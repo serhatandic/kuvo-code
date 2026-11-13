@@ -958,6 +958,8 @@ final class Workspace {
     func markdown(of id: String) async throws -> String? {
         guard let session = session(id), let api = api(for: session) else { return nil }
         let messages = try await ConversationExport.messages(of: session, api: api)
+        // Those from before as their box reads them.
+        await SentMessage.read(messages, from: box(of: id, else: session.location.directory)())
         return ConversationExport.markdown(title: session.title ?? "New Session", messages: messages, directory: session.location.directory)
     }
 
@@ -2169,19 +2171,18 @@ final class Workspace {
         guard let api = api(forSession: id) else { return }
         let session = try await branch(id, before: message.id, api: api)
         upsert(session)
-        let sent = CommandMessages.shared.text(of: message)
-        let (text, comments, paths, _) = SentMessage.split(sent)
+        let parts = SentMessage.parts(message)
         // The engine's copy carries the attachments; one seen arrive live has them as picked.
         let recent = (try? await api.messages(session: id, limit: 100).data) ?? []
         var stored = message
         for case .user(let user) in recent where user.id == message.id { stored = user }
         // What it replied to comes back over the composer, as you wrote it, and so do its comments
         // (a goal as one).
-        let (quotes, written) = Quoting.draft(of: text)
-        let words = SentWithKeyword.draft(written, keyword: SentMessage.keyword(of: sent))
-        let files = Attachments.restored(SessionModel.files(of: message, stored: stored), noting: paths)
+        let (quotes, written) = Quoting.draft(of: parts.words)
+        let words = SentWithKeyword.draft(written, keyword: parts.keyword)
+        let files = Attachments.restored(SessionModel.files(of: message, stored: stored), noting: parts.paths)
         var draft = Drafts.Draft(text: words, files: files, quotes: quotes)
-        draft.comments = comments
+        draft.comments = parts.reviewComments
         Drafts.shared[session.id] = draft
         tabs?.open(.session(session.id))
     }
@@ -3332,16 +3333,14 @@ final class Workspace {
             try? await Task.sleep(for: .seconds(15))
             guard let session = session(id), session.parentID == nil, session.title?.isEmpty != false, let api = api(forSession: id),
                   let page = try? await api.firstMessages(session: id, limit: 10) else { return }
-            // What you wrote first, as it shows in the conversation: a command as you typed it,
-            // without the note on attached files, and another agent's message without its header.
-            let first = page.data.lazy.compactMap { message -> String? in
-                guard case .user(let user) = message else { return nil }
-                let text = SentMessage.words(of: CommandMessages.shared.text(of: user))
-                let words = AgentMail.parse(text)?.text ?? text
-                return words.isEmpty ? nil : words
-            }.first
+            // What you wrote first, as it shows in the conversation (its parts, as its box keeps or
+            // reads them): a command as you typed it, without the note on attached files, and another
+            // agent's message without its header.
+            await SentMessage.read(page.data, from: box(of: id, else: session.location.directory)())
+            let users = page.data.compactMap { message -> Message.User? in if case .user(let user) = message { user } else { nil } }
+            let first = users.lazy.map(SentMessage.parts).first { !$0.words.isEmpty }
             guard let first else { return }
-            let written = OutsideAgents.runsInBridge(session.model?.providerID) ? try? await self.api?.generate(Self.titlePrompt(for: first)) : nil
+            let written = OutsideAgents.runsInBridge(session.model?.providerID) ? try? await self.api?.generate(Self.titlePrompt(for: first.words)) : nil
             guard let title = written.flatMap(Self.cleanTitle) ?? Self.title(from: first),
                   self.session(id)?.title?.isEmpty != false else { return }
             try? await api.renameSession(id, title: title)
@@ -3363,12 +3362,11 @@ final class Workspace {
         return title.isEmpty ? nil : String(title.prefix(80))
     }
 
-    /// A title from a message: its words without review comments, the note of attached files or
-    /// line breaks, up to the end of its first sentence or about 48 characters, at a word. A dot in
+    /// A title from a message's parts: its words (or its first comment on the changes) without line
+    /// breaks, up to the end of its first sentence or about 48 characters, at a word. A dot in
     /// a word (README.md, a web address) doesn't end a sentence.
-    nonisolated static func title(from message: String) -> String? {
-        let split = SentMessage.split(message)
-        let words = (split.text.isEmpty ? split.comments.first?.text ?? "" : split.text)
+    nonisolated static func title(from message: MessageParts) -> String? {
+        let words = (message.words.isEmpty ? message.comments.first?.text ?? "" : message.words)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !words.isEmpty else { return nil }
         var title = words

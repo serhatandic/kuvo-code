@@ -169,6 +169,15 @@ describe("kuvo/sessions/<id>/send", () => {
     expect(prompted(bridgeAsked)[0].body.metadata.kuvo.parts).toEqual({ words: "Hello" })
   })
 
+  test("one sent again (Retry) goes as the agent read it, its parts kept", async () => {
+    const text = "Ask again\n\n<sent-with>\nThe user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:\n/plan\n</sent-with>"
+    await send("ses_main", { id: "msg_retry", text, files: [{ uri: "file:///x/a.png", name: "a.png" }] })
+    const [sent] = prompted(engineAsked)
+    expect(sent.body.text).toBe(text)
+    expect(sent.body.files).toEqual([{ uri: "file:///x/a.png", name: "a.png" }])
+    expect(sent.body.metadata.kuvo.parts).toEqual({ words: "Ask again", keyword: "/plan" })
+  })
+
   test("a command runs with its arguments and its files' note", async () => {
     await send("ses_main", { words: "the tests", command: "review-quick", notes: { paths: ["/x/y.txt"] } })
     const [ran] = prompted(engineAsked)
@@ -179,7 +188,7 @@ describe("kuvo/sessions/<id>/send", () => {
 
   test("nothing written and nothing with it isn't sent; nor is it to a conversation that isn't here", async () => {
     expect((await send("ses_main", { words: "  " })).status).toBe(400)
-    expect((await send("ses_main", { text: "the old way" })).status).toBe(400)
+    expect((await send("ses_main", { text: " " })).status).toBe(400)
     expect((await send("ses_gone", { words: "Hi" })).status).toBe(404)
     expect(prompted(engineAsked)).toEqual([])
   })

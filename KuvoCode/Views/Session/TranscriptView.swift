@@ -134,7 +134,7 @@ struct TranscriptView: View {
         .environment(hover)
         // What a widget writes back goes to this conversation's agent, as yours: as words, never
         // a command or keyword the page could run as you, and without your review comments.
-        .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
+        .environment(\.answerAgent) { text, widget in model.send(text, for: nil, withComments: false, widget: widget) }
         // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
         // on the session it works for.
         .workChipContext(WorkQueues.Key(box: Workspace.box(of: model.session.location.directory), owner: workspace.root(of: model.id)))
@@ -783,12 +783,14 @@ enum Row: Identifiable, Hashable {
             return [.plain(text)]
         case .user(let message):
             let text = CommandMessages.shared.text(of: message)
-            if let mail = AgentMail.parse(text) { return [.markdown(mail.text)] }
+            let parts = SentMessage.parts(message)
+            if parts.mail != nil { return [.markdown(parts.words)] }
             if text.hasPrefix(Wakes.marker) { return [.plain(String(text.dropFirst(Wakes.marker.count)))] }
             if let work = GroupWork.parse(text) { return [.markdown(work.task)] }
-            return UserBubble.findParts(UserBubble.words(of: text), keyword: SentMessage.keyword(of: text)).map(ConversationFind.Part.plain)
+            return UserBubble.findParts(parts.words, keyword: parts.keyword).map(ConversationFind.Part.plain)
         case .pending(let item):
-            return UserBubble.findParts(UserBubble.words(of: item.text), keyword: SentMessage.keyword(of: item.text)).map(ConversationFind.Part.plain)
+            let parts = SentMessage.parts(item)
+            return UserBubble.findParts(parts.words, keyword: parts.keyword).map(ConversationFind.Part.plain)
         case .assistant(let message, _), .more(let message, _):
             return message.content.compactMap { if case .text(let part) = $0 { .markdown(part.text) } else { nil } }
         case .shell(let shell):
@@ -905,9 +907,10 @@ private struct RowView: View, Equatable {
 
     var body: some View {
         switch row {
-        case .user(let message) where AgentMail.parse(CommandMessages.shared.text(of: message)) != nil:
-            if let mail = AgentMail.parse(CommandMessages.shared.text(of: message)) {
-                AgentMessageRow(id: message.id, from: mail.name, session: mail.session, text: mail.text, at: message.time.created)
+        case .user(let message) where SentMessage.parts(message).mail != nil:
+            let parts = SentMessage.parts(message)
+            if let mail = parts.mail {
+                AgentMessageRow(id: message.id, from: mail.name, session: mail.session, text: parts.words, at: message.time.created)
             }
         case .user(let message) where GroupWork.parse(CommandMessages.shared.text(of: message)) != nil:
             if let work = GroupWork.parse(CommandMessages.shared.text(of: message)) {
@@ -921,22 +924,21 @@ private struct RowView: View, Equatable {
                 WakeRow(id: message.id, wake: wake, at: message.time.created)
             }
         case .user(let message):
-            let written = CommandMessages.shared.text(of: message)
-            let (text, comments, paths, references) = SentMessage.split(written)
+            let parts = SentMessage.parts(message)
             let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: ConversationPictures.id(message: message.id, file: $0)) }
-            YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments,
-                        widget: SentMessage.widget(of: written), keyword: SentMessage.keyword(of: written), sent: Date(timeIntervalSince1970: message.time.created / 1000),
-                        fromPhone: FromPhone.isFromPhone(written),
+            YourMessage(text: parts.words, references: parts.references, folders: folders(), attachments: stored + Attachments.paths(parts.paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path),
+                        comments: parts.reviewComments, widget: parts.widget, keyword: parts.keyword, sent: Date(timeIntervalSince1970: message.time.created / 1000),
+                        fromPhone: parts.phone,
                         // Not in a bot's conversation, which is the bot's one: a session made from
                         // it would be no bot's, in no list you'd look in.
                         fork: bot == nil ? { fork(message) } : nil, undo: { undo(message) },
                         undoNote: YourMessage.undoNote(in: directory),
                         isOffline: isOffline)
         case .pending(let item):
-            let (text, comments, paths, references) = SentMessage.split(item.text)
-            UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + item.inlineFiles.enumerated().map { AttachmentItem.stored($1, id: "\(item.id)#\(item.files.count + $0)") }
-                           + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
-                       widget: SentMessage.widget(of: item.text), keyword: SentMessage.keyword(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
+            let parts = SentMessage.parts(item)
+            UserBubble(text: parts.words, references: parts.references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + item.inlineFiles.enumerated().map { AttachmentItem.stored($1, id: "\(item.id)#\(item.files.count + $0)") }
+                           + Attachments.paths(parts.paths, besides: item.files).map(AttachmentItem.path), comments: parts.reviewComments,
+                       widget: parts.widget, keyword: parts.keyword, status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
                 .heldContextMenu { HeldRow.button("Cancel", role: .destructive, disabled: isOffline) { cancel(item) } }
         case .assistant(let message, let showsError):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
@@ -1043,18 +1045,6 @@ struct UserBubble: View {
         if marks { MessageMentions.applyLinksAndPictures(to: &text, pictures: attachments.count(where: \.isImage)) }
         if !refs.isEmpty { WorkItemChipAttachment.mark(&text, refs: refs) }
         return text
-    }
-
-    /// A message as its bubble shows it: its words, the review comments it was sent with, and
-    /// the files it names as attached.
-    static func split(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String]) {
-        let (text, comments, paths, _) = SentMessage.split(message)
-        return (text, comments, paths)
-    }
-
-    /// A message's words, as its bubble shows them.
-    static func words(of message: String) -> String {
-        split(message).text
     }
 
     /// The parts of the words, in order: each quote it answers, then its answer.

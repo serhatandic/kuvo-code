@@ -54,8 +54,10 @@ export const isEmpty = (fields: MessageFields, files: unknown[]): boolean =>
 
 // `kuvo/sessions/<id>/send`: `{id, words, files?, delivery?, keyword?, widget?, comments?, named?,
 // notes?}` as a message, or with `command`, that command run with `words` as its arguments (only
-// its files' note goes with them). Answered as the engine (or the coding agents' bridge) answers
-// it; a message sent again under its id goes once (`sentOnce`), whoever sent it going meanwhile.
+// its files' note goes with them); `{id, text, files?, delivery?}`, one sent before sent again as
+// the agent read it (Retry), its files as they went. Answered as the engine (or the coding agents'
+// bridge) answers it; a message sent again under its id goes once (`sentOnce`), whoever sent it
+// going meanwhile.
 export async function* sendRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
   const { request, readEngine, bridge, signal, json } = context;
   if (request.method.toUpperCase() !== "POST") return yield* json(405, { message: "Send a message with POST." });
@@ -63,11 +65,12 @@ export async function* sendRoute(context: RouteContext, match: RegExpMatchArray)
   try { session = decodeURIComponent(match[1]!); } catch {}
   if (!session) return yield* json(404, { message: "There's no such conversation here." });
   const given = parsed(request.body);
+  const again = isObject(given) && typeof given.words !== "string" && typeof given.text === "string" ? given.text : null;
   const fields = isObject(given) ? fieldsOf(given) : null;
-  if (!isObject(given) || !fields) return yield* json(400, { message: "Send what was written (words)." });
+  if (!isObject(given) || (!fields && again === null)) return yield* json(400, { message: "Send what was written (words)." });
   const files = Array.isArray(given.files) ? given.files : [];
-  if (isEmpty(fields, files)) return yield* json(400, { message: "There's nothing to send." });
-  const command = typeof given.command === "string" && given.command.trim() ? given.command.trim() : null;
+  if (fields ? isEmpty(fields, files) : !again!.trim() && !files.length) return yield* json(400, { message: "There's nothing to send." });
+  const command = fields && typeof given.command === "string" && given.command.trim() ? given.command.trim() : null;
   if (frozen().has(session)) return yield* json(409, { message: MOVING });
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
@@ -89,7 +92,9 @@ export async function* sendRoute(context: RouteContext, match: RegExpMatchArray)
   // stops with its sender: it has no id, and sent again it would run twice.
   const send = async (): Promise<SentAnswer> => {
     try {
-      const message = await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined);
+      const message = fields
+        ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined)
+        : { text: again!, files: files as PromptFile[], metadata: withParts(undefined, partsOf(again!)) };
       const body = command
         ? { name: command, text: message.text, ...(message.files.length ? { files: message.files } : {}), ...(delivery ? { delivery } : {}) }
         : { id: typeof given.id === "string" && given.id ? given.id : messageID(), text: message.text, ...(message.files.length ? { files: message.files } : {}), delivery, metadata: message.metadata };

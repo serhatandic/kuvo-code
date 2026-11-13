@@ -36,8 +36,9 @@ enum ConversationExport {
                     for news in note.shown { say("From \(news.title)" + (news.status.map { " · \($0)" } ?? ""), news.body) }
                     continue
                 }
-                if let mail = AgentMail.parse(written) {
-                    say("Message from \(mail.name)", mail.text)
+                let parts = SentMessage.parts(user)
+                if let mail = parts.mail {
+                    say("Message from \(mail.name)", parts.words)
                     continue
                 }
                 if written.hasPrefix(Wakes.marker) {
@@ -48,11 +49,11 @@ enum ConversationExport {
                     say("Work from \(work.chat)", work.task)
                     continue
                 }
-                let (text, comments, paths, _) = SentMessage.split(written)
-                var lines = comments.map { "> On \($0.location): \($0.text)" }
+                let text = parts.words
+                var lines = parts.comments.map { "> On \($0.location): \($0.text)" }
                 // Sent with a keyword: as you typed it, the keyword in front of the words.
-                if !text.isEmpty { lines.append(SentMessage.keyword(of: written).map { "\($0) \(text)" } ?? text) }
-                let attached = (user.files ?? []).compactMap(\.name) + paths.map { ($0 as NSString).lastPathComponent }
+                if !text.isEmpty { lines.append(parts.keyword.map { "\($0) \(text)" } ?? text) }
+                let attached = (user.files ?? []).compactMap(\.name) + parts.paths.map { ($0 as NSString).lastPathComponent }
                 if !attached.isEmpty { lines.append("Attached: " + attached.joined(separator: ", ")) }
                 if !lines.isEmpty { say(you, lines.joined(separator: "\n\n")) }
             case .assistant(let assistant):
