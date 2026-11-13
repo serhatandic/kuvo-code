@@ -10,6 +10,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSy
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { CodexAgent } from "../../src/agents/agents/codex"
 import type { Agent } from "../../src/agents/agent"
 import { subscribe } from "../../src/agents/events"
 import { LinkDirectory, PeerPost, peerRoutes, type PeerParts } from "../../src/agents/groups/post"
@@ -17,7 +18,7 @@ import type { Clock } from "../../src/agents/groups/peer"
 import { claudeLine, dedupClaude } from "../../src/agents/usage/claude-log"
 import { claudeSlots, daysIn } from "../../src/agents/usage/history"
 import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFrom, type PricingFetch } from "../../src/agents/usage/pricing"
-import { claudeSources, engineHostedSources, thisComputer, Usage, usageRoutes, uuidOf, type UsageSource } from "../../src/agents/usage/usage"
+import { claudeSources, codexSources, engineHostedSources, thisComputer, Usage, usageRoutes, UsageSettings, uuidOf, type UsageSource } from "../../src/agents/usage/usage"
 import { Database } from "bun:sqlite"
 import { isRealBridgeFolder } from "../../src/shared/account"
 import { digestOf, UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
@@ -131,7 +132,7 @@ describe("one box", () => {
 
     const istanbul = await route(usage, "Europe/Istanbul")
     expect(istanbul.zone).toBe("Europe/Istanbul")
-    expect(istanbul.services).toEqual(["claude", "grok", "opencode"])
+    expect(istanbul.services).toEqual(["claude", "codex", "grok", "opencode"])
     expect(istanbul.rows).toHaveLength(1)
     const row = istanbul.rows[0]
     expect(row).toMatchObject({ id: "claude#0123456789abcdef", service: "claude", provider: "claude-code@work", agent: "claude", account: "work", label: "Work", identity: "0123456789abcdef", scanned: at })
@@ -328,13 +329,21 @@ class PeerBox {
   parts: PeerParts
   private following = new AbortController()
   agents: Agent[]
+  /** Codex's fallback model here, as the box keeps it (`UsageSettings`). */
+  readonly settings = new UsageSettings()
+  get fallback() {
+    return this.settings.codexFallback
+  }
+  set fallback(model: string | undefined) {
+    this.settings.setCodexFallback(model ?? null)
+  }
 
   constructor(
     readonly key: string,
     readonly name: string,
     relay: Relay,
     readonly home: string,
-    agents: TestClaude[],
+    agents: (TestClaude | CodexAgent)[],
     identity: (provider: string) => string | undefined,
     now: () => number,
     most?: number,
@@ -347,7 +356,9 @@ class PeerBox {
     this.post = new Post(() => relay.posted++)
     this.directory = new LinkDirectory(this.post, still)
     const sources = claudeSources(join(home, "usage"), computer === undefined ? undefined : () => computer)
-    this.usage = new Usage(() => [...sources(this.agents), ...extra()], new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
+    const codex = codexSources(join(home, "usage"), () => this.fallback, computer === undefined ? undefined : () => computer)
+    this.usage = new Usage(() => [...sources(this.agents), ...codex(this.agents), ...extra()], new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
+    this.usage.settings = this.settings
     this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now, most)
     this.parts = { post: this.post, directory: this.directory, usage: this.peers }
     relay.boxes.set(key, this)
@@ -474,6 +485,73 @@ describe("across your computers", () => {
     // Removed from your computers: what it said goes.
     await mac.meet([])
     expect(mac.usage.view("UTC").rows.map((row) => [row.id, row.days[0]!.tokens])).toEqual([["claude#aaaaaaaaaaaaaaaa", 1009]])
+    mac.stop()
+    dev.stop()
+  })
+
+  test("Codex's use estimated with a fallback model goes to the others saying so; a box from before, which keeps none of that, finds the same digest and asks nothing again", async () => {
+    const macHome = mkdtempSync(join(base, "mac-"))
+    const devHome = mkdtempSync(join(base, "devbox-"))
+    const codexHome = join(devHome, "codex", "accounts", "work")
+    mkdirSync(join(codexHome, "sessions"), { recursive: true })
+    writeFileSync(join(codexHome, "sessions", "rollout-a.jsonl"), JSON.stringify({ timestamp: "2026-11-12T10:00:00Z", type: "turn_context", payload: { model: "gpt-mystery-9" } }) + "\n" + JSON.stringify({ timestamp: "2026-11-12T10:01:00Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 } } } }) + "\n")
+    const mac = new PeerBox("mac-key", "MacBook", relay, macHome, [], () => undefined, now)
+    const dev = new PeerBox("dev-key", "devbox", relay, devHome, [new CodexAgent({ home: devHome, temporary: devHome, deps: {} as any }, { id: "work", home: codexHome })], () => "cccccccccccccccc", now)
+    const choice = new PricingStore(undefined, null).current().fallbackOptions("codex")[0]!
+    dev.fallback = choice
+    await mac.meet([dev])
+    await dev.meet([mac])
+    await dev.usage.refresh()
+    await mac.usage.refresh()
+    await relay.settled()
+    const day = mac.usage.view("UTC").totals.codex![0]!
+    expect(day).toMatchObject({ date: "2026-11-12", tokens: 1100, unknown: ["gpt-mystery-9"], fallback: [choice] })
+    expect(day.cost).toBeGreaterThan(0)
+
+    // What a box from before keeps of it (no `fallback`) hashes the same as what was told.
+    const told = relay.sent.filter((each) => each.from === "dev-key" && each.mail.accounts).at(-1)!.mail.accounts!
+    expect(JSON.stringify(told)).toContain('"fallback"')
+    const before = told.map((account) => ({ ...account, slots: { ...account.slots, fallback: undefined } }))
+    expect(digestOf(before)).toBe(digestOf(told))
+    // Ten minutes on, its digest alone: the Mac asks nothing again.
+    const sent = relay.sent.length
+    at += 11 * MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(relay.sent.slice(sent).map((each) => [each.from, each.mail.accounts === undefined, each.mail.ask ?? false])).toEqual([["dev-key", true, false]])
+
+    // Another fallback model priced the same (the digest is the same): its older days say the new one too.
+    appendFileSync(join(codexHome, "sessions", "rollout-a.jsonl"), JSON.stringify({ timestamp: "2026-11-06T10:01:00Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 } } } }) + "\n")
+    at += MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    const pricing = new PricingStore(undefined, null).current()
+    const rates = (model: string) => JSON.stringify(pricing.fallbackRates(model, "codex"))
+    const choices = pricing.fallbackOptions("codex")
+    // (Two priced the same, so their dollars and digest are the same: only telling all of it again shows the change.)
+    const pair = choices.flatMap((one) => choices.filter((other) => other > one && rates(other) === rates(one)).map((other) => [one, other] as const))[0]
+    expect(pair).toBeDefined()
+    const [first, second] = pair!
+    const switched = relay.sent.length
+    dev.fallback = first
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(mac.usage.view("UTC").totals.codex!.map((each) => [each.date, each.fallback])).toEqual([["2026-11-12", [first]], ["2026-11-06", [first]]])
+    dev.fallback = second
+    at += MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(mac.usage.view("UTC").totals.codex!.map((each) => [each.date, each.fallback])).toEqual([["2026-11-12", [second]], ["2026-11-06", [second]]])
+    // Told once each way it changed, all of it, not asking the Mac for its own; the Mac sent nothing back.
+    expect(relay.sent.slice(switched).filter((each) => each.mail.accounts && each.mail.from === undefined).map((each) => [each.from, each.mail.ask ?? false])).toEqual(first === choice ? [["dev-key", false]] : [["dev-key", false], ["dev-key", false]])
+    expect(relay.sent.slice(switched).filter((each) => each.from === "mac-key")).toEqual([])
+    // A round with more estimated use, the same model: two days' slots, as ever.
+    appendFileSync(join(codexHome, "sessions", "rollout-a.jsonl"), JSON.stringify({ timestamp: "2026-11-12T11:31:00Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 } } } }) + "\n")
+    const later = relay.sent.length
+    at += MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(relay.sent.slice(later).map((each) => [each.from, typeof each.mail.from])).toEqual([["dev-key", "number"]])
     mac.stop()
     dev.stop()
   })

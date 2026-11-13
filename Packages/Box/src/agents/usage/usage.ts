@@ -1,7 +1,8 @@
 // What your accounts used and cost, by the day: each account this box runs that's signed in to Kuvo
-// Code (Claude Code's and Grok's, so far), read from its agent's own logs on this computer, priced
-// (pricing.ts), and what the engine's own hosted models (OpenCode Go and Zen) cost, as OpenCode
-// billed it, read from the engine's databases here (engine-hosted.ts); and kept by the quarter hour (history.ts). This box's own, with your other computers' boxes'
+// Code (Claude Code's and Codex's, and your ChatGPT sign-in's use through the engine's models, so
+// far), read from its agent's own logs (or the engine's database) on this computer, priced
+// (pricing.ts), Grok's from its session transcripts, and what the engine's own hosted models
+// (OpenCode Go and Zen) cost, as OpenCode billed it (engine-hosted.ts), and kept by the quarter hour (history.ts). This box's own, with your other computers' boxes'
 // (usage-peers.ts), one row per account: an account used on two computers is the sum of both. A
 // client asks for its own days (`zone`): the box answers them. Read every five minutes, or when a
 // client asks, one round at a time. PROTOCOL.md, "Usage history".
@@ -10,7 +11,7 @@
 
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { homedir, hostname } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { AgentKind } from "../accounts"
@@ -19,6 +20,8 @@ import type { Agent } from "../agent"
 import { emit } from "../events"
 import type { LimitsService } from "../limits"
 import { claudeLine, dedupClaude, fromKeptClaude, keptClaude, type KeptClaudeEntry } from "./claude-log"
+import { codexLine, codexSlots, codexState, codexStateFrom, fromKeptCodex, keptCodex, type CodexState, type KeptCodexEvent } from "./codex-log"
+import { engineCodexRows, engineCodexSlots, engineStamp } from "./engine-codex"
 import { dedupGrok, fromKeptGrok, grokLine, grokSlots, keptGrok, type KeptGrokEntry } from "./grok-log"
 import { databasesStamp } from "./engine-db"
 import { HOSTED_PROVIDERS, hostedRows, hostedSlots, type HostedRow } from "./engine-hosted"
@@ -28,7 +31,7 @@ import type { Pricing, PricingStore } from "./pricing"
 import type { UsagePeers } from "./usage-peers"
 
 /** The services whose usage history a box states, so far (`opencode` only where it knows its engine's folder). */
-export const USAGE_SERVICES: LimitsService[] = ["claude", "grok", "opencode"]
+export const USAGE_SERVICES: LimitsService[] = ["claude", "codex", "grok", "opencode"]
 
 const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
@@ -211,6 +214,8 @@ export class Usage {
   peers?: UsagePeers
   /** The services this box states the usage of (`opencode` only where it reads its engine's databases). */
   services: LimitsService[] = USAGE_SERVICES
+  /** How this box prices what can't be priced by itself (Codex's fallback model). */
+  settings?: UsageSettings
 
   constructor(
     private readonly sources: () => UsageSource[],
@@ -263,6 +268,8 @@ export class Usage {
 
   private async round() {
     const pricing = this.pricing.current()
+    // (The fallback model as the round starts: one chosen during it is told all again after the next.)
+    const fallback = this.settings?.codexFallback ?? null
     const at = this.now()
     // (From a UTC midnight: what ages out goes once a day, not a little each round.)
     const since = Math.floor((at - KEPT_DAYS * DAY) / DAY) * DAY
@@ -291,7 +298,12 @@ export class Usage {
     // (A round cut short forgets none of the logs it didn't get to.)
     for (const files of new Set(sources.flatMap((source) => (source.files ? [source.files] : [])))) files.endRound(complete)
     this.save()
-    this.changed(true)
+    this.changed(true, fallback)
+  }
+
+  /** Whether this box keeps an account's usage (read before, or kept from before a restart). */
+  has(provider: string): boolean {
+    return this.entries.has(provider)
   }
 
   /** This box's own accounts, as it keeps them and tells its peers. */
@@ -352,11 +364,27 @@ export class Usage {
       zone: asked,
       services: this.services,
       ...(scanned ? { scanned } : {}),
+      // Codex's fallback model, as this box prices its own logs with it, and those it may be.
+      pricing: { codex: { fallback: this.settings?.codexFallback ?? null, chosen: this.settings?.chosen ?? false, choices: this.pricing.current().fallbackOptions("codex") } },
       rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
       totals,
       ...(Object.keys(partial).length ? { partial } : {}),
     }
   }
+
+  /**
+   * Codex's fallback model, for this box's own logs (none: `null`): one of the choices
+   * (`fallbackOptions`), or false when it isn't. Its caller reads again with it (`refresh`).
+   */
+  setCodexFallback(model: string | null): boolean {
+    if (!this.settings) return false
+    if (model !== null && !this.pricing.current().fallbackOptions("codex").includes(model)) return false
+    this.settings.setCodexFallback(model)
+    return true
+  }
+
+  /** Codex's fallback model as this box's use was last told with. */
+  private ownFallback?: string | null
 
   /** What this box's own accounts used, as last told: a round that read nothing new tells no one. */
   private ownSaid = ""
@@ -366,12 +394,16 @@ export class Usage {
    * used, and the clients that the rows changed, only when what they used did (when each was read
    * isn't news).
    */
-  private changed(own: boolean) {
+  private changed(own: boolean, fallback: string | null = null) {
     if (own) {
       const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })))
+      // Another fallback model chosen: which one estimated what isn't in the digest, and the older
+      // days your other computers keep say the one they were told, so all of it goes again.
       // (A round is minutes from the last: what changed goes at once; else, now and then, that nothing did.)
-      this.peers?.tell(mine !== this.ownSaid)
+      if (this.ownFallback !== undefined && fallback !== this.ownFallback) this.peers?.tellAll()
+      else this.peers?.tell(mine !== this.ownSaid)
       this.ownSaid = mine
+      this.ownFallback = fallback
     }
     const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })))
     if (now === this.said) return
@@ -413,10 +445,19 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
  * api/kuvo/usage/refresh[?zone=]` reads now (here, and asks your other computers to), and answers
  * the same once it's read here (PROTOCOL.md, "Usage history").
  */
-export async function usageRoutes(usage: Usage | undefined, method: string, rest: string[], params: URLSearchParams): Promise<Response> {
+export async function usageRoutes(usage: Usage | undefined, method: string, rest: string[], params: URLSearchParams, body: () => Promise<any> = async () => ({})): Promise<Response> {
   if (!usage) return json({ message: "Usage isn't read on this computer." }, 503)
   const zone = params.get("zone")
   if (!rest.length && method === "GET") return json({ data: usage.view(zone) })
+  // `PUT api/kuvo/usage/pricing {codex: {fallback: <model> | null}}`: Codex's fallback model, this box's.
+  if (rest.length === 1 && rest[0] === "pricing" && method === "PUT") {
+    const given = (await body())?.codex
+    const model = given && typeof given === "object" ? given.fallback : undefined
+    if (model !== null && typeof model !== "string") return json({ message: "Say {codex: {fallback}}: a model, or null for none." }, 400)
+    if (!usage.setCodexFallback(model === "" ? null : model)) return json({ message: "This model's prices aren't available now. Choose another model or None." }, 400)
+    await Promise.race([usage.refresh(), new Promise((resolve) => setTimeout(resolve, 5_000).unref?.())])
+    return json({ data: usage.view(zone) })
+  }
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
     usage.peers?.refreshElsewhere()
     // What's read within a few seconds is in the answer; the rest comes as kuvo.usage.updated.
@@ -555,6 +596,184 @@ export function claudeSources(folder?: string, computer = ownComputer): (agents:
       }
       return [source]
     })
+}
+
+/**
+ * How a box prices what can't be priced by itself, kept in its usage folder (`settings.json`):
+ * Codex's fallback model, whose rates estimate a Codex model with no known price (none until
+ * chosen). Each box's own, for its own logs.
+ */
+export class UsageSettings {
+  codexFallback?: string
+  /** Whether it was ever chosen here (none counts): a Mac's own choice from before is brought over only until it is. */
+  chosen = false
+
+  constructor(private readonly file?: string) {
+    if (!file) return
+    try {
+      const saved = JSON.parse(readFileSync(file, "utf8"))?.codex
+      if (saved && typeof saved === "object" && "fallback" in saved) {
+        this.chosen = true
+        if (typeof saved.fallback === "string" && saved.fallback && saved.fallback.length <= 200) this.codexFallback = saved.fallback
+      }
+    } catch {}
+  }
+
+  setCodexFallback(model: string | null) {
+    this.codexFallback = model ?? undefined
+    this.chosen = true
+    if (!this.file) return
+    try {
+      mkdirSync(dirname(this.file), { recursive: true })
+      writeFileSync(this.file + ".new", JSON.stringify({ codex: { fallback: model } }), { mode: 0o600 })
+      renameSync(this.file + ".new", this.file)
+    } catch {}
+  }
+}
+
+/** A folder's real path (itself when it isn't there). */
+function realOf(folder: string): string {
+  try {
+    return realpathSync(folder)
+  } catch {
+    return folder
+  }
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Each home a Codex account's logs are in, with the folders read in it, as UsageKit (and ccusage)
+ * read them: an added account's own home; your own Codex's each of a comma-separated `CODEX_HOME`,
+ * else `~/.codex`. In each, `sessions` and `archived_sessions`, or the home itself when it has neither.
+ */
+export function codexHomes(agent: Agent, env: NodeJS.ProcessEnv = process.env, home = homedir()): string[][] {
+  const configured = env.CODEX_HOME?.trim()
+  const homes = agent.instance.home
+    ? [agent.instance.home]
+    : configured
+      ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => (part.startsWith("~/") ? join(home, part.slice(2)) : part))
+      : [join(home, ".codex")]
+  // (One home named twice, by a link to it too: once.)
+  const real = new Set<string>()
+  return homes.filter((each) => !real.has(realOf(each)) && !!real.add(realOf(each))).map((each) => {
+    const folders = ["sessions", "archived_sessions"].map((name) => join(each, name)).filter(isFolder)
+    return folders.length ? folders : [each]
+  })
+}
+
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The Codex accounts whose usage is read here, from their homes (`codexHomes`): an added
+ * account's own, your own Codex's `~/.codex` (or each of `CODEX_HOME`). A
+ * folder an added account links to another's here (on a Mac, its history is your Codex's) is read
+ * with that one only, never twice. `fallback`: the model whose rates estimate one with no price
+ * (`UsageSettings`). A round that read nothing new, with the same prices, works nothing out again.
+ */
+export function codexSources(folder?: string, fallback: () => string | undefined = () => undefined, computer = ownComputer): (agents: Agent[]) => UsageSource[] {
+  const files = new JSONLFiles<KeptCodexEvent, CodexState>(
+    (line, state) => codexLine(line, state).map(keptCodex),
+    (entry) => entry[0],
+    folder ? join(folder, "codex-files") : undefined,
+    1,
+    // (A turn the same as one before it in its log: once. The same in another log is left out when they're priced.)
+    (entry) => JSON.stringify(entry.slice(0, 8)),
+    { initial: codexState, from: codexStateFrom },
+  )
+  const last = new Map<string, { version: number; pricing: Pricing; since: number; listed: string; fallback?: string; slots: Slots }>()
+  return (agents) => {
+    const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex")
+    const homes = new Map(codex.map((agent) => [agent.providerID, codexHomes(agent)]))
+    // Whose each folder is: the account it's really in, not one that links to it; one only linked
+    // to (your ~/.codex while CODEX_HOME names another), the first that links to it.
+    const owner = new Map<string, string>()
+    for (const agent of codex) for (const root of homes.get(agent.providerID)!.flat()) if (!isLink(root) && !owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
+    for (const agent of codex) for (const root of homes.get(agent.providerID)!.flat()) if (!owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
+    return codex.map((agent) => {
+      const parsed = parseProvider(agent.providerID)!
+      const mine = (root: string) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID
+      const groups = () => homes.get(agent.providerID)!.map((folders) => folders.filter(mine))
+      const roots = () => groups().flat()
+      const source: UsageSource = {
+        provider: agent.providerID,
+        service: "codex",
+        agent: { kind: "codex", account: parsed.id },
+        ...(agent.instance.label ? { label: agent.instance.label } : {}),
+        places: () => {
+          const here = computer()
+          return roots().map((root) => placeOf(here, root))
+        },
+        slots: async (pricing, since) => {
+          // `sessions` before `archived_sessions`: a log in both of one home (by where it is in each) is the first's.
+          const found: Awaited<ReturnType<typeof jsonlFiles>> = []
+          for (const folders of groups()) {
+            const seen = new Set<string>()
+            for (const root of folders) {
+              for (const file of await jsonlFiles(root)) {
+                const inside = file.path.slice(root.length)
+                if (seen.has(inside)) continue
+                seen.add(inside)
+                found.push(file)
+              }
+            }
+          }
+          await files.refresh(found, since)
+          const listed = createHash("sha256").update(found.map((file) => file.path).join("\n")).digest("hex")
+          const model = fallback()
+          const before = last.get(agent.providerID)
+          if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed && before.fallback === model) return before.slots
+          const slots = codexSlots(files.itemsOf(found, since).map(fromKeptCodex), pricing, since, model)
+          last.set(agent.providerID, { version: files.version, pricing, since, listed, ...(model ? { fallback: model } : {}), slots })
+          return slots
+        },
+        files,
+      }
+      return source
+    })
+  }
+}
+
+/**
+ * Your ChatGPT sign-in's use through the engine's own models (engine-codex.ts), from the engine's
+ * databases in its data folder (`folder`), while the engine has one (`signedIn`; undefined until
+ * the engine has said, as the bridge starts: then only while this box kept it from before, so a
+ * restart neither drops it nor shows an empty one where there's none):
+ * Codex's, the same row as a Codex account signed in to the same ChatGPT account. Read again only
+ * when a database changed, or the prices did.
+ */
+export function engineCodexSource(folder: string | undefined, signedIn: () => boolean | undefined, kept: () => boolean, computer = ownComputer): () => UsageSource[] {
+  let last: { stamp: string; pricing: Pricing; since: number; slots: Slots } | undefined
+  return () => {
+    if (!folder || !(signedIn() ?? kept())) return []
+    return [
+      {
+        provider: "openai",
+        service: "codex",
+        places: () => [placeOf(computer(), folder)],
+        slots: async (pricing, since) => {
+          const stamp = engineStamp(folder)
+          if (last && last.stamp === stamp && last.pricing === pricing && last.since === since) return last.slots
+          const rows = await engineCodexRows(folder, since)
+          const slots = rows ? engineCodexSlots(rows, pricing, since) : noSlots()
+          last = { stamp, pricing, since, slots }
+          return slots
+        },
+      },
+    ]
+  }
 }
 
 /**

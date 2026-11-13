@@ -1,0 +1,8 @@
+{"timestamp":"2026-11-11T12:00:05.500Z","type":"session_meta","payload":{"id":"c","forked_from_id":"root","timestamp":"2026-11-11T12:00:05.500Z"}}
+{"timestamp":"2026-11-11T12:00:05.600Z","type":"session_meta","payload":{"id":"x","id2":"replayed parent meta"}}
+{"timestamp":"2026-11-11T12:00:05.600Z","type":"turn_context","payload":{"model":"gpt-5.5","cwd":"/work"}}
+{"timestamp":"2026-11-11T12:00:05.700Z","type":"event_msg","payload":{"type":"task_started","started_at":1794304800}}
+{"timestamp":"2026-11-11T12:00:05.800Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":300,"reasoning_output_tokens":50,"total_tokens":1300},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":300,"reasoning_output_tokens":50,"total_tokens":1300}}}}
+{"timestamp":"2026-11-11T12:00:06.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"cached_input_tokens":1200,"output_tokens":500,"reasoning_output_tokens":100,"total_tokens":3500}}}}
+{"timestamp":"2026-11-11T12:00:07.000Z","type":"event_msg","payload":{"type":"task_started","started_at":1794398406}}
+{"timestamp":"2026-11-11T12:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3500,"cached_input_tokens":1200,"output_tokens":600,"reasoning_output_tokens":110,"total_tokens":4110}}}}

@@ -116,7 +116,7 @@ describe("Grok's accounts", () => {
     const usage = make()
     await usage.refresh()
     const view = await route(usage)
-    expect(view.services).toEqual(["claude", "grok", "opencode"])
+    expect(view.services).toEqual(["claude", "codex", "grok", "opencode"])
     expect(view.rows.map((row: any) => [row.id, row.service, row.provider, row.agent, row.account, row.label, row.estimated])).toEqual([["grok#0123456789abcdef", "grok", "grok-cli@work", "grok", "work", "Work", undefined]])
     const expected = fixture("grok-expected.json")
     expectDays(view.totals.grok, expected.days)

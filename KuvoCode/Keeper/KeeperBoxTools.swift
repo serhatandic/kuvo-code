@@ -6,10 +6,10 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 
 /// Kuvo Code's own tools that this Mac's box answers without the app, for the keeper while the app
 /// isn't open (`KeeperTools`): agents writing to each other and running their sessions, wake-ups,
-/// a bot's job, the vault, the sandbox's way out, and showing a file or a widget in the
-/// conversation. Every box answers them alike (`kuvo/agent-tools`, `kuvo/vault/tools`,
-/// `kuvo/sandbox/tools`), as a machine's `kuvo-browser.js mcp` passes them on, so bots on this Mac
-/// keep doing them with the app closed. The box is found by its record in `run` (`serve.json`).
+/// a bot's job, the vault, the sandbox's way out, the Work Queue, and showing a file or a widget in
+/// the conversation. Every box answers them alike (`kuvo/agent-tools`, `kuvo/vault/tools`,
+/// `kuvo/sandbox/tools`, `kuvo/work-queue/tools`), as a machine's `kuvo-browser.js mcp` passes them
+/// on, so bots on this Mac keep doing them with the app closed. The box is found by its record in `run` (`serve.json`).
 @MainActor
 final class KeeperBoxTools {
     typealias Answer = (text: String, isError: Bool)
@@ -28,6 +28,7 @@ final class KeeperBoxTools {
     /// from the call, on the Mac when it opens and on a phone, and the box reads mark_final's).
     static func answers(_ name: String) -> Bool {
         (BrowserTools.boxTools.contains(name) && name != BrowserTools.showInPanel) || BrowserTools.isVault(name) || BrowserTools.isSandbox(name)
+            || BrowserTools.isWorkQueue(name)
     }
 
     /// A call from `caller`'s conversation (the engine's session, or the coding agent's the bridge
@@ -38,6 +39,8 @@ final class KeeperBoxTools {
             answer = await vault(name, arguments, caller)
         } else if BrowserTools.isSandbox(name) {
             answer = await sandbox(name, arguments, caller)
+        } else if BrowserTools.isWorkQueue(name) {
+            answer = await workQueue(name, arguments, caller)
         } else {
             answer = await mail(name, arguments, caller)
         }
@@ -107,6 +110,32 @@ final class KeeperBoxTools {
         let said = (try? JSONSerialization.jsonObject(with: answer.data)) as? [String: Any]
         guard answer.status == 200, let text = said?["text"] as? String else {
             return (said?["message"] as? String ?? "The sandbox couldn't do that (\(answer.status)).", true)
+        }
+        return (text, said?["isError"] as? Bool ?? false)
+    }
+
+    // MARK: The Work Queue
+
+    /// The Work Queue's tools, and what agents are told of them, as the box gives them
+    /// (`GET kuvo/work-queue/tools`): none without a box.
+    func workQueueDefinitions() async -> (tools: [[String: Any]], instructions: String) {
+        guard let answer = try? await box("GET", "kuvo/work-queue/tools", timeout: 15), answer.status == 200,
+              let said = try? JSONSerialization.jsonObject(with: answer.data) as? [String: Any],
+              let tools = said["tools"] as? [[String: Any]] else { return ([], "") }
+        return (tools, said["instructions"] as? String ?? "")
+    }
+
+    /// queue_add, queue_list and the rest: the box carries them out for the conversation calling
+    /// (`POST kuvo/work-queue/tools`), as it does for the open app's tools.
+    private func workQueue(_ name: String, _ arguments: [String: Any], _ caller: String?) async -> Answer {
+        var body: [String: Any] = ["name": name, "arguments": arguments]
+        if let caller { body["session"] = caller }
+        guard let answer = try? await box("POST", "kuvo/work-queue/tools", body: body, timeout: 16 * 60) else {
+            return ("This Mac's box can't be reached now. Try again in a moment.", true)
+        }
+        let said = (try? JSONSerialization.jsonObject(with: answer.data)) as? [String: Any]
+        guard answer.status == 200, let text = said?["text"] as? String else {
+            return (said?["message"] as? String ?? "The Work Queue couldn't do that (\(answer.status)).", true)
         }
         return (text, said?["isError"] as? Bool ?? false)
     }

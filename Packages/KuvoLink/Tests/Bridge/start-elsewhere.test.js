@@ -92,6 +92,8 @@ async function engineWith(sessions) {
     if (url.pathname === "/api/session/active") return send(200, {});
     if (url.pathname === "/api/provider") return send(200, [{ id: "p" }]);
     if (url.pathname === "/api/model") return send(200, [{ id: "m1", providerID: "p", name: "Model One" }]);
+    // (Its accounts, as Settings › Accounts lists them: p is one of your own, with nothing to sign in to.)
+    if (url.pathname === "/api/integration") return send(200, []);
     if (url.pathname.startsWith("/api/experimental/")) return send(200, {});
     const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/);
     const id = match && decodeURIComponent(match[1]);

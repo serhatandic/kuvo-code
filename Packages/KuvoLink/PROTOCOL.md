@@ -383,7 +383,10 @@ computer. Changing the main computer and joining two setups come later: #183.)
     a box, with `KUVO_HOME` its own box's folder (in its app folder) and `root` the machines'
     folder (`.kuvo-code`, or a test's); without either (or with them the same) it stops, exit 2.
     Prints `{verdict, use: "own"|"attach", opens: "main"|"window", runs, box, own}`, `box` and
-    `own` as `boxes` above. `runs`, for the box in `~/<root>`: `gone` where its Mac removed it
+    `own` as `boxes` above. While a move of this Mac's box into `~/<root>` is unfinished (its
+    journal there, "Moving this Mac's box"), `{verdict: "moving", use: "wait", opens: "main", runs:
+    null, box: null, own: null}`, before anything else: no box starts until `rehome --resume`
+    finishes it. `runs`, for the box in `~/<root>`: `gone` where its Mac removed it
     (`kuvo-start off` leaves `run/off`, which only a Mac's start there takes away, and then its way
     to start, `bin/kuvo-start`, goes with its keys, leaving its link.json and card: no
     `bin/kuvo-start`, or `run/off`, whatever still runs), else `running` (its keeper,
@@ -1390,6 +1393,14 @@ start on a model by the same rule.
   retiring or hidden and isn't a Custom Auto list. `null`: nothing runs there. Left out while the engine
   can't say, or didn't say its default (and the one named is the engine's, or no longer there): a
   client starts on the one named, as it is.
+- An agent's `list_models`, and `start_session` with a `model` named, go by the same rule: one that
+  runs is taken (one its agent keeps out of its picker, or its provider is retiring, too); one of a
+  coding agent's account in `listing` with none of its own models listed yet (none, or only its
+  agent's usual ones) is taken as it's named (the bridge says whether it runs); one whose account
+  needs a sign-in, a key or its agent installed is refused saying which. While the engine can't
+  say, its models whose provider it says is ready (`api/provider`) are taken, as a start naming
+  none goes then; while the bridge can't say, one of the coding agents' is refused saying to try
+  again in a moment.
 - A lead on another computer starting a session there (`start_session` from "Peers") starts on it
   the same way, for the lead's model, where a bridge not running is no coding agents there; a new
   bot there (`kuvo/bots/templates`' `startingModel`) the same way, for the one its client named.
@@ -1458,8 +1469,10 @@ client shows it from the same routes.
   `kuvo/work` gives that row none), `stop_session`
   (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
   own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
-  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
-  an account for here, `provider/model`, with their efforts; none its provider is retiring).
+  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models that run
+  here, as "The models offered" offers them, `provider/model`, with their efforts; none its
+  provider is retiring or its agent keeps out of its picker; then the coding agents' accounts
+  still listing theirs, and a place that can't say yet).
   - **Across your computers** (bridge 0.9.204): a lead reaches the sessions under it on another
     computer (a bot that moved, say) by a call ("Peers", `call`). `stop_session`, `compact_session`
     and `answer_ask` for a session that isn't here go to the computer that told of it, or where it's
@@ -3938,11 +3951,20 @@ account you added: its own folder; a machine: Kuvo Code's, not your `~/.claude` 
 sign-in: your Claude Code settings folders, where Claude Code runs with it, as OpenUsage read them,
 each of a comma-separated `CLAUDE_CONFIG_DIR`, else `~/.config/claude` and `~/.claude`: Claude
 Code's conversations there count whoever ran them, your Terminal or Claude's desktop app), never
-another tool's folders (Cowork's, claude-swap's, Pi's); and Grok's, each Grok account's home's
-`sessions` (an account you added: its own home; a machine: Kuvo Code's; a Mac's own sign-in: your
-`GROK_HOME`, else `~/.grok`, where Grok runs with it, its sessions there counted whoever ran them),
-only each session's `updates.jsonl`, never Grok's debug log (`logs/unified.jsonl`, which it cuts
-short). It prices them as OpenUsage does (its supplement,
+another tool's folders (Cowork's, claude-swap's, Pi's); and Codex's, each Codex account's home's
+`sessions` and `archived_sessions` (an account you added: its own home, whose history on a Mac is
+your Codex's, which it links to, so counted once, with your own Codex's; a Mac's own sign-in: your
+`~/.codex`, or each of a comma-separated `CODEX_HOME`, where Codex runs with it, its conversations
+there counted whoever ran them; a machine: Kuvo Code's; a home with neither folder is read itself,
+as OpenUsage did), never Pi's or another tool's. And what your
+ChatGPT sign-in in Kuvo Code (the engine's `openai`, Settings › Accounts) used through the engine's
+own models, read (only read) from the engine's databases on that computer (each `opencode*.db` in
+its data folder: on a Mac the app's, on a machine `~/.kuvo-code/data/opencode`), Codex's, the same
+row as a Codex account signed in to the same ChatGPT account; never your own opencode's. And Grok's, each Grok account's home's `sessions` (an account you added:
+its own home; a machine: Kuvo Code's; a Mac's own sign-in: your `GROK_HOME`, else `~/.grok`, where
+Grok runs with it, its sessions there counted whoever ran them, your Terminal's too; a folder two
+accounts name, the first's), only each session's `updates.jsonl`, never Grok's debug log
+(`logs/unified.jsonl`, which it cuts short). It prices them as OpenUsage does (its supplement,
 LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
 hourly, kept in the bridge's `usage/pricing`, only by a real box's bridge, in a Mac app's folder or
 a machine's `~/.kuvo-code`, never a test's): estimates, not your bill, but where the maker said
@@ -3957,9 +3979,11 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
 - `GET kuvo/agents/api/kuvo/usage?zone=<IANA time zone>` → `{data: {zone, services, scanned?, rows:
   [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
-  `zone` says which. `services`: what this box states the usage of (`claude`, `grok`, `opencode`):
-  a client shows those from here, and reads the rest as it did. `scanned`: when this box last read
-  its logs.
+  `zone` says which. `services`: what this box states the usage of (`claude`, `codex`,
+  `grok`, `opencode`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
+  (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
+  `choices`, the models it may be, in order.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
@@ -3976,14 +4000,16 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
     peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
-    in no total), each folder once: what the Mac's Claude, Grok and OpenCode cards show. `partial`: a service whose
+    in no total), each folder once: what the Mac's Claude, Codex, Grok and OpenCode cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).
-  - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?}`, newest first, for
+  - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?, fallback?}`, newest first, for
     today and the 30 days before it in `zone`; `date` is `yyyy-MM-dd`, `cost` US dollars,
     `models` by name; `unknown`, models used that day that couldn't be priced, which count
-    nowhere (a day with only those has no tokens and no models). A model with no name but a cost
-    of its own is `Unattributed`.
+    nowhere (a day with only those has no tokens and no models), unless a fallback model estimated
+    them: `fallback`, the models whose rates did (their dollars and tokens are then in `models`
+    under the model's own name, and it's still in `unknown`). A model with no name but a cost of
+    its own is `Unattributed`.
   - What counts (OpenUsage's rules, from ccusage): a log line with `"usage":{` that parses, with a
     valid time and version and no `null` where Claude Code never writes one; once per
     `(message.id, requestId)`, a subagent's line replaying its parent's message under another
@@ -3991,6 +4017,33 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
     where it has one, else its tokens at its model's rates (1-hour cache writes at twice the input
     rate, a request whose prompt passes the model's long-context threshold at those rates
     throughout, a fast request at its model's fast multiplier).
+  - Codex's (OpenUsage's rules, from ccusage): an `event_msg` `token_count` line (written as Codex
+    writes JSON, without spaces) is a turn: its `last_token_usage`, else what its running
+    `total_token_usage` grew by since the line before; a running total the same as the last is a
+    snapshot said again, not a turn; a turn with nothing in it isn't one. `turn_context` (or a
+    model on the line itself) names the model from then on, `gpt-5` for a session that never
+    named one; `thread_settings_applied` the service tier (`fast` or `priority`, `ultrafast`). A
+    child session's log (a subagent's, a fork's: `forked_from_id`, `parent_thread_id`,
+    `thread_source: "subagent"`, `source.subagent`) replays its parent's turns first: none of those
+    counts, until a `task_started` at or after the session's own start (its first `session_meta`'s
+    time, else that line's own). A turn the same as another (time, model, tokens), in its log or
+    another, counts once; a log in both `sessions` and `archived_sessions` (by where it is in each)
+    is the first's. Priced with Codex's rules over the catalogs: cached input apart from the rest
+    (at the full input rate where a model has no cache discount or the catalog didn't say one),
+    the newer GPT models' higher rates for a whole request past 272k prompt tokens, the priority
+    tier's multiplier (and GPT-6 Astra's Ultrafast 6x), a `-fast` alias off its base once;
+    `codex-auto-review` at the model it ran on by its date, free from 2026-10-06 (UTC);
+    `gpt-reserve` at `gpt-5.6-luna`'s rates.
+  - The engine's ChatGPT slice (OpenUsage's `OpenCodeCodexUsageScanner`): a database counts only
+    while its own `openai` sign-in is a ChatGPT one (OAuth; before opencode 2 took its sign-ins in,
+    the `auth.json` beside it says), only its assistant messages from `openai` priced at nothing
+    (Codex's sign-in prices every model at $0; a key's cost more), from `message` (opencode 1) and
+    `session_message` (opencode 2, a compaction too, from when the sign-in was made on), a message
+    copied between two databases once (by its ID). Priced as Codex's. Whether the sign-in is OAuth
+    is asked of SQLite: its tokens never leave the database. A database that can't be read now
+    (and none that could) leaves what was read before as it was, never none (its box's `scanned`
+    as of when it last was); one in WAL mode whose
+    `-wal` and `-shm` are gone (its engine stopped) is read as it is.
   - Grok's (OpenUsage's rules): a transcript line holding `turn_completed` that parses, a
     `turn_completed` session update (under `params.update`, else `update`) with `usage.modelUsage`
     and a time (`_meta.agentTimestampMs`, under `params`, else the line's own; else the line's
@@ -4006,8 +4059,16 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
     says, else its buckets added up; its cost as written, never priced again (a negative one left
     out); a message in both tables, or in two channels' databases, once (by its ID, the first by
     path). A database without either table says nothing; one that can't be read while another can
-    is left out; none readable: not known now (the last read stands). A model you reach with a key
+    leaves what was read before as it was, never less (a database that can't be read now and none that
+    could too), until every one is read again; one in WAL mode whose `-wal` and `-shm` are gone is
+    read as it is. A model you reach with a key
     of your own is its provider's, never counted here.
+- `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
+  fallback model, whose rates estimate what a Codex model with no known price used (in this box's
+  own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
+  `fallback_models.codex` priced exactly by a catalog), or `null` for none (`400 {message}` for
+  anything else, its `message` a client shows as it is). Kept in the bridge's `usage/settings.json`, through a restart; read again with it
+  at once, answered as `GET`.
 - `POST kuvo/agents/api/kuvo/usage/refresh[?zone=]` reads the logs now, asks your other computers
   to read theirs and tell (below), and answers as `GET` once it's read here (or after five
   seconds, the rest coming as the event).
@@ -4016,9 +4077,10 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail
   below, only when what was used changed. A log is read on from where
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
-  is kept in the bridge's folder (`usage/claude-files` and `usage/grok-files`, a file a log, rebuilt
-  from the logs when it's lost; the engine's databases are read again whole, only when one or its
-  write-ahead log changed), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
+  is kept in the bridge's folder (`usage/claude-files`, `usage/codex-files` and `usage/grok-files`,
+  a file a log, with a Codex log's running total and model so far, rebuilt from the logs when it's
+  lost; the engine's databases are read again whole, only when one or its write-ahead log
+  changed), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
   answers at once, and every zone's days come out whole (India's midnight is on the half hour).
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
@@ -4029,14 +4091,16 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
   since its bridge or link started, and to one that asks; after a read that changed what they used
   (not only when they were read), only the last two days' slots, `from` the first slot they're
   from, the receiver keeping its older ones as told before; every ten minutes otherwise, `digest`
-  alone, saying what it told is as it was. `digest` is a hash of all of it (each account's
+  alone, saying what it told is as it was; all of it again, without `ask`, when another Codex
+  fallback model is chosen (which model estimated what isn't in `digest`). `digest` is a hash of all of it (each account's
   `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
-  dollars]], unknown?: [[slot, model]]}, estimated?: false}` (`estimated`, as a row's, never in
-  `digest`: it doesn't change for an account, and a box from before doesn't keep it): `places`, the
-  folders its logs are in (for the engine's, its data folder with the provider), each 16 hex
+  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}, estimated?: false}` (`fallback`, a model whose
+  rates estimated that slot's use of one with no price; `estimated`, as a row's; neither in
+  `digest`, which a box from before works out without them): `places`, the folders its logs are
+  in (for the engine's hosted models, its data folder with the provider), each 16 hex
   characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
   its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight
@@ -4216,8 +4280,8 @@ answers `{item}`; a category removed only once nothing, deleted items included, 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
 tool servers add to what they tell agents); `POST kuvo/work-queue/tools {name, arguments, session}`
 → `{text, isError}`, run only while the session named is making that call (as the vault's). The
-tool servers (this Mac's app, a machine's `kuvo-browser.js`) list them and pass on every `queue_…`
-call. `queue_list` (its own and its view's items, then those on your other computers, as each last
+tool servers (this Mac's app, and its keeper while the app is closed, and a machine's
+`kuvo-browser.js`) list them and pass on every `queue_…` call. `queue_list` (its own and its view's items, then those on your other computers, as each last
 told them), `queue_show` (one on another computer as it told it, saying it lives there),
 `queue_add`, `queue_update`, `queue_hand` (into a session's queue, linked to it: one on this box at
 once; one on another computer that takes the Work Queue's mail, by address or a bot's name, by mail,
@@ -4668,6 +4732,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
+| `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -4954,8 +5019,124 @@ own keeps:
   that `serve` runs, its `kuvo-start` holds nothing for it and lets go of a hold it had; until then
   it holds the Mac awake on power as a machine's does.
 
-Nothing records `box/kind` yet: the move to `~/.kuvo-code` and what the app does for a box there
-come later (#333), so this Mac's box runs in the app's folder as above.
+Only the move below records `box/kind` (`mac`), and nothing runs it yet: the keeper that runs it
+and what the app does for a box there come later (#333), so this Mac's box runs in the app's folder
+as above.
+
+#### Moving this Mac's box
+
+`box.rehome`. The box moves itself out of the app's folder into `~/.kuvo-code`, laid out as above,
+with `kuvo-link.js rehome` (#333 piece 2a). The box decides and does each step; the keeper only
+stops the old box first and starts what's there after, and a client only shows it. Only on a Mac:
+on Linux every command but `--status`, `--ready` and `--resume` refuses, saying there's nothing to
+move (`--settled` works anywhere). Everything it keeps is in `~/.kuvo-code/updates/rehome`, made
+first and never moved (an update's tidying of `updates` leaves it): its state (`state.json`, one
+change at a time, synced), its journal (`journal.json`, synced before what it
+says is done, and `journal.acts`, each act on a line, synced before it's done; a journal that's
+there but can't be read is a move under way that nothing finishes by guessing), its lock (`lock`, the holder's pid: a second `rehome` waits for it, saying so
+on stderr; one whose holder is gone is taken over), its staging folder, and the kept copies.
+
+`kuvo-link.js rehome <root> …`, with `KUVO_HOME` the app's own box's folder (`<app folder>/box`)
+and `root` the home's name in the home folder (`.kuvo-code`, or a test's), as `here` takes them.
+Each prints one JSON line, `{result, message?, status}` (`--ready` always as below, with why where
+it's not), and exits with what the keeper starts
+then: 0 (`done`, `back`, `nothing`), what's there; 1 (`refused`, `failed`: it never began, or went
+back, or something unforeseen went wrong before a move began), the box where it was; 3
+(`stuck`: it stopped past the point it goes back from, or its journal can't be read, with why in
+`state.json`'s `failed`; `--resume` carries it on), nothing; 4 (`waits`: another move holds the
+lock), nothing; 2, a command it doesn't know. It goes by whether each process runs, never a pid
+alone (it drops `KUVO_BOX`). A copy of the app (its box's folder not in `run.kuvo.code`) is
+refused anything but `--status` on the real `~/.kuvo-code`.
+
+- **`rehome <root> --release <folder> [--keeps-awake off]`**: the move, with the old box stopped
+  (its engine, coding agents' bridge and `serve`; the keeper may hold its lock). `status` is as
+  `kuvo/box/rehome` says it. `--release` is a folder with the box's own files in `bin/`
+  (`kuvo-start` and `kuvo-link.js` at least, as files), copied into `~/.kuvo-code/bin` (links
+  followed), with what the app put in its box's `bin` that the release doesn't bring (its catalog
+  of servers, its bots' words); `--keeps-awake off`, Keep This Mac Awake off in the app,
+  which the box's own setting says then (`keepsAwake: false` in `box/work.json`). Its steps:
+  1. **Plan.** What moves where, journaled. It's refused, in words, while the old box hasn't
+     started since the app updated (its `run/served.json`, which `serve` writes in the app's
+     folder each time it starts, names another app version, from `KUVO_APP_VERSION`, or another
+     link version), while something runs in it, without the box's files, while a box is in
+     `~/.kuvo-code` (one with a card or a link.json that its Mac didn't remove, `here`'s `runs`
+     not `gone`: both keep running as they are), when the app's folder and `~/.kuvo-code` aren't
+     on one APFS disk, without room for the engine's database and its journal, × 1.1, plus
+     200 MB, for a copy of the app (a demo's, a test's: its folder isn't `run.kuvo.code`) moving
+     into the real `~/.kuvo-code`, and, until the paths its sessions name are rewritten (#333
+     piece 2b), for the real app's box at all: only a test's moves yet. A refusal counts as a try.
+  2. **Install.** What's in `~/.kuvo-code` that isn't a box (one its Mac removed, or what was
+     left) is set aside into `trash/earlier-box-<date>`, nothing deleted.
+  3. **Clone.** Each folder cloned (`cp -c`, for up to six hours: APFS clones, links as links,
+     sockets left out) into
+     staging: the box's own folder's entries (not `bin`, nor in `run` its processes' records:
+     `keeper.*`, `serve.json`, `served.json`, `host.json`, `engine.json`, `bridge.json`, pids,
+     locks, `socket.key`, the app's notes on its engine), the engine's `opencode/data`, `config`,
+     `state`, `cache` and `workspace` to the same names, `engine`, `integrations`, `bots`,
+     `wakes`, `groups`, `Chats` (to `chats`), `agents`, `phone-link.json`, the app's
+     `Attachments` (into `attachments`), and the box's files. The app's folder isn't changed.
+  4. **Rewrite** and 5. **check**: the paths that name the old place (piece 2b; nothing yet).
+  6. **Place.** Each staged folder renamed into place, merged entry by entry where one's there
+     (a name in both keeps both: the one there keeps its name, the other is `<name> 2`); then
+     `box/kind` (`mac`), last.
+  7. **Fix.** What outside the box names its folders (piece 2b; nothing yet).
+  8. **Clear.** Should something have started in the old box meanwhile, or anything changed, or
+     been made, in what it clears since it cloned (the engine's `opencode` folder aside, which only
+     the engine writes, and in `run` its processes' records: a file the app kept as you sent it,
+     say, or its list of machines), it goes back first: nothing is left only in the kept copy. So the app writes nothing
+     there during a move. From here it only goes forward. The originals, the app's `box` and `opencode`
+     folders whole and each other, are renamed into `updates/rehome/kept/<date>/`, so nothing in
+     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted, by
+     `serve` as it starts and by `--ready`.
+  9. **Done.** `state.json` says `done`, with what the app's executable still owes (`owed`:
+     `keychain`, the Keychain's originals deleted, and `agent`, its own launch agent
+     unregistered), then the journal, last.
+
+  A failure before step 8 goes back: each act journaled is undone, last first (only where it was
+  done), and staging is deleted, so the app's folder and `~/.kuvo-code` are exactly as before, but
+  for the move's own `state.json` saying so.
+- **`--resume`**: a move (or move back) that stopped part way, finished: back before step 8,
+  forward from it. Going back is done again from the start if it's cut short itself. While one is
+  unfinished, `here` says `{verdict: "moving", use: "wait"}`: a keeper and app that know it start
+  no box (today's app doesn't know `wait`, and never runs a move: the keeper that does comes with
+  it). Gone back, `failed`; finished, `done` or `back`; nothing to finish, `nothing`, making nothing.
+- **`--back`**: Move Back, with the box in `~/.kuvo-code` stopped: the same steps the other way, on
+  the data as it is now (what was made since goes back too), into the app's folder it came from
+  (`state.json`'s `from`). What the move merged goes back where it came from; each other entry of
+  `~/.kuvo-code` to where the move took it from (`updates` an entry at a time, never the move's
+  own folder), any other into the app's `box`, without `box/kind` or the key files written from the
+  Keychain (`box/keys`, `box/bot-keys`, which go as it clears, never kept), nor a box the move set
+  aside in `trash` (it stays); folders made again as they were in the move's kept copy.
+  Where the app made a file again meanwhile, the box's keeps the name and the app's is kept beside
+  it (`<name> 2`). Then `~/.kuvo-code`'s originals and its `bin` are kept as above, and
+  `state.json` says `back`, owing `keychain` (the items put back) and `agent` (registered again).
+  Refused while that box runs (its keeper, `box.pid`, aside: it's what runs it), or while the app's folder has a box of its own again; a refusal
+  answers Move Back (`asked` cleared, `failed` says why). One that fails leaves the box moved
+  (`done`, with `failed`). Moved back, it moves again only on Move Now, until a move's done.
+- **`--ready [--release <folder>]`**: whether the keeper should run it now, asked with the box
+  running (its running isn't a refusal here: the keeper stops it first): `{ready, how:
+  "move"|"back"|"resume"|null, why?, status}`. One unfinished first (`resume`); then Move Back
+  asked (`back`, unless it would be refused: then that answers it); then not while a move would
+  be refused; then Move Now asked (`move`, whatever runs: the app asked you before stopping it).
+  Otherwise not after three tries (it waits for Move Now), nor before the next (an hour after one
+  fails), nor while something works on the box (a conversation on its engine or with its coding
+  agents, or one that can't be told) or a browser waits on you. Only waiting for a quiet moment
+  does it note it waits (`waiting`, `waitingSince`), and three days of that (waiting, or failing
+  meanwhile) is `overdue`.
+- **`--status`**: `kuvo/box/rehome`'s answer. **`--settled keychain|agent`**: one of `owed`, done
+  (`{settled, status}`).
+
+`kuvo/box/rehome`: `GET` answers `{state, way, step, tries, nextTry, waitingSince, overdue,
+failed, movedAt, keptUntil, owed, asked, from, to}`. `state`: null before anything, `waiting`,
+`moving` or `clearing` (under way, at `step`, or a journal that can't be read: `plan`, `install`, `clone`, `rewrite`, `check`,
+`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` says `{at, step,
+message}`), or `back`; `way`, `move` or `back`; `nextTry`, `waitingSince`, `movedAt` and
+`keptUntil` in ms; `asked`, `now` or `back`, until it's acted on. The app's box in its folder
+answers for the `~/.kuvo-code` it moves to (the real app's folder alone, `run.kuvo.code`; a copy,
+only for the home `KUVO_MACHINE_ROOT` names, else nothing: it never reads or asks the real one's); a box in a home of its own, for its own. `POST
+{now: true}` asks for Move Now and `{back: true}` (once it's moved) for Move Back, answering the
+same: only from Kuvo Code itself (the app, or `box route`; 403 from a phone), 409 with why when it
+can't (a machine, or nothing to move back).
 
 #### Host interface
 

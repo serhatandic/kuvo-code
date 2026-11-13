@@ -74,14 +74,19 @@ export class EngineAccounts {
 
   /** The engine has listed its sign-ins once: until then, none is known gone. */
   answered = false
+  /** Told the first time it has (what waited on knowing them goes on). */
+  onAnswered?: () => void
 
   /** Asks the engine again (before each round of reads); what it said last stays when it can't say. */
   async refresh() {
     try {
       const answer: any = await this.credentialsNow()
       const list = Array.isArray(answer) ? answer : Array.isArray(answer?.data) ? answer.data : undefined
-      if (list) this.answered = true
       if (list) this.credentials = list.filter((each: any) => each && typeof each.integrationID === "string" && each.active === true && each.value && typeof each.value === "object")
+      if (list && !this.answered) {
+        this.answered = true
+        this.onAnswered?.()
+      }
     } catch {}
   }
 

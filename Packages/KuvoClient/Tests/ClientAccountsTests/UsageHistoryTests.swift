@@ -60,4 +60,27 @@ struct UsageHistoryTests {
         #expect(usage.rows.map(\.estimated) == [false, true])
         #expect(usage.totals["opencode"]?.map(\.cost) == [0.5])
     }
+
+    /// Codex's days, a model estimated at the fallback model's rates, and the box's choice of it.
+    @Test func codexsFallbackEstimatesAndTheBoxsChoiceOfIt() throws {
+        struct Envelope: Decodable { var data: BoxUsage }
+        let answer = """
+        {"data": {"zone": "UTC", "services": ["claude", "codex"], "rows": [],
+          "totals": {"codex": [{"date": "2026-11-12", "tokens": 1100, "cost": 0.0085, "models": [{"model": "gpt-mystery-9", "tokens": 1100, "cost": 0.0085}], "unknown": ["gpt-mystery-9"], "fallback": ["gpt-5.5"]}]},
+          "pricing": {"codex": {"fallback": "gpt-5.5", "chosen": true, "choices": ["gpt-6-astra", "gpt-5.5"]}}
+        }}
+        """
+        let usage = try JSONDecoder().decode(Envelope.self, from: Data(answer.utf8)).data
+        #expect(usage.services == ["claude", "codex"])
+        #expect(usage.totals["codex"]?.first?.fallback == ["gpt-5.5"])
+        #expect(usage.totals["codex"]?.first?.unknown == ["gpt-mystery-9"])
+        #expect(usage.codexFallback?.model == "gpt-5.5")
+        #expect(usage.codexFallback?.choices == ["gpt-6-astra", "gpt-5.5"])
+        #expect(usage.codexFallback?.chosen == true)
+        // None chosen yet; a box from before says nothing of it.
+        let none = try JSONDecoder().decode(Envelope.self, from: Data(#"{"data": {"services": ["claude", "codex"], "pricing": {"codex": {"fallback": null, "chosen": false, "choices": []}}}}"#.utf8)).data
+        #expect(none.codexFallback?.model == nil)
+        #expect(none.codexFallback?.chosen == false)
+        #expect(try JSONDecoder().decode(Envelope.self, from: Data(answer.replacingOccurrences(of: "\"pricing\"", with: "\"other\"").utf8)).data.codexFallback == nil)
+    }
 }

@@ -77,6 +77,30 @@ export const UPDATE = object({
   blocked: nullable(string),
 });
 
+/** A step of moving this Mac's box into a home of its own (PROTOCOL.md, "Moving this Mac's box"). */
+const REHOME_STEP = words("plan", "install", "clone", "rewrite", "check", "place", "fix", "clear", "done");
+/** How moving this Mac's box into a home of its own stands (`kuvo/box/rehome`): its state (none
+ * yet; `waiting` for a quiet moment; `moving` or `clearing`, under way, and the step; `done`;
+ * `failed`, gone back; `back`, moved back), which way, its tries and the next one, since when it
+ * waits and whether that's three days (`overdue`), why it last failed, when it moved and when its
+ * kept copy goes, what the app still owes it, Move Now or Move Back asked, and both folders. */
+export const REHOME = object({
+  state: nullable(words("waiting", "moving", "clearing", "done", "failed", "back")),
+  way: nullable(words("move", "back")),
+  step: nullable(REHOME_STEP),
+  tries: number,
+  nextTry: nullable(number),
+  waitingSince: nullable(number),
+  overdue: bool,
+  failed: nullable(object({ at: number, step: nullable(REHOME_STEP), message: string })),
+  movedAt: nullable(number),
+  keptUntil: nullable(number),
+  owed: list(words("keychain", "agent")),
+  asked: nullable(words("now", "back")),
+  from: nullable(string),
+  to: nullable(string),
+});
+
 /** The browser agents use on a machine (`kuvo/browser`, PROTOCOL.md, "The browser on a machine"):
  * `missing` (none, and none being set up), `checking`, `downloading` (with `progress`, 0 to 1),
  * `installing`, `ready`, or `failed` (`message`, and when it tries again by itself, ms, or null for
@@ -138,10 +162,12 @@ export const JUDGED = object({ verdict: words("self", "free", "ours", "older", "
 /** What `kuvo-link.js here` prints as Kuvo Code opens on a Mac (PROTOCOL.md, "Already in a
  * setup?"): one verdict, whether the app uses its own box or the one already here (`attach`), how it
  * opens (`main`: its setup's main computer; `window`: onto a setup another computer is main of, its
- * box one of its members), that box, and the app's own. Not a route: the app decodes it as it opens. */
+ * box one of its members), that box, and the app's own. While a move of this Mac's box into its home
+ * is under way (its journal there, not done), `moving`, to `wait`: neither the app nor its keeper
+ * starts a box then. Not a route: the app decodes it as it opens. */
 export const HERE = object({
-  verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"),
-  use: words("own", "attach"),
+  verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two", "moving"),
+  use: words("own", "attach", "wait"),
   opens: words("main", "window"),
   runs: nullable(words("running", "stopped", "gone")),
   box: nullable(JUDGED_BOX),
@@ -187,6 +213,8 @@ export type MachineInfo = Extract<BoxInfo, { kind: "machine" }>;
 export type UpdateStatus = Infer<typeof UPDATE>;
 export type UpdateStep = Infer<typeof STEP>;
 export type LastUpdate = Infer<typeof LAST_UPDATE>;
+export type RehomeStatus = Infer<typeof REHOME>;
+export type RehomeStep = Infer<typeof REHOME_STEP>;
 export type BrowserStatus = Infer<typeof BROWSER>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
@@ -198,6 +226,8 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/info", answers: { 200: INFO } },
   { route: "GET kuvo/update", answers: { 200: UPDATE } },
   { route: "POST kuvo/update", answers: { 202: UPDATE } },
+  { route: "GET kuvo/box/rehome", answers: { 200: REHOME } },
+  { route: "POST kuvo/box/rehome", answers: { 200: REHOME } },
   { route: "GET kuvo/browser", answers: { 200: BROWSER } },
   { route: "POST kuvo/browser", answers: { 202: BROWSER } },
   { route: "GET kuvo/file", answers: { 200: BYTES } },

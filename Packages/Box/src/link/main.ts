@@ -58,7 +58,9 @@ import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
 import { browserStatus, installBrowser, startBrowserInstall } from "./browser/install";
-import { BRIDGE_FILE, IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
+import { APP_FOLDER, BRIDGE_FILE, IS_MAC, K, MAC_APP_VERSION, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
+import { rehomeCommand } from "./rehome/command";
+import { clearKept, SERVED_FILE } from "./rehome/move";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, outboxSoon, sendOutbox } from "./letters/outbox";
@@ -746,6 +748,13 @@ async function serve(): Promise<void> {
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app
   // makes them this box's (it gives the box its kit then).
   if (readKit()) try { keepJobs(); } catch {}
+  // The app's box, started (its upgrades run as it starts, its bots' jobs taken): said, with the
+  // app's version and its own, for a move of it into a home of its own, which waits for that
+  // (`rehome`). A box in a home of its own lets its kept copy go once its 30 days are up.
+  try {
+    if (APP_FOLDER) writePrivate(path.join(RUN, SERVED_FILE), JSON.stringify({ app: MAC_APP_VERSION, bridge: BRIDGE_VERSION, at: Date.now() }));
+    else clearKept(K);
+  } catch {}
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
   // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
   // Each notice kept as told too, for its clients to show (`kuvo/notices`); and what its agents send
@@ -1056,12 +1065,17 @@ if (main) {
       process.exit(2);
     }
   }
+  // Moving this Mac's box out of its app's folder into a home of its own (PROTOCOL.md, "Moving this
+  // Mac's box"), and back: `rehome <root> [--ready | --resume | --back | --status | --settled <what>]`.
+  else if (mode === "rehome") {
+    process.exitCode = await rehomeCommand(argument, process.argv.slice(4));
+  }
   else if (mode === "selftest") {
     const ok = selftest();
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

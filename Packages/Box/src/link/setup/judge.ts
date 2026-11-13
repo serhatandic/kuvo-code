@@ -14,6 +14,7 @@ import { processRuns } from "../../shared/platform";
 import { plainName } from "../../shared/text";
 import { homeFolder } from "../home";
 import { KEY, macsOf, ownKey, peersOf } from "../peers/known";
+import { moveUnderWay } from "../rehome/state";
 import { followedSetup } from "./record";
 import { setupView } from "./view";
 import type { HERE, JUDGED } from "../../shared/routes/box";
@@ -306,6 +307,9 @@ function engineKept(engineData: string | undefined): boolean {
 export function hereNow(root: string, appBox: string | undefined = process.env.KUVO_HOME, home = homeFolder(), engineData = process.env.KUVO_ENGINE_DATA): Here {
   const machine = path.join(home, root || "");
   if (!root || !appBox || path.resolve(appBox) === path.resolve(machine)) throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
+  // A move of this Mac's box into that home, under way (or stopped part way): no box starts until
+  // it's finished, back or forward (`rehome --resume`), whatever its folders say meanwhile.
+  if (moveUnderWay(machine)) return { verdict: "moving", use: "wait", opens: "main", runs: null, box: null, own: null };
   const ownRan = engineKept(engineData) || OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
   const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
   const there = foundAt(machine, false, home);

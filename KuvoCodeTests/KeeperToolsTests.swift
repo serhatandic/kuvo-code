@@ -5,7 +5,7 @@ import Testing
 
 /// With Kuvo Code closed, this Mac's box goes on, and so do the agents on it: the keeper's tools
 /// (`KeeperTools`) answer what a machine's box answers without any app (agents writing to each
-/// other, wake-ups, a bot's job, the vault, the sandbox's way out); the browser opens Kuvo Code
+/// other, wake-ups, a bot's job, the vault, the sandbox's way out, the Work Queue); the browser opens Kuvo Code
 /// (`KeeperOpensAppTests`).
 /// Over real HTTP, to a stand-in for this Mac's box on a loopback port of the test's own.
 @MainActor
@@ -155,5 +155,59 @@ import Testing
         #expect(sent.body["name"] as? String == "sandbox_ask")
         #expect(sent.body["session"] as? String == "ses_bot")
         #expect((sent.body["arguments"] as? [String: Any])?["command"] as? String == "swift build")
+    }
+
+    /// A bot keeps its Work Queue with Kuvo Code closed (#662): the queue's tools are listed, and
+    /// what agents are told of them said, in this Mac's box's words (before the app has ever listed
+    /// them, and once only after it has), and queue_add goes to the box as the conversation calling,
+    /// rather than saying it needs Kuvo Code open.
+    @Test func aBotKeepsItsWorkQueueWithTheAppClosed() async throws {
+        let asked = Asked()
+        let queueTools = StubWeb.json([
+            "tools": [["name": "queue_add", "description": "Add an item to the Work Queue.", "inputSchema": ["type": "object"]],
+                      ["name": "queue_list", "description": "List the Work Queue.", "inputSchema": ["type": "object"]]],
+            "instructions": " Keep your work in the Work Queue.",
+        ])
+        let box = try await StubListener { request, body in
+            asked.note(request, body)
+            guard request.url?.path() == "/kuvo/work-queue/tools" else { return StubWeb.Answer(status: 404) }
+            if request.httpMethod == "GET" { return queueTools }
+            return StubWeb.json(["text": "Added #12: Ship the release notes.", "isError": false])
+        }
+        let endpoint = box.endpoint
+        let tools = KeeperTools(record: { $0 == "serve.json" ? endpoint : nil })
+        try? FileManager.default.removeItem(at: KeeperTools.listFile)
+        defer {
+            tools.stop()
+            box.stop()
+            try? FileManager.default.removeItem(at: KeeperTools.listFile)
+        }
+        let server = try await tools.start().agents
+        let names = { (result: [String: Any]) in ((result["tools"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String } }
+
+        let started = try await call(server, ["method": "initialize", "params": ["protocolVersion": "2025-06-18"]])
+        #expect((started["instructions"] as? String)?.hasSuffix(" Keep your work in the Work Queue.") == true)
+        // Before the app has ever listed them.
+        var listed = names(try await call(server, ["method": "tools/list"]))
+        #expect(listed.contains("queue_add"))
+        #expect(listed.contains("send_message"))
+        // As the app last listed them, its own copy of the queue's with them.
+        let kept = try JSONSerialization.data(withJSONObject: BrowserTools.definitions(vault: []) + [["name": "queue_add", "description": "Old words.", "inputSchema": ["type": "object"]]])
+        FileManager.default.createFile(atPath: KeeperTools.listFile.path, contents: kept)
+        listed = names(try await call(server, ["method": "tools/list"]))
+        #expect(listed.filter { $0 == "queue_add" }.count == 1)
+        #expect(listed.contains("queue_list"))
+
+        let result = try await call(server, ["method": "tools/call", "params": [
+            "name": "queue_add", "arguments": ["title": "Ship the release notes"],
+            "_meta": ["ai.opencode/sessionID": "ses_bot"],
+        ]])
+        #expect(text(result) == "Added #12: Ship the release notes.")
+        #expect(result["isError"] as? Bool == false)
+        let sent = try #require(asked.requests("/kuvo/work-queue/tools").last)
+        #expect(sent.body["name"] as? String == "queue_add")
+        #expect(sent.body["session"] as? String == "ses_bot")
+        #expect((sent.body["arguments"] as? [String: Any])?["title"] as? String == "Ship the release notes")
+        #expect(sent.authorization == "Basic " + Data("opencode:test".utf8).base64EncodedString())
     }
 }

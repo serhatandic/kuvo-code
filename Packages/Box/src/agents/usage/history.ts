@@ -22,9 +22,14 @@ export interface Slots {
   used: Map<number, Map<string, Use>>
   /** Each slot's start to the models in it that couldn't be priced (and counted nowhere). */
   unknown: Map<number, Set<string>>
+  /**
+   * Each slot's start to the models whose rates priced some of its use that couldn't be priced
+   * by its own (Codex's fallback model, a box setting): those dollars are its estimate.
+   */
+  fallback: Map<number, Set<string>>
 }
 
-export const noSlots = (): Slots => ({ used: new Map(), unknown: new Map() })
+export const noSlots = (): Slots => ({ used: new Map(), unknown: new Map(), fallback: new Map() })
 
 /** What `Unattributed` is in UsageKit: a line with a cost of its own but no model. */
 export const UNATTRIBUTED = "Unattributed"
@@ -66,12 +71,19 @@ export function addUnknown(slots: Slots, slot: number, model: string) {
   models.add(model)
 }
 
+export function addFallback(slots: Slots, slot: number, model: string) {
+  let models = slots.fallback.get(slot)
+  if (!models) slots.fallback.set(slot, (models = new Set()))
+  models.add(model)
+}
+
 /** Several boxes' (or accounts') slots, added up. */
 export function summed(all: Slots[]): Slots {
   const sum = noSlots()
   for (const slots of all) {
     for (const [slot, models] of slots.used) for (const [model, [tokens, cost]] of models) add(sum, slot, model, tokens, cost)
     for (const [slot, models] of slots.unknown) for (const model of models) addUnknown(sum, slot, model)
+    for (const [slot, models] of slots.fallback) for (const model of models) addFallback(sum, slot, model)
   }
   return sum
 }
@@ -82,6 +94,7 @@ export function trimmed(slots: Slots, now: number): Slots {
   const kept = noSlots()
   for (const [slot, models] of slots.used) if (slot >= since) kept.used.set(slot, models)
   for (const [slot, models] of slots.unknown) if (slot >= since) kept.unknown.set(slot, models)
+  for (const [slot, models] of slots.fallback) if (slot >= since) kept.fallback.set(slot, models)
   return kept
 }
 
@@ -96,6 +109,8 @@ export interface Day {
   models: { model: string; tokens: number; cost: number }[]
   /** Models used that day that couldn't be priced (counted nowhere). */
   unknown?: string[]
+  /** The models whose rates estimated some of that day's dollars for models that couldn't be priced (Codex's fallback). */
+  fallback?: string[]
 }
 
 const formats = new Map<string, Intl.DateTimeFormat>()
@@ -142,12 +157,12 @@ export function windowDays(now: number, zone: string, previous = 30): string[] {
  * priced use listed with their totals (as UsageKit's series), a day with only unknown models listed
  * with none. Models in each day by name.
  */
-export function daysIn(slots: Slots, zone: string, now: number): Day[] {
-  const window = new Set(windowDays(now, zone))
-  const days = new Map<string, { models: Map<string, Use>; unknown: Set<string> }>()
+export function daysIn(slots: Slots, zone: string, now: number, previous = 30): Day[] {
+  const window = new Set(windowDays(now, zone, previous))
+  const days = new Map<string, { models: Map<string, Use>; unknown: Set<string>; fallback: Set<string> }>()
   const dayOf = (date: string) => {
     let found = days.get(date)
-    if (!found) days.set(date, (found = { models: new Map(), unknown: new Set() }))
+    if (!found) days.set(date, (found = { models: new Map(), unknown: new Set(), fallback: new Set() }))
     return found
   }
   for (const [slot, models] of slots.used) {
@@ -167,9 +182,14 @@ export function daysIn(slots: Slots, zone: string, now: number): Day[] {
     if (!window.has(date)) continue
     for (const model of models) dayOf(date).unknown.add(model)
   }
+  for (const [slot, models] of slots.fallback) {
+    const date = dayIn(slot, zone)
+    if (!window.has(date)) continue
+    for (const model of models) dayOf(date).fallback.add(model)
+  }
   return [...days.entries()]
     .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
-    .map(([date, { models, unknown }]) => {
+    .map(([date, { models, unknown, fallback }]) => {
       const listed = [...models.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([model, [tokens, cost]]) => ({ model, tokens, cost }))
       return {
         date,
@@ -177,6 +197,7 @@ export function daysIn(slots: Slots, zone: string, now: number): Day[] {
         cost: listed.reduce((sum, each) => sum + each.cost, 0),
         models: listed,
         ...(unknown.size ? { unknown: [...unknown].sort() } : {}),
+        ...(fallback.size ? { fallback: [...fallback].sort() } : {}),
       }
     })
 }
@@ -188,6 +209,8 @@ export interface KeptSlots {
   models: string[]
   used: [number, number, number, number][]
   unknown?: [number, number][]
+  /** `[slot, model's index]`: a model whose rates estimated that slot's use of a model that couldn't be priced. */
+  fallback?: [number, number][]
 }
 
 export function keptSlots(slots: Slots): KeptSlots {
@@ -201,7 +224,9 @@ export function keptSlots(slots: Slots): KeptSlots {
   for (const [slot, uses] of [...slots.used].sort(([a], [b]) => a - b)) for (const [model, [tokens, cost]] of uses) used.push([slot / SLOT, index(model), tokens, Math.round(cost * 1e6) / 1e6])
   const unknown: [number, number][] = []
   for (const [slot, names] of [...slots.unknown].sort(([a], [b]) => a - b)) for (const model of names) unknown.push([slot / SLOT, index(model)])
-  return { models, used, ...(unknown.length ? { unknown } : {}) }
+  const fallback: [number, number][] = []
+  for (const [slot, names] of [...slots.fallback].sort(([a], [b]) => a - b)) for (const model of names) fallback.push([slot / SLOT, index(model)])
+  return { models, used, ...(unknown.length ? { unknown } : {}), ...(fallback.length ? { fallback } : {}) }
 }
 
 /** Kept or told slots back, checked: what isn't one is left out (tokens are whole numbers); at most `most` uses. */
@@ -221,6 +246,11 @@ export function slotsFrom(given: unknown, most = 50_000): Slots {
     if (!Array.isArray(each)) continue
     const [slot, model] = [slotAt(each[0]), typeof each[1] === "number" ? models[each[1]] : undefined]
     if (slot !== undefined && model !== undefined) addUnknown(slots, slot, model)
+  }
+  for (const each of (Array.isArray(kept.fallback) ? kept.fallback : []).slice(0, most)) {
+    if (!Array.isArray(each)) continue
+    const [slot, model] = [slotAt(each[0]), typeof each[1] === "number" ? models[each[1]] : undefined]
+    if (slot !== undefined && model !== undefined) addFallback(slots, slot, model)
   }
   return slots
 }
