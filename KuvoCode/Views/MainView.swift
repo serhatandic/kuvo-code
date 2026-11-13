@@ -382,7 +382,6 @@ struct MainView: View {
                 branch: activeDirectory.flatMap { directory in isBotsOwnFolder(directory) ? nil : workspace.branches[directory] },
                 directory: activeDirectory,
                 isWorktree: activeDirectory.map { workspace.worktrees[$0] != nil } ?? false,
-                environment: app.shellEnvironment,
                 showsSidebar: sidebarToggle
             ) {
                 if let activeDirectory { Task { await workspace.loadBranch(for: activeDirectory) } }

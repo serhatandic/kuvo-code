@@ -1,5 +1,6 @@
 import Foundation
 import KuvoLink
+import os
 import Testing
 @testable import KuvoCode
 
@@ -112,18 +113,18 @@ import Testing
         try repo.write("a.txt", "one\n")
         try repo.commitAll()
         try repo.write("a.txt", "two\n")
-        #expect(await Git.switching(to: "idea", creating: true, at: place, environment: [:]) == nil)
+        #expect(await Git.switching(to: "idea", creating: true, at: place) == nil)
         let made = try #require(await Git.branches(at: place))
         #expect(made.repository && made.current == "idea")
         #expect(Set(made.branches) == ["idea", "main"])
         #expect(repo.read("a.txt") == "two\n", "what wasn't committed came along")
 
         try repo.commitAll("Two")
-        #expect(await Git.switching(to: "main", creating: false, at: place, environment: [:]) == nil)
+        #expect(await Git.switching(to: "main", creating: false, at: place) == nil)
         #expect(await Git.branches(at: place)?.current == "main")
         #expect(repo.read("a.txt") == "one\n")
-        #expect(await Git.switching(to: "nowhere", creating: false, at: place, environment: [:]) != nil)
-        #expect(await Git.switching(to: "-f", creating: false, at: place, environment: [:]) == "A branch’s name can’t start with “-”.")
+        #expect(await Git.switching(to: "nowhere", creating: false, at: place) != nil)
+        #expect(await Git.switching(to: "-f", creating: false, at: place) == "A branch’s name can’t start with “-”.")
 
         let plain = AppInfo.testRoot.appending(path: "Folders/plain-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
@@ -163,31 +164,29 @@ import Testing
         func take() -> (Int, String) { lock.withLock { left.count > 1 ? left.removeFirst() : left[0] } }
     }
 
-    /// How a box from before these routes says it hasn't one: `404 {}` (every box since), or a
-    /// released one's (0.7, 0.8.0-beta.1) `403` in plain words.
-    nonisolated static let olderAnswers: [(Int, String)] = [(404, "{}"), (403, "That isn't available over the link.")]
-
-    /// This Mac's box from before these routes, running on after an update: no git of this Mac's
-    /// runs; Switch says it waits, Delete says changes may go, the menu lists none.
-    @Test(arguments: olderAnswers)
-    func thisMacsOlderBoxRunsNoGitHere(status: Int, body: String) async throws {
+    /// A box held for its update (#679): no git of this Mac's runs, nothing reaches the box; Switch
+    /// and Merge into… say the gate's words, Delete says changes may go, the menu lists none.
+    @Test func aHeldBoxRunsNoGitAndSaysWhy() async throws {
         try repo.write("a.txt", "one\n")
         try repo.commitAll()
-        let older = answering([(status, body)])
-        let there = GitPlace(client: older, path: repo.path, machine: nil)
+        let id = "held-\(UUID().uuidString)"
+        let gates = BoxGates()
+        gates.updating(id, detail: "Kuvo Code on this Mac finishes updating once the work running now ends.")
+        defer { gates.letGo(id) }
+        let asked = OSAllocatedUnfairLock(initialState: 0)
+        let reached = BoxClient(box: id, transport: LocalBox { _ in
+            asked.withLock { $0 += 1 }
+            return AsyncThrowingStream { $0.finish() }
+        })
+        let there = GitPlace(client: reached, path: repo.path, machine: nil)
+        let words = "Updating… Kuvo Code on this Mac finishes updating once the work running now ends."
         #expect(await Git.branches(at: there) == nil)
-        #expect(await Git.switching(to: "idea", creating: true, at: there, environment: [:]) == Git.switchAfterUpdate)
+        #expect(await Git.switching(to: "idea", creating: true, at: there) == words)
         #expect(await Git.hasUncommittedChanges(at: there))
+        let tree = Workspace.Worktree(project: repo.path, root: repo.path + "-work", branch: "work", base: "main")
+        #expect(await tree.mergeBack(at: there, author: [:]) == .failed(words))
         #expect(try repo.git("branch", "--list", "idea").isEmpty, "nothing switched here")
-    }
-
-    /// Merge into… on a machine whose box is from before it, whichever way that box says so: it
-    /// needs a newer Kuvo Code, never "It said no".
-    @Test(arguments: olderAnswers)
-    func mergeOnAMachinesOlderBoxSaysItNeedsANewerOne(status: Int, body: String) async {
-        let place = GitPlace(client: answering([(status, body)], box: "studio"), path: "/home/ada/site", machine: "studio")
-        let tree = Workspace.Worktree(project: "/home/ada/site", root: "/home/ada/site-work", branch: "work", base: "main")
-        #expect(await tree.mergeBack(at: place, author: [:]) == .failed("studio needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac."))
+        #expect(asked.withLock { $0 } == 0)
     }
 
     /// The branch menu and Edit Project's setup while this Mac's box is starting: they wait for it,
@@ -200,13 +199,6 @@ import Testing
         ])
         let place = GitPlace(client: client, path: "/x", machine: nil)
         #expect(await Git.branches(at: place, pause: .zero) == Git.Branches(repository: true, current: "main", branches: ["main", "idea"]))
-    }
-
-    /// Commit on a machine whose released box hasn't the route: it needs a newer Kuvo Code, never
-    /// "It said no" nor its words for it, which read as a rule.
-    @Test func aReleasedBoxSaysItNeedsANewerOne() async {
-        let place = GitPlace(client: answering([(403, "That isn't available over the link.")], box: "studio"), path: "/home/ada/site", machine: "studio")
-        #expect(await Git.committing(message: "Work", push: false, at: place, environment: [:]) == BoxRefusal.olderBoxMessage)
     }
 
     /// A box's own refusal in plain words is what it says; what went wrong on the way (5xx) isn't.

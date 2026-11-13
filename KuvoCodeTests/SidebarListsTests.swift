@@ -125,22 +125,29 @@ import Testing
         #expect(workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }?.sessions.map(\.id) == ["s_new", "s_web_new", "s_web_old"])
     }
 
-    /// A machine whose box is from before it listed its sessions: the sidebar says to update Kuvo
-    /// Code there rather than file them by a rule of its own, and the worktrees this Mac removed
-    /// there are kept to hand over once it's updated (the box refuses them until then).
-    @Test func aMachineFromBeforeSessionListsSaysToUpdateIt() async throws {
+    /// A machine whose box is from before it listed its sessions (it went back to an older version
+    /// since it connected, say): the update gate holds it, saying why and what to do, rather than
+    /// filing them by a rule of its own; nothing but `kuvo/info` is sent it meanwhile, nor are the
+    /// worktrees this Mac removed there handed over (they are once it's up to date, #679).
+    @Test func aMachineFromBeforeSessionListsIsHeldForItsUpdate() async throws {
         defer { done() }
         let machine = "m_lists_old"
         UserDefaults.standard.removeObject(forKey: "removedWorktreesHandedOver." + machine)
         defer { UserDefaults.standard.removeObject(forKey: "removedWorktreesHandedOver." + machine) }
+        let gates = BoxGates()
+        defer { gates.letGo(machine) }
+        workspace.onOlderBox = { box, features in gates.foundOlder(box, features: features, name: "lab") }
         let old = OlderBox()
         workspace.boxes = { id in id == machine ? BoxClient(box: id, transport: old) : nil }
         let following = Task { await workspace.followSessionList(on: machine) }
         defer { following.cancel() }
-        try await until { workspace.outdatedLists.contains(machine) }
+        try await until { gates.state(of: machine) != nil }
+        #expect(gates.state(of: machine) == .failed("Kuvo Code on lab couldn’t be updated. It answers as an older version since it connected. Try again, or update it with the Kuvo Code that set it up."))
         #expect(!workspace.isListed(machine))
         #expect(!UserDefaults.standard.bool(forKey: "removedWorktreesHandedOver." + machine))
-        #expect(old.paths == ["kuvo/info"])
+        // Held: what reads it is refused here, and never reaches it.
+        await #expect(throws: BoxRefusal.self) { try await BoxClient(box: machine, transport: old).value([String: String].self, "GET", "kuvo/projects") }
+        #expect(Set(old.paths) == ["kuvo/info"])
     }
 
     /// A box from before `sessions.list`: its features say so, and the list's route isn't there.

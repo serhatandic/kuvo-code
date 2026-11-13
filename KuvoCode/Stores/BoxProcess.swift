@@ -177,7 +177,7 @@ final class BoxProcess {
     }
 
     /// What this Mac's box runs with, from `environment` (your shell's, and what the keeper adds):
-    /// as it starts (`launch`), and as the app runs its script once (`OwnToolsOnce`). `runsEngine`:
+    /// as it starts (`launch`). `runsEngine`:
     /// with the engine's Bun.
     static func boxEnvironment(_ environment: [String: String], runsEngine: Bool) -> [String: String] {
         var env = environment

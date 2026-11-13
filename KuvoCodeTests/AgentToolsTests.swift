@@ -92,49 +92,4 @@ import Testing
         let said = await AgentMail.shared.call("list_agents", arguments: [:], caller: "ses_lead")
         #expect(said == (text: "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.", isError: true))
     }
-
-    /// Just updated, while the older box still runs a session's work (the keeper makes way once
-    /// it's over, which can take hours): a wake-up goes to it, which doesn't answer those yet
-    /// (`agent-tools.own`), and this app's own box script keeps it all the same, run once with the
-    /// box's folders, as a machine's tool server runs it; kuvo-wake and the box's script are real.
-    /// Where that can't run (no engine yet), the agent hears why. Another tool's refusal is the box's.
-    @Test func anOlderBoxAfterAnUpdateStillKeepsAWakeUp() async throws {
-        let node = try #require(TestBox.node, "Node runs the box's script in the tests")
-        try await StubWeb.listen(port: 47_966)
-        BoxProcess.engineChanged(ServerEndpoint(url: try #require(URL(string: engine.url)), password: "test"), version: OpenCodeEngine.version, pid: getpid())
-        let runtime = OwnToolsOnce.runtime
-        OwnToolsOnce.runtime = { (node, false) }
-        let wakes = WakeUps.root.appending(path: "ses_lead")
-        defer {
-            OwnToolsOnce.runtime = runtime
-            BoxProcess.engineChanged(nil, version: nil, pid: nil)
-            try? FileManager.default.removeItem(at: wakes)
-            try? FileManager.default.removeItem(at: BoxProcess.home)
-            StubWeb.stopListening(port: 47_966)
-            engine.stop()
-        }
-        let mail = AgentMail()
-        mail.box = {
-            BoxClient(box: BoxClient.mac, transport: LocalBox { request in
-                AsyncThrowingStream { continuation in
-                    let older = request.path == "kuvo/info"
-                        ? (200, ["features": ["agent-tools", "agents"]] as [String: Any])
-                        : (400, ["message": "Send {name, arguments, session}: name one of list_agents, send_message."] as [String: Any])
-                    continuation.yield(.head(status: older.0, headers: ["content-type": "application/json"]))
-                    continuation.yield(.body((try? JSONSerialization.data(withJSONObject: older.1)) ?? Data()))
-                    continuation.finish()
-                }
-            })
-        }
-        let said = await mail.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Look again"], caller: "ses_lead")
-        #expect(!said.isError, "\(said.text)")
-        let kept = (try? FileManager.default.contentsOfDirectory(atPath: wakes.appending(path: "wakes").path(percentEncoded: false))) ?? []
-        #expect(kept.count == 1, "kept, for its time")
-        #expect((try? String(contentsOf: wakes.appending(path: "session"), encoding: .utf8)) == "ses_lead")
-
-        OwnToolsOnce.runtime = { nil }
-        #expect(await mail.call("list_wake_ups", arguments: [:], caller: "ses_lead") == (text: AgentMail.updating, isError: true))
-        let other = await mail.call("list_agents", arguments: [:], caller: "ses_lead")
-        #expect(other == (text: "Send {name, arguments, session}: name one of list_agents, send_message.", isError: true))
-    }
 }

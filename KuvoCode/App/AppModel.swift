@@ -1,5 +1,6 @@
 import AppKit
 import ClientNews
+import ClientSessions
 import KuvoVoice
 import OpenCodeKit
 import os
@@ -351,6 +352,12 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
+        // The update gate (#679): a box found older than this app needs is held; let go, it's read again.
+        workspace.onOlderBox = { [weak self] box, features in
+            guard let self else { return }
+            machines.gates.foundOlder(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
+        }
+        machines.gates.onLetGo = { [weak self] box in self?.workspace.boxUpdated(box) }
         BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
@@ -844,6 +851,30 @@ final class AppModel {
         }
     }
 
+    /// This Mac's own box, as the update gate holds it (#679): while an older app's keeper still runs
+    /// it (making way for this app's once the work under way ends), it's asked what it has, and
+    /// held while that's less than this app needs: nothing but its update is sent it until the
+    /// keeper of this version runs it. Let go once it has it all.
+    func checkOwnBoxGate() async {
+        let gates = machines.gates
+        guard keeperMakesWay || gates.state(of: BoxClient.mac) != nil else { return }
+        struct Info: Decodable { var features: [String]? }
+        guard let (status, data) = try? await box(BoxClient.mac).send("GET", "kuvo/info") else { return }
+        let features: [String]
+        if status == 404 || status == 405 {
+            features = []
+        } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
+            features = info.features ?? []
+        } else {
+            return
+        }
+        if BoxGate.isCurrent(features) {
+            gates.letGo(BoxClient.mac)
+        } else {
+            gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
+        }
+    }
+
     /// The box here answered, without a chats folder: it's from before chats had one there.
     struct ChatsNeedNewerBox: LocalizedError {
         var errorDescription: String? { "This Mac’s box needs a newer Kuvo Code to start chats there. It updates by itself overnight." }
@@ -874,7 +905,10 @@ final class AppModel {
             follower.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
             follower.onGone = { [weak self] in self?.keeperGone() }
-            follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
+            follower.onMakingWay = { [weak self] makingWay in
+                self?.keeperMakesWay = makingWay
+                Task { await self?.checkOwnBoxGate() }
+            }
             host.tellsBox = false
             // Answering again at a new address (its listener failed by itself): the keeper is told.
             host.restarted = { [weak self] in Task { await self?.tellKeeper() } }
@@ -969,6 +1003,8 @@ final class AppModel {
     private func boxEngineChanged(_ state: MacBoxRunner.Engine) {
         switch state {
         case .ready(let endpoint):
+            // (A newer keeper's box, say, in place of one an older app's keeper ran.)
+            Task { await checkOwnBoxGate() }
             // Up again, somewhere new: connected anew (a start under way, waiting for it, takes it).
             if engine == .ready, api?.client.endpoint == endpoint { return }
             guard starting == nil else { return }

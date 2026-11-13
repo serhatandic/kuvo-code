@@ -735,6 +735,7 @@ extension AppModel {
     func removeMachine(_ id: String, uninstall: Bool = false) {
         // This Mac's own box runs this Mac: it isn't removed from here.
         guard id != SSHConnection.thisMac else { return }
+        machines.gates.letGo(id)
         planLimits.stopped(id)
         // Left running, as Disconnect leaves it (a test or demo copy's stops).
         if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
