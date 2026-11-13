@@ -117,12 +117,12 @@ export function updating(now = Date.now()): boolean {
 }
 
 /** The app registered: open (`tools`), or quit (`tools` null, and its host with it), and where it's
- * installed (kept from before when it doesn't say), and where its own host answers (kept from before
- * while it's open and doesn't say). Open, what an opening that failed said is forgotten, as is an
- * update that installed. */
+ * installed (kept from before when it doesn't say), and where its own host answers (none when it
+ * doesn't say: a registration is whole, so a host an earlier app left is never kept for this one).
+ * Open, what an opening that failed said is forgotten, as is an update that installed. */
 export function registerApp(given: { tools: AppRecord["tools"]; bundle?: string | null; host?: AppRecord["host"] }, now = Date.now()): AppRecord {
   const before = readApp();
-  const host = given.tools === null ? null : given.host !== undefined ? given.host : before?.host ?? null;
+  const host = given.tools === null ? null : given.host ?? null;
   const record: AppRecord = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, host, at: now };
   writePrivate(APP_FILE(), JSON.stringify(record));
   if (record.tools) {

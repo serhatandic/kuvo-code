@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import os
 import Security
 import Testing
 @testable import KuvoCode
@@ -239,6 +240,23 @@ import Testing
         #expect(seed.settings["compaction"] != nil)
         #expect(seed.settings["shell"] == nil, "a shell on this Mac means nothing there")
         #expect(standIn.asked.allSatisfy { $0.fromApp })
+    }
+
+    /// Quitting to install an update, once the box has moved: noted where the box looks for it
+    /// (`run/app-updating`) even with its server down, so it never opens the app while Sparkle
+    /// installs it.
+    @Test func quittingToUpdateIsNotedWhereTheBoxLooksWithItsServerDownToo() throws {
+        defer {
+            AppModel.toldOwnBoxUpdating.withLock { $0 = false }
+            done()
+        }
+        try moved()
+        try write("", at: "run/.made")
+        AppModel.tellOwnBoxQuitting(updating: true)
+        let note = try box.appending(path: "run/app-updating")
+        #expect(FileManager.default.fileExists(atPath: note.path(percentEncoded: false)))
+        let modified = try FileManager.default.attributesOfItem(atPath: note.path(percentEncoded: false))[.modificationDate] as? Date
+        #expect(modified.map { abs($0.timeIntervalSinceNow) < 60 } == true, "noted now, as the box counts it")
     }
 
     /// Your machines' list is the app's to write and the box's to read: once the box has moved, in its

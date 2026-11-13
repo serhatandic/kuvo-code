@@ -164,8 +164,13 @@ test("a phone's ask of the Mac's own routes goes to the open app's own host as i
   assert.equal((await ask("POST", "kuvo/box/app", elsewhere, { fromMac: true })).status, 403);
   assert.equal((await ask("POST", "kuvo/box/app", { ...registration, host: { url: "http://example.com:80", password: "p".repeat(32) } })).status, 400);
   assert.equal((await phone("GET", "kuvo/mac/info")).status, 200, "still the app's");
-  // Its tools again (a new address), saying nothing of its host: the host it gave is kept.
+  // Registered again saying nothing of its host (a Kuvo Code from before it said one): the host the
+  // last one gave goes, never kept for this one.
   assert.equal((await ask("POST", "kuvo/box/app", { tools: registration.tools }, { fromMac: true })).status, 200);
+  const unsaid = await phone("GET", "kuvo/mac/info");
+  assert.equal(unsaid.status, 503);
+  assert.equal(unsaid.json.message, "Kuvo Code isn't open on this Mac.");
+  assert.equal((await ask("POST", "kuvo/box/app", registration)).status, 200);
   assert.equal((await phone("GET", "kuvo/mac/info")).status, 200);
 
   // It quits: nothing goes to where it answered.

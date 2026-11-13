@@ -386,9 +386,17 @@ final class PhoneLink {
         var missed = 0
         while !Task.isCancelled {
             if let client = box() { await handOver(client) }
-            if let client = box(),
-               (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200,
-               await tellPeers(client), await sendRemovals(client) {
+            // Held by the update gate (#679: an older box, taking the release the app carries): its
+            // words, at once, rather than that it isn't answering.
+            var held: String?
+            let client = box()
+            var told: (status: Int, body: Data)?
+            if let client { told = try? await client.send("PUT", "kuvo/link/config", body: linkConfig) }
+            if let told, told.status == 503 {
+                let refusal = BoxRefusal(status: told.status, data: told.body)
+                if refusal.reason == BoxGates.reason { held = refusal.message }
+            }
+            if let client, told?.status == 200, await tellPeers(client), await sendRemovals(client) {
                 missed = 0
                 // Told: your machines are set up with what it keeps (one that couldn't be before).
                 syncMachines()
@@ -408,8 +416,12 @@ final class PhoneLink {
             guard !Task.isCancelled else { return }
             // Starting, or starting again: still coming for a few tries, then said.
             missed += 1
-            status = missed < Self.graceTries ? (relayWanted ? .connecting : .off)
-                : .failed("Kuvo Code’s background service on this Mac, which holds the link to your phones and machines, isn’t answering. It’s being started again.")
+            if let held {
+                status = .failed(held)
+            } else {
+                status = missed < Self.graceTries ? (relayWanted ? .connecting : .off)
+                    : .failed("Kuvo Code’s background service on this Mac, which holds the link to your phones and machines, isn’t answering. It’s being started again.")
+            }
             try? await Task.sleep(for: .seconds(2))
         }
     }

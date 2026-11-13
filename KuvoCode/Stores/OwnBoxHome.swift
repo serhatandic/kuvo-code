@@ -62,11 +62,22 @@ nonisolated enum OwnBoxHome {
         let folder = folder
         return BoxClient(box: SSHConnection.thisMac, transport: LocalBox { request in
             guard let folder, let from = speaksAs, let served = served(in: folder) else {
+                // This Mac's own box refuses its CLI what only its app may ask (its link, its keys'
+                // proofs): until its server's up (starting, at login say), that's said as it is.
+                let own = hasMoved
                 // (`box route`'s transport is the main actor's.)
                 return AsyncThrowingStream { answer in
                     let task = Task { @MainActor in
                         do {
-                            for try await part in MachineBoxTransport(connection: SSHConnection(destination: SSHConnection.thisMac)).send(request) { answer.yield(part) }
+                            var startingNow = false
+                            for try await part in MachineBoxTransport(connection: SSHConnection(destination: SSHConnection.thisMac)).send(request) {
+                                if own, case .head(403, _) = part {
+                                    startingNow = true
+                                    answer.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+                                    answer.yield(.body((try? JSONSerialization.data(withJSONObject: ["message": stillStarting])) ?? Data()))
+                                }
+                                if !startingNow { answer.yield(part) }
+                            }
                             answer.finish()
                         } catch {
                             answer.finish(throwing: error)
@@ -82,6 +93,9 @@ nonisolated enum OwnBoxHome {
                                         allowing: { path, _ in path.hasPrefix("kuvo/") })
         })
     }
+
+    /// What this Mac's own box, moved, says of what only its app may ask while its server isn't up yet.
+    static let stillStarting = "This Mac’s box is still starting. Try again in a moment."
 
     /// Who the app is to the box attached in place, over its server: its own app (`app`, this Mac's
     /// own box, moved), Kuvo Code on its computer (`mac`, a machine's box that says it takes that

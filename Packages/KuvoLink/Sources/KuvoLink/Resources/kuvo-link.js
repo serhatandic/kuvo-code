@@ -39885,7 +39885,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "80246620e515";
+var BRIDGE_VERSION = "b339a6318a05";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -50111,7 +50111,7 @@ function updating2(now = Date.now()) {
 }
 function registerApp(given, now = Date.now()) {
   const before = readApp();
-  const host = given.tools === null ? null : given.host !== undefined ? given.host : before?.host ?? null;
+  const host = given.tools === null ? null : given.host ?? null;
   const record = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, host, at: now };
   writePrivate(APP_FILE(), JSON.stringify(record));
   if (record.tools) {

@@ -2278,7 +2278,7 @@ too). A client adds a name there as it drops its fallback for a box without it, 
 such a box needs a newer Kuvo Code.
 
 - **Held**: a client sends a held box nothing but `kuvo/info`, `kuvo/update` and `kuvo/box/update`,
-  and what keeps work already under way there going, so a session waiting on you can be answered:
+  its Mac's app's own registration (`kuvo/box/app`, "This Mac's app"), and what keeps work already under way there going, so a session waiting on you can be answered:
   its engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), the tool calls of the agents at
   work there (`kuvo/agent-tools`; a tool that box hasn't is said to the agent as waiting for the
   update), its asks (`kuvo/asks`, `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`) and
@@ -5835,9 +5835,9 @@ app's panel through it, with no Chromium of its own. A machine's box answers `40
   (`sites/signed-in`). So the app also says where its own host interface answers: `host: {url,
   password}`, `url` `http://127.0.0.1:<port>`, taken only from the app itself (`x-kuvo-from: app` over
   the box's server; `403` from `box route`, which anything you run could use to have your phones'
-  asks sent elsewhere; `400` for anything else). It's kept while the app's open (a registration
-  without `host` keeps it) and goes with `{tools: null}` and `{updating: true}`; never in what `GET`
-  answers. The box sends those two calls there, proving it's the app first (`hello`, "Host
+  asks sent elsewhere; `400` for anything else). It's kept while the app's open; a registration
+  without `host` has none (a host an earlier app left isn't kept for it), and it goes with `{tools:
+  null}` and `{updating: true}`; never in what `GET` answers. The box sends those two calls there, proving it's the app first (`hello`, "Host
   interface") for each one, as the box outlives the app and a port it left after a crash could be
   anyone's by the next; with no app there, a phone's ask is `503` ("isn't answering"). The app answers
   only those there (`hello`, `sites/signed-in`, `link/route`; `404` for its keys, which are the

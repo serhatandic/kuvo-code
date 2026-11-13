@@ -357,7 +357,12 @@ final class AppModel {
         }
         workspace.onCurrentBox = { [weak self] box, features in self?.machines.gates.foundCurrent(box, features: features) }
         workspace.isHeld = { [weak self] box in self?.machines.gates.state(of: box) != nil }
-        machines.gates.onLetGo = { [weak self] box in self?.workspace.boxUpdated(box) }
+        machines.gates.onLetGo = { [weak self] box in
+            self?.workspace.boxUpdated(box)
+            // This Mac's own box, up to date now: the app registers there (again), as it held off
+            // while the box couldn't say what it has.
+            if box == SSHConnection.thisMac, self?.attachedIsOwnBox == true { Task { await self?.registerWithOwnBox() } }
+        }
         BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,

@@ -48,6 +48,9 @@ struct BoxGateTests {
         #expect(BoxGate.isAllowed("kuvo/info"))
         #expect(BoxGate.isAllowed("kuvo/update"))
         #expect(BoxGate.isAllowed("kuvo/box/update"))
+        // Its Mac's app registering with it: its agents' browser and your phones' asks go there.
+        #expect(BoxGate.isAllowed("kuvo/box/app"))
+        #expect(!BoxGate.isAllowed("kuvo/box/app/open"))
         #expect(!BoxGate.isAllowed("kuvo/sessions/list?since=1"))
         #expect(!BoxGate.isAllowed("kuvo/git/branches"))
         #expect(!BoxGate.isAllowed("kuvo/info/extra"))

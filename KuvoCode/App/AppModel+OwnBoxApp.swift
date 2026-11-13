@@ -27,56 +27,81 @@ extension AppModel {
     /// Registered there (and the release offered), over its server alone, where the box takes the
     /// app's word as its own app's (never through `box route`, which it refuses the app's host from):
     /// waited for while it isn't up (its helper starting it at login, or again after an update),
-    /// looking at its record every two seconds, and tried again a few times should it not take it
-    /// then. One at a time (each connection asks); it ends once the app lets go of the box.
+    /// looking at its record less often as it goes on (`ownBoxServerWaits`, ten minutes in all, then
+    /// it stops and says so: the next connection asks again), and tried again a few times should it
+    /// not take it then. Held by the update gate where the box couldn't say what it has, it's asked
+    /// again as the gate lets it go (`wireStores`), not counted as a try. One at a time (each
+    /// connection asks); it ends once the app lets go of the box.
     func registerWithOwnBox() async {
         if let ownBoxRegistering { return await ownBoxRegistering.value }
         let registering = Task { [weak self] in
-            var tries = 0
-            while let self, Self.movesOwnBox, attachedIsOwnBox, !Task.isCancelled {
-                if OwnBoxHome.streamsNow {
-                    if await registerOnce() { return }
-                    tries += 1
-                    if tries >= 5 { return }
-                }
-                try? await Task.sleep(for: .seconds(2))
-            }
+            guard let self else { return }
+            await registering()
         }
         ownBoxRegistering = registering
         await registering.value
-        ownBoxRegistering = nil
+        // (Only its own: one let go of meanwhile, and another begun, is that one's.)
+        if ownBoxRegistering == registering { ownBoxRegistering = nil }
     }
 
-    /// One registration over its server: whether it's done (registered, or there's nothing to
-    /// register with: a box that isn't a Mac's, or from before it took the app), or worth trying
-    /// again (not answering just then, or not taking it).
-    private func registerOnce() async -> Bool {
+    /// How long registering waits for this Mac's own box's server between looks at its record: two
+    /// seconds, then longer, ten minutes in all. A test's own.
+    nonisolated(unsafe) static var ownBoxServerWaits: [Duration] = [2, 2, 4, 8, 16, 30].map(Duration.seconds) + Array(repeating: .seconds(60), count: 9)
+
+    private func registering() async {
+        var tries = 0
+        var waits = Self.ownBoxServerWaits[...]
+        while Self.movesOwnBox, attachedIsOwnBox, !Task.isCancelled {
+            if OwnBoxHome.streamsNow {
+                switch await registerOnce() {
+                case .done, .held: return
+                case .again:
+                    tries += 1
+                    if tries >= 5 { return }
+                }
+            }
+            guard let wait = waits.popFirst() else {
+                log.error("This Mac's box's server didn't come up within ten minutes: the app registers there when it next connects")
+                return
+            }
+            try? await Task.sleep(for: wait)
+        }
+    }
+
+    /// How one registration went: done (registered, or nothing to register with: a box that isn't a
+    /// Mac's, or from before it took the app), worth trying again (not answering just then, or not
+    /// taking it), or held by the update gate (asked again as it's let go).
+    enum OwnBoxRegistration { case done, again, held }
+
+    private func registerOnce() async -> OwnBoxRegistration {
         let client = box(SSHConnection.thisMac)
-        guard let info = try? await client.value(OwnBoxInfo.self, "GET", "kuvo/info") else { return false }
-        guard info.kind == "mac" else { return true }
+        let held = { BoxGates.isHeld(SSHConnection.thisMac) }
+        guard let info = try? await client.value(OwnBoxInfo.self, "GET", "kuvo/info") else { return held() ? .held : .again }
+        guard info.kind == "mac" else { return .done }
         let features = Set(info.features ?? [])
         // The release it carries, at its first quiet moment: the box refuses one that isn't newer.
         if features.contains("box.update") { await offerRelease(to: client) }
-        guard features.contains("box.app") else { return true }
+        guard features.contains("box.app") else { return .done }
         do {
             _ = try await browserTools.start()
             browserTools.owner = { [weak self] id in await self?.workspace.engineRunOwner(id) }
             browserTools.ready = { [weak self] in await self?.workspace.firstLoad(within: 20) }
         } catch {
             log.error("Browser tools didn't start for this Mac's box: \(error.localizedDescription, privacy: .public)")
-            return true
+            return .done
         }
-        guard let tools = browserTools.agentsServer else { return true }
+        guard let tools = browserTools.agentsServer else { return .done }
         var body: [String: Any] = ["tools": ["url": tools.url, "token": tools.token], "bundle": Bundle.main.bundleURL.path(percentEncoded: false)]
         if features.contains("box.app.host"), let host = await hostForOwnBox() { body["host"] = host }
         do {
-            let (status, _) = try await client.send("POST", "kuvo/box/app", body: try JSONSerialization.data(withJSONObject: body))
-            if status == 200 { return true }
+            let (status, data) = try await client.send("POST", "kuvo/box/app", body: try JSONSerialization.data(withJSONObject: body))
+            if status == 200 { return .done }
+            if status == 503, BoxRefusal(status: status, data: data).reason == BoxGates.reason { return .held }
             log.error("This Mac's box didn't take the app's registration (\(status))")
         } catch {
             log.error("The app couldn't register with this Mac's box: \(error.localizedDescription, privacy: .public)")
         }
-        return false
+        return .again
     }
 
     /// A machine's box attached in place (one you set up on this Mac): its server kept running for
@@ -149,7 +174,15 @@ extension AppModel {
         // (Quitting to install an update, said already: quitting adds nothing to it.)
         guard updating || !toldOwnBoxUpdating.withLock({ $0 }) else { return }
         if updating { toldOwnBoxUpdating.withLock { $0 = true } }
-        guard AppModel.movesOwnBox, OwnBoxHome.hasMoved, let folder = OwnBoxHome.folder, let served = OwnBoxHome.served(in: folder),
+        guard AppModel.movesOwnBox, OwnBoxHome.hasMoved, let folder = OwnBoxHome.folder else { return }
+        // Noted where the box looks for it too (`run/app-updating`, as the keeper's was), whether or
+        // not its server answers now: it never opens the app while Sparkle installs it.
+        if updating {
+            let note = folder.appending(path: "run/app-updating")
+            FileManager.default.createFile(atPath: note.path(percentEncoded: false), contents: Data(String(Int(Date.now.timeIntervalSince1970 * 1000)).utf8), attributes: [.posixPermissions: 0o600])
+            try? FileManager.default.setAttributes([.modificationDate: Date.now], ofItemAtPath: note.path(percentEncoded: false))
+        }
+        guard let served = OwnBoxHome.served(in: folder),
               let body = try? JSONSerialization.data(withJSONObject: updating ? ["updating": true] : ["tools": NSNull()]) else { return }
         var request = URLRequest(url: served.base.appending(path: "kuvo/box/app"), timeoutInterval: 1)
         request.httpMethod = "POST"

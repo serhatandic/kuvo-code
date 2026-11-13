@@ -1074,6 +1074,11 @@ import Testing
         #expect(!BoxClient.streams(SSHConnection.thisMac))
         await model.phoneLink.beginPairing()
         #expect(model.phoneLink.pairingProblem?.contains("isn’t running") == true, "no server to ask yet")
+        // What only its app may ask, through its CLI meanwhile (its keys' proofs), which refuses it:
+        // said as starting, not as refused.
+        try boxHereStatuses(["kuvo/box/proof": [403]])
+        let (proofStatus, proofSaid) = try await model.box(SSHConnection.thisMac).send("POST", "kuvo/box/proof", body: Data(#"{"machine":"mini.local"}"#.utf8))
+        #expect(proofStatus == 503 && BoxRefusal(status: proofStatus, data: proofSaid).message == OwnBoxHome.stillStarting)
         server = try await StandInBox.start(at: home.appending(path: RemoteEngineInstaller.root)) { request in
             switch (request.method, request.path) {
             case ("GET", "/kuvo/info"): return .json(["kind": "mac", "features": BoxGate.required + ["box.app", "box.app.host", "box.update"], "chats": "/Users/me/.kuvo-code/chats"])
@@ -1136,6 +1141,85 @@ import Testing
         let quit = try #require(stand.asked.last { $0.path == "/kuvo/box/app" })
         let quitting = try JSONSerialization.jsonObject(with: quit.body) as? [String: Any]
         #expect(quitting?["tools"] is NSNull)
+    }
+
+    /// This Mac's own box, older than this app needs (taking the release the app carries): held by the
+    /// update gate, yet the app registers there (its agents' browser calls and your phones' asks of
+    /// this Mac go to it meanwhile), and Settings › Phone says it's updating, not that the box isn't
+    /// answering.
+    @Test func thisMacsOwnBoxHeldForAnUpdateStillHasTheAppRegistered() async throws {
+        let release = folder.appending(path: "box-release")
+        let (boxRelease, lookAgain) = (MachineEngine.boxRelease, MachineEngine.updateLookAgain)
+        let taken = PhoneLinkBoxTests.Gate()
+        var app: AppModel?
+        var server: StandInBox?
+        defer {
+            taken.open()
+            MachineEngine.boxRelease = boxRelease
+            MachineEngine.updateLookAgain = lookAgain
+            server?.stop()
+            cleanUp(app)
+            AppModel.movesOwnBox = false
+            OwnBoxHome.recheck()
+        }
+        MachineEngine.boxRelease = { release }
+        MachineEngine.updateLookAgain = { await taken.pass() }
+        connectsReady()
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        try thisMacsOwnBox()
+        let older = BoxGate.required.filter { $0 != "sessions.list" } + ["box.app", "box.app.host", "box.update"]
+        server = try await StandInBox.start(at: home.appending(path: RemoteEngineInstaller.root)) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/kuvo/info"): return .json(["kind": "mac", "features": older, "chats": "/Users/me/.kuvo-code/chats"])
+            case ("POST", "/kuvo/box/update"): return HTTPResponse(status: 202, headers: ["Content-Type": "application/json"], body: Data("{}".utf8))
+            default: return .json([:])
+            }
+        }
+        app = try await started { }
+        let model = try #require(app)
+        try await until { model.machines.gates.state(of: SSHConnection.thisMac) != nil && (server?.count("POST", "/kuvo/box/app") ?? 0) > 0 }
+        #expect(model.machines.gates.state(of: SSHConnection.thisMac) == .updating(detail: BoxGate.Words.thisMacTaking), "still held")
+        try await until { if case .failed(let words) = model.phoneLink.status { words.hasPrefix(BoxGate.Words.updating) } else { false } }
+        #expect(server?.count("PUT", "/kuvo/link/config") == 0, "held: its link's words wait for the update")
+    }
+
+    /// This Mac's own box that couldn't say what it has as the app attached (not answering just then):
+    /// held, and the app registers there once the gate lets it go.
+    @Test func thisMacsOwnBoxThatCouldntSayWhatItHasHasTheAppRegisteredOnceLetGo() async throws {
+        let (boxRelease, lookAgain) = (MachineEngine.boxRelease, MachineEngine.updateLookAgain)
+        let taken = PhoneLinkBoxTests.Gate()
+        let answers = OSAllocatedUnfairLock(initialState: false)
+        var app: AppModel?
+        var server: StandInBox?
+        defer {
+            taken.open()
+            MachineEngine.boxRelease = boxRelease
+            MachineEngine.updateLookAgain = lookAgain
+            server?.stop()
+            cleanUp(app)
+            AppModel.movesOwnBox = false
+            OwnBoxHome.recheck()
+        }
+        MachineEngine.boxRelease = { nil }
+        MachineEngine.updateLookAgain = { await taken.pass() }
+        connectsReady()
+        try thisMacsOwnBox()
+        server = try await StandInBox.start(at: home.appending(path: RemoteEngineInstaller.root)) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/kuvo/info"):
+                guard answers.withLock({ $0 }) else { return HTTPResponse(status: 503) }
+                return .json(["kind": "mac", "features": BoxGate.required + ["box.app", "box.app.host"], "chats": "/Users/me/.kuvo-code/chats"])
+            default: return .json([:])
+            }
+        }
+        app = try await started { }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady && model.machines.gates.state(of: SSHConnection.thisMac) != nil }
+        // It answers now: let go, and the app registers there.
+        answers.withLock { $0 = true }
+        taken.open()
+        try await until { model.machines.gates.state(of: SSHConnection.thisMac) == nil && (server?.count("POST", "/kuvo/box/app") ?? 0) > 0 }
     }
 
     /// The files the app counts as its own box having run, when the box can't be asked, are the box's
