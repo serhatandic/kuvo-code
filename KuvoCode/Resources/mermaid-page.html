@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="initial-scale=1,width=device-width">
+    <meta http-equiv="Content-Security-Policy" content="connect-src 'none'; default-src 'none'; font-src data:; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'unsafe-eval' file:">
+    <style>
+      :root { background-color: transparent; }
+      body { margin: 0px; overflow: hidden; }
+      main { display: flex; justify-content: center; }
+      main > svg { height: auto; max-width: 100%; }
+    </style>
+    <script src="mermaid.min.js"></script>
+  </head>
+  <body>
+    <main aria-label="Diagram"></main>
+    <script>
+      let serial = 0;
+      async function renderDiagram(source, isDark) {
+        const container = document.querySelector('main');
+        container.replaceChildren();
+        const id = `kuvo-diagram-${++serial}`;
+        try {
+          mermaid.initialize({ securityLevel: 'strict', startOnLoad: false,
+            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+            theme: isDark ? 'dark' : 'default' });
+          const drawing = await mermaid.render(id, source);
+          const markup = document.createElement('template');
+          markup.innerHTML = drawing.svg;
+          container.replaceChildren(markup.content);
+          return { height: Math.ceil(container.getBoundingClientRect().height) };
+        } catch (problem) {
+          container.replaceChildren();
+          return { error: problem instanceof Error ? problem.message : String(problem) };
+        } finally {
+          document.getElementById(`d${id}`)?.remove();
+        }
+      }
+    </script>
+  </body>
+</html>

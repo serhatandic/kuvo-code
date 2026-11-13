@@ -668,7 +668,8 @@ struct FileViewer: View {
                                 // Drawn as replies are (TextKit), so a long file opens at once. Its own
                                 // pictures, beside it; none from the web (a README's badges and tracking
                                 // pixels would reach their hosts as you open it).
-                                ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent(), diagrams: true) { link in
+                                ReplyView(markdown: text, parser: MathMarkdownParser(),
+                                          images: url.deletingLastPathComponent(), diagrams: true) { link in
                                     // Another file of the project's, here; web links in the browser. A
                                     // link to a heading in the file opens nothing else.
                                     if link.scheme == nil, link.path.isEmpty { return true }

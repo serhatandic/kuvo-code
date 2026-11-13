@@ -15,9 +15,11 @@ struct ReplyDocument {
         case code(code: String, language: String?, marks: [ReplyCodeMark])
         /// A formula on its own line (`$$…$$`).
         case math(latex: String)
-        /// A Mermaid diagram (` ```mermaid `), where the document is asked to draw them.
-        case diagram(source: String)
+        /// Source for a rendered document diagram.
+        case diagram(source: MermaidSource)
     }
+
+    typealias MermaidSource = String
 
     var segments: [Segment] = []
     /// The space above each segment (the first's is 0).
@@ -214,7 +216,8 @@ struct ReplyDocument {
     /// `diagrams`: ` ```mermaid ` blocks are drawn as diagrams (a reply's, a file's preview), not
     /// shown as code; one a reply is still writing has its language marked (`CodeLanguage.writing`),
     /// so it shows as code till it's done, and one Find has places in shows as code, with them.
-    init(markdown: String, parser: some MarkupParser, style: Style, images: URL? = nil, diagrams: Bool = false) {
+    init(markdown: String, parser: some MarkupParser, style: Style,
+         images: URL? = nil, diagrams: Bool = false) {
         let parsed = (try? parser.attributedString(for: markdown)) ?? AttributedString(markdown)
         let findsMarks = (parser as? FileLinkingParser).map { $0.highlight != nil } ?? false
         let context = Context()
@@ -697,7 +700,7 @@ enum PartsCheck {
                     return "text gap \(gap): \(text.string.debugDescription) | \(paragraphs.joined(separator: ", ")) | \(fonts.joined(separator: ", "))"
                 case .code(let code, let language, _): return "code gap \(gap) \(language ?? "-"): \(code.count)"
                 case .math(let latex): return "math gap \(gap): \(latex)"
-                case .diagram(let source): return "diagram gap \(gap): \(source.count)"
+                case .diagram(source: let code): return "diagram gap \(gap): \(code.count)"
                 }
             }
         }

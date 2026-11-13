@@ -13,6 +13,7 @@ struct ReplyView: NSViewRepresentable {
     let parser: any MarkupParser
     var images: URL? = nil
     /// Enables rendered diagrams in this document.
+    var diagrams = false
     var openURL: (URL) -> Bool = { _ in false }
     @Environment(\.messageFont) private var font
     @Environment(\.colorScheme) private var scheme
@@ -701,6 +702,106 @@ final class SidewaysScrollView: NSScrollView {
             super.scrollWheel(with: event)
         }
         if event.phase == .ended || event.momentumPhase == .ended || event.phase == .cancelled { passesOn = nil }
+    }
+}
+
+/// The compact text controls shared by code and diagram blocks.
+class ReplyChipButton: NSButton {
+    private var hover = false
+    private var area: NSTrackingArea?
+    private var maximumTitle: String
+    private let pointer = PointerClaim()
+
+    init(title: String, widest: String? = nil) {
+        maximumTitle = widest ?? title
+        super.init(frame: .zero)
+        font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        isBordered = false
+        setButtonType(.momentaryChange)
+        show(title: title)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("Use init(title:widest:)") }
+
+    func show(title text: String) {
+        title = text
+        updateLabel()
+        invalidateIntrinsicContentSize()
+    }
+
+    private func updateLabel() {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: hover ? NSColor.labelColor : NSColor.secondaryLabelColor,
+            .font: font ?? NSFont.systemFont(ofSize: 11, weight: .medium)
+        ]
+        attributedTitle = NSAttributedString(string: title, attributes: attributes)
+        needsDisplay = true
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let measured = NSAttributedString(string: maximumTitle, attributes: [.font: font!]).size()
+        let natural = super.intrinsicContentSize
+        return NSSize(width: 12 + max(natural.width, measured.width), height: natural.height + 6)
+    }
+    override var fittingSize: NSSize { return intrinsicContentSize }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        area = PointerClaim.trackingArea(owner: self, in: self)
+        if let area { addTrackingArea(area) }
+    }
+
+    private func movePointer(_ event: NSEvent) {
+        let clickable = isEnabled && PointerClaim.isTopmost(self, at: event.locationInWindow)
+        pointer.show(clickable ? .pointingHand : nil)
+    }
+    override func cursorUpdate(with event: NSEvent) { movePointer(event) }
+    override func mouseMoved(with event: NSEvent) { movePointer(event) }
+    override func mouseEntered(with event: NSEvent) {
+        hover = true
+        updateLabel()
+        movePointer(event)
+    }
+    override func mouseExited(with event: NSEvent) {
+        pointer.show(nil)
+        hover = false
+        updateLabel()
+    }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            pointer.show(nil)
+            hover = false
+            updateLabel()
+        }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        if hover || isHighlighted {
+            NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.12 : 0.06).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
+        }
+        super.draw(dirtyRect)
+    }
+}
+
+/// Keeps the copy acknowledgement from changing the toolbar's width.
+final class ReplyCopyButton: ReplyChipButton {
+    private var restore: DispatchWorkItem?
+    init() {
+        super.init(title: "Copy", widest: "Copied")
+        toolTip = "Copy Code"
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("Use init()") }
+    deinit { restore?.cancel() }
+    func showCopied() {
+        restore?.cancel()
+        show(title: "Copied")
+        let work = DispatchWorkItem { [weak self] in self?.show(title: "Copy") }
+        restore = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
 }
 
