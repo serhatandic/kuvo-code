@@ -100,3 +100,19 @@ In no state does any client fall back to an old path.
 | 0.7 limits-merge | it also covers a computer the first box doesn't hear from now (relay down); PROTOCOL.md says that needs an answer first |
 | 0.7 box-notices | it also covers a machine whose bridge isn't running (`telling: false`) |
 | 0.7 model-rule (for now) | the gate makes its older-box half unreachable, but a catalog with no box (34 test files) still takes it; goes once those tests give theirs a box |
+
+## After the separate review
+- A held box still gets its engine (`api/…`), its coding agents' bridge (`kuvo/agents/…`), its agents'
+  tool calls, and what answers a waiting session: its asks and Auto's decisions. This is the same on
+  both apps, so a session waiting on you can be answered.
+- The attached box's follow reads `kuvo/update` on every pass.
+  - When it's blocked, its engine is stopped on purpose, or taking the update failed, it fails with
+    the box's own reason.
+  - When the offer is gone and nothing is under way, it offers the release again.
+  - When `kuvo/info` doesn't answer, it's held and asked again, never let through.
+- This Mac's own box is held whenever another version's keeper runs it, and looked at again as soon
+  as its box answers at a new address.
+- A machine updates itself overnight only when its `kuvo/info` lists `update`; a 0.7 machine can't.
+- A phone release must not ship before a Mac release whose box has every required name.
+- The phone dropped its checks for names the gate implies. Queued phone removals stay, as data carried
+  across the update (COMPAT).
