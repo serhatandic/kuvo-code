@@ -7,9 +7,12 @@
 //! summaries, and the end of each turn (`idle`). A kind this client doesn't know is kept by its id,
 //! type and time.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::parts::Parts;
 use crate::paths;
 
 /// Where a conversation lives on its box.
@@ -80,6 +83,18 @@ pub struct UserMessage {
     pub files: Vec<Value>,
     #[serde(default)]
     pub metadata: Option<Value>,
+}
+
+impl UserMessage {
+    /// The parts its box kept with it, if it kept any.
+    pub fn kept_parts(&self) -> Option<Parts> {
+        Parts::kept(self.metadata.as_ref())
+    }
+
+    /// One of the box's own notes to the agent (`kuvo.note`), which has no parts to read.
+    pub fn is_box_note(&self) -> bool {
+        self.metadata.as_ref().and_then(|metadata| metadata.get("kuvo")?.get("note")).is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -211,7 +226,24 @@ impl Message {
 pub struct Page {
     pub data: Vec<Message>,
     #[serde(default)]
-    pub cursor: Option<Value>,
+    pub cursor: Option<Cursor>,
+}
+
+/// Where a page leads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct Cursor {
+    #[serde(default)]
+    pub previous: Option<String>,
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
+impl Page {
+    /// The way back to the messages before it, when it was full (so there may be more).
+    pub fn earlier(&self, limit: usize) -> Option<String> {
+        let cursor = self.cursor.as_ref()?;
+        (self.data.len() >= limit).then(|| cursor.next.clone().or_else(|| cursor.previous.clone())).flatten()
+    }
 }
 
 /// The newest `limit` messages' route, newest first (a client shows them reversed).
@@ -219,13 +251,25 @@ pub fn newest_route(place: Where, session: &str, limit: usize) -> String {
     place.session_route(session, &format!("/message?limit={limit}&order=desc"))
 }
 
+/// The `limit` messages before `cursor` (a page's [`Page::earlier`]).
+pub fn earlier_route(place: Where, session: &str, cursor: &str, limit: usize) -> String {
+    place.session_route(session, &format!("/message?limit={limit}&cursor={}", paths::query_value(cursor)))
+}
+
 /// A conversation as a client shows it: its messages, oldest first, and whether a run is under way.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Conversation {
     pub session: String,
     pub place: Where,
+    /// Oldest first: the newest read, and any earlier pages read before them.
     pub messages: Vec<Message>,
     pub running: bool,
+    /// The way back to messages before these, while there may be some.
+    pub earlier: Option<String>,
+    /// Whether an earlier page has been read (the way back is then its own, not the newest's).
+    paged: bool,
+    /// The parts its box read of messages from before, by id, with the text each was read from.
+    read_parts: HashMap<String, (String, Parts)>,
 }
 
 /// What an event asks of what's shown.
@@ -241,7 +285,51 @@ pub enum Applied {
 
 impl Conversation {
     pub fn new(session: impl Into<String>, place: Where) -> Conversation {
-        Conversation { session: session.into(), place, messages: Vec::new(), running: false }
+        Conversation { session: session.into(), place, messages: Vec::new(), running: false, earlier: None, paged: false, read_parts: HashMap::new() }
+    }
+
+    /// A message's parts, to draw it by: kept with it, else as its box read them, else (not read
+    /// yet, or its box couldn't) its text as it is.
+    pub fn parts_of(&self, user: &UserMessage) -> Parts {
+        user.kept_parts()
+            .or_else(|| self.read_parts.get(&user.id).filter(|(text, _)| *text == user.text).map(|(_, parts)| parts.clone()))
+            .unwrap_or_else(|| Parts::words(user.text.clone()))
+    }
+
+    /// Of `messages`, yours and other agents' whose parts are still to be read from their box (none
+    /// kept with them, none read yet, not the box's own notes): their ids and texts.
+    pub fn unread_parts(&self, messages: &[Message]) -> Vec<(String, String)> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::User(user) if !user.is_box_note() && user.kept_parts().is_none() && self.read_parts.get(&user.id).is_none_or(|(text, _)| *text != user.text) => {
+                    Some((user.id.clone(), user.text.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What its box read of messages from before (`kuvo/messages/parts`), kept by id.
+    pub fn take_parts(&mut self, read: Vec<((String, String), Parts)>) {
+        if self.read_parts.len() > 20_000 {
+            self.read_parts.clear();
+        }
+        for ((id, text), parts) in read {
+            self.read_parts.insert(id, (text, parts));
+        }
+    }
+
+    /// An earlier page's messages (newest first, as the engine answers), put ahead of those shown;
+    /// `earlier`, the way back from it.
+    pub fn take_earlier(&mut self, mut newest_first: Vec<Message>, earlier: Option<String>) {
+        newest_first.reverse();
+        newest_first.retain(|message| !self.messages.iter().any(|shown| shown.id() == message.id()));
+        // Nothing new: there's nothing before.
+        self.earlier = if newest_first.is_empty() { None } else { earlier };
+        self.paged = true;
+        newest_first.append(&mut self.messages);
+        self.messages = newest_first;
     }
 
     /// One of the engine's events (`{id, type, data}`) applied: the words a step streams, as they
@@ -360,11 +448,19 @@ impl Conversation {
     /// once it ends, and the coding agents' bridge keeps some of them, so a read mid-reply has
     /// fewer than what streamed. Pieces for such a block that came meanwhile are in the shown words
     /// already, and are left out. `running`: whether the box says a run is under way, where it said.
-    pub fn catch_up(&mut self, mut newest_first: Vec<Message>, during: &[Value], running: Option<bool>) {
+    pub fn catch_up(&mut self, mut newest_first: Vec<Message>, earlier: Option<String>, during: &[Value], running: Option<bool>) {
         newest_first.reverse();
-        let shown = std::mem::replace(&mut self.messages, newest_first);
+        // What was shown before the newest read's (earlier pages, and those the newest left
+        // behind as more came) stays ahead of it.
+        let mut older: Vec<Message> = self.messages.iter().take_while(|shown| !newest_first.iter().any(|read| read.id() == shown.id())).cloned().collect();
+        if !self.paged && older.is_empty() {
+            self.earlier = earlier;
+        }
+        let read_from = older.len();
+        older.extend(newest_first);
+        let shown = std::mem::replace(&mut self.messages, older);
         let mut kept: Vec<(String, bool, usize)> = Vec::new();
-        for message in self.messages.iter_mut().rev() {
+        for message in self.messages[read_from..].iter_mut().rev() {
             let Message::Assistant(step) = message else { continue };
             if step.time.completed.is_some() {
                 break;

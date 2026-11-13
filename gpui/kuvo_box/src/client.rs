@@ -13,8 +13,9 @@ use crate::messages::{self, Message, Page, Where};
 use crate::sessions::{self, Line};
 use crate::ssh::SshBox;
 use crate::transport::{Closer, Request, Response, Stream, Transport};
-use crate::typed::{self, Answer, Ask, Offers};
-use crate::{ids, place, paths};
+use crate::parts::{self, Comment, Delivery, File, Notes, Parts, Sending};
+use crate::typed::{self, Answer, Ask, ModelRef, Offers, Restore};
+use crate::{ids, place};
 
 /// One box's routes. Cheap to clone: clones share the box's transport and its gate.
 #[derive(Clone)]
@@ -24,13 +25,48 @@ pub struct BoxClient {
     gate: Arc<Mutex<(Gate, u64)>>,
 }
 
-/// How a message goes to the agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Delivery {
-    /// To the agent now, read at its next step (`steer`).
-    Now,
-    /// After the run under way ends, in the queue the box carries (`queue`).
-    Queue,
+/// What a composer sends: the text as typed, and what goes with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draft {
+    /// The send's own id: the same send again (after a dropped connection) is taken once.
+    pub id: String,
+    /// What was typed (what it replies to apart: see [`BoxClient::send_draft`]'s `quote`).
+    pub text: String,
+    /// Files and pictures, as the engine takes them, and the note on those sent otherwise.
+    pub files: Vec<File>,
+    pub notes: Notes,
+    /// Review comments on the changes that go with it.
+    pub comments: Vec<Comment>,
+    /// The sessions picked from the "&" list as it was written.
+    pub named: Vec<String>,
+    /// The title of the widget it answers ("" for one without a title).
+    pub widget: Option<String>,
+    /// Whether the side thread's tag is on the composer.
+    pub side: bool,
+    /// Why the conversation's model can't run, as the client says it (it's kept, not sent).
+    pub refusal: Option<String>,
+    /// The model picked last in "Who reads it", for a review.
+    pub reviewer: Option<ModelRef>,
+    /// Now, or after the run under way.
+    pub delivery: Delivery,
+}
+
+impl Draft {
+    pub fn new(id: impl Into<String>, text: impl Into<String>) -> Draft {
+        Draft {
+            id: id.into(),
+            text: text.into(),
+            files: Vec::new(),
+            notes: Notes::default(),
+            comments: Vec::new(),
+            named: Vec::new(),
+            widget: None,
+            side: false,
+            refusal: None,
+            reviewer: None,
+            delivery: Delivery::Steer,
+        }
+    }
 }
 
 /// What became of a text sent from a composer.
@@ -38,10 +74,10 @@ pub enum Delivery {
 pub enum Sent {
     /// A message, sent to the agent under this id.
     Message { id: String },
-    /// The box read it (`typed`): what it did and what the client does with the rest. Where it said
-    /// to send a message, that's been sent (`message`, its id); anything else in it is the client's
-    /// to do (run a command, compact, switch the mode shown), and `restore` and `error` go back to
-    /// the composer.
+    /// The box read it (`typed`), or it was kept for a model that can't run: what it did and what
+    /// the client does with the rest. Where it said to send a message or run a command, that's been
+    /// sent (`message`, its id); anything else in it is the client's to do (a `!` command, compact,
+    /// switch the mode shown, the side thread), and `restore` and `error` go back to the composer.
     Typed { answer: Box<Answer>, message: Option<String> },
 }
 
@@ -206,45 +242,97 @@ impl BoxClient {
         Ok(Answer::refused(response.status, &response.body, &ask.text))
     }
 
-    /// Sends a message to the agent under `id`, which the box and the engine take once however
-    /// often it comes. `Now` goes to the agent (`steer`); `Queue` waits for the run under way, in
-    /// the queue the box carries.
-    pub fn message(&self, session: &str, place: Where, id: &str, text: &str, delivery: Delivery) -> Result<()> {
-        let request = match delivery {
-            Delivery::Now => Request::post(place.session_route(session, "/prompt"), json!({ "id": id, "text": text, "delivery": "steer" })),
-            Delivery::Queue => Request::post(
-                format!("kuvo/sessions/{}/queue/add", paths::segment(session)),
-                json!({ "id": id, "text": text, "delivery": "queue" }),
-            ),
+    /// Sends a message as its fields (`kuvo/sessions/<id>/send`): the box writes what the agent
+    /// reads, and keeps its parts with it. Taken once per `id` however often it comes.
+    pub fn send_message(&self, session: &str, sending: &Sending) -> Result<()> {
+        let body = serde_json::to_value(sending).map_err(|error| Error::BadAnswer(error.to_string()))?;
+        let mut request = Request::post(parts::send_route(session), body);
+        if let Some(id) = &sending.id {
+            request = request.header("idempotency-key", id.clone());
         }
-        .header("idempotency-key", id);
         let response = self.send(&request)?;
         if response.is_success() { Ok(()) } else { Err(Error::Refused(Refusal::from_answer(response.status, &response.body))) }
     }
 
-    /// A composer's text sent, as every client sends it: a plain message straight to the agent; a
-    /// text starting "/" or "!" to the box first (`typed`), which says what it means, sending on
-    /// what it says to send. `id` is the send's own: the same send again is answered as it was.
-    pub fn send_text(&self, session: &str, place: Where, id: &str, text: &str, delivery: Delivery) -> Result<Sent> {
-        if !typed::asks_box(text) {
-            self.message(session, place, id, text, delivery)?;
-            return Ok(Sent::Message { id: id.to_owned() });
-        }
-        let answer = self.typed(session, &Ask::new(id, text))?;
-        let message = match &answer.send {
-            Some(send) => {
-                let delivery = if send.steer == Some(true) { Delivery::Now } else { delivery };
-                // Sent with the keyword it was typed with, as both apps send it.
-                let words = match &send.typed {
-                    Some(keyword) => typed::sent_with(&send.text, keyword),
-                    None => send.text.clone(),
-                };
-                self.message(session, place, id, &words, delivery)?;
-                Some(id.to_owned())
+    /// A composer's draft sent, as every client sends it: a plain message straight to the box as
+    /// fields; a text starting "/" or "!" to the box first (`typed`), which says what it means,
+    /// sending on the message or command it says to. `quote`, given what the composer replies to:
+    /// the words with it, as the client writes a reply (KuvoClient's `Quoting.message`), for a
+    /// message that takes it.
+    pub fn send_draft(&self, session: &str, draft: &Draft, quote: Option<&dyn Fn(&str) -> String>) -> Result<Sent> {
+        let quoted = |words: &str| quote.map_or_else(|| words.to_owned(), |quote| quote(words));
+        if !typed::asks_box(&draft.text) {
+            // With a model that can't run, it's kept, saying why, as the box would.
+            if let Some(refusal) = &draft.refusal {
+                let answer = Answer { restore: Some(Restore { text: draft.text.clone(), beside: None }), error: Some(refusal.clone()), ..Answer::default() };
+                return Ok(Sent::Typed { answer: Box::new(answer), message: None });
             }
-            None => None,
+            let sending = Sending {
+                id: Some(draft.id.clone()),
+                words: quoted(&draft.text),
+                files: draft.files.clone(),
+                delivery: Some(draft.delivery),
+                widget: draft.widget.clone(),
+                comments: draft.comments.clone(),
+                named: draft.named.clone(),
+                notes: draft.notes.clone(),
+                ..Sending::default()
+            };
+            self.send_message(session, &sending)?;
+            return Ok(Sent::Message { id: draft.id.clone() });
+        }
+        let ask = Ask {
+            id: draft.id.clone(),
+            text: draft.text.clone(),
+            files: !draft.files.is_empty() || !draft.notes.is_empty(),
+            side: draft.side,
+            refusal: draft.refusal.clone(),
+            reviewer: draft.reviewer.clone(),
         };
-        Ok(Sent::Typed { answer: Box::new(answer), message })
+        let answer = self.typed(session, &ask)?;
+        let mut sending = Sending { id: Some(draft.id.clone()), files: draft.files.clone(), notes: draft.notes.clone(), delivery: Some(draft.delivery), ..Sending::default() };
+        if let Some(send) = &answer.send {
+            sending.words = if send.quoted == Some(true) { quoted(&send.text) } else { send.text.clone() };
+            sending.keyword = send.typed.clone();
+            sending.comments = draft.comments.clone();
+            sending.named = draft.named.clone();
+            if send.steer == Some(true) {
+                sending.delivery = Some(Delivery::Steer);
+            }
+        } else if let Some(run) = &answer.command {
+            sending.words = run.arguments.clone();
+            sending.command = Some(run.name.clone());
+        } else {
+            return Ok(Sent::Typed { answer: Box::new(answer), message: None });
+        }
+        self.send_message(session, &sending)?;
+        Ok(Sent::Typed { answer: Box::new(answer), message: Some(draft.id.clone()) })
+    }
+
+    /// The parts of messages from before (none kept with them), read from their texts by the box
+    /// (`kuvo/messages/parts`), one for each, in order.
+    pub fn read_parts(&self, texts: &[String]) -> Result<Vec<Parts>> {
+        #[derive(serde::Deserialize)]
+        struct Told {
+            parts: Vec<Parts>,
+        }
+        let mut all = Vec::with_capacity(texts.len());
+        for batch in texts.chunks(parts::READ_MOST) {
+            let told: Told = self.value(&Request::post(parts::READ_ROUTE, json!({ "texts": batch })))?;
+            if told.parts.len() != batch.len() {
+                return Err(Error::BadAnswer("The box read a different number of messages than it was asked.".into()));
+            }
+            all.extend(told.parts);
+        }
+        Ok(all)
+    }
+
+    /// The messages before `cursor` (a page's [`Page::earlier`]), newest first as the engine
+    /// answers, and the way back from them.
+    pub fn earlier_messages(&self, session: &str, place: Where, cursor: &str, limit: usize) -> Result<(Vec<Message>, Option<String>)> {
+        let page: Page = self.get(&messages::earlier_route(place, session, cursor, limit))?;
+        let earlier = page.earlier(limit);
+        Ok((page.data, earlier))
     }
 
     /// A new send's own id.

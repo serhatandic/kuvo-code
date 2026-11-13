@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use kuvo_box::follow::{ConversationUpdate, ListUpdate, Timing};
 use kuvo_box::messages::{Content, Message};
-use kuvo_box::{BoxClient, Delivery, Error, Gate, Sent, Where};
+use kuvo_box::{BoxClient, Delivery, Draft, Error, Gate, Sent, Where};
 use serde_json::{Value, json};
 use support::{Answer, ServeProcess, StandInBox, app_box, current_features, home, mac_info, write_record};
 
@@ -292,57 +292,93 @@ fn a_coding_agents_conversation_is_read_from_its_bridge() {
 }
 
 #[test]
-fn a_composer_sends_messages_and_asks_the_box_what_a_typed_text_means() {
+fn a_composer_sends_its_fields_and_asks_the_box_what_a_typed_text_means() {
+    use kuvo_box::parts::{Comment, File, Notes, Side};
     let stand_in = StandInBox::start(|seen| match (seen.method.as_str(), seen.route()) {
         (_, "kuvo/info") => Answer::json(200, mac_info(current_features())),
-        ("POST", "api/session/ses_1/prompt") | ("POST", "kuvo/sessions/ses_1/queue/add") => Answer::json(200, json!({})),
+        ("POST", "kuvo/sessions/ses_1/send") => Answer::json(200, json!({})),
         ("POST", "kuvo/sessions/ses_1/typed") => match seen.body.as_ref().unwrap()["text"].as_str().unwrap() {
-            "/plan sketch it" => Answer::json(200, json!({ "keyword": "plan", "agent": "plan", "send": { "text": "sketch it", "typed": "/plan" } })),
+            "/plan sketch it" => Answer::json(200, json!({ "keyword": "plan", "agent": "plan", "send": { "text": "sketch it", "typed": "/plan", "quoted": true } })),
+            "/loop every hour check" => Answer::json(200, json!({ "wakeUp": { "due": 1, "every": "1h", "note": "check" }, "send": { "text": "check", "typed": "/loop every hour", "steer": true } })),
+            "/init now" => Answer::json(200, json!({ "command": { "name": "init", "arguments": "now" } })),
             "!ls" => Answer::json(200, json!({ "shell": "ls" })),
             _ => Answer::json(503, json!({ "message": "The engine isn't answering.", "restore": { "text": "/review now" } })),
         },
         _ => Answer::json(404, json!({})),
     });
     let (_home, _serve, client) = this_mac(&stand_in);
+    let quote = |words: &str| format!("> the line\n\n{words}");
 
-    // A plain message goes straight to the agent, under its id, which the box takes once.
+    // A plain message goes to its box as fields, under its id, which the box takes once: the
+    // words with what they reply to, the files, the comments, the agents named and the widget.
     let id = BoxClient::new_id();
     assert!(id.starts_with("msg_") && id.len() == 4 + 26);
-    assert_eq!(client.send_text("ses_1", Where::Engine, &id, "fix the tests", Delivery::Now).unwrap(), Sent::Message { id: id.clone() });
-    let prompt = stand_in.seen().pop().unwrap();
-    assert_eq!(prompt.route(), "api/session/ses_1/prompt");
-    assert_eq!(prompt.body.unwrap(), json!({ "id": id, "text": "fix the tests", "delivery": "steer" }));
-    assert_eq!(prompt.headers.get("idempotency-key"), Some(&id));
+    let mut draft = Draft::new(id.clone(), "fix the tests");
+    draft.files = vec![File { uri: "file:///Users/me/shot.png".into(), name: Some("shot.png".into()) }];
+    draft.notes = Notes { paths: vec!["/Users/me/big.zip".into()], ..Notes::default() };
+    draft.comments = vec![Comment { file: "a.js".into(), line: 4, side: Side::New, snippet: "x()".into(), text: "Why?".into() }];
+    draft.named = vec!["ses_mira".into()];
+    draft.widget = Some("Pick one".into());
+    assert_eq!(client.send_draft("ses_1", &draft, Some(&quote)).unwrap(), Sent::Message { id: id.clone() });
+    let sent = stand_in.seen().pop().unwrap();
+    assert_eq!(sent.route(), "kuvo/sessions/ses_1/send");
+    assert_eq!(sent.body.unwrap(), json!({
+        "id": id, "words": "> the line\n\nfix the tests", "delivery": "steer",
+        "files": [{ "uri": "file:///Users/me/shot.png", "name": "shot.png" }],
+        "notes": { "paths": ["/Users/me/big.zip"] },
+        "comments": [{ "file": "a.js", "line": 4, "side": "new", "snippet": "x()", "text": "Why?" }],
+        "named": ["ses_mira"], "widget": "Pick one"
+    }));
+    assert_eq!(sent.headers.get("idempotency-key"), Some(&id));
 
-    // One for after the run waits in the queue the box carries.
-    client.send_text("ses_1", Where::Engine, "msg_q", "then this", Delivery::Queue).unwrap();
-    let queued = stand_in.seen().pop().unwrap();
-    assert_eq!(queued.route(), "kuvo/sessions/ses_1/queue/add");
-    assert_eq!(queued.body.unwrap(), json!({ "id": "msg_q", "text": "then this", "delivery": "queue" }));
+    // One for after the run says so; the box puts it in the queue.
+    let mut later = Draft::new("msg_q", "then this");
+    later.delivery = Delivery::Queue;
+    client.send_draft("ses_1", &later, None).unwrap();
+    assert_eq!(stand_in.seen().pop().unwrap().body.unwrap(), json!({ "id": "msg_q", "words": "then this", "delivery": "queue" }));
 
-    // "/plan sketch it": the box says what it means, and the words it says to send go.
-    let Sent::Typed { answer, message } = client.send_text("ses_1", Where::Engine, "msg_p", "/plan sketch it", Delivery::Now).unwrap() else { panic!("typed") };
-    assert_eq!(answer.agent.as_deref(), Some("plan"));
-    assert_eq!(message.as_deref(), Some("msg_p"));
+    // With a model that can't run, it's kept, saying why: nothing goes.
+    let before = stand_in.seen().len();
+    let mut refused = Draft::new("msg_k", "fix it");
+    refused.refusal = Some("Sign in to Anthropic again.".into());
+    let Sent::Typed { answer, message: None } = client.send_draft("ses_1", &refused, None).unwrap() else { panic!("kept") };
+    assert_eq!((answer.error.as_deref(), answer.restore.unwrap().text.as_str()), (Some("Sign in to Anthropic again."), "fix it"));
+    assert_eq!(stand_in.seen().len(), before);
+
+    // "/plan sketch it": the box says what it means; the words it says to send go with the keyword
+    // as typed and what they reply to, and the box writes what the agent reads.
+    let mut plan = Draft::new("msg_p", "/plan sketch it");
+    plan.files = vec![File { uri: "data:image/png;base64,AA==".into(), name: None }];
+    let Sent::Typed { answer, message } = client.send_draft("ses_1", &plan, Some(&quote)).unwrap() else { panic!("typed") };
+    assert_eq!((answer.agent.as_deref(), message.as_deref()), (Some("plan"), Some("msg_p")));
     let seen = stand_in.seen();
     let [.., typed, sent] = &seen[..] else { panic!() };
-    assert_eq!(typed.body.as_ref().unwrap(), &json!({ "id": "msg_p", "text": "/plan sketch it", "files": false, "side": false }));
-    assert_eq!(sent.route(), "api/session/ses_1/prompt");
-    // With the keyword it was sent with, as both apps send it.
-    assert_eq!(sent.body.as_ref().unwrap()["text"], json!(kuvo_box::typed::sent_with("sketch it", "/plan")));
-    assert!(sent.body.as_ref().unwrap()["text"].as_str().unwrap().starts_with("sketch it\n\n<sent-with>\n"));
+    assert_eq!(typed.body.as_ref().unwrap(), &json!({ "id": "msg_p", "text": "/plan sketch it", "files": true, "side": false }));
+    assert_eq!(sent.body.as_ref().unwrap(), &json!({ "id": "msg_p", "words": "> the line\n\nsketch it", "keyword": "/plan", "delivery": "steer", "files": [{ "uri": "data:image/png;base64,AA==" }] }));
+
+    // A /loop's first goes now, whatever was asked.
+    let mut looped = Draft::new("msg_l", "/loop every hour check");
+    looped.delivery = Delivery::Queue;
+    client.send_draft("ses_1", &looped, None).unwrap();
+    assert_eq!(stand_in.seen().pop().unwrap().body.unwrap(), json!({ "id": "msg_l", "words": "check", "keyword": "/loop every hour", "delivery": "steer" }));
+
+    // One of the engine's commands runs with its arguments as written.
+    client.send_draft("ses_1", &Draft::new("msg_c", "/init now"), None).unwrap();
+    assert_eq!(stand_in.seen().pop().unwrap().body.unwrap(), json!({ "id": "msg_c", "words": "now", "command": "init", "delivery": "steer" }));
 
     // "!ls": the client's to run; nothing's sent.
     let before = stand_in.seen().len();
-    let Sent::Typed { answer, message } = client.send_text("ses_1", Where::Engine, "msg_s", "!ls", Delivery::Now).unwrap() else { panic!() };
+    let Sent::Typed { answer, message } = client.send_draft("ses_1", &Draft::new("msg_s", "!ls"), None).unwrap() else { panic!() };
     assert_eq!((answer.shell.as_deref(), message), (Some("ls"), None));
     assert_eq!(stand_in.seen().len(), before + 1);
 
     // Refused: it all goes back to the composer, saying why.
-    let Sent::Typed { answer, message } = client.send_text("ses_1", Where::Engine, "msg_r", "/review now", Delivery::Now).unwrap() else { panic!() };
+    let Sent::Typed { answer, message } = client.send_draft("ses_1", &Draft::new("msg_r", "/review now"), None).unwrap() else { panic!() };
     assert_eq!(message, None);
     assert_eq!(answer.error.as_deref(), Some("The engine isn't answering."));
     assert_eq!(answer.restore.unwrap().text_beside(""), "/review now");
+    // Nothing went the way before.
+    assert!(stand_in.seen().iter().all(|seen| !seen.route().ends_with("/prompt") && !seen.route().ends_with("/queue/add")));
 }
 
 #[test]
@@ -466,4 +502,65 @@ fn a_password_the_box_doesnt_take_is_said_plainly() {
         other => panic!("not taken, not {other:?}"),
     }
     assert!(stand_in.seen().is_empty());
+}
+
+#[test]
+fn a_conversation_shows_each_message_by_its_parts_and_pages_back() {
+    // The newest 100, newest first: one keeps its parts, one is the box's note, the rest are from
+    // before; then 3 older ones before them.
+    let user_with = |n: usize, metadata: Value| json!({ "type": "user", "id": format!("msg_{n:03}"), "time": { "created": n }, "text": format!("text {n}"), "metadata": metadata });
+    let newest: Vec<Value> = (100..200)
+        .rev()
+        .map(|n| match n {
+            199 => user_with(n, json!({ "kuvo": { "parts": { "words": "kept words", "keyword": "/plan" } } })),
+            198 => user_with(n, json!({ "kuvo": { "note": { "from": "Wake-up", "line": "x" } } })),
+            _ => user_with(n, json!(null)),
+        })
+        .collect();
+    let older: Vec<Value> = (1..4).rev().map(|n| user_with(n, json!(null))).collect();
+    let stand_in = StandInBox::start(move |seen| match (seen.method.as_str(), seen.path.as_str()) {
+        (_, "kuvo/info") => Answer::json(200, mac_info(current_features())),
+        (_, "api/session/ses_1") => Answer::json(200, json!({ "data": { "id": "ses_1" } })),
+        (_, "api/session/ses_1/message?limit=100&order=desc") => Answer::json(200, json!({ "data": newest, "cursor": { "next": "c1" } })),
+        (_, "api/session/ses_1/message?limit=100&cursor=c1") => Answer::json(200, json!({ "data": older, "cursor": { "next": "c2" } })),
+        // The box reads each text from before: "text 5" was sent with /goal.
+        ("POST", "kuvo/messages/parts") => {
+            let texts: Vec<String> = serde_json::from_value(seen.body.as_ref().unwrap()["texts"].clone()).unwrap();
+            Answer::json(200, json!({ "parts": texts.iter().map(|text| json!({ "words": format!("read {text}"), "keyword": "/goal" })).collect::<Vec<_>>() }))
+        }
+        _ => Answer::json(404, json!({})),
+    });
+    let events = stand_in.stream_for("api/event");
+    let (_home, _serve, client) = this_mac(&stand_in);
+    let follow = client.follow_conversation("ses_1", at_once());
+    let ConversationUpdate::Conversation(shown) = follow.next_blocking().unwrap() else { panic!() };
+    assert_eq!(shown.messages.len(), 100);
+    assert_eq!(shown.earlier.as_deref(), Some("c1"));
+    let parts = |conversation: &kuvo_box::Conversation, id: &str| {
+        let Some(Message::User(user)) = conversation.messages.iter().find(|message| message.id() == id) else { panic!("{id}") };
+        conversation.parts_of(user)
+    };
+    // Kept with it; read by its box; the box's note as it is.
+    assert_eq!((parts(&shown, "msg_199").words.as_str(), parts(&shown, "msg_199").keyword.as_deref()), ("kept words", Some("/plan")));
+    assert_eq!((parts(&shown, "msg_150").words.as_str(), parts(&shown, "msg_150").keyword.as_deref()), ("read text 150", Some("/goal")));
+    assert_eq!(parts(&shown, "msg_198").words, "text 198");
+    let asked = |stand_in: &StandInBox| -> Vec<Vec<String>> {
+        stand_in.seen().iter().filter(|seen| seen.route() == "kuvo/messages/parts").map(|seen| serde_json::from_value(seen.body.as_ref().unwrap()["texts"].clone()).unwrap()).collect()
+    };
+    assert_eq!(asked(&stand_in), vec![(100..198).rev().map(|n| format!("text {n}")).collect::<Vec<_>>()]);
+
+    // Back past the first page: the 3 before, with theirs read, and nothing more before them.
+    follow.load_earlier();
+    let ConversationUpdate::Conversation(shown) = follow.next_blocking().unwrap() else { panic!() };
+    assert_eq!(shown.messages.len(), 103);
+    assert_eq!(shown.messages[..4].iter().map(Message::id).collect::<Vec<_>>(), vec!["msg_001", "msg_002", "msg_003", "msg_100"]);
+    assert_eq!(shown.earlier, None);
+    assert_eq!(parts(&shown, "msg_002").words, "read text 2");
+
+    // Read again (a message delivered): the earlier ones stay ahead, and nothing is asked twice.
+    events.send(event("session.inbox.delivered", "ses_1", json!({ "inboxID": "msg_x" }))).unwrap();
+    let ConversationUpdate::Conversation(shown) = follow.next_blocking().unwrap() else { panic!() };
+    assert_eq!(shown.messages.len(), 103);
+    assert_eq!(shown.messages[0].id(), "msg_001");
+    assert_eq!(asked(&stand_in).len(), 2);
 }

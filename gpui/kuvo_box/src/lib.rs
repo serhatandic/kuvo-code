@@ -19,6 +19,7 @@ pub mod info;
 pub mod lines;
 pub mod local;
 pub mod messages;
+pub mod parts;
 pub mod paths;
 pub mod place;
 pub mod sessions;
@@ -26,7 +27,8 @@ pub mod ssh;
 pub mod transport;
 pub mod typed;
 
-pub use client::{BoxClient, Delivery, Sent, WorkCounts};
+pub use client::{BoxClient, Draft, Sent, WorkCounts};
+pub use parts::{Delivery, Parts, Sending};
 pub use error::{Error, Refusal, Result};
 pub use follow::{ConversationUpdate, Follow, ListUpdate, Timing};
 pub use gate::Gate;

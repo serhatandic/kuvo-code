@@ -186,3 +186,54 @@ fn the_gate_needs_what_the_swift_clients_need() {
     let names: Vec<&str> = list.split(',').map(|name| name.trim().trim_matches('"')).filter(|name| !name.is_empty()).collect();
     assert_eq!(names, gate::REQUIRED);
 }
+
+/// A message's parts as every client reads them, kept with a message or read by its box from one
+/// from before; and the fields a client sends, as the box takes them (Vectors/message-parts.json).
+#[test]
+fn a_messages_parts_are_read_as_the_box_wrote_them() {
+    let vectors = vectors("message-parts.json");
+    let cases: Vec<&Value> = vectors["compose"].as_array().unwrap().iter().chain(vectors["read"].as_array().unwrap()).collect();
+    assert!(cases.len() >= 30);
+    for case in cases {
+        let metadata = serde_json::json!({ "kuvo": { "parts": case["parts"], "other": 1 } });
+        let read = kuvo_box::Parts::kept(Some(&metadata)).unwrap_or_else(|| panic!("{}", case["about"]));
+        // Read and written again, the same parts.
+        assert_eq!(numbers_as_floats(serde_json::to_value(&read).unwrap()), numbers_as_floats(case["parts"].clone()), "{}", case["about"]);
+        // And as the box answers `kuvo/messages/parts`.
+        let told: kuvo_box::Parts = serde_json::from_value(case["parts"].clone()).unwrap();
+        assert_eq!(told, read, "{}", case["about"]);
+    }
+    // One with none kept is from before.
+    assert_eq!(kuvo_box::Parts::kept(Some(&serde_json::json!({ "kuvo": { "wake": true } }))), None);
+}
+
+#[test]
+fn a_client_sends_the_fields_the_box_takes() {
+    use kuvo_box::parts::{Comment, Notes, Sending, Side};
+    let vectors = vectors("message-parts.json");
+    for case in vectors["compose"].as_array().unwrap() {
+        let fields = &case["fields"];
+        let strings = |value: &Value| -> Vec<String> { serde_json::from_value(value.clone()).unwrap_or_default() };
+        let sending = Sending {
+            words: fields["words"].as_str().unwrap().to_owned(),
+            keyword: fields["keyword"].as_str().map(str::to_owned),
+            widget: fields["widget"].as_str().map(str::to_owned),
+            comments: fields["comments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|each| Comment {
+                    file: each["file"].as_str().unwrap().to_owned(),
+                    line: each["line"].as_i64().unwrap(),
+                    side: if each["side"] == "old" { Side::Old } else { Side::New },
+                    snippet: each["snippet"].as_str().unwrap().to_owned(),
+                    text: each["text"].as_str().unwrap().to_owned(),
+                })
+                .collect(),
+            named: strings(&fields["named"]),
+            notes: Notes { included: strings(&fields["notes"]["included"]), paths: strings(&fields["notes"]["paths"]), unsent: strings(&fields["notes"]["unsent"]) },
+            ..Sending::default()
+        };
+        assert_eq!(numbers_as_floats(serde_json::to_value(&sending).unwrap()), numbers_as_floats(fields.clone()), "{}", case["about"]);
+    }
+}

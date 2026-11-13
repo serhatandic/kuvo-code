@@ -8,7 +8,6 @@
 //! Over a box's own server, what's followed streams. Over SSH, a box answers each request once,
 //! so it's read again on a timer ([`Timing`]).
 
-use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -18,7 +17,8 @@ use serde_json::Value;
 use crate::client::BoxClient;
 use crate::error::{Error, Refusal};
 use crate::lines;
-use crate::messages::{self, Applied, Conversation, Page, Where};
+use crate::messages::{self, Applied, Conversation, Message, Page, Where};
+use crate::parts::Parts;
 use crate::sessions::{self, Line, Listing};
 use crate::transport::{Closer, Request, Stream};
 
@@ -78,6 +78,18 @@ pub enum ConversationUpdate {
 pub struct Follow<T> {
     updates: async_channel::Receiver<T>,
     stop: Arc<Stop>,
+    /// What a conversation's reader is asked for.
+    wants: Option<Arc<Wants>>,
+}
+
+impl Follow<ConversationUpdate> {
+    /// Reads the messages before those shown (as you scroll up), and puts them ahead of them: the
+    /// conversation that follows has them, and `earlier` says whether there are more.
+    pub fn load_earlier(&self) {
+        if let Some(wants) = &self.wants {
+            wants.earlier();
+        }
+    }
 }
 
 impl<T> Follow<T> {
@@ -108,6 +120,8 @@ impl<T> Drop for Follow<T> {
 struct Stop {
     state: Mutex<(bool, Vec<Closer>)>,
     woken: Condvar,
+    /// What else wakes as it ends (a reader waiting to be asked).
+    wakes: Mutex<Vec<Arc<Wants>>>,
 }
 
 impl Stop {
@@ -120,6 +134,9 @@ impl Stop {
         self.woken.notify_all();
         for closer in closers {
             closer.close();
+        }
+        for wants in self.wakes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter() {
+            wants.close();
         }
     }
 
@@ -148,6 +165,52 @@ impl Stop {
 
     fn release(&self) {
         self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).1.clear();
+    }
+}
+
+/// What a conversation's reader is asked for: its newest messages again, earlier ones, or to end.
+/// Asked again while it reads, it reads once more after.
+#[derive(Default)]
+struct Wants {
+    state: Mutex<(bool, bool, bool)>,
+    woken: Condvar,
+}
+
+impl Wants {
+    fn again(&self) {
+        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).0 = true;
+        self.woken.notify_all();
+    }
+
+    fn earlier(&self) {
+        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).1 = true;
+        self.woken.notify_all();
+    }
+
+    fn close(&self) {
+        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).2 = true;
+        self.woken.notify_all();
+    }
+
+    /// What's wanted (the newest again, earlier ones), waiting for it up to `most` (none: as long
+    /// as it takes); the newest again once `most` has gone by; none once it's ended.
+    fn next(&self, most: Option<Duration>) -> Option<(bool, bool)> {
+        let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let waiting = |state: &mut (bool, bool, bool)| !state.0 && !state.1 && !state.2;
+        let (mut state, timed_out) = match most {
+            Some(most) => {
+                let (state, result) = self.woken.wait_timeout_while(state, most, waiting).unwrap_or_else(|poisoned| poisoned.into_inner());
+                (state, result.timed_out())
+            }
+            None => (self.woken.wait_while(state, waiting).unwrap_or_else(|poisoned| poisoned.into_inner()), false),
+        };
+        if state.2 {
+            return None;
+        }
+        let wanted = (state.0 || timed_out, state.1);
+        state.0 = false;
+        state.1 = false;
+        Some(wanted)
     }
 }
 
@@ -211,7 +274,7 @@ fn spawn<T: Send + 'static>(name: &str, run: impl FnOnce(&Latest<T>, Arc<Stop>) 
     if started.is_err() {
         updates.close();
     }
-    Follow { updates, stop }
+    Follow { updates, stop, wants: None }
 }
 
 /// The rest of an answer, for what it says when it's a refusal.
@@ -235,7 +298,18 @@ impl BoxClient {
     pub fn follow_conversation(&self, session: &str, timing: Timing) -> Follow<ConversationUpdate> {
         let client = self.clone();
         let session = session.to_owned();
-        spawn("kuvo-box conversation", move |latest, stop| follow_conversation(client, session, timing, latest, stop))
+        let wants = Arc::new(Wants::default());
+        let theirs = wants.clone();
+        let mut follow = spawn("kuvo-box conversation", move |latest, stop| {
+            stop.wakes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(theirs.clone());
+            // (Stopped before it started: it ends at once.)
+            if stop.is_stopped() {
+                return;
+            }
+            follow_conversation(client, session, timing, latest, &stop, &theirs);
+        });
+        follow.wants = Some(wants);
+        follow
     }
 }
 
@@ -318,7 +392,8 @@ struct Shown {
 const READ: usize = 100;
 
 /// Reads the conversation, and shows it with what came meanwhile: under the lock, so no older
-/// copy is ever handed on after a newer one. False once it's gone, which ends the follow.
+/// copy is ever handed on after a newer one. The parts of messages from before are read first, so
+/// the page shows as written. False once it's gone, which ends the follow.
 fn read(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUpdate>) -> bool {
     let (session, place) = {
         let mut now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -326,12 +401,17 @@ fn read(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUp
         (now.conversation.session.clone(), now.conversation.place)
     };
     let read: Result<Page, Error> = client.get(&messages::newest_route(place, &session, READ));
-    let running = if read.is_ok() { is_running(client, place, &session) } else { None };
+    let (parts, running) = match &read {
+        Ok(page) => (read_parts(client, shown, &page.data), is_running(client, place, &session)),
+        Err(_) => (Vec::new(), None),
+    };
     let mut now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let during = now.during.take().unwrap_or_default();
     match read {
         Ok(page) => {
-            now.conversation.catch_up(page.data, &during, running);
+            let earlier = page.earlier(READ);
+            now.conversation.take_parts(parts);
+            now.conversation.catch_up(page.data, earlier, &during, running);
             latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
             true
         }
@@ -346,6 +426,39 @@ fn read(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUp
     }
 }
 
+/// Reads the messages before those shown, and puts them ahead.
+fn read_earlier(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUpdate>) {
+    let (session, place, cursor) = {
+        let now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(cursor) = now.conversation.earlier.clone() else { return };
+        (now.conversation.session.clone(), now.conversation.place, cursor)
+    };
+    match client.earlier_messages(&session, place, &cursor, READ) {
+        Ok((older, earlier)) => {
+            let parts = read_parts(client, shown, &older);
+            let mut now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            now.conversation.take_parts(parts);
+            now.conversation.take_earlier(older, earlier);
+            latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
+        }
+        Err(error) => latest.put(ConversationUpdate::Failed(error)),
+    }
+}
+
+/// The parts of those of `messages` from before, as their box reads them; none where it couldn't
+/// say (they show as written, and are asked again with the next read).
+fn read_parts(client: &BoxClient, shown: &Mutex<Shown>, messages: &[Message]) -> Vec<((String, String), Parts)> {
+    let unread = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).conversation.unread_parts(messages);
+    if unread.is_empty() {
+        return Vec::new();
+    }
+    let texts: Vec<String> = unread.iter().map(|(_, text)| text.clone()).collect();
+    match client.read_parts(&texts) {
+        Ok(parts) => unread.into_iter().zip(parts).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Whether a run is under way in it, as its engine (or bridge) says (`api/session/active`); none
 /// when it couldn't say.
 fn is_running(client: &BoxClient, place: Where, session: &str) -> Option<bool> {
@@ -353,7 +466,24 @@ fn is_running(client: &BoxClient, place: Where, session: &str) -> Option<bool> {
     Some(active.get("data")?.as_object()?.contains_key(session))
 }
 
-fn follow_conversation(client: BoxClient, session: String, timing: Timing, latest: &Latest<ConversationUpdate>, stop: Arc<Stop>) {
+/// Reads as it's asked to (or, `most` given, on that timer), until it's ended or the conversation's
+/// gone.
+fn reader(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUpdate>, stop: &Stop, wants: &Wants, most: Option<Duration>) {
+    while let Some((again, earlier)) = wants.next(most) {
+        if stop.is_stopped() {
+            return;
+        }
+        if earlier {
+            read_earlier(client, shown, latest);
+        }
+        if again && !read(client, shown, latest) {
+            stop.stop();
+            return;
+        }
+    }
+}
+
+fn follow_conversation(client: BoxClient, session: String, timing: Timing, latest: &Latest<ConversationUpdate>, stop: &Stop, wants: &Wants) {
     let mut backoff = Backoff::new(timing);
     // Where it lives, once.
     let place = loop {
@@ -365,45 +495,33 @@ fn follow_conversation(client: BoxClient, session: String, timing: Timing, lates
             }
             Err(error) => {
                 latest.put(ConversationUpdate::Failed(error));
-                if backoff.wait(&stop) {
+                if backoff.wait(stop) {
                     return;
                 }
             }
         }
     };
-    let shown = Arc::new(Mutex::new(Shown { conversation: Conversation::new(session, place), during: None }));
+    let shown = Mutex::new(Shown { conversation: Conversation::new(session, place), during: None });
 
     if !client.streams() {
-        while !stop.is_stopped() {
-            if !read(&client, &shown, latest) || stop.wait(timing.conversation_again) {
-                return;
-            }
-        }
+        // Read now, then again on the timer, and earlier ones as asked.
+        wants.again();
+        reader(&client, &shown, latest, stop, wants, Some(timing.conversation_again));
         return;
     }
 
-    // Reads asked for while one is under way come together as one more, made here on a thread
-    // of their own so the events keep coming meanwhile; it ends with this one.
-    let (again, asked) = mpsc::sync_channel::<()>(1);
+    // Reads come on a thread of their own, so the events keep coming meanwhile; it ends with this.
     thread::scope(|scope| {
-        let (client, shown, stop) = (&client, &*shown, &*stop);
-        let reader = thread::Builder::new().name("kuvo-box conversation reads".into()).spawn_scoped(scope, move || {
-            while asked.recv().is_ok() && !stop.is_stopped() {
-                if !read(client, shown, latest) {
-                    stop.stop();
-                    return;
-                }
-            }
-        });
-        if reader.is_ok() {
-            follow_events(client, place, timing, latest, stop, shown, &again);
+        let (client, shown) = (&client, &shown);
+        let reads = thread::Builder::new().name("kuvo-box conversation reads".into()).spawn_scoped(scope, move || reader(client, shown, latest, stop, wants, None));
+        if reads.is_ok() {
+            follow_events(client, place, timing, latest, stop, shown, wants);
         }
-        // (Its asks end with this, and so does the reader.)
-        drop(again);
+        wants.close();
     });
 }
 
-fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Latest<ConversationUpdate>, stop: &Stop, shown: &Mutex<Shown>, again: &mpsc::SyncSender<()>) {
+fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Latest<ConversationUpdate>, stop: &Stop, shown: &Mutex<Shown>, wants: &Wants) {
     let mut backoff = Backoff::new(timing);
     while !stop.is_stopped() {
         let mut stream = match client.open(&Request::get(place.events_route()), &|closer| stop.hold(closer)) {
@@ -430,7 +548,7 @@ fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Late
             }
         };
         // Read once it's listening, so nothing from before is missed.
-        let _ = again.try_send(());
+        wants.again();
         loop {
             match lines::next_event(&mut *stream.reader) {
                 Ok(Some(data)) => {
@@ -450,7 +568,7 @@ fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Late
                         applied
                     };
                     if applied == Applied::ReadAgain {
-                        let _ = again.try_send(());
+                        wants.again();
                     }
                 }
                 Ok(None) => break,

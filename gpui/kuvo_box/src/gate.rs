@@ -13,6 +13,7 @@ pub const REQUIRED: &[&str] = &[
     "git.merge",
     "git.pull-request",
     "git.status",
+    "messages.send",
     "models.offered",
     "sessions.list",
     "sessions.models",

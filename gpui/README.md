@@ -73,7 +73,7 @@ routes. It decides nothing the box decides: it orders the sidebar as every clien
 box's facts.
 
 ```rust
-use kuvo_box::{BoxClient, Delivery, SshBox, Timing, follow::ListUpdate};
+use kuvo_box::{BoxClient, Draft, SshBox, Timing, follow::ListUpdate, parts::File};
 
 // This Mac's own box: found by its server's record (`run/serve.json`), whose process is checked
 // to be the box's server before its password is sent. A machine's: over SSH, through
@@ -93,17 +93,24 @@ while let Some(update) = lists.next_blocking() {       // a GPUI view awaits lis
 
 // One conversation, live: its messages, the words it streams as they come, and whether it runs.
 let conversation = client.follow_conversation("ses_…", Timing::default());
+conversation.load_earlier();                            // the page before, as you scroll up
+// Each message is drawn by its parts (what was written, its keyword, comments, files, agents named):
+// `conversation.parts_of(&user)`, as the box kept them or read them; no client parses the text.
 
-// What the composer sends: a message to the agent, or "/…" and "!…" to the box first.
-let place = client.where_is("ses_…")?;                  // its engine, or the coding agents' bridge
-client.send_text("ses_…", place, &BoxClient::new_id(), "/plan sketch it", Delivery::Now)?;
+// What the composer sends: its text and what goes with it, as fields; the box writes what the agent
+// reads. "/…" and "!…" go to the box first, which says what they mean.
+let mut draft = Draft::new(BoxClient::new_id(), "/plan sketch it");
+draft.files = vec![File { uri: "file:///Users/me/shot.png".into(), name: None }];
+client.send_draft("ses_…", &draft, None)?;              // `None`: it replies to nothing
 ```
 
 What it uses of the box: `kuvo/info`; `kuvo/sessions/list` and `…/events` (with `since`);
 `api/session/<id>`, `…/message` and `api/event` on the engine, and the same under
 `kuvo/agents/` for a coding agent's conversation; `kuvo/sessions/<id>/typed` (`GET` and `POST`);
-`api/session/active` (whether a run is under way); `api/session/<id>/prompt` and
-`kuvo/sessions/<id>/queue/add`; `kuvo/work-queue?owner=all&glance=1` and `kuvo/asks` for the counts.
+`api/session/active` (whether a run is under way); `kuvo/sessions/<id>/send` (a message's fields,
+#668 item 3) and `kuvo/messages/parts` (the parts of messages from before); and
+`kuvo/work-queue?owner=all&glance=1` and `kuvo/asks` for the counts. A message's parts and fields
+are held to `Packages/KuvoLink/Vectors/message-parts.json`.
 
 Over a box's own server, what's followed streams. Its record is read again for each request, so
 a server that started again (a new port and password each time) is found, its `kuvo/info` read
@@ -112,11 +119,11 @@ request once, so its lists are read again every half minute and an open conversa
 seconds, over one shared connection (`/tmp/kuvo-ssh-<uid>`, as the Mac app shares it). A follow
 hands on only the latest of what it sees, so a view that reads late gets the state now.
 
-Not done yet, for phase 2: following a machine's conversation as it streams (an SSH tunnel to its
-engine, as the Mac app makes); a message's parts (#668 item 3, not merged yet); one event stream
-shared by every conversation followed on a box; a machine's box attached in place on this Mac
-(`x-kuvo-from: mac`); and the words a message sent with a keyword carries (`<sent-with>`), which
-the box should write rather than each client.
+Not done yet, for phase 2:
+- Following a machine as it streams. The plan is in `notes/kuvo-box-machines.md`.
+- One event stream shared by every conversation followed on a box.
+- Which messages ran a command, so they show as typed (KuvoClient's `CommandMessages`).
+- A machine's box attached in place on this Mac (`x-kuvo-from: mac`).
 
 To see it list sessions without touching a real box:
 
