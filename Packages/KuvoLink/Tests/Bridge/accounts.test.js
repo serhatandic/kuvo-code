@@ -66,12 +66,21 @@ async function engineWith() {
       return send(200, { data: true });
     }
     if (url.pathname === "/api/credential") return send(200, { data: engine.credentials });
+    // Its providers, which it answers once its plugins are set up.
+    if (url.pathname === "/api/provider") {
+      if (engine.notAnswering) return send(503, { message: "Starting." });
+      engine.settingUp = false;
+      return send(200, { data: [] });
+    }
     if (url.pathname === "/api/integration") {
       // Restarting, or too busy to answer.
       if (engine.notAnswering) return send(503, { message: "Starting." });
       // As the engine lists a sign-in in use: its credential's `id`.
       const plan = id => ({ id, connections: engine.inUse[id] ? [{ type: "credential", id: engine.inUse[id].credentialID, method: engine.inUse[id].method }] : [] });
-      return send(200, { data: [plan("openai"), plan("anthropic"), plan("sirket-proxy"), plan("şirket-proxy"), { id: "notion", metadata: { source: "mcp" }, connections: [] }] });
+      // (Just started: nothing yet, or what it has before its plugins are set up, without OpenAI.)
+      if (engine.listsNothing) return send(200, { data: [] });
+      const plans = [plan("openai"), plan("anthropic"), plan("sirket-proxy"), plan("şirket-proxy"), { id: "notion", metadata: { source: "mcp" }, connections: [] }];
+      return send(200, { data: engine.settingUp ? plans.slice(1) : plans });
     }
     const session = engine.sessions[decodeURIComponent(url.pathname.split("/").pop())];
     send(session ? 200 : 404, { data: session ?? null });
@@ -146,6 +155,20 @@ test("Disconnect signs the box out of that plan alone, and of nothing that isn't
   }
   assert.equal((await ask("GET", "kuvo/accounts/anthropic/forget")).status, 405);
   assert.deepEqual(engine.removed.sort(), ["crd_1", "crd_2"]);
+});
+
+test("Disconnect while the engine is just starting doesn't take a plan it hasn't listed yet for one it hasn't", async () => {
+  engine.credentials.push({ id: "crd_9", integrationID: "openai", label: "me" });
+  // Nothing listed yet: it says to try again, and signs nothing out.
+  engine.listsNothing = true;
+  const answer = await ask("POST", "kuvo/accounts/openai/forget");
+  engine.listsNothing = false;
+  assert.equal(answer.status, 503);
+  assert.ok(engine.credentials.some(each => each.id === "crd_9"));
+  // Before its plugins are set up: its plans are listed once they are, OpenAI's too.
+  engine.settingUp = true;
+  assert.equal((await ask("POST", "kuvo/accounts/openai/forget")).status, 200);
+  assert.ok(!engine.credentials.some(each => each.id === "crd_9"));
 });
 
 test("Disconnect that the engine refuses says so, and the plan still says its sign-in ended", async () => {

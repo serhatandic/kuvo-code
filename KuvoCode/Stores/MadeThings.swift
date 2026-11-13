@@ -44,7 +44,7 @@ final class MadeThings {
     @ObservationIgnored private var timelinePagedOn = false
 
     /// Whether the box streams its changes: this Mac's does; a machine's, over SSH, answers once.
-    private var streams: Bool { box.box == BoxClient.mac }
+    private var streams: Bool { BoxClient.streams(box.box) }
 
     init(box: BoxClient, scope: ArtifactScope) {
         self.box = box

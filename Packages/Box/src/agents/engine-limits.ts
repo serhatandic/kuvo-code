@@ -108,6 +108,11 @@ export class EngineAccounts {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value
               return value ? READERS[integration]?.identity?.(value) : undefined
             },
+            // (What lasts through a renewal: the refresh token, else the key.)
+            account: () => {
+              const value = this.credentials.find((each) => each.integrationID === integration)?.value
+              return fingerprint(value?.refresh || value?.key || value?.access)
+            },
           },
         }
         this.made.set(integration, account)

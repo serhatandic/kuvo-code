@@ -48,6 +48,9 @@ struct RootView: View {
         .overContentCard { BrowserAskOverlay() }
         // A picture you sent, looked at closer, over everything.
         .overlay { ImageViewerOverlay() }
+        // This Mac's models and accounts, where nothing names another computer: its own engine's,
+        // or, attached to the box already here, that box's.
+        .environment(app.catalog(for: app.thisMacsBox))
         // The window closing ends the panel's terminals and pages, and the terminal tabs. (Not the
         // sessions' view going away: that also happens while the engine restarts, and they should
         // outlive that.)

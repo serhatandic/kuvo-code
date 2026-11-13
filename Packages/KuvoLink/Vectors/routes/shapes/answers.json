@@ -3014,6 +3014,9 @@
             "literal": "agent-tools"
            },
            {
+            "literal": "agent-tools.own"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -3083,6 +3086,9 @@
             "literal": "btw.threads"
            },
            {
+            "literal": "claude-code"
+           },
+           {
             "literal": "config"
            },
            {
@@ -3123,6 +3129,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.words"
            },
            {
             "literal": "goals"
@@ -3323,9 +3332,6 @@
             "literal": "accounts.ended"
            },
            {
-            "literal": "claude-code"
-           },
-           {
             "literal": "hosts"
            },
            {
@@ -3383,6 +3389,9 @@
            },
            {
             "literal": "agent-tools"
+           },
+           {
+            "literal": "agent-tools.own"
            },
            {
             "literal": "agents"
@@ -3454,6 +3463,9 @@
             "literal": "btw.threads"
            },
            {
+            "literal": "claude-code"
+           },
+           {
             "literal": "config"
            },
            {
@@ -3494,6 +3506,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.words"
            },
            {
             "literal": "goals"
@@ -5014,6 +5029,7 @@
       "title": "string",
       "body": "string",
       "summary?": "string",
+      "prompt?": "string",
       "host": {
        "oneOf": [
         {
@@ -5048,7 +5064,33 @@
     "200": {
      "object": {
       "diff": "string",
-      "staged": "bool"
+      "staged": "bool",
+      "prompt?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/settings/move",
+   "answers": {
+    "200": {
+     "object": {
+      "moved": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string"
      }
     }
    }
@@ -6883,6 +6925,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -6985,6 +7030,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -7087,6 +7135,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -8321,6 +8372,45 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/claude-code",
+   "answers": {
+    "200": {
+     "object": {
+      "agents": {
+       "list": {
+        "object": {
+         "name": "string",
+         "description": "string",
+         "path": {
+          "list": "string"
+         },
+         "settings": {
+          "map": "string"
+         },
+         "imported": "bool"
+        }
+       }
+      },
+      "commands": {
+       "list": {
+        "object": {
+         "name": "string",
+         "description": "string",
+         "path": {
+          "list": "string"
+         },
+         "settings": {
+          "map": "string"
+         },
+         "imported": "bool"
+        }
+       }
+      }
+     }
     }
    }
   },

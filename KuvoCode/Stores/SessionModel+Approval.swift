@@ -129,7 +129,6 @@ extension SessionModel {
                 let shown = try await box.value(ApprovalShown.self, "PUT", approvalRoute, body: ["approval": approval.rawValue])
                 if latest {
                     approvalShown = shown
-                    ToolApproval.lastPicked = approval
                     if approval == .auto { readDecisions() }
                 }
             } catch let refusal as BoxRefusal where refusal.status == 409 && refusal.reason == "fullAccessOff" {

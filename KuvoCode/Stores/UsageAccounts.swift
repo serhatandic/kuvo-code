@@ -29,6 +29,12 @@ final class UsageAccounts {
         UsageMenuBar.shared.start(openHostApp: openApp)
     }
 
+    /// The engines' opencode data folders the panel reads spend from: the app's own engine's, and
+    /// the box's attached in place (`AppModel.thisMacsBoxConnected`).
+    func readEngineData(_ folders: [URL]) {
+        HostAccounts.setOpenCodeDataDirectories(folders.map { $0.path(percentEncoded: false) })
+    }
+
     /// Hands the engine's active accounts to UsageKit, and which of its providers they stand for:
     /// the panel follows only those. Secrets stay in memory.
     func sync() async {

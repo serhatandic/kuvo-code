@@ -233,7 +233,7 @@ const LETTERS = /^[A-Za-z0-9]+$/;
 // The most wake-ups a conversation keeps waiting, as the Mac's (Wakes.limit).
 const WAKE_LIMIT = 50;
 
-// A folder for a session's wake-ups here, made as a Mac makes one (WakeUps.makeFolder): its
+// A folder for a session's wake-ups here, made as kuvo-wake makes one with a session's first wake-up: its
 // session, its folder, whether the coding agents run it, and held while it's archived. Null when
 // it isn't a conversation here.
 async function wakeFolderFor(session: string, readEngine: () => EngineRecord, bridge: () => BridgeRecord | null): Promise<string | null> {

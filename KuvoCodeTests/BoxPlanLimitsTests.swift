@@ -102,6 +102,56 @@ import UsageKit
         #expect(rows.map(\.place) == [nil, "hetzner, mini-local", "hetzner", "mini-local"])
     }
 
+    /// One of the box's rows of every computer's accounts (`rows`): `boxes`, each `(key, name, here)`.
+    private static func row(_ id: String, _ provider: String, agent: String, label: String? = nil, identity: String, used: Double, minutesAgo: Double = 0, boxes: [(String, String, Bool)], away: Bool = false) -> [String: Any] {
+        var row = account(provider, "claude", agent: agent, label: label, identity: identity, used: used, minutesAgo: minutesAgo)
+        row["id"] = id
+        row["boxes"] = boxes.map { key, name, here in ["key": key, "name": name, "provider": provider, "agent": agent, "here": here] as [String: Any] }
+        if away { row["away"] = true }
+        return row
+    }
+
+    /// #210: this Mac's box lists every computer's accounts itself, one row each with the newest
+    /// reading any of them made: the panel shows its rows as they are, merges nothing, and a refresh
+    /// asks only this Mac's box (which asks the others for what it hasn't).
+    @Test func thisMacsBoxListsEveryComputersAccountsAsTheyAre() async throws {
+        defer { StubWeb.stop(); HostLimits.shared.update(rows: [], covered: []); UserDefaults.standard.removeObject(forKey: "usage.boxServices") }
+        let hetzner = "http://127.0.0.1:47965"
+        // This Mac's Claude, read on hetzner a moment ago, not here; and hetzner's Athas, whose
+        // computer isn't heard from now.
+        try StubWeb.answer(Self.mac + "/api/kuvo/limits", json: ["data": [
+            "services": ["claude"],
+            "accounts": [Self.account("claude-code", "claude", agent: "claude", identity: "c1a0dec1a0dec1a0", used: 0.1, minutesAgo: 40)],
+            "rows": [
+                Self.row("claude#c1a0dec1a0dec1a0", "claude-code", agent: "claude", identity: "c1a0dec1a0dec1a0", used: 0.53, minutesAgo: 1, boxes: [("kmac", "MacBook Pro", true), ("khetzner", "hetzner", false)]),
+                Self.row("claude#a7a7a7a7a7a7a7a7", "claude-code@a7", agent: "claude", label: "Athas", identity: "a7a7a7a7a7a7a7a7", used: 0.2, minutesAgo: 2, boxes: [("khetzner", "hetzner", false)], away: true),
+            ],
+        ] as [String: Any]])
+        // hetzner's box lists them too; its own numbers aren't merged in here.
+        try StubWeb.answer(hetzner + "/api/kuvo/limits", json: ["data": [
+            "services": ["claude"],
+            "accounts": [Self.account("claude-code", "claude", agent: "claude", identity: "c1a0dec1a0dec1a0", used: 0.99)],
+            "rows": [] as [Any],
+        ] as [String: Any]])
+        try StubWeb.answer(Self.mac + "/api/kuvo/limits/refresh", json: ["data": ["services": ["claude"], "accounts": [] as [Any], "rows": [] as [Any]] as [String: Any]])
+        try StubWeb.answer(hetzner + "/api/kuvo/limits/refresh", json: ["data": ["services": ["claude"], "accounts": [] as [Any], "rows": [] as [Any]] as [String: Any]])
+        let planLimits = BoxPlanLimits()
+        planLimits.connected(nil, api: api(Self.mac))
+        planLimits.connected("hetzner", api: api(hetzner))
+        try await until { HostLimits.shared.rows.map(\.name) == ["Claude", "Claude · Athas"] && StubWeb.asked.contains(hetzner + "/api/kuvo/limits") }
+
+        let rows = HostLimits.shared.rows
+        #expect(rows.map { $0.meters.map(\.fraction) } == [[0.53], [0.2]])
+        #expect(rows.map(\.isLocal) == [true, false])
+        #expect(rows.map(\.place) == [nil, "hetzner"])
+        // Its computer isn't heard from: "As of …", however recent its reading.
+        #expect(rows.map(\.isAway) == [false, true])
+
+        planLimits.refreshAll()
+        try await until { StubWeb.asked.contains(Self.mac + "/api/kuvo/limits/refresh") }
+        #expect(!StubWeb.asked.contains(hetzner + "/api/kuvo/limits/refresh"))
+    }
+
     @Test func aBoxFromBeforeThemCoversNothing() async throws {
         defer { StubWeb.stop(); HostLimits.shared.update(rows: [], covered: []); UserDefaults.standard.removeObject(forKey: "usage.boxServices") }
         try StubWeb.answer(Self.mac + "/api/kuvo/limits", json: Self.limits([Self.account("claude-code", "claude", agent: "claude", used: 0.42)]))

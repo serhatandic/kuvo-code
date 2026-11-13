@@ -69,7 +69,9 @@ final class GoalPlans {
     func follow(_ box: String) async {
         let me = UUID()
         following[box] = me
-        let onThisMac = box == BoxClient.mac
+        // (Followed as it changes on the app's own box, which streams; read now and then on any
+        // other, the one attached in place too, which answers once a read.)
+        let onThisMac = BoxClient.streams(box)
         var older = false
         while !Task.isCancelled {
             if !onThisMac {
@@ -102,7 +104,7 @@ final class GoalPlans {
 
     /// `box`'s goals now, read once (as it connects).
     func read(_ box: String) async {
-        guard box == BoxClient.mac || isConnected(box), let client = client(box), let list = try? await client.value(GoalPlanList.self, "GET", "kuvo/work/goals") else { return }
+        guard BoxClient.isThisMac(box) || isConnected(box), let client = client(box), let list = try? await client.value(GoalPlanList.self, "GET", "kuvo/work/goals") else { return }
         take(list.goals, from: box)
     }
 

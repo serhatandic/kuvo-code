@@ -86,11 +86,18 @@ let ownList: ListedAgent[] | null = null;
 let ownMachine: string | null = null;
 // Each working out's turn, and the latest one kept: one begun earlier, answered later, is older.
 let refreshes = 0, keptRefresh = 0;
-// Them, as just worked out elsewhere (`kuvo/named`), on box `machine`.
-export function keepOwn(list: ListedAgent[], machine: string | null): void {
-  ownList = list;
-  keptRefresh = refreshes;
-  ownMachine = machine;
+// Them, worked out again for one asking here (`list_agents`, `kuvo/named`) on box `machine`, and
+// kept unless a working out begun since was kept first. Null when its engine can't say.
+export async function ownAgentsNow(readEngine: () => Target, machine: string | null): Promise<ListedAgent[] | null> {
+  const turn = ++refreshes;
+  const list = await ownAgents(readEngine, machine ?? undefined);
+  if (list && turn > keptRefresh) {
+    ownList = list;
+    keptRefresh = turn;
+    ownMachine = machine;
+  }
+  // (One kept since is newer than this.)
+  return list && ownList;
 }
 
 // This box's own agents as last worked out: since it started, else as `run/agents.json` last had
@@ -145,7 +152,9 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
   if (!ownList) return;
   // With the conversations it moved away lately, and where each lives now.
   const moved = movedAway(now).map(({ session, key, at }) => ({ session, key, at }));
-  const json = JSON.stringify([ownList, moved]);
+  // And the boxes it knows: each peer may take plan limits from those it doesn't know itself.
+  const boxes = peersOf(link).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
+  const json = JSON.stringify([ownList, moved, boxes]);
   let have: DigestEntry[] | false | null = null;
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
@@ -157,7 +166,7 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
     let bytes: Buffer | null = null, sent: ListedAgent[] = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved, boxes: boxes.filter(box => box.key !== peer.key) }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;

@@ -197,12 +197,6 @@ final class ProjectChanges {
         return failure
     }
 
-    /// The diff a commit would take (what's staged, or everything with new files' names),
-    /// cut to a size a model reads quickly.
-    func commitDiff() async -> String {
-        await Git.commitDiffing(in: directory).diff
-    }
-
     /// Whether anything is staged, which is what a commit takes then.
     func hasStaged() async -> Bool {
         let directory = directory
@@ -664,8 +658,9 @@ nonisolated enum Git {
             let portable = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS"]
             let settings = environment.filter { portable.contains($0.key) }.map { "\($0.key)=\(SSHConnection.quoted($0.value))" }.sorted()
             let command = (["exec", "env"] + settings + ["git"] + arguments.map(SSHConnection.quoted)).joined(separator: " ")
-            let ssh = SSHConnection(destination: remote.machine).arguments(running: "cd \(SSHConnection.quoted(remote.path)) && \(command)")
-            return try ChildProcess.runBlocking("/usr/bin/ssh", ssh, errors: errors, limit: limit)
+            let started = SSHConnection(destination: remote.machine).invocation(running: "cd \(SSHConnection.quoted(remote.path)) && \(command)")
+            return try ChildProcess.runBlocking(started.executable, started.arguments, environment: started.environment, directory: started.directory,
+                                                errors: errors, limit: limit)
         }
         return try ChildProcess.runBlocking("/usr/bin/git", arguments, environment: environment, directory: URL(filePath: directory),
                                             errors: errors, limit: limit)

@@ -123,8 +123,6 @@ final class AppModel {
     /// This Mac's engine settings, for Settings, as its box keeps them (in the engine's settings
     /// file, where they've always been).
     @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(remote: BoxSettings(client: box(BoxClient.mac)), file: engineFolders.configFile)
-    /// Machines taking settings changed here, a moment after the last change (`settingsSaved`).
-    @ObservationIgnored var settingsSync: Task<Void, Never>?
     /// This Mac's settings being read (`prepareSettings`).
     @ObservationIgnored private var settingsPreparation: Task<Void, Never>?
     /// Engines to start again with new settings once nothing's at work in them: "" for this Mac's,
@@ -190,7 +188,7 @@ final class AppModel {
     }
     /// Settings › Accounts of `machine` (nil: this Mac): each computer signs in on its own.
     func openAccounts(on machine: String?) {
-        openSettings(.accounts, on: SidebarBox(machine: machine))
+        openSettings(.accounts, on: machine.map(SidebarBox.machine) ?? thisMacsBox)
     }
 
     /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): its panel goes
@@ -202,15 +200,15 @@ final class AppModel {
 
     /// Settings › Custom Auto of `machine` (nil: this Mac): each has its own lists.
     func openAuto(on machine: String?) {
-        openSettings(.auto, on: SidebarBox(machine: machine))
+        openSettings(.auto, on: machine.map(SidebarBox.machine) ?? thisMacsBox)
     }
     /// Settings' tabs: the page, and the sites you're signing in to.
     let settingsTabs = SettingsTabs()
 
     /// Shows Settings in the main window, on `page` of `box` if one is given (otherwise the last
     /// one open).
-    func openSettings(_ page: SettingsPage? = nil, on box: SidebarBox = .mac) {
-        if let page { settingsTabs.show(page, on: box) }
+    func openSettings(_ page: SettingsPage? = nil, on box: SidebarBox? = nil) {
+        if let page { settingsTabs.show(page, on: box ?? thisMacsBox) }
         if page == .accounts { Analytics.shared.onboardingStep("accounts") }
         #if DEBUG
         let background = ProcessInfo.processInfo.environment["KUVO_DEMO_BACKGROUND"] != nil
@@ -354,7 +352,7 @@ final class AppModel {
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
         // and this Mac's bots with it are told what it is now, by its box.
-        Personalities.shared.box = { [weak self] in self?.box(BoxClient.mac) }
+        Personalities.shared.box = { [weak self] in self?.box(BoxClient.thisMac) }
         Personalities.shared.onChange = { [weak self] _ in self?.personalitiesChanged() }
         workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
@@ -390,7 +388,7 @@ final class AppModel {
         if chatsWaitForStores {
             chatsWaitForStores = false
             Task { [moves, boxGroups] in
-                await moves.reload(BoxClient.mac)
+                await moves.reload(BoxClient.thisMac)
                 await boxGroups.connected(nil)
             }
         }
@@ -410,7 +408,9 @@ final class AppModel {
         phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
         // With machines, this Mac meets them at the relay, phone or not.
         phoneLink.hasMachines = { [weak self] in self.map { !$0.machines.list.isEmpty || $0.machines.fileDidntRead } ?? false }
-        Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
+        // (Attached in place, the app has no link of its own (the box here keeps its own), so it's
+        // on no machine's bridge to leave.)
+        Machines.linkKey = { [weak self] in self?.attached == nil ? self?.phoneLink.macKey : nil }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks
         phoneLink.workspace = workspace
@@ -419,13 +419,26 @@ final class AppModel {
         // Agents writing to each other, and what an earlier Kuvo Code kept of their letters, to
         // this Mac's box before its link meets your other computers (it starts before the machines).
         AgentMail.shared.app = self
-        AgentMail.shared.box = { [weak self] in self?.box(BoxClient.mac) }
+        AgentMail.shared.box = { [weak self] in self?.box(BoxClient.thisMac) }
         // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
         phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
-        phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
+        // Attached in place, the box there keeps its own link (a machine's, set up by the Mac that
+        // added it), which only its own Macs change: the app has none to tell (`noBox`).
+        phoneLink.box = { [weak self] in self?.attached == nil ? self?.box(BoxClient.mac) : nil }
+        phoneLink.noBox = { [weak self] in self?.attached == nil ? nil : PhoneLink.keptByTheBoxHere }
         host.phoneLink = phoneLink
-        phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
+        phoneLink.restartEngine = { [weak self] in Task { await self?.restartThisMacsEngine() } }
+    }
+
+    /// This Mac's engine started over: the app's own (`restart`), or, attached in place, that box's,
+    /// which its own keeper restarts: connected again, as Settings › Engine's Restart does there.
+    func restartThisMacsEngine() async {
+        if attached != nil, let here = machines.engine(SSHConnection.thisMac) {
+            await restartEngine(here).value
+        } else {
+            await restart()
+        }
     }
 
     /// Puts the usage panel in the menu bar. It reads the engine's database for spend, so it
@@ -536,7 +549,8 @@ final class AppModel {
             // place, and starts, claims and registers nothing of its own, so there's never a second.
             // (One that couldn't tell, with a box here, starts nothing: its own would be a second, for good.)
             if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted {
-                attached = nil
+                // (Attached already, it stays so while it's looked at again: this Mac doesn't show
+                // up twice, nor do Settings' tabs move, as it starts again.)
                 BackgroundWork.heldBack = nil
                 let outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
                                               home: Self.hereHome, checked: Self.engineOverride == nil)
@@ -557,17 +571,24 @@ final class AppModel {
                     attached = here
                     // One that won't start is said so, to try again, rather than waited on.
                     guard here.runs == .running else {
-                        throw MachineFailure(message: "The box already on this Mac didn’t start. Try again in a moment.")
+                        // Its login item there, which launchd wouldn't start: turned off, it stays off.
+                        throw MachineFailure(message: Here.startsByLaunchd(home: Self.hereHome)
+                            ? "The box already on this Mac didn’t start. If its login item (“sh”) is turned off in System Settings › General › Login Items, turn it on, then try again."
+                            : "The box already on this Mac didn’t start. Try again in a moment.")
                     }
                     // Running, it's told the app is here, for good.
                     await Here.sayAttached(home: Self.hereHome)
+                    guard launch == self.launch else { return }
+                    openOnAttached(began: began, downloaded: downloaded)
                     return
                 case .unknown(let why):
+                    detachHere()
                     let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
                     BackgroundWork.heldBack = couldnt
                     throw MachineFailure(message: why ?? couldnt)
                 case .own:
-                    break
+                    // None here now: the box that was is no longer this Mac's.
+                    detachHere()
                 }
             }
             guard launch == self.launch else { return }
@@ -612,6 +633,8 @@ final class AppModel {
             // What it makes and tells this Mac's bots with, as this version has it.
             bots.writeMacKit()
             Task {
+                // COMPAT(0.7 mac-git-settings): Settings › Git as this Mac kept it before, to its box once. Goes 3 months after 0.8.0.
+                await GitPreferences.move(to: box(BoxClient.mac))
                 // Your personalities, as it keeps them, before they're followed.
                 await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on
@@ -708,7 +731,14 @@ final class AppModel {
 
     /// The box already on this Mac that the app attached to in place as it opened (`Here`), rather
     /// than starting one of its own: a Mac you set up as a machine, your Mac mini say.
-    private(set) var attached: Here?
+    private(set) var attached: Here? {
+        // What has no computer of its own is on this box from now on (`BoxClient.thisMac`), and
+        // Settings' pages on this Mac go with it.
+        didSet {
+            BoxClient.thisMac = thisMacsBox.id
+            settingsTabs.thisMac = thisMacsBox
+        }
+    }
     /// Whether the app attaches to a box already on this Mac (#183): on with the screen that says
     /// so, which the window shows instead of starting (with a state of its own, not `.starting`,
     /// which it stays in meanwhile); the tests' until then.
@@ -717,6 +747,103 @@ final class AppModel {
     nonisolated(unsafe) static var hereHome = defaultHereHome
     nonisolated static var defaultHereHome: URL {
         AppInfo.isHostingTests ? AppInfo.testRoot.appending(path: "here-home") : FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    /// The window opens on the box already here, attached in place: this Mac is that box, reached as
+    /// a machine with no SSH (`SSHConnection.thisMac`), from its own home folder, its engine at its
+    /// own ports, its keys, paths and start at login as they are. The app has no engine, box or
+    /// keeper of its own (`api` stays nil), so `.ready` here says the window can open on it.
+    /// Its link to your phones is that box's own; what the app's own box is followed for as it runs
+    /// (its wake-ups, worktrees and your personalities) is followed there once it's connected, as
+    /// a machine's things are (`connected`, `thisMacsBoxConnected`). Nothing after the attach in
+    /// `start` runs for it: that starts the app's own box, a second one.
+    /// `began`, `downloaded`: as `start` counts them, for when its engine's ready.
+    private func openOnAttached(began: SuspendingClock.Instant, downloaded: Bool) {
+        attachStarted = (began, downloaded)
+        SSHConnection.thisMacHome = Self.hereHome.path(percentEncoded: false)
+        machines.attachHere()
+        // Its stores told of each other, as a start of the app's own box tells them (what follows
+        // the app's own box finds none, and waits); and what a phone's request would reach here,
+        // with agents' letters (`AgentMail`) going to the box here. The app's link isn't started:
+        // the box here has its own.
+        wireStores()
+        wirePhoneLink()
+        followClock()
+        followActivation()
+        engine = .ready
+        startMachines()
+        // Where its chats go, as it says, for a new chat with no project.
+        Task { try? await readChatsHere() }
+    }
+
+    /// When the start that attached in place began, and whether it downloaded the engine first:
+    /// `engine_ready` is counted once the box's engine connects.
+    @ObservationIgnored private var attachStarted: (began: SuspendingClock.Instant, downloaded: Bool)?
+
+    /// The box attached in place connected (again): it's this Mac's engine, so the usage panel reads
+    /// its spend (its engine's database, beside what the app's own engine kept before) and its
+    /// accounts, and analytics its models; its start is counted once, as the app's own engine's is.
+    func thisMacsBoxConnected(_ here: MachineEngine) {
+        guard attached != nil else { return }
+        usage.api = here.api
+        if let root = Here.root {
+            usage.readEngineData([engineFolders.dataDirectory, EngineFolders(root: Self.hereHome.appending(path: root)).dataDirectory])
+        }
+        if usageFollows !== here.catalog {
+            usageFollows = here.catalog
+            usage.follow(here.catalog)
+        }
+        Task { await usage.sync() }
+        Analytics.shared.catalog = here.catalog
+        if let started = attachStarted {
+            Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - started.began).components.seconds),
+                                                        "downloaded": started.downloaded, "attached": true])
+        }
+    }
+
+    /// The box attached in place's catalog, once the usage panel follows its coding agents.
+    @ObservationIgnored private weak var usageFollows: Catalog?
+
+    /// No longer attached to a box here (none now, or it can't be told): it's no longer listed or
+    /// followed, and what has no computer of its own is the app's own box's again.
+    /// What this Mac showed of it goes as a removed machine's does (`removeMachine`), with nothing
+    /// run there.
+    private func detachHere() {
+        let id = SSHConnection.thisMac
+        attached = nil
+        workspace.attachedChats = nil
+        guard machines.engine(id) != nil else { return }
+        // The usage panel and analytics go back to the app's own engine (set again as it starts).
+        usage.api = nil
+        usage.readEngineData([engineFolders.dataDirectory])
+        Analytics.shared.catalog = catalog
+        planLimits.stopped(id)
+        closeAll(on: id)
+        machines.detachHere()
+        forgetAll(of: id)
+        moves.forget(id)
+        // Its sessions' tabs go with them; a new one not sent yet, in a folder there, too.
+        for key in tabs.keys {
+            if case .draft(let folder) = key, RemoteFolder.machine(of: folder) == id { tabs.close(key, remember: false) }
+        }
+    }
+
+    /// The box here answered, without a chats folder: it's from before chats had one there.
+    struct ChatsNeedNewerBox: LocalizedError {
+        var errorDescription: String? { "This Mac’s box needs a newer Kuvo Code to start chats there. It updates by itself overnight." }
+    }
+
+    /// The chats folder of the box attached in place, as it names it (`kuvo/info`'s `chats`), as a
+    /// machine's is read for a new chat there. Throws why not: it didn't answer, or it's from
+    /// before chats had a folder there.
+    func readChatsHere() async throws {
+        guard attached != nil, workspace.attachedChats == nil else { return }
+        struct Info: Decodable { var chats: String? }
+        let info = try await box(SSHConnection.thisMac).value(Info.self, "GET", "kuvo/info")
+        // (Let go of meanwhile: nothing of it is kept.)
+        guard attached != nil else { return }
+        guard let chats = info.chats else { throw ChatsNeedNewerBox() }
+        workspace.attachedChats = RemoteFolder.folder(chats, on: SSHConnection.thisMac)
     }
 
     /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as
@@ -973,21 +1100,31 @@ final class AppModel {
                 await workspace.refreshAgents()
             }
         }
-        // Your time zone or how you write dates changed: meetings go by the new ones.
-        if clockObservers.isEmpty {
-            for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
-                clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.boxGroups.settingsChanged() }
-                })
-            }
+        followClock()
+        followActivation()
+    }
+
+    /// Your time zone or how you write dates changed: each computer's group chats go by the new
+    /// ones (this Mac's, or, attached in place, the box here's). Once, from either start.
+    func followClock() {
+        guard clockObservers.isEmpty else { return }
+        for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.boxGroups.settingsChanged() }
+            })
         }
-        // Back in the app, you may have installed an agent or signed in to one in Terminal.
-        if agentsActivation == nil {
-            agentsActivation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.catalog.refreshAgentsIfStale()
-                    self?.workspace.reloadMachinesProjects()
-                }
+    }
+
+    /// Back in the app, you may have installed an agent or signed in to one in Terminal: this Mac's
+    /// agents are read again (its own engine's, or, attached in place, the box here's), and your
+    /// machines' projects. Once, from either start.
+    func followActivation() {
+        guard agentsActivation == nil else { return }
+        agentsActivation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.catalog(for: self.thisMacsBox).refreshAgentsIfStale()
+                self.workspace.reloadMachinesProjects()
             }
         }
     }

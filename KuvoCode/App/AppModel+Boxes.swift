@@ -1,3 +1,4 @@
+import ClientAccounts
 import OpenCodeKit
 import SwiftUI
 
@@ -54,48 +55,40 @@ extension AppModel {
     /// What it's called: this Mac's name, or the machine's.
     func name(of box: SidebarBox) -> String {
         guard let machine = box.machine else { return PhoneLink.computerName }
-        return machines.list.first { $0.id == machine }?.name ?? machine
+        return machines.list.first { $0.id == machine }?.name ?? Machine(destination: machine).name
     }
 
-    /// This Mac, then your machines.
+    /// This Mac, then your machines. Attached to the box already here (#183), this Mac is that box
+    /// (first of the machines), and there's no box of the app's own.
     var boxes: [SidebarBox] {
-        [.mac] + machines.list.map { .machine($0.id) }
+        (attached == nil ? [.mac] : []) + machines.list.map { .machine($0.id) }
     }
+
+    /// This Mac's box: the app's own, or the one attached in place.
+    var thisMacsBox: SidebarBox { attached == nil ? .mac : .attached }
 
     /// The box whose page the sidebar shows, while it's still there: where New Bot and New Group
     /// Chat start.
     var boxInView: SidebarBox {
         let picked = SidebarBox(id: UserDefaults.standard.string(forKey: SidebarBox.inViewKey) ?? "mac")
-        return boxes.contains(picked) ? picked : .mac
+        return boxes.contains(picked) ? picked : thisMacsBox
     }
 
-    /// Coding agents on `box` (while its agents are up) with a newer version that their installer
-    /// can update to, one per program, asked of the agent's own sign-in (where its row or tile in
-    /// Settings › Accounts shows how it goes): what that page's Update All updates.
+    /// What Update All updates on `box` (while its agents are up), as its box picks it, once for
+    /// each program, but not one being asked already: each shows how it goes on its row or tile in
+    /// Settings › Accounts.
     func outdatedAgents(on box: SidebarBox) -> [Integration] {
         if let machine = box.machine, machines.engine(machine) == nil { return [] }
         guard agents(for: box).api != nil, !agents(for: box).isDown else { return [] }
-        var seen = Set<String>()
-        // An agent's own sign-in ahead of the accounts added to it, which run the same program.
-        let integrations = catalog(for: box).codingAgents
-        let own = integrations.filter { $0.metadata?["accountID"]?.string ?? "default" == "default" }
-        return (own + integrations.filter { !own.contains($0) }).compactMap { integration in
-            let metadata = integration.metadata
-            guard metadata?["outdated"]?.bool == true, metadata?["updates"]?.bool == true,
-                  let kind = metadata?["agent"]?.string, seen.insert(kind).inserted else { return nil }
-            return integration
-        }
+        return catalog(for: box).codingAgents.filter { $0.isInUpdateAll && !agents(for: box).isAskedToUpdate($0) }
     }
 
-    /// Updates each of them, on `box`, through the installer that owns it.
-    /// (Each update under way, for a test to wait for.)
-    @discardableResult
-    func updateAllAgents(on box: SidebarBox) -> [Task<Void, Never>] {
-        let agents = agents(for: box), catalog = catalog(for: box)
-        return outdatedAgents(on: box).compactMap { outdated in
-            if agents.isUpdating(outdated.id) { return nil }
-            return agents.update(outdated.id) { await catalog.refreshAgents(fresh: true) }
-        }
+    /// Update All on `box`: its box updates each it picks, through the installer that owns it, and
+    /// says how each goes. Throws only when it couldn't be asked.
+    func updateAllAgents(on box: SidebarBox) async throws {
+        let agents = agents(for: box)
+        let catalog = catalog(for: box)
+        try await agents.updateAll(catalog.codingAgents) { await catalog.refreshAgents() }
     }
 
     /// A machine that isn't added any more: nothing there to show or change.
@@ -104,5 +97,6 @@ extension AppModel {
 
 extension EnvironmentValues {
     /// The computer a page of Settings is about: this Mac, or a machine, with its own settings.
+    /// (Settings gives each page its own; a page shown elsewhere is given `thisMacsBox`.)
     @Entry var settingsBox: SidebarBox = .mac
 }

@@ -95,7 +95,8 @@ final class RowGlances {
 
     private func follow(_ sessions: Set<String>, on box: String) async {
         let path = SessionGlances.path(sessions.sorted(), events: true)
-        let isMac = box == BoxClient.mac
+        // (The app's own box streams them; every other answers once.)
+        let isMac = BoxClient.streams(box)
         while !Task.isCancelled {
             // Not asked again before its time: unless (on a machine) a row came that wasn't asked of
             // lately, whose glance is wanted now.

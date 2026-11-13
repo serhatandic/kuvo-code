@@ -3,7 +3,7 @@ import Foundation
 import Security
 
 /// Each computer's vault, as the Mac app shows and changes it (KuvoLink's PROTOCOL.md, "Vault"):
-/// what its box says, by box (`BoxClient.mac`, or a machine's id). A machine's is reached with its
+/// what its box says, by box (`BoxClient.thisMac`, or a machine's id). A machine's is reached with its
 /// unlock key, which this Mac keeps in the Keychain (`VaultKeys`) and gets, the first time, by
 /// proving to the machine it's the Mac that set it up.
 @MainActor
@@ -62,7 +62,7 @@ final class Vaults {
         guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Kuvo Code isn't ready yet.") }
         let sent = try body.map { try JSONSerialization.data(withJSONObject: $0) }
         var headers: [String: String] = [:]
-        if box != BoxClient.mac {
+        if BoxClient.needsVaultProof(box) {
             guard let proof = requestProof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
             headers["x-kuvo-vault-proof"] = proof
         }
@@ -95,7 +95,8 @@ final class Vaults {
             now.activity = try await ask(Entries.self, "GET", VaultRoutes.activity(limit: 50), on: box).entries
             now.failure = nil
             now.locked = false
-            if box != BoxClient.mac, let generations = now.vault?.state.generations {
+            // (A vault the app's own box keeps checks itself.)
+            if BoxClient.needsVaultProof(box), let generations = now.vault?.state.generations {
                 if Self.wentBack(box, to: generations) {
                     now.rolledBack = true
                     // What it says now is taken from now on only once its agents are paused: if
@@ -124,7 +125,7 @@ final class Vaults {
     func follow(_ box: String) async {
         var round = 0
         while !Task.isCancelled {
-            if box == BoxClient.mac, round % 5 == 0 {
+            if BoxClient.streams(box), round % 5 == 0 {
                 await refresh(box)
             } else {
                 // Dropped if a whole read began meanwhile, which has the asks too.
@@ -143,7 +144,9 @@ final class Vaults {
                 } catch {}
             }
             round += 1
-            try? await Task.sleep(for: .seconds(box == BoxClient.mac ? 1 : 10))
+            // (Every second from the app's own box, answered here; any other, the one attached in
+            // place too, answers each read in a process of its own.)
+            try? await Task.sleep(for: .seconds(BoxClient.streams(box) ? 1 : 10))
         }
     }
 
@@ -152,7 +155,7 @@ final class Vaults {
     func forget(_ box: String) {
         forgottenAt[box] = nextRead(box)
         shown[box] = nil
-        if box != BoxClient.mac { VaultKeys.forget(box) }
+        if BoxClient.needsVaultProof(box) { VaultKeys.forget(box) }
     }
 
     func activity(on box: String, item: String? = nil, bot: String? = nil, limit: Int = 100) async throws -> [VaultActivity] {
@@ -164,7 +167,7 @@ final class Vaults {
     @discardableResult
     func add(_ given: VaultDraft, on box: String) async throws -> VaultItem {
         let made = try await ask(Made.self, "POST", VaultRoutes.items, body: given.json, on: box)
-        if let key = made.key, box != BoxClient.mac { VaultKeys.keep(key, for: box) }
+        if let key = made.key, BoxClient.needsVaultProof(box) { VaultKeys.keep(key, for: box) }
         await refresh(box)
         return made.item
     }

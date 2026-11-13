@@ -22,7 +22,7 @@ struct GoalProjectsRow: View {
     /// The chip whose new folder is being chosen on a machine, in its folder browser.
     @State private var browsing: Int?
 
-    private var onThisMac: Bool { box == BoxClient.mac }
+    private var onThisMac: Bool { BoxClient.isThisMac(box) }
     private var computer: String { onThisMac ? "This Mac" : app.machines.engine(box)?.machine.name ?? box }
 
     var body: some View {

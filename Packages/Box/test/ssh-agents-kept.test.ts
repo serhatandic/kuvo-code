@@ -13,8 +13,9 @@ const vaultAgents = process.env.KUVO_VAULT_AGENTS
 process.env.KUVO_VAULT_AGENTS = "1"
 const { keepSshAgents } = await import("../src/link/vault/ssh")
 const { SSH_AGENTS, SSH_FOR } = await import("../src/link/home")
-// (Its agents' folder, in Kuvo Code's short folder in /tmp, named for this test's home: its own.)
-ownPath(SSH_AGENTS)
+// (Its agents' folder, in Kuvo Code's short folder in /tmp on a Mac, named for this test's home: its
+// own. Elsewhere it's in the box's folder, in the run's home, its own already.)
+if (!SSH_AGENTS.startsWith(`${process.env.HOME}/`)) ownPath(SSH_AGENTS)
 let quick!: () => void
 const interval = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay: number) => {
   if (delay === 1000) quick = callback
