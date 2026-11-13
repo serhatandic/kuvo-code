@@ -270,6 +270,7 @@ test("a member pairs no phone and adds no computer, naming the main computer, an
   const elsewhere = { status: 409, json: { message: "Add and remove computers from Studio Mac.", ...named } };
   assert.deepEqual(labRoute("POST", "kuvo/machines"), elsewhere);
   assert.deepEqual(labRoute("DELETE", "kuvo/hosts/lab"), elsewhere);
+  assert.deepEqual(labRoute("POST", "kuvo/machines/lab.example/uninstall"), elsewhere);
   assert.deepEqual(labRoute("PUT", "kuvo/link/peers"), elsewhere);
   assert.equal(read(linkFile).setup.primary, macPub);
   // (What a Mac's app answers that isn't adding or removing one: none here, as before.)

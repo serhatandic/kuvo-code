@@ -13344,6 +13344,62 @@ import crypto26 from "node:crypto";
 // Packages/Box/src/link/phones.ts
 import crypto24 from "node:crypto";
 
+// Packages/Box/src/link/setup/settle.ts
+var macsNamed = (doc) => (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).filter((box) => isObject(box) && box.kind === "mac" && typeof box.key === "string").map((box) => box.key);
+function sharedMachine(link) {
+  if (IS_MAC || !link)
+    return false;
+  const macs = macsOf(link);
+  if (macs.length < 2)
+    return false;
+  const setup = link.setup?.role === "member" ? link.setup : null;
+  const doc = setup ? macDoc(link, setup.primary, "peers") ?? setupDoc(link) : null;
+  const named = doc && setup ? new Set([setup.primary, ...macsNamed(doc)]) : new Set;
+  return !macs.every((mac) => named.has(mac));
+}
+function settleSetup(link) {
+  if (IS_MAC)
+    return;
+  const macs = macsOf(link);
+  if (!macs.length) {
+    if (link.setup?.role === "member")
+      delete link.setup;
+    return;
+  }
+  if (link.setup?.role === "primary")
+    delete link.setup;
+  const offers = macs.map((mac) => ({ mac, doc: macDoc(link, mac, "peers") })).map(({ mac, doc }) => ({ mac, doc, setup: ledSetup(doc) })).filter((each) => each.setup && each.setup.primary === each.mac);
+  const kept = link.setup;
+  if (kept && macSign(link, kept.primary))
+    kept.sign = macSign(link, kept.primary);
+  if (kept) {
+    const own = offers.find((each) => each.mac === kept.primary);
+    const doc = macDoc(link, kept.primary, "peers");
+    if (own && (own.setup.id !== kept.id || own.setup.epoch >= kept.epoch)) {
+      if (own.setup.id !== kept.id || own.setup.epoch !== kept.epoch)
+        delete kept.conflict;
+      kept.id = own.setup.id;
+      kept.epoch = own.setup.epoch;
+      delete kept.aside;
+    } else if (doc && !ledSetup(doc))
+      kept.aside = true;
+  } else if (offers.length === 1) {
+    const { setup, doc } = offers[0];
+    link.setup = { id: setup.id, epoch: setup.epoch, primary: setup.primary, sign: doc.origin, role: "member" };
+  }
+  if (link.setup && sharedMachine(link))
+    link.setup.aside = true;
+}
+function noteConflict(link, doc) {
+  const setup = followedSetup(link);
+  const said = ledSetup(doc);
+  if (setup?.role !== "member" || !said || said.id !== setup.id || said.epoch !== setup.epoch || said.primary === setup.primary)
+    return;
+  if (!macsOf(link).includes(said.primary) || macSign(link, said.primary) !== doc.origin)
+    return;
+  setup.conflict = { primary: said.primary, epoch: said.epoch };
+}
+
 // Packages/Box/src/link/setup/main-only.ts
 function mainElsewhere(link) {
   const setup = link?.setup;
@@ -13360,9 +13416,9 @@ var named = (main) => main.name || "your main computer";
 var pairElsewhere = (main) => ({ message: `Pair new phones from ${named(main)}.`, primary: main.key });
 var addElsewhere = (main) => ({ message: `Add and remove computers from ${named(main)}.`, primary: main.key });
 function memberHosts(link) {
-  if (IS_MAC || !mainElsewhere(link) || !link?.relay)
+  if (IS_MAC || !mainElsewhere(link) || !link?.relay || sharedMachine(link))
     return null;
-  const doc = setupDoc(link);
+  const doc = setupDoc(link) ?? (link.setup.aside && macsOf(link).length === 1 ? macDoc(link, link.setup.primary, "peers") : null);
   if (!doc)
     return null;
   const hosts = [];
@@ -13523,62 +13579,6 @@ function pairingLink(link) {
   return `kuvo-link://pair?${query}`;
 }
 var phoneDocs = (link) => Object.values(link?.docs ?? {}).map(held).filter((doc) => doc?.kind === "phones");
-
-// Packages/Box/src/link/setup/settle.ts
-var macsNamed = (doc) => (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).filter((box) => isObject(box) && box.kind === "mac" && typeof box.key === "string").map((box) => box.key);
-function sharedMachine(link) {
-  if (IS_MAC || !link)
-    return false;
-  const macs = macsOf(link);
-  if (macs.length < 2)
-    return false;
-  const setup = link.setup?.role === "member" ? link.setup : null;
-  const doc = setup ? macDoc(link, setup.primary, "peers") ?? setupDoc(link) : null;
-  const named = doc && setup ? new Set([setup.primary, ...macsNamed(doc)]) : new Set;
-  return !macs.every((mac) => named.has(mac));
-}
-function settleSetup(link) {
-  if (IS_MAC)
-    return;
-  const macs = macsOf(link);
-  if (!macs.length) {
-    if (link.setup?.role === "member")
-      delete link.setup;
-    return;
-  }
-  if (link.setup?.role === "primary")
-    delete link.setup;
-  const offers = macs.map((mac) => ({ mac, doc: macDoc(link, mac, "peers") })).map(({ mac, doc }) => ({ mac, doc, setup: ledSetup(doc) })).filter((each) => each.setup && each.setup.primary === each.mac);
-  const kept = link.setup;
-  if (kept && macSign(link, kept.primary))
-    kept.sign = macSign(link, kept.primary);
-  if (kept) {
-    const own = offers.find((each) => each.mac === kept.primary);
-    const doc = macDoc(link, kept.primary, "peers");
-    if (own && (own.setup.id !== kept.id || own.setup.epoch >= kept.epoch)) {
-      if (own.setup.id !== kept.id || own.setup.epoch !== kept.epoch)
-        delete kept.conflict;
-      kept.id = own.setup.id;
-      kept.epoch = own.setup.epoch;
-      delete kept.aside;
-    } else if (doc && !ledSetup(doc))
-      kept.aside = true;
-  } else if (offers.length === 1) {
-    const { setup, doc } = offers[0];
-    link.setup = { id: setup.id, epoch: setup.epoch, primary: setup.primary, sign: doc.origin, role: "member" };
-  }
-  if (link.setup && sharedMachine(link))
-    link.setup.aside = true;
-}
-function noteConflict(link, doc) {
-  const setup = followedSetup(link);
-  const said = ledSetup(doc);
-  if (setup?.role !== "member" || !said || said.id !== setup.id || said.epoch !== setup.epoch || said.primary === setup.primary)
-    return;
-  if (!macsOf(link).includes(said.primary) || macSign(link, said.primary) !== doc.origin)
-    return;
-  setup.conflict = { primary: said.primary, epoch: said.epoch };
-}
 
 // Packages/Box/src/link/documents/parts.ts
 import crypto25 from "node:crypto";
@@ -38985,7 +38985,7 @@ async function* setupRoute(context) {
   }
   return yield* json(200, setupView(readLink()));
 }
-var ADDS_OR_REMOVES = (method, route) => method === "POST" && route === "kuvo/machines" || method === "DELETE" && /^kuvo\/(machines|hosts)\/[^/]+$/.test(route);
+var ADDS_OR_REMOVES = (method, route) => method === "POST" && (route === "kuvo/machines" || /^kuvo\/machines\/[^/]+\/uninstall$/.test(route)) || method === "DELETE" && /^kuvo\/(machines|hosts)\/[^/]+$/.test(route);
 async function* memberComputersRoute(context) {
   const { request, route, json } = context;
   const method = request.method.toUpperCase();
@@ -39000,8 +39000,8 @@ async function* memberComputersRoute(context) {
   const hosts = memberHosts(link);
   if (hosts)
     return yield* json(200, hosts);
-  if (link?.setup?.aside)
-    return yield* json(503, { message: `This computer is shared with more than one Mac: see your computers on ${main.name || "your main computer"}.` });
+  if (sharedMachine(link))
+    return yield* json(503, { message: "This computer is shared with more than one Mac: see your computers on the Mac you paired with." });
   return yield* json(503, { message: "This computer can't list your computers yet. Try again in a moment." });
 }
 
@@ -39506,7 +39506,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4f65ed1da2ae";
+var BRIDGE_VERSION = "ce1576656221";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

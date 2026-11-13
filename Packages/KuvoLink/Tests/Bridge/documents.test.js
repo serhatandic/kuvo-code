@@ -236,18 +236,25 @@ async function asked(box, method, route) {
   return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
 }
 
-test("only a member's own setup lists its computers for a phone: set aside by a second Mac's setup, it lists none and pairs none; its main computer let go, it pairs, until it takes the other Mac's", async () => {
+test("only a member's own Mac's list goes to a phone: set aside by its one Mac, it lists that Mac's; shared with a second Mac's setup, it lists none and pairs none; its main computer let go, it pairs, until it takes the other Mac's", async () => {
   const studio = mac("Studio"), other = mac("Other"), b = machine("b"), c = machine("c"), d = machine("d");
   // Studio's setup: b lists its machines from it, by name, with the ids Studio gave them.
   setUp(b, studio, [studio.peers([c, b], leads(studio, 1))]);
   const row = box => ({ kind: "machine", name: box.name, address: box.entry.address, key: box.entry.key, relay: "wss://relay.invalid", machine: `${box.name}.invalid`, anotherMac: false, removed: false });
   assert.deepEqual(await asked(b, "GET", "kuvo/hosts"), { status: 200, json: { hosts: [row(b), row(c)] } });
 
+  // Studio stops leading (another Mac's machine holds it back): c, Studio's alone, is set aside,
+  // and still lists Studio's machines from Studio's own document, for its phones are all Studio's.
+  setUp(c, studio, [studio.peers([c, b], leads(studio, 1))]);
+  link.docsWork(c.state, studio.entry, { give: [studio.peers([c, b])] });
+  assert.deepEqual([c.state.link.setup.primary, c.state.link.setup.aside], [studio.entry.key, true]);
+  assert.deepEqual(await asked(c, "GET", "kuvo/hosts"), { status: 200, json: { hosts: [row(b), row(c)] } });
+
   // Other set b up too, and leads a setup of its own: b is set aside, still Studio's.
   setUp(b, other, [other.peers([b, d], leads(other, 1, setupID("two")))]);
   assert.deepEqual([b.state.link.setup.primary, b.state.link.setup.aside], [studio.entry.key, true]);
   // A phone of Other's gets neither Mac's machines from b, nor a link to pair with it.
-  assert.deepEqual(await asked(b, "GET", "kuvo/hosts"), { status: 503, json: { message: "This computer is shared with more than one Mac: see your computers on Studio." } });
+  assert.deepEqual(await asked(b, "GET", "kuvo/hosts"), { status: 503, json: { message: "This computer is shared with more than one Mac: see your computers on the Mac you paired with." } });
   assert.deepEqual(await asked(b, "POST", "kuvo/phones/pair"), { status: 409, json: { message: "Pair new phones from Studio.", primary: studio.entry.key } });
 
   // Studio let go (`kuvo-link.js leave`): b is in no setup, and pairs phones itself.

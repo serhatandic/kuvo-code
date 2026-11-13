@@ -6,9 +6,10 @@
 import { isObject } from "../../shared/json";
 import type { Hosts } from "../../shared/routes/mac";
 import { IS_MAC } from "../home";
-import { macDoc } from "../peers/known";
+import { macDoc, macsOf } from "../peers/known";
 import type { LinkState } from "../state";
 import { setupDoc } from "./record";
+import { sharedMachine } from "./settle";
 
 /** The main computer of the setup this box is a member of: its key and name; null on the main
  * computer itself and in no setup. One set aside counts too (a shared machine, or its main computer
@@ -32,18 +33,19 @@ const named = (main: { name: string }) => main.name || "your main computer";
 /** What a member answers a pairing link asked of it (`kuvo/phones/pair`, `kuvo-link.js pair`). */
 export const pairElsewhere = (main: { key: string; name: string }) => ({ message: `Pair new phones from ${named(main)}.`, primary: main.key });
 
-/** What a member answers adding, changing or removing computers (`kuvo/machines…`, `kuvo/hosts/…`,
- * and `kuvo/link/peers` from an app beside it that isn't the main computer's). */
+/** What a member answers adding or removing computers (`kuvo/machines…`, `kuvo/hosts/…`, and
+ * `kuvo/link/peers` from an app beside it that isn't the main computer's). */
 export const addElsewhere = (main: { key: string; name: string }) => ({ message: `Add and remove computers from ${named(main)}.`, primary: main.key });
 
 /** `kuvo/hosts` as a member says it, from the document of the setup it follows: every machine in
  * the setup a phone reaches directly (itself too), as a Mac lists its machines; the main computer's
- * Mac isn't one (a phone pairs with it). Null where this box is no member, has no relay to name, or
- * follows no setup's document now: one set aside (its Macs' phones aren't all that setup's, so no
- * one Mac's list is theirs to read) or holding none yet. */
+ * Mac isn't one (a phone pairs with it). Set aside by its one Mac (which leads no setup now), from
+ * that Mac's own peers document: its phones are all that Mac's. Null where this box is no member,
+ * has no relay to name, holds no such document yet, or is shared: its Macs' phones aren't all one
+ * Mac's, so no one Mac's list is theirs to read. */
 export function memberHosts(link: LinkState | null | undefined): Hosts | null {
-  if (IS_MAC || !mainElsewhere(link) || !link?.relay) return null;
-  const doc = setupDoc(link);
+  if (IS_MAC || !mainElsewhere(link) || !link?.relay || sharedMachine(link)) return null;
+  const doc = setupDoc(link) ?? (link.setup!.aside && macsOf(link).length === 1 ? macDoc(link, link.setup!.primary, "peers") : null);
   if (!doc) return null;
   const hosts: Hosts["hosts"][number][] = [];
   for (const box of Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, 64) : []) {
