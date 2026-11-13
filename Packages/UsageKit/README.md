@@ -60,9 +60,14 @@ here.
   the same way, the provider's spend and trend under the first. The panel then doesn't read
   Claude's limits or sign-ins itself (Anthropic would only count it against the same hold): its own
   Claude reading takes this Mac's own Claude login's limits from the host, as of when, for the menu
-  bar, the cards, notices and the host's readers. Anthropic's reset grants and extra usage aren't
-  shown meanwhile (the box doesn't read them yet). `kuvo/usage` marks the rows whose place the
-  boxes' rows take (`covers`), without their limits.
+  bar, the cards, notices and the host's readers. What a plan has beyond its limits comes from the
+  host's rows too (`HostLimitRow.extras`: Claude's extra usage and reset grants, Codex's credits and
+  reset credits, OpenRouter's spend, a Copilot organization's credits), drawn under the row's
+  limits, its resets with a Use control that the host spends through its box, once, confirmed in
+  place (`askReset`, `useReset`, `HostResetFlow`); the panel's own claims (`ResetClaimService`)
+  stand down for a provider the host covers, and its own lines of the same facts aren't shown again
+  beside them. `kuvo/usage` marks the rows whose place the boxes' rows take (`covers`), without
+  their limits.
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.
 - **A card of the host's** (`Embedding/HostCard.swift`): shown at the foot of the dashboard, above
