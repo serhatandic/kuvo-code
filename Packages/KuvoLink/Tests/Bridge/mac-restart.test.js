@@ -225,3 +225,13 @@ test("for your machines alone: back on the relay while the list has one, not onc
   await none.stop();
   fs.rmSync(listFile, { force: true });
 });
+
+test("each start of this Mac's box in its app's folder says so, with its version and the app's: a move into a home of its own waits for the upgrades a start runs", async () => {
+  fs.rmSync(path.join(box, "run", "served.json"), { force: true });
+  const started = await serve();
+  // (Said as it starts, before it answers anything.)
+  assert.equal((await started.asApp("GET", "kuvo/attention")).status, 200);
+  const served = JSON.parse(fs.readFileSync(path.join(box, "run", "served.json"), "utf8"));
+  assert.deepEqual([served.app, served.bridge], [null, link.BRIDGE_VERSION], "no app version given here");
+  await started.stop();
+});

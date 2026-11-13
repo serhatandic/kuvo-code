@@ -383,7 +383,10 @@ computer. Changing the main computer and joining two setups come later: #183.)
     a box, with `KUVO_HOME` its own box's folder (in its app folder) and `root` the machines'
     folder (`.kuvo-code`, or a test's); without either (or with them the same) it stops, exit 2.
     Prints `{verdict, use: "own"|"attach", opens: "main"|"window", runs, box, own}`, `box` and
-    `own` as `boxes` above. `runs`, for the box in `~/<root>`: `gone` where its Mac removed it
+    `own` as `boxes` above. While a move of this Mac's box into `~/<root>` is unfinished (its
+    journal there, "Moving this Mac's box"), `{verdict: "moving", use: "wait", opens: "main", runs:
+    null, box: null, own: null}`, before anything else: no box starts until `rehome --resume`
+    finishes it. `runs`, for the box in `~/<root>`: `gone` where its Mac removed it
     (`kuvo-start off` leaves `run/off`, which only a Mac's start there takes away, and then its way
     to start, `bin/kuvo-start`, goes with its keys, leaving its link.json and card: no
     `bin/kuvo-start`, or `run/off`, whatever still runs), else `running` (its keeper,
@@ -4580,6 +4583,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
+| `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -4866,8 +4870,98 @@ own keeps:
   that `serve` runs, its `kuvo-start` holds nothing for it and lets go of a hold it had; until then
   it holds the Mac awake on power as a machine's does.
 
-Nothing records `box/kind` yet: the move to `~/.kuvo-code` and what the app does for a box there
-come later (#333), so this Mac's box runs in the app's folder as above.
+Only the move below records `box/kind` (`mac`), and nothing runs it yet: the keeper that runs it
+and what the app does for a box there come later (#333), so this Mac's box runs in the app's folder
+as above.
+
+#### Moving this Mac's box
+
+`box.rehome`. The box moves itself out of the app's folder into `~/.kuvo-code`, laid out as above,
+with `kuvo-link.js rehome` (#333 piece 2a). The box decides and does each step; the keeper only
+stops the old box first and starts what's there after, and a client only shows it. Only on a Mac:
+on Linux every command but `--status`, `--ready` and `--resume` refuses, saying there's nothing to
+move. Everything it keeps is in `~/.kuvo-code/updates/rehome`, made first and never moved: its
+state (`state.json`), its journal (`journal.json`, and `journal.acts`, each act on a line, synced
+before it's done), its lock (`lock`, the holder's pid: a second `rehome` waits for it, saying so
+on stderr; one whose holder is gone is taken over), its staging folder, and the kept copies.
+
+`kuvo-link.js rehome <root> …`, with `KUVO_HOME` the app's own box's folder (`<app folder>/box`)
+and `root` the home's name in the home folder (`.kuvo-code`, or a test's), as `here` takes them.
+Each prints one JSON line; it exits 0 when it moved (or had nothing to do), 1 when it was refused,
+failed or waited too long for the lock, 2 for a command it doesn't know.
+
+- **`rehome <root> --release <folder> [--keeps-awake off]`**: the move, with the old box stopped
+  (its engine, coding agents' bridge and `serve`; the keeper may hold its lock). Prints
+  `{result: "done"|"refused"|"failed", message?, status}`, `status` as `kuvo/box/rehome` says it.
+  `--release` is a folder with the box's own files in `bin/` (`kuvo-start` and `kuvo-link.js` at
+  least), copied into `~/.kuvo-code/bin`; `--keeps-awake off`, Keep This Mac Awake off in the app,
+  which the box's own setting says then (`keepsAwake: false` in `box/work.json`). Its steps:
+  1. **Plan.** What moves where, journaled. It's refused, in words, while the old box hasn't
+     started since the app updated (its `run/served.json`, which `serve` writes in the app's
+     folder each time it starts, names another app version, from `KUVO_APP_VERSION`, or another
+     link version), while something runs in it, without the box's files, while a box is in
+     `~/.kuvo-code` (one with a card or a link.json that its Mac didn't remove, `here`'s `runs`
+     not `gone`: both keep running as they are), when the app's folder and `~/.kuvo-code` aren't
+     on one APFS disk, and without room for the engine's database and its journal, × 1.1, plus
+     200 MB. A refusal counts as a try.
+  2. **Install.** What's in `~/.kuvo-code` that isn't a box (one its Mac removed, or what was
+     left) is set aside into `trash/earlier-box-<date>`, nothing deleted.
+  3. **Clone.** Each folder cloned (`cp -c`: APFS clones, links as links, sockets left out) into
+     staging: the box's own folder's entries (not `bin`, nor in `run` its processes' records:
+     `keeper.*`, `serve.json`, `served.json`, `host.json`, `engine.json`, `bridge.json`, pids,
+     locks, `socket.key`, the app's notes on its engine), the engine's `opencode/data`, `config`,
+     `state`, `cache` and `workspace` to the same names, `engine`, `integrations`, `bots`,
+     `wakes`, `groups`, `Chats` (to `chats`), `agents`, `phone-link.json`, the app's
+     `Attachments` (into `attachments`), and the box's files. The app's folder isn't changed.
+  4. **Rewrite** and 5. **check**: the paths that name the old place (piece 2b; nothing yet).
+  6. **Place.** Each staged folder renamed into place, merged entry by entry where one's there
+     (a name in both keeps both, the second as `<name> 2`); then `box/kind` (`mac`), last.
+  7. **Fix.** What outside the box names its folders (piece 2b; nothing yet).
+  8. **Clear.** From here it only goes forward. The originals, the app's `box` and `opencode`
+     folders whole and each other, are renamed into `updates/rehome/kept/<date>/`, so nothing in
+     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted, by
+     `serve` as it starts and by `--ready`.
+  9. **Done.** `state.json` says `done`, with what the app's executable still owes (`owed`:
+     `keychain`, the Keychain's originals deleted, and `agent`, its own launch agent
+     unregistered), then the journal, last.
+
+  A failure before step 8 goes back: each act journaled is undone, last first (only where it was
+  done), and staging is deleted, so the app's folder and `~/.kuvo-code` are exactly as before.
+- **`--resume`**: a move (or move back) that stopped part way, finished: back before step 8,
+  forward from it. While one is unfinished, `here` says `{verdict: "moving", use: "wait"}`, and
+  neither app nor keeper starts a box. Gone back, it prints `result: "failed"` (exit 1), and the
+  old box starts as it was; finished, `done`; nothing to finish, `nothing`.
+- **`--back`**: Move Back, with the box in `~/.kuvo-code` stopped: the same steps the other way, on
+  the data as it is now (what was made since goes back too), into the app's folder it came from
+  (`state.json`'s `from`). What the move merged goes back where it came from; each other entry of
+  `~/.kuvo-code` to where the move took it from (`updates` an entry at a time, never the move's
+  own folder), any other into the app's `box`, without `box/kind`; folders made again as they were
+  in the move's kept copy. Then `~/.kuvo-code`'s originals and its `bin` are kept as above, and
+  `state.json` says `back`, owing `keychain` (the items put back) and `agent` (registered again).
+  Refused while that box runs, or while the app's folder has a box of its own again. One that
+  fails leaves the box moved (`done`, with `failed`).
+- **`--ready [--release <folder>]`**: whether the keeper should run it now: `{ready, how:
+  "move"|"back"|"resume"|null, why?, status}`. One unfinished first (`resume`); then Move Back
+  asked (`back`); then Move Now asked (`move`, whatever runs: the app asked you before stopping
+  it). Otherwise not after three tries (it waits for Move Now), nor before the next (an hour after
+  one fails), nor while a move would be refused, nor while something works on the box (a
+  conversation on its engine or with its coding agents, or one that can't be told) or a browser
+  waits on you. The first time it's asked it notes it waits (`waiting`, `waitingSince`); after
+  three days of that, `overdue`.
+- **`--status`**: `kuvo/box/rehome`'s answer. **`--settled keychain|agent`**: one of `owed`, done
+  (`{settled, status}`).
+
+`kuvo/box/rehome`: `GET` answers `{state, way, step, tries, nextTry, waitingSince, overdue,
+failed, movedAt, keptUntil, owed, asked, from, to}`. `state`: null before anything, `waiting`,
+`moving` or `clearing` (under way, at `step`: `plan`, `install`, `clone`, `rewrite`, `check`,
+`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` says `{at, step,
+message}`), or `back`; `way`, `move` or `back`; `nextTry`, `waitingSince`, `movedAt` and
+`keptUntil` in ms; `asked`, `now` or `back`, until it's acted on. The app's box in its folder
+answers for the `~/.kuvo-code` it moves to (a copy other than the real app's, only for the home
+`KUVO_MACHINE_ROOT` names; else nothing yet); a box in a home of its own, for its own. `POST
+{now: true}` asks for Move Now and `{back: true}` (once it's moved) for Move Back, answering the
+same: only from Kuvo Code itself (the app, or `box route`; 403 from a phone), 409 with why when it
+can't (a machine, or nothing to move back).
 
 #### Host interface
 

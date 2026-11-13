@@ -1,0 +1,244 @@
+// Moving this Mac's box out of its app's folder to a home of its own (#333, PROTOCOL.md, "Moving
+// this Mac's box"): what the move keeps where it can't be moved itself, in the home it moves to
+// (`<home>/updates/rehome`, made first and never moved). Its state (`state.json`: how it stands,
+// its tries, the next one, why it last failed, when the kept copy goes), its journal (`journal.json`
+// and its acts, `journal.acts`), and its lock (`lock`). What `here`, the route and `rehome` read.
+
+import fs from "node:fs";
+import path from "node:path";
+import { isObject } from "../../shared/json";
+import { processRuns } from "../../shared/platform";
+import { writePrivate } from "../files";
+import { sleep } from "../../shared/wait";
+import type { RehomeStatus, RehomeStep } from "../../shared/routes/box";
+
+/** The move's folder in the home it moves to (`<home>/updates/rehome`). */
+export const rehomeFolder = (home: string): string => path.join(home, "updates", "rehome");
+
+/** The steps, in order (PROTOCOL.md, "Moving this Mac's box"). Before `clear`, a move that stops
+ * goes back; from it on, it only goes forward. */
+export const STEPS = ["plan", "install", "clone", "rewrite", "check", "place", "fix", "clear", "done"] as const satisfies readonly RehomeStep[];
+export const stepIndex = (step: RehomeStep): number => STEPS.indexOf(step);
+/** Whether `step` is past the point a stopped move goes back from. */
+export const forwardOnly = (step: RehomeStep): boolean => stepIndex(step) >= stepIndex("clear");
+
+/** How many tries a move gets by itself before it waits for Move Now, and how long after one fails
+ * before the next. */
+export const MOST_TRIES = 3;
+export const AFTER_A_FAILURE = 3600_000;
+/** How long a move waits for a quiet moment before the box says it's overdue (Move Now). */
+export const OVERDUE_AFTER = 3 * 86_400_000;
+/** How long the originals are kept after a move. */
+export const KEPT_FOR = 30 * 86_400_000;
+
+/** What `state.json` keeps (`kuvo/box/rehome` answers it, `RehomeStatus`), and the folders and
+ * merges a move back needs. */
+export interface RehomeRecord extends Partial<RehomeStatus> {
+  /** The kept copies' folders, each deleted once `keptUntil` passes. */
+  kept?: string[];
+  /** What a move merged into a folder that was there (a session's files from the app's
+   * `Attachments` into `attachments`, say): each as it was and where it went, for a move back. */
+  merged?: { source: string; placed: string }[];
+}
+
+const stateFile = (home: string) => path.join(rehomeFolder(home), "state.json");
+
+export function readRecord(home: string): RehomeRecord {
+  try {
+    const kept = JSON.parse(fs.readFileSync(stateFile(home), "utf8"));
+    return isObject(kept) ? kept as RehomeRecord : {};
+  } catch {
+    return {};
+  }
+}
+
+/** `state.json` changed: each field given, null taking it away where it's optional. */
+export function noteRecord(home: string, change: Partial<RehomeRecord>): RehomeRecord {
+  const next: RehomeRecord = { ...readRecord(home), ...change };
+  writePrivate(stateFile(home), JSON.stringify(next, null, 1));
+  return next;
+}
+
+/** How the move stands, as `kuvo/box/rehome` says it (the journal's step while one's under way). */
+export function rehomeStatus(home: string, now = Date.now()): RehomeStatus {
+  const kept = readRecord(home);
+  const journal = readJournal(home);
+  const underWay = journal && journal.step !== "done";
+  const waitingSince = typeof kept.waitingSince === "number" ? kept.waitingSince : null;
+  const state = underWay ? (forwardOnly(journal.step) ? "clearing" : "moving") : kept.state ?? null;
+  return {
+    state,
+    way: underWay ? journal.way : kept.way ?? null,
+    step: underWay ? journal.step : null,
+    tries: typeof kept.tries === "number" ? kept.tries : 0,
+    nextTry: typeof kept.nextTry === "number" ? kept.nextTry : null,
+    waitingSince,
+    overdue: state === "waiting" && waitingSince !== null && now - waitingSince >= OVERDUE_AFTER,
+    failed: kept.failed ?? null,
+    movedAt: typeof kept.movedAt === "number" ? kept.movedAt : null,
+    keptUntil: typeof kept.keptUntil === "number" ? kept.keptUntil : null,
+    owed: Array.isArray(kept.owed) ? kept.owed : [],
+    asked: kept.asked ?? null,
+    from: kept.from ?? (underWay ? journal.from : null),
+    to: kept.to ?? (underWay ? journal.to : null),
+  };
+}
+
+// The journal
+
+/** One thing a move did, journaled before it's done, so going back undoes exactly what was:
+ * renamed (`from` → `to`; `source`, where it came from before it was staged), or made (a folder or
+ * file that wasn't there). */
+export type Act = { act: "rename"; from: string; to: string; source?: string; merged?: boolean } | { act: "made"; path: string; folder?: boolean };
+
+/** What moves where: each staged (`staged`, in the move's staging folder) from where it is
+ * (`from`), then put in place (`to`). `run` takes its files but its processes' records. */
+export interface Placement {
+  from: string;
+  to: string;
+  staged: string;
+  run?: boolean;
+  /** Its files, installed rather than moved: never cleared. */
+  installed?: boolean;
+}
+
+/** A move's journal (`journal.json`): which way (`move`: from the app's folder to a home of its
+ * own; `back`), the step under way, both folders, its plan, and its kept copy's folder. */
+export interface Journal {
+  v: 1;
+  way: "move" | "back";
+  began: number;
+  step: RehomeStep;
+  from: string;
+  to: string;
+  placements: Placement[];
+  /** What's cleared once it's in place: renamed into `kept`. */
+  clearing: string[];
+  kept: string;
+  /** A move back's: the kept copy of the move it undoes, whose folders' modes it makes them with again. */
+  keptBefore?: string;
+  /** Keep This Mac Awake was off in the app: the box's own setting says so too. */
+  keepsAwakeOff?: boolean;
+}
+
+const journalFile = (home: string) => path.join(rehomeFolder(home), "journal.json");
+const actsFile = (home: string) => path.join(rehomeFolder(home), "journal.acts");
+
+export function readJournal(home: string): Journal | null {
+  try {
+    const kept = JSON.parse(fs.readFileSync(journalFile(home), "utf8"));
+    return isObject(kept) && kept.v === 1 && typeof kept.step === "string" ? kept as unknown as Journal : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a move is under way in `home` (a journal not done): what `here` says first. */
+export const moveUnderWay = (home: string): boolean => {
+  const journal = readJournal(home);
+  return journal !== null && journal.step !== "done";
+};
+
+/** The journal written whole, synced before anything it says is done. */
+export function writeJournal(home: string, journal: Journal): void {
+  writePrivate(journalFile(home), JSON.stringify(journal, null, 1));
+  syncFolder(rehomeFolder(home));
+}
+
+export function forgetJournal(home: string): void {
+  fs.rmSync(actsFile(home), { force: true });
+  fs.rmSync(journalFile(home), { force: true });
+  syncFolder(rehomeFolder(home));
+}
+
+/** Each act, one JSON line, synced before it's done (one cut short by a crash wasn't done). */
+export function journalAct(home: string, act: Act): void {
+  const fd = fs.openSync(actsFile(home), "a", 0o600);
+  try {
+    fs.writeSync(fd, JSON.stringify(act) + "\n");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+export function readActs(home: string): Act[] {
+  let text = "";
+  try { text = fs.readFileSync(actsFile(home), "utf8"); } catch { return []; }
+  const acts: Act[] = [];
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    try {
+      const act = JSON.parse(line);
+      if (isObject(act) && (act.act === "rename" || act.act === "made")) acts.push(act as unknown as Act);
+    } catch {}
+  }
+  return acts;
+}
+
+function syncFolder(folder: string): void {
+  try {
+    const fd = fs.openSync(folder, "r");
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  } catch {}
+}
+
+// The lock
+
+const lockFolder = (home: string) => path.join(rehomeFolder(home), "lock");
+const holderOf = (lock: string): number | null => {
+  try {
+    const pid = Number(fs.readFileSync(path.join(lock, "pid"), "utf8"));
+    return Number.isInteger(pid) && pid > 1 ? pid : null;
+  } catch {
+    return null;
+  }
+};
+// (A holder by its command line: `kuvo-link.js rehome`, or its source's.)
+const holds = (pid: number) => pid === process.pid || processRuns(pid, "rehome");
+
+/** Takes the move's lock once it's free (a holder that's gone leaves it free), saying once that it
+ * waits (`waiting`); false once `most` ms have gone by. One held by this process is taken again. */
+export async function takeLock(home: string, { waiting = () => {}, most = 30 * 60_000, clock = Date.now } = {}): Promise<boolean> {
+  const lock = lockFolder(home);
+  fs.mkdirSync(rehomeFolder(home), { recursive: true, mode: 0o700 });
+  const began = clock();
+  let said = false;
+  for (;;) {
+    try {
+      fs.mkdirSync(lock, { mode: 0o700 });
+      fs.writeFileSync(path.join(lock, "pid"), String(process.pid), { mode: 0o600 });
+      return true;
+    } catch {}
+    const holder = holderOf(lock);
+    if (holder === process.pid) return true;
+    if (holder !== null && !holds(holder)) {
+      // A holder that's gone: its lock set aside whole (one rename, so only one taker gets it),
+      // then given back if it turns out another had just taken it.
+      const aside = `${lock}.gone.${process.pid}`;
+      try {
+        fs.renameSync(lock, aside);
+        if (holderOf(aside) === holder) fs.rmSync(aside, { recursive: true, force: true });
+        else try { fs.renameSync(aside, lock); } catch { fs.rmSync(aside, { recursive: true, force: true }); }
+      } catch {}
+      continue;
+    }
+    // (One just made, its holder not written yet, is a moment from being said.)
+    if (holder === null) {
+      try { if (clock() - fs.statSync(lock).mtimeMs > 60_000) fs.rmSync(lock, { recursive: true, force: true }); } catch {}
+    }
+    if (!said) {
+      said = true;
+      waiting();
+    }
+    if (clock() - began > most) return false;
+    await sleep(200);
+  }
+}
+
+/** Whether this process still holds the lock (checked before each step). */
+export const holdsLock = (home: string): boolean => holderOf(lockFolder(home)) === process.pid;
+
+export function giveLock(home: string): void {
+  if (holdsLock(home)) fs.rmSync(lockFolder(home), { recursive: true, force: true });
+}
