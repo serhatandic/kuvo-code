@@ -20,6 +20,7 @@ import { HERE, IS_MAC, RUN } from "../home";
 import { holdsBack } from "../bots/tell";
 import { botHere } from "../bots/here";
 import { readPeerAgents } from "../peers/directory";
+import { computerName } from "../peers/computer-name";
 import { ownKey, peersOf } from "../peers/known";
 import { macLink, readLink } from "../state";
 import { approvalOf, isApproval, otherComputersAllowed } from "../work/approval";
@@ -109,9 +110,6 @@ export function ownComputerNames(): string[] {
   const names = IS_MAC ? [macLink.config?.name, "the mac", "this mac", "mac"] : [link?.id, link?.name, "this machine"];
   return [...names, "here", "this computer", HERE].filter((each): each is string => typeof each === "string" && each.trim() !== "").map(folded);
 }
-
-/** What a box is called by agents here: a machine by its name, a Mac by its own or "the Mac". */
-export const computerName = (peer: Pick<Peer, "kind" | "name" | "id">): string => (peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer");
 
 const namesOf = (peer: Peer, macs: number): string[] => [peer.id, plainName(peer.name), computerName(peer), ...(peer.kind === "mac" && macs === 1 ? ["the mac", "mac"] : [])]
   .filter((each): each is string => typeof each === "string" && each.trim() !== "").map(folded);

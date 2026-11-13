@@ -37,6 +37,9 @@ export const MOST_NOTE = 20_000;
 export const MOST_NOTES = 200;
 export const MOST_FILE = 25_000_000;
 export const MOST_FILES = 50;
+/** The bytes of files an item may take to another computer, all of them. (Here, not in hand.ts:
+ * acts.ts reads it as it loads, and hand.ts is in a ring of imports with it.) */
+export const MOST_HANDED_FILES = 4_000_000;
 export const MOST_LINKS = 50;
 /** What happened to an item, kept for its feed: the last this many. */
 export const MOST_EVENTS = 50;
