@@ -50,8 +50,10 @@ const write = (file, value) => {
 };
 const read = file => { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } };
 
-// An engine with these sessions, as the engine keeps them: what's made, sent, interrupted.
-async function engine(sessions) {
+// An engine with these sessions, as the engine keeps them: what's made, sent, interrupted. `lists`:
+// what it answers besides, by path and query (`/api/model?hidden=1`), else by path (a coding
+// agents' bridge's models and accounts, say).
+async function engine(sessions, lists = {}) {
   const seen = { made: [], prompts: [], interrupted: [], patched: [] };
   const all = new Map(Object.entries(sessions).map(([id, each]) => [id, { id, time: { created: 1, updated: 1 }, directory: "/work", ...each }]));
   const messages = new Map();
@@ -86,6 +88,8 @@ async function engine(sessions) {
         try { execFileSync("git", ["worktree", "remove", "--force", given.directory], { cwd: given.projectID.slice(4) }); } catch { return raw({ message: "git refused" }, 400); }
         return raw({});
       }
+      const listed = lists[url.pathname + url.search] ?? lists[url.pathname];
+      if (listed !== undefined) return reply(listed);
       if (url.pathname === "/api/provider") return reply([{ id: "p" }]);
       if (url.pathname === "/api/model") return reply([{ id: "m1", providerID: "p", name: "Model One" }]);
       if (url.pathname.startsWith("/api/experimental/")) return reply({});
@@ -142,9 +146,9 @@ const callID = () => `cal_start${String(++ids).padStart(12, "0")}`;
 // What a lead's computer says of it: Foreman, a bot, in Full Access as it comes to there, with no rules.
 const startAs = (more = {}) => ({ approval: "fullAccess", held: [], agent: null, model: { providerID: "p", id: "m1" }, autopilot: false, works: by, own: true, depth: 1, line: ["ses_lead"], limits: null, homes: { ses_lead: mini.pub }, ...more });
 const startCall = (args = {}, start = {}, extra = {}) => ({ id: callID(), from: "ses_lead", tool: "start_session", args: { task: "Fix the sign-in.", project: "api", title: "Sign-in", ...args }, as: { name: "Foreman", bot: by, rules: [], free: true, start: startAs(start) }, made: Date.now(), at: Date.now(), ...extra });
-async function take(call, sender = mini.peer) {
+async function take(call, sender = mini.peer, agents = null) {
   const said = [];
-  await link.takeCall(sender, call, { send: (_to, message) => said.push(message.delivered), targets: [eng.target], bridge: true, places: { readEngine: () => eng.target, bridge: () => null } });
+  await link.takeCall(sender, call, { send: (_to, message) => said.push(message.delivered), targets: [eng.target, ...(agents ? [agents] : [])], bridge: true, places: { readEngine: () => eng.target, bridge: () => agents } });
   return said;
 }
 const answerOf = call => read(path.join(run, "outbox", "sending", `${call.id}-a.json`));
@@ -969,4 +973,67 @@ test("a worktree made for a start going to the coding agents stays while their b
   assert.equal(answered.length, 1, "the lead hears once");
   assert.ok(fs.existsSync(tree.root), "its worktree stays");
   assert.equal(read(path.join(run, "calls", "cal_agent0000000001.json")).tree.root, tree.root, "to be tried again once the bridge runs");
+});
+
+// Which model a lead's session starts on here, by the rule a new conversation here starts by
+// (PROTOCOL.md, "The models offered"): the lead's own where it runs here, else the default, else
+// the first model that runs.
+const codexAccount = { id: "codex-cli", name: "Codex", metadata: { source: "agent", installed: true, modelsComplete: true }, methods: [{ type: "oauth", id: "browser" }], connections: [{ type: "agent", method: "oauth" }] };
+const engineLists = more => ({ "/api/integration": [], "/api/model/default": { providerID: "p", id: "m1" }, ...more });
+
+test("a lead on a model its coding agent keeps out of its picker (Codex's hidden ones) starts on it here, where that agent runs it", async () => {
+  confirmFullAccess();
+  eng = await engine({ ses_user: { title: "The user's own" } }, engineLists());
+  write(path.join(run, "engine.json"), eng.target);
+  // (Its picker's list leaves the hidden one out; the box asks for those too.)
+  const visible = [{ id: "gpt-5.5", providerID: "codex-cli", name: "GPT-5.5" }];
+  const agents = await engine({}, {
+    "/api/model": visible,
+    "/api/model?hidden=1": [...visible, { id: "gpt-5.1-codex-mini", providerID: "codex-cli", name: "GPT-5.1 Codex Mini", hidden: true }],
+    "/api/integration": [codexAccount],
+    "/api/kuvo/auto": { lists: [] },
+  });
+  const call = startCall({}, { model: { providerID: "codex-cli", id: "gpt-5.1-codex-mini", variant: "high" } });
+  await take(call, mini.peer, agents.target);
+  assert.equal(eng.seen.made.length, 0, "not on the engine's default");
+  assert.equal(agents.seen.made.length, 1);
+  assert.deepEqual(agents.seen.made[0].model, { providerID: "codex-cli", id: "gpt-5.1-codex-mini", variant: "high" });
+  assert.doesNotMatch(answerOf(call).note.words, /default model/);
+});
+
+test("a lead whose model has no account here, where the default can't run either, starts on the first model that does, and is told which", async () => {
+  confirmFullAccess();
+  eng = await engine({ ses_user: { title: "The user's own" } }, engineLists({
+    "/api/model": [{ id: "m1", providerID: "p", name: "Model One" }, { id: "x", providerID: "r", name: "Signed Out" }],
+    "/api/integration": [{ id: "r", name: "R", methods: [{ type: "key" }], connections: [] }],
+    "/api/model/default": { providerID: "r", id: "x" },
+  }));
+  write(path.join(run, "engine.json"), eng.target);
+  const call = startCall({}, { model: { providerID: "q", id: "elsewhere" } });
+  await take(call);
+  assert.deepEqual(eng.seen.made.at(-1).model, { providerID: "p", id: "m1" });
+  assert.match(answerOf(call).note.words, /It runs on p\/m1 there: yours \(q\/elsewhere\) has no account on that computer, nor can its default model run\./);
+});
+
+test("a lead whose model is being retired on this computer starts on the default, and is told why", async () => {
+  confirmFullAccess();
+  eng = await engine({ ses_user: { title: "The user's own" } }, engineLists({
+    "/api/model": [{ id: "m1", providerID: "p", name: "Model One" }, { id: "old", providerID: "p", name: "Old One", status: "deprecated" }],
+  }));
+  write(path.join(run, "engine.json"), eng.target);
+  const call = startCall({}, { model: { providerID: "p", id: "old" } });
+  await take(call);
+  assert.equal(eng.seen.made.at(-1).model, undefined);
+  assert.match(answerOf(call).note.words, /It runs on the default model there: yours \(p\/old\) is being retired on that computer\./);
+});
+
+test("a lead on a coding agent's account this computer doesn't have starts on the default, told it has no account here, not that the model is gone", async () => {
+  confirmFullAccess();
+  eng = await engine({ ses_user: { title: "The user's own" } }, engineLists());
+  write(path.join(run, "engine.json"), eng.target);
+  const agents = await engine({}, { "/api/model": [], "/api/integration": [codexAccount], "/api/kuvo/auto": { lists: [] } });
+  const call = startCall({}, { model: { providerID: "codex-cli@work", id: "gpt-5.5" } });
+  await take(call, mini.peer, agents.target);
+  assert.equal(eng.seen.made.at(-1).model, undefined);
+  assert.match(answerOf(call).note.words, /It runs on the default model there: yours \(codex-cli@work\/gpt-5\.5\) has no account on that computer\./);
 });

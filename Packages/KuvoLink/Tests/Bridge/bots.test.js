@@ -353,6 +353,12 @@ async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}, 
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
       if (listed && request.method === "GET" && request.url === "/api/model") return reply({ data: listed.models });
       if (listed && request.method === "GET" && request.url === "/api/model/default") return reply({ data: listed.defaultModel });
+      // Each provider's account, as the engine lists them: signed in where it's ready (so a new
+      // bot's model goes by the box's one rule, work/model-rule.ts).
+      if (listed && request.method === "GET" && request.url === "/api/integration") {
+        const providers = [...new Set(listed.models.map(each => each.providerID))];
+        return reply({ data: providers.map(id => ({ id, name: id, methods: [{ type: "key" }], connections: ready.includes(id) ? [{ type: "credential", method: "key" }] : [] })) });
+      }
       if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_made${next++}` } });
       const one = request.url.match(/^\/api\/session\/([^/]+)$/);
       if (one && request.method === "GET") return reply({ data: { id: one[1], permissions: rules[one[1]] ?? [] } });
@@ -419,6 +425,22 @@ test("New Bot here offers, and starts a bot on, a model this box can use: not th
   assert.deepEqual(await offeredWith({ id: "sonnet", providerID: "anthropic" }, ["opencode"], sonnet), { id: "flint", providerID: "opencode" });
   // One it can: as the Mac named it.
   assert.deepEqual(await offeredWith({ id: "sonnet", providerID: "anthropic" }, ["opencode", "anthropic"], pickle), { id: "sonnet", providerID: "anthropic" });
+});
+
+test("New Bot here starts on the model a new conversation here would, by the box's one rule: with none named and a default being retired, the first that runs in the picker's order, not the engine's", async () => {
+  // The engine lists Flint (OpenCode Zen) first; Anthropic, featured before OpenCode Zen, comes first in the picker.
+  const flint = { id: "flint", providerID: "opencode", name: "Flint", enabled: true };
+  const sonnet = { id: "sonnet", providerID: "anthropic", name: "Sonnet", enabled: true };
+  const retiring = { id: "opus-old", providerID: "anthropic", name: "Opus Old", enabled: true, status: "deprecated" };
+  write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, startingModel: null }));
+  const engine = await makingEngine(["opencode", "anthropic"], {}, () => {}, { models: [flint, sonnet, retiring], defaultModel: retiring });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const offered = await ask(handle, "GET", "kuvo/bots/templates");
+    assert.deepEqual(offered.json.startingModel["my-server"], { id: "sonnet", providerID: "anthropic" });
+  } finally {
+    engine.close();
+  }
 });
 
 test("with the Mac closed, a bot is made here as New Bot makes it: its folder, conversation and instructions, and it writes first", async () => {

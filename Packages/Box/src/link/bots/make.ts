@@ -20,6 +20,7 @@ import { listBots } from "./list";
 import { noteTold, toldDigest } from "./tell";
 import { approvalOf, approvalRules } from "../work/approval";
 import { usableModels } from "../work/models";
+import { listsHere, startingModel } from "../work/model-rule";
 import type { Target } from "../../shared/records";
 import type { BotLook, BotModel } from "../../shared/routes/bots";
 import type { MadeBot } from "../../shared/routes/bots";
@@ -74,6 +75,12 @@ export async function startingModelHere(named: BotModel | null, readEngine: () =
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
   if (!engine) return named;
+  // By the rule a new session here starts by (work/model-rule.ts): the one named where it runs,
+  // else the default, else the first that runs. (Its own reckoning below only while the engine
+  // can't say; a coding agent's named is the bridge's to say, as above.)
+  const starting = startingModel([named], await listsHere(engine, null));
+  if (starting) return starting.why === "wanted" && named ? named : { id: starting.model.id, providerID: starting.model.providerID };
+  if (starting === null) return named;
   const step = signal ? AbortSignal.any([signal, AbortSignal.timeout(BOT_STEP)]) : AbortSignal.timeout(BOT_STEP);
   const models = (await usableModels(engine, null, step)).filter(model => !model.retiring);
   if (!models.length) return named;

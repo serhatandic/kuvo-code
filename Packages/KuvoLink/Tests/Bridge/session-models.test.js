@@ -318,3 +318,93 @@ test("none named is refused, and it's only read", async () => {
   assert.equal((await answer("GET", "kuvo/sessions/models")).status, 400);
   assert.equal((await answer("POST", "kuvo/sessions/models?sessions=ses_fine")).status, 405);
 });
+
+// The models a session can use here, and the one a new session starts on (PROTOCOL.md, "The models
+// offered"), by the same rule: what every client's picker offers, and its new conversation's model.
+const offeredOn = async (on, query = "") => {
+  const { status, json } = await answer("GET", `kuvo/models/offered${query}`, on);
+  assert.equal(status, 200);
+  return json;
+};
+const refs = models => models.map(each => `${each.providerID}/${each.id}${each.retiring ? " (retiring)" : ""}${each.hidden ? " (hidden)" : ""}`);
+
+test("the models offered: every one that runs, the engine's in its picker's order, then the coding agents' (those an agent hides marked), then Custom Auto's lists with models", async () => {
+  const offered = await offeredOn(handle);
+  assert.deepEqual(refs(offered.models), [
+    // Signed in, a free one of OpenCode Zen's, and providers with nothing to sign in to; not the
+    // signed-out ones, those only a key would run, nor one only the plan's agent runs.
+    "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5 (retiring)", "opencode/big-pickle", "lmstudio/qwen-3", "ollama/llama-4",
+    // One Codex keeps out of its picker runs, marked so a picker leaves it out.
+    "codex-cli@work/gpt-5.5", "codex-cli@work/gpt-5.1-codex-mini (hidden)", "codex-cli@old/gpt-5.5", "claude-code/claude-opus-5-5", "claude-code/claude-sonnet-5", "claude-code@new/opus", "claude-code@new/sonnet",
+    "auto/auto",
+  ]);
+  assert.equal(offered.models[0].name, "Claude Opus 5.5");
+  assert.deepEqual(offered.known, { engine: true, agents: true });
+  // Accounts whose list isn't all they run yet: one of theirs not listed may still run. Codex signed
+  // in with none listed, Claude Code with only its usual ones, a Codex that can't say its list is whole.
+  assert.deepEqual(offered.listing, ["codex-cli", "claude-code@new", "codex-cli@old"]);
+  // None wanted: the engine's default, which runs.
+  assert.deepEqual(offered.starting, { providerID: "anthropic", id: "claude-opus-5-5" });
+});
+
+test("a new session starts on the model picked last where it runs, by the id its place lists it, else on the default", async () => {
+  const startsOn = async query => (await offeredOn(handle, query)).starting;
+  // Claude Code's `default`, as the model it stands for, its effort kept.
+  assert.deepEqual(await startsOn("?provider=claude-code&model=default&variant=high"), { providerID: "claude-code", id: "claude-opus-5-5", variant: "high" });
+  // One Codex keeps out of its picker runs all the same.
+  assert.deepEqual(await startsOn("?provider=codex-cli%40work&model=gpt-5.1-codex-mini"), { providerID: "codex-cli@work", id: "gpt-5.1-codex-mini" });
+  // A coding agent's still being listed: as it is.
+  assert.deepEqual(await startsOn("?provider=claude-code%40new&model=opusplan"), { providerID: "claude-code@new", id: "opusplan" });
+  // A Custom Auto list deleted: the list it runs on, your first.
+  assert.deepEqual(await startsOn("?provider=auto&model=list_deleted"), { providerID: "auto", id: "auto" });
+  const fallback = { providerID: "anthropic", id: "claude-opus-5-5" };
+  // Signed out of, only a key would run it, being retired, gone, or with no account here at all.
+  for (const query of ["?provider=github-copilot&model=gpt-5.5", "?provider=deepseek&model=deepseek-chat", "?provider=anthropic&model=claude-sonnet-5",
+    "?provider=anthropic&model=claude-3-opus", "?provider=nowhere&model=x", "?provider=claude-code%40work&model=claude-opus-5-5", "?provider=cursor&model=composer-2"]) {
+    assert.deepEqual(await startsOn(query), fallback, query);
+  }
+});
+
+test("a default that can't run, or none: the first model that runs; nothing that runs: none", async () => {
+  const signedOutDefault = handlerOn(await engineWith({ "/api/model/default": { providerID: "github-copilot", id: "gpt-5.5" } }));
+  assert.deepEqual((await offeredOn(signedOutDefault)).starting, { providerID: "anthropic", id: "claude-opus-5-5" });
+  const noDefault = handlerOn(await engineWith({ "/api/model/default": null, "/api/provider": [{ id: "opencode" }], "/api/integration": engineLists["/api/integration"].map(each => (each.id === "anthropic" ? { ...each, connections: [] } : each)) }));
+  assert.deepEqual((await offeredOn(noDefault)).starting, { providerID: "opencode", id: "big-pickle" });
+  // Nothing of the engine's runs, and no coding agents here: none.
+  const nothing = await engineWith({ "/api/model": [model("github-copilot", "gpt-5.5", "GPT-5.5")] });
+  const alone = link.engineHandler(() => ({ pid: process.pid, ...nothing, version: "2.0.32" }), { name: "Studio" }, () => null);
+  const none = await offeredOn(alone);
+  assert.deepEqual([none.models, none.starting], [[], null]);
+});
+
+test("a default the engine didn't say isn't taken for none, nor a bridge not running for no coding agents: a new session's model isn't said, or is the one wanted as it is", async () => {
+  const unsaid = handlerOn(await engineWith({ "/api/model/default": FAILS }));
+  assert.equal("starting" in (await offeredOn(unsaid)), false);
+  // The bridge starting, or started again: its models can't be said yet, and a model of theirs
+  // picked last stays the one a new session starts on.
+  const nothing = await engineWith();
+  const noBridge = link.engineHandler(() => ({ pid: process.pid, ...nothing, version: "2.0.32" }), { name: "Studio" }, () => null);
+  const offered = await offeredOn(noBridge, "?provider=claude-code&model=claude-opus-5-5");
+  assert.deepEqual(offered.known, { engine: true, agents: false });
+  assert.deepEqual(offered.starting, { providerID: "claude-code", id: "claude-opus-5-5" });
+});
+
+test("the models offered while the engine can't say: its models not known, and no model to start on said, rather than a coding agent's", async () => {
+  const unloaded = handlerOn(await engineWith({ "/api/provider": [], "/api/model": [] }));
+  const offered = await offeredOn(unloaded);
+  assert.deepEqual(offered.known, { engine: false, agents: true });
+  assert.ok(offered.models.every(each => !["anthropic", "opencode"].includes(each.providerID)));
+  assert.equal("starting" in offered, false);
+  assert.equal((await answer("POST", "kuvo/models/offered")).status, 405);
+});
+
+test("a provider the engine has ready with a key of its own (an environment variable, its settings) runs and is offered, though its account isn't signed in; without one, a plan's provider still needs its key", async () => {
+  // OPENAI_API_KEY where the engine runs: it lists OpenAI ready, with no connection in Accounts.
+  const keyed = handlerOn(await engineWith({ "/api/provider": [{ id: "anthropic" }, { id: "opencode" }, { id: "openai" }] }));
+  assert.ok(refs((await offeredOn(keyed)).models).includes("openai/gpt-5.5"));
+  assert.deepEqual((await statesOn(keyed, "ses_chatgpt")).ses_chatgpt, { model: { providerID: "openai", id: "gpt-5.5" }, name: "GPT-5.5", runs: true });
+  assert.deepEqual((await offeredOn(keyed, "?provider=openai&model=gpt-5.5")).starting, { providerID: "openai", id: "gpt-5.5" });
+  // Without it: its ChatGPT plan's sign-in is Codex's, so the engine's OpenAI needs a key, and isn't offered.
+  assert.ok(!refs((await offeredOn(handle)).models).includes("openai/gpt-5.5"));
+  assert.equal((await states("ses_chatgpt")).ses_chatgpt.plan?.agent, "Codex");
+});
