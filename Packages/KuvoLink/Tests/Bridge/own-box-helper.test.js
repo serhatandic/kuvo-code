@@ -131,6 +131,12 @@ test("helper start: the whole start through the helper, its launch agent put in 
   assert.equal(left.status, 0);
   assert.equal(left.said.left, true);
   assert.deepEqual(asked().filter(line => !line.startsWith("print")), []);
+  // Switched off in Login Items: launchd won't load it, and it says so plainly.
+  fs.rmSync(path.join(where.home, "loaded"), { force: true });
+  write(path.join(where.tools, "launchctl"), `#!/bin/sh\necho "$*" >>"${where.home}/launchctl"\ncase "$1" in print) exit 113 ;; bootstrap) echo "Bootstrap failed: 5: Input/output error" >&2; exit 5 ;; print-disabled) printf '\\t"run.kuvo.code.machine" => disabled\\n' ;; esac\n`, 0o755);
+  const off = helper(where, ["start"]);
+  assert.equal(off.status, 1);
+  assert.deepEqual(off.said, { started: false, mac: true, disabled: true, message: "Kuvo Code Box is turned off in System Settings › General › Login Items. Turn it on, then try again." });
   // A Mac's box with no helper in its bin: says why, which the app shows.
   const bare = home("mac", { helper: false });
   const refused = helper(bare, ["start"]);

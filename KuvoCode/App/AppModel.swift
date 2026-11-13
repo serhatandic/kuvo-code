@@ -575,10 +575,18 @@ final class AppModel {
                     // Its keeper switched off (in Login Items): nothing finishes the move, so it says
                     // so rather than wait for good.
                     BackgroundWork.shared.refresh()
+                    // (Not registered at all, the copy that registered it moved say: registered
+                    // again, so it starts and finishes the move.)
+                    if BackgroundWork.shared.state == .off {
+                        BackgroundWork.heldBack = nil
+                        BackgroundWork.shared.register()
+                    }
                     if BackgroundWork.shared.state != .on {
                         boxMoving = nil
                         BackgroundWork.heldBack = "This Mac’s box is moving into its own home."
-                        throw MachineFailure(message: "This Mac’s box is moving into its own home, but Kuvo Code’s background work is off, so it can’t finish. Turn it on in System Settings › General › Login Items, then try again.")
+                        throw MachineFailure(message: BackgroundWork.shared.state == .needsApproval
+                            ? "This Mac’s box is moving into its own home, but Kuvo Code’s background work is turned off, so it can’t finish. Turn it on in System Settings › General › Login Items, then try again."
+                            : "This Mac’s box is moving into its own home, but Kuvo Code’s background work couldn’t be set up, so it can’t finish. \(BackgroundWork.shared.failure ?? "Try again in a moment.")")
                     }
                     BackgroundWork.heldBack = "This Mac’s box is moving into its own home."
                     boxMoving = await OwnBoxMove.forThisMac()?.movingNow() ?? ""
@@ -608,7 +616,7 @@ final class AppModel {
                     guard here.runs == .running else {
                         // Its login item there, which launchd wouldn't start: turned off, it stays off.
                         throw MachineFailure(message: BackgroundWork.boxStartsOnItsOwn
-                            ? Here.startTrouble.map { "This Mac’s box didn’t start: \($0)" }
+                            ? Here.startTrouble.map { "This Mac’s box didn’t start. \($0)" }
                                 ?? "This Mac’s box didn’t start. If Kuvo Code Box is turned off in System Settings › General › Login Items, turn it on, then try again."
                             : Here.startsByLaunchd(home: Self.hereHome)
                             ? "The box already on this Mac didn’t start. If its login item (“sh”) is turned off in System Settings › General › Login Items, turn it on, then try again."

@@ -239,10 +239,10 @@ final class OwnBoxMove {
         if state == nil {
             // (One that can't say: asked again in a moment, then nothing started meanwhile, rather
             // than a second box.)
-            var made = await rehome(["--new", "--check"])?.answer["made"] as? Bool
+            var made = await rehome(["--new", "--check"], limit: .seconds(30))?.answer["made"] as? Bool
             for _ in 0..<2 where made == nil {
                 await Self.pause(2)
-                made = await rehome(["--new", "--check"])?.answer["made"] as? Bool
+                made = await rehome(["--new", "--check"], limit: .seconds(30))?.answer["made"] as? Bool
             }
             guard let made else { return .wait }
             if made { return await finish(owed: [], helperOnlyIfMissing: true) }

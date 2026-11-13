@@ -540,6 +540,32 @@ import Testing
         #expect(exists(ran))
     }
 
+    /// A keeper finding a new Mac's box in its home, whose box doesn't answer once (busy, say): asked
+    /// again a moment later, it retires rather than waiting ten minutes with no box running.
+    @Test func aKeeperAsksAgainSoonWhenTheBoxDoesntSayItsMade() async throws {
+        let realPause = OwnBoxMove.pause
+        var paused = 0
+        OwnBoxMove.pause = { _ in paused += 1 }
+        defer {
+            OwnBoxMove.pause = realPause
+            done()
+        }
+        try newMac()
+        let identity = Identity()
+        let move = try keeper(identity)
+        #expect(await move.makeNew())
+        // Its engine fails the first time it's asked whether the box is made.
+        var asked = 0
+        let flaky = OwnBoxMove(root: move.root, home: move.home, appBox: move.appBox, engineData: move.engineData, engine: {
+            asked += 1
+            return asked == 2 ? URL(filePath: "/usr/bin/false") : await move.engine()
+        }, script: move.script, appID: move.appID, appVersion: move.appVersion, keepsAwakeOff: move.keepsAwakeOff, identity: identity.stands, release: move.release)
+        flaky.environment = move.environment
+        #expect(await flaky.settle() == .retire)
+        #expect(paused == 1)
+        #expect(identity.did == ["unregister"])
+    }
+
     /// A move stopped part way: the app, with no keeper to say so, hears it from the box.
     @Test func aMoveStoppedPartWayIsSaidAsMovingNotFailing() async throws {
         defer { done() }

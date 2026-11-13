@@ -193,7 +193,8 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
     #endif
 
     /// The box in `box` started through its helper's launch agent, where the box says it's a Mac's
-    /// own in its home of its own (`helper start`, else `helper install --load`), by this app's own
+    /// own in its home of its own (`helper start`, which puts it in place, loads and starts it as
+    /// each needs), by this app's own
     /// script with the box's home: whether it's such a box, so nothing else starts it (never
     /// `kuvo-start` from the app, which would make the app what macOS asks about, with no keys).
     static func startedByHelper(engine: URL, script: URL, box: URL, environment: [String: String]) async -> Bool {

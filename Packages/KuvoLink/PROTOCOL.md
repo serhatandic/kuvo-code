@@ -5573,7 +5573,8 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      there during a move. From here it only goes forward. The originals, the app's `box` and `opencode`
      folders whole and each other, are renamed into `updates/rehome/kept/<date>/`, so nothing in
      the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted (only ever what's in the move's own `kept`, where it
-     really is, `..` and links followed, whatever `state.json` names), by
+     really is, `..` and links followed, whatever `state.json` names; nothing where `kept` itself
+     isn't a folder of its own), by
      `serve` as it starts and by `--ready`.
   9. **Done.** `state.json` says `done`, with what the app's executable still owes (`owed`:
      `keychain`, the Keychain's originals deleted, and `agent`, its own launch agent
@@ -5875,7 +5876,9 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   launch agent put in place and loaded where it isn't there (as `install --load`), loaded where it's
   there but not loaded, and started where it isn't running (`launchctl kickstart`, leaving one
   running as it is); with `--if-missing`, one in place is left as it is, loaded or not (switched
-  off in Login Items, it stays off: `left: true`). It says `{started, mac, left?, message}`, `mac`
+  off in Login Items, it stays off: `left: true`). It says `{started, mac, left?, disabled?,
+  message}` (`disabled` where launchd won't because it's switched off in Login Items, which
+  `message` then says plainly), `mac`
   whether it's a Mac's own box in a home of its own (only then does its helper start it, and
   nothing else may), `message` why not where it didn't; exit 0 once it has (or left it), 1 when
   refused as `install` is or launchd didn't. As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's

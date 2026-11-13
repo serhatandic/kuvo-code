@@ -651,6 +651,7 @@ test.if(mac)("a new Mac's box whose making fails part way takes its mark away ag
   expect(failed.status).toBe(1)
   expect(failed.said).toMatchObject({ result: "failed" })
   expect(existsSync(join(w.K, "updates", "rehome", "new"))).toBe(false)
+  expect(existsSync(join(w.K, "bin.new")), "its scratch copy gone with it").toBe(false)
   expect(existsSync(join(w.K, "updates", "rehome", "lock"))).toBe(false)
   expect(existsSync(join(w.K, "box", "kind"))).toBe(false)
   // Fixed, it's made: what the try left set aside.
@@ -671,6 +672,15 @@ test.if(mac)("kept copies are deleted only from the move's own kept folder, what
   expect(existsSync(join(w.K, "box", "kind"))).toBe(true)
   expect(existsSync(kept)).toBe(false)
   expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({ kept: [], keptUntil: null })
+  // `kept` itself a link (to the home): nothing it names is deleted.
+  const v = world()
+  expect(move(v).said).toMatchObject({ result: "done" })
+  const vState = join(v.K, "updates", "rehome", "state.json")
+  rmSync(join(v.K, "updates", "rehome", "kept"), { recursive: true })
+  symlinkSync(v.K, join(v.K, "updates", "rehome", "kept"))
+  writeFileSync(vState, JSON.stringify({ ...JSON.parse(readFileSync(vState, "utf8")), keptUntil: 1, kept: [join(v.K, "updates", "rehome", "kept", "box")] }))
+  rehome(v, ["--ready"])
+  expect(existsSync(join(v.K, "box", "kind"))).toBe(true)
 }, 60_000)
 
 test.if(mac)("a move that goes back puts a cut-short new box's mark back where it was", () => {

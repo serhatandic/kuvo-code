@@ -106,7 +106,7 @@ export function installHelperAgent({ load, app }: { load: boolean; app: string }
  * running as it is: one that found the box moving went, and launchd leaves it so until it's
  * asked). `ifMissing`: one in place is left as it is, loaded or not (switched off in Login Items, it
  * stays off). `mac`: whether it's a Mac's own box in a home of its own, which only its helper starts. */
-export function startHelperAgent({ app, ifMissing = false }: { app: string; ifMissing?: boolean }): { started: boolean; mac: boolean; left?: boolean; message: string } {
+export function startHelperAgent({ app, ifMissing = false }: { app: string; ifMissing?: boolean }): { started: boolean; mac: boolean; left?: boolean; disabled?: boolean; message: string } {
   const mac = process.platform === "darwin" && !APP_FOLDER && recordedKind() === "mac";
   const why = refusal();
   if (why) return { started: false, mac, message: why };
@@ -119,14 +119,20 @@ export function startHelperAgent({ app, ifMissing = false }: { app: string; ifMi
   const tools = launchTools()!;
   const domain = `gui/${process.getuid?.() ?? 0}`;
   const run = (args: string[]) => spawnSync(tools.launchctl, args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  // Why launchd won't, said plainly where it's the usual reason: switched off in Login Items.
+  const refusedBy = (what: string, said: ReturnType<typeof run>) => {
+    const disabled = run(["print-disabled", domain]);
+    if (disabled.status === 0 && new RegExp(`"${LAUNCH_AGENT.replace(/\./g, "\\.")}"\\s*=>\\s*(disabled|true)`).test(disabled.stdout ?? "")) {
+      return { started: false, mac, disabled: true, message: `${HELPER_NAME} is turned off in System Settings › General › Login Items. Turn it on, then try again.` };
+    }
+    return { started: false, mac, message: `launchd didn't ${what} ${HELPER_NAME}: ${(said.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+  };
   if (status.loaded === false) {
     const loaded = run(["bootstrap", domain, path.join(tools.agents, `${LAUNCH_AGENT}.plist`)]);
-    if (loaded.status !== 0) return { started: false, mac, message: `launchd didn't load ${HELPER_NAME}: ${(loaded.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+    if (loaded.status !== 0) return refusedBy("load", loaded);
   }
   const started = run(["kickstart", `${domain}/${LAUNCH_AGENT}`]);
-  return started.status === 0
-    ? { started: true, mac, message: `${HELPER_NAME} runs this Mac's box.` }
-    : { started: false, mac, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+  return started.status === 0 ? { started: true, mac, message: `${HELPER_NAME} runs this Mac's box.` } : refusedBy("start", started);
 }
 
 /** `helper install [--load] [--app <bundle ID>] | start [--if-missing] [--app <bundle ID>] | status`:

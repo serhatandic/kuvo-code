@@ -785,7 +785,11 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     try {
       return making(now);
     } catch (error) {
-      if (recordedKind(path.join(home, "box", "kind")) !== "mac") fs.rmSync(newMarker(home), { force: true });
+      if (recordedKind(path.join(home, "box", "kind")) !== "mac") {
+        // (Its own scratch copies with it: only ever its own, never for a later move to keep.)
+        for (const scratch of ["bin.new", "engine.new"]) fs.rmSync(path.join(home, scratch), { recursive: true, force: true });
+        fs.rmSync(newMarker(home), { force: true });
+      }
       throw error;
     }
   });
@@ -925,8 +929,12 @@ export function clearKept(home: string, now = Date.now()): void {
   // (Each where it really is, `..` and links followed: only ever a kept copy in the move's own
   // `kept`, whatever a damaged record names.)
   const real = (file: string) => { try { return fs.realpathSync(file); } catch { return path.resolve(file); } };
-  const keptFolder = real(path.join(rehomeFolder(home), "kept"));
-  for (const folder of record.kept) {
+  // (`kept` itself never followed: one that isn't a folder of its own, a link, keeps everything.)
+  const kept = path.join(rehomeFolder(home), "kept");
+  let isFolder = false;
+  try { isFolder = fs.lstatSync(kept).isDirectory(); } catch {}
+  const keptFolder = path.join(real(rehomeFolder(home)), "kept");
+  for (const folder of isFolder ? record.kept : []) {
     if (typeof folder !== "string" || !path.isAbsolute(folder)) continue;
     if (inside(real(folder), keptFolder)) fs.rmSync(real(folder), { recursive: true, force: true });
   }

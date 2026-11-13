@@ -39859,7 +39859,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "040efb34c694";
+var BRIDGE_VERSION = "0cd75cf6a905";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -42162,8 +42162,11 @@ async function rehomeNew(folders, options = {}) {
     try {
       return making(now);
     } catch (error) {
-      if (recordedKind(path135.join(home, "box", "kind")) !== "mac")
+      if (recordedKind(path135.join(home, "box", "kind")) !== "mac") {
+        for (const scratch of ["bin.new", "engine.new"])
+          fs130.rmSync(path135.join(home, scratch), { recursive: true, force: true });
         fs130.rmSync(newMarker(home), { force: true });
+      }
       throw error;
     }
   });
@@ -42302,8 +42305,13 @@ function clearKept(home, now = Date.now()) {
       return path135.resolve(file);
     }
   };
-  const keptFolder = real(path135.join(rehomeFolder(home), "kept"));
-  for (const folder of record.kept) {
+  const kept = path135.join(rehomeFolder(home), "kept");
+  let isFolder = false;
+  try {
+    isFolder = fs130.lstatSync(kept).isDirectory();
+  } catch {}
+  const keptFolder = path135.join(real(rehomeFolder(home)), "kept");
+  for (const folder of isFolder ? record.kept : []) {
     if (typeof folder !== "string" || !path135.isAbsolute(folder))
       continue;
     if (inside5(real(folder), keptFolder))
@@ -50817,13 +50825,20 @@ function startHelperAgent({ app, ifMissing = false }) {
   const tools = launchTools();
   const domain = `gui/${process.getuid?.() ?? 0}`;
   const run = (args) => spawnSync12(tools.launchctl, args, { encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
+  const refusedBy = (what, said) => {
+    const disabled = run(["print-disabled", domain]);
+    if (disabled.status === 0 && new RegExp(`"${LAUNCH_AGENT.replace(/\./g, "\\.")}"\\s*=>\\s*(disabled|true)`).test(disabled.stdout ?? "")) {
+      return { started: false, mac, disabled: true, message: `${HELPER_NAME} is turned off in System Settings › General › Login Items. Turn it on, then try again.` };
+    }
+    return { started: false, mac, message: `launchd didn't ${what} ${HELPER_NAME}: ${(said.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+  };
   if (status.loaded === false) {
     const loaded = run(["bootstrap", domain, path162.join(tools.agents, `${LAUNCH_AGENT}.plist`)]);
     if (loaded.status !== 0)
-      return { started: false, mac, message: `launchd didn't load ${HELPER_NAME}: ${(loaded.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+      return refusedBy("load", loaded);
   }
   const started = run(["kickstart", `${domain}/${LAUNCH_AGENT}`]);
-  return started.status === 0 ? { started: true, mac, message: `${HELPER_NAME} runs this Mac's box.` } : { started: false, mac, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+  return started.status === 0 ? { started: true, mac, message: `${HELPER_NAME} runs this Mac's box.` } : refusedBy("start", started);
 }
 function helperCommand(args) {
   const [what, ...rest] = args;
