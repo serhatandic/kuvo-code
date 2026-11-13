@@ -9610,6 +9610,109 @@ function limitOf2(window) {
   return `${window.model?.toLowerCase() ?? ""}|${window.name ?? ""}|${window.minutes ?? ""}`;
 }
 
+// Packages/Box/src/agents/usage/notices.ts
+import { randomUUID } from "crypto";
+var milestones = ["underTenPercent", "healthyToClose", "closeToRunningOut"];
+var initialState = () => ({ fired: [], previous: "untracked", under: false, primed: false });
+var severity = (bucket) => ["untracked", "healthy", "close", "runningOut"].indexOf(bucket);
+function transitions(meter, fraction, resetsAt, previous, toggles) {
+  const state = structuredClone(previous);
+  if (resetsAt !== undefined && (previous.resetsAt === undefined || resetsAt - previous.resetsAt > 1000)) {
+    state.fired = [];
+    state.under = false;
+    state.previous = "untracked";
+  }
+  state.resetsAt = resetsAt ?? previous.resetsAt;
+  const bucket = meter === "spent" ? "runningOut" : meter === "noData" || meter === "level" ? "untracked" : meter;
+  if (meter === "noData")
+    return { fire: [], state };
+  if (!state.primed) {
+    state.primed = true;
+    state.previous = bucket;
+    state.under = fraction < 0.1;
+    state.fired = [];
+    return { fire: [], state };
+  }
+  const fire = [];
+  const maybe = (milestone) => {
+    if (!toggles[milestone] || state.fired.includes(milestone))
+      return false;
+    fire.push(milestone);
+    return true;
+  };
+  if (bucket !== "untracked") {
+    const before = severity(state.previous), current = severity(bucket);
+    let fired = false;
+    if (bucket === "close" && before < 2)
+      fired = maybe("healthyToClose");
+    if (current >= 3 && before < 3)
+      fired = maybe("closeToRunningOut") || fired;
+    if (current < before) {
+      state.fired = state.fired.filter((m) => !(m === "healthyToClose" && current <= 1) && !(m === "closeToRunningOut" && current <= 2));
+    }
+    if (current <= before || fired)
+      state.previous = bucket;
+  }
+  const under = fraction < 0.1;
+  const crossed = under && !state.under;
+  const fired = crossed && maybe("underTenPercent");
+  if (!under)
+    state.fired = state.fired.filter((m) => m !== "underTenPercent");
+  if (!crossed || fired)
+    state.under = under;
+  return { fire, state };
+}
+function meter(window, now) {
+  if (!Number.isFinite(window.used))
+    return "noData";
+  const amount = window.amount;
+  const remaining = amount && amount.limit > 0 ? amount.limit - amount.used : (1 - window.used) * 100;
+  const precision = amount ? amount.unit === "usd" ? 100 : 10 : 1;
+  if (Math.round(remaining * precision) <= 0)
+    return "spent";
+  if (!window.minutes || !window.resetsAt || window.used <= 0 || now >= window.resetsAt)
+    return "level";
+  const period = window.minutes * 60000;
+  const elapsed = now - (window.resetsAt - period);
+  if (elapsed < Math.max(60000, period * 0.01))
+    return "level";
+  const projected = window.used / elapsed * period;
+  if (projected <= 0.9)
+    return "healthy";
+  if (window.used < 0.05)
+    return "level";
+  return projected <= 1 && Math.round((1 - projected) * 100) >= 1 ? "close" : "runningOut";
+}
+function newNotice(row, service, window, milestone, at) {
+  return { id: `usage_${randomUUID()}`, row, service, window: window.id, milestone, at, remaining: 1 - window.used, ...window.resetsAt ? { resetsAt: window.resetsAt } : {} };
+}
+function takeNotices(given) {
+  if (!Array.isArray(given))
+    return [];
+  return given.slice(-100).filter((n) => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)));
+}
+function takeStates(given) {
+  if (!given || typeof given !== "object" || Array.isArray(given))
+    return {};
+  return Object.fromEntries(Object.entries(given).slice(0, 30).flatMap(([id, value]) => {
+    const s = value;
+    return s && Array.isArray(s.fired) && s.fired.every((m) => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) ? [[id, s]] : [];
+  }));
+}
+function metricID(service, window) {
+  const id = window.id;
+  const aliases = {
+    claude: { five_hour: "session", seven_day: "weekly", seven_day_sonnet: "sonnet", seven_day_fable: "fable", seven_day_opus: "opus" },
+    codex: { primary: "session", secondary: "weekly" },
+    opencode: { rolling: "session" },
+    copilot: { premium_interactions: "premium" },
+    openrouter: { key: "keyLimit" },
+    zai: { web_search: "webSearches", window_10080: "weekly" },
+    cursor: { total: "usage", included: "usage", on_demand: "onDemand", grok_bot: "grokBot" }
+  };
+  return `${service}.${aliases[service]?.[id] ?? id}`;
+}
+
 // Packages/Box/src/agents/limits.ts
 var BOX_ONLY_SERVICES = ["antigravity"];
 
@@ -9656,6 +9759,12 @@ class Limits {
     this.said = this.saying();
   }
   peers;
+  settings;
+  ownKey = () => "";
+  notices() {
+    const all = [...this.list(false).flatMap((a) => a.notices ?? []), ...this.peers?.notices() ?? []];
+    return [...new Map(all.filter((n) => this.now() - n.at < 24 * 60 * MINUTE).map((n) => [n.id, n])).values()].sort((a, b) => a.at - b.at);
+  }
   rows() {
     const own = this.list(false);
     return this.peers ? this.peers.rows(own) : limitRows([{ key: "", name: "", here: true, away: false, accounts: own }]);
@@ -9664,7 +9773,7 @@ class Limits {
     this.changed(true, false);
   }
   saying() {
-    return JSON.stringify([this.list(), this.rows()]);
+    return JSON.stringify([this.list(), this.rows(), this.notices()]);
   }
   start() {
     this.timer ??= setInterval(() => void this.tick(), MINUTE);
@@ -9710,6 +9819,8 @@ class Limits {
         ...entry.identity ? { identity: entry.identity } : {},
         ...entry.plan ? { plan: entry.plan } : {},
         windows: entry.windows,
+        ...entry.notices?.length ? { notices: entry.notices } : {},
+        ...entry.noticeState ? { noticeState: entry.noticeState } : {},
         ...entry.balance ? { balance: entry.balance } : {},
         ...entry.extras?.length ? { extras: entry.extras } : {},
         ...entry.checked ? { checked: entry.checked } : {},
@@ -9809,7 +9920,7 @@ class Limits {
       const before = source.bucket ? this.asked.get(source.bucket) : undefined;
       if (source.bucket)
         this.asked.set(source.bucket, at);
-      const sent = await this.readOne(source, entry);
+      const sent = await this.readOne(source, entry, account);
       if (source.bucket && !sent) {
         if (before === undefined)
           this.asked.delete(source.bucket);
@@ -9821,7 +9932,7 @@ class Limits {
     this.forgetGone();
     this.changed();
   }
-  async readOne(source, entry) {
+  async readOne(source, entry, account) {
     const started = this.now();
     entry.next = Math.max(entry.next, started + source.every);
     this.save();
@@ -9849,6 +9960,7 @@ class Limits {
       entry.failures = 0;
       if (source.bucket)
         this.refusals.delete(source.bucket);
+      this.decide(account, entry, reading.windows.filter((w) => Number.isFinite(w.used)).map((w) => w.id));
       return true;
     } catch (caught) {
       const at = this.now();
@@ -9901,6 +10013,8 @@ class Limits {
   }
   forget(entry) {
     entry.windows = [];
+    entry.notices = undefined;
+    entry.noticeState = undefined;
     entry.partialMissing = undefined;
     entry.plan = undefined;
     entry.balance = undefined;
@@ -9935,6 +10049,8 @@ class Limits {
     if (source.heard)
       return;
     source.heard = (window) => {
+      if (!Number.isFinite(window.used))
+        return;
       let entry = this.entries.get(provider);
       if (!entry) {
         entry = { windows: [], next: 0 };
@@ -9962,8 +10078,47 @@ class Limits {
       if (heard.resetsAt === undefined)
         delete heard.resetsAt;
       entry.windows = before ? entry.windows.map((each) => each.id === window.id ? heard : each) : [...entry.windows, heard];
+      const account = this.accounts().find((a) => a.provider === provider);
+      if (account)
+        this.decide(account, entry, [heard.id]);
       this.changed(true);
     };
+  }
+  decide(account, entry, ids) {
+    const settings = this.settings?.values();
+    const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false };
+    const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service);
+    if (disabled) {
+      entry.noticeState = {};
+      return;
+    }
+    const peer = entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined;
+    if (peer?.checked && peer.checked > Math.max(...Object.values(entry.noticeState ?? {}).map((s) => s.read ?? 0), 0)) {
+      entry.noticeState = takeStates(peer.noticeState);
+    }
+    entry.noticeState ??= {};
+    const row = entry.identity ? `${account.service}#${entry.identity}` : `${this.ownKey()}/${account.provider}`;
+    const created = [];
+    for (const window of entry.windows.filter((w) => ids.includes(w.id))) {
+      if (settings?.layout && !settings.layout.placed.includes(metricID(account.service, window))) {
+        delete entry.noticeState[window.id];
+        continue;
+      }
+      const previous = entry.noticeState[window.id] ?? initialState();
+      const result = transitions(meter(window, this.now()), 1 - window.used, window.resetsAt, previous, toggles);
+      result.state.fired.push(...result.fire);
+      entry.noticeState[window.id] = Object.assign(result.state, { read: window.read });
+      for (const milestone of result.fire)
+        created.push(newNotice(row, account.service, window, milestone, this.now()));
+    }
+    const present = new Set(entry.windows.filter((w) => !settings?.layout || settings.layout.placed.includes(metricID(account.service, w))).map((w) => w.id));
+    for (const id of Object.keys(entry.noticeState))
+      if (!present.has(id))
+        delete entry.noticeState[id];
+    entry.notices = [...entry.notices ?? [], ...created].filter((n) => this.now() - n.at < 24 * 60 * MINUTE).slice(-100);
+    this.save();
+    if (created.length)
+      emit("kuvo.usage.notices", { notices: created, push: true });
   }
   forgetGone() {
     if (!this.settled())
@@ -9977,7 +10132,8 @@ class Limits {
   changed(heard = false, own = true) {
     const list = this.list();
     const rows = this.rows();
-    const now = JSON.stringify([list, rows]);
+    const notices = this.notices();
+    const now = JSON.stringify([list, rows, notices]);
     if (own && (!heard || this.now() - this.lastHeardSave >= 30000)) {
       if (heard)
         this.lastHeardSave = this.now();
@@ -9988,7 +10144,7 @@ class Limits {
     if (now === this.said)
       return;
     this.said = now;
-    emit("kuvo.limits.updated", { accounts: list, rows });
+    emit("kuvo.limits.updated", { accounts: list, rows, notices });
   }
   load() {
     if (!this.file)
@@ -9998,6 +10154,8 @@ class Limits {
       for (const [provider, entry] of Object.entries(saved.accounts ?? {})) {
         if (!entry || !Array.isArray(entry.windows) || typeof entry.next !== "number")
           continue;
+        entry.notices = takeNotices(entry.notices);
+        entry.noticeState = takeStates(entry.noticeState);
         this.entries.set(provider, entry);
       }
       for (const [bucket, until] of Object.entries(saved.holds ?? {}))
@@ -10042,7 +10200,7 @@ var json6 = (value, status = 200) => new Response(JSON.stringify(value), { statu
 async function limitsRoutes(limits, method, rest) {
   if (!limits)
     return json6({ message: "Plan limits aren't read on this computer." }, 503);
-  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows() } });
+  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notices: limits.notices(), ownNotices: limits.list(false).flatMap((a) => a.notices ?? []) } });
   if (!rest.length && method === "GET")
     return answer();
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
@@ -13037,7 +13195,7 @@ function unzipper() {
 
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
-import { createHash as createHash9, randomUUID } from "crypto";
+import { createHash as createHash9, randomUUID as randomUUID2 } from "crypto";
 import { existsSync as existsSync15, mkdirSync as mkdirSync14, readdirSync as readdirSync15, readFileSync as readFileSync23, rmdirSync as rmdirSync2, rmSync as rmSync12, statSync as statSync10 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname13, join as join26, resolve as resolve7 } from "path";
@@ -14657,7 +14815,7 @@ ${input.text}` } : input, this.copies());
     let id = this.state.claudeSession;
     const resume = Boolean(id && this.state.claudeStarted);
     if (!id) {
-      id = randomUUID();
+      id = randomUUID2();
       this.state.claudeSession = id;
       hooks.saveState();
     }
@@ -15751,7 +15909,7 @@ Attached files:
 ${others.map((path) => `- ${path}`).join(`
 `)}`;
   content.push({ type: "text", text });
-  return { type: "user", message: { role: "user", content }, parent_tool_use_id: null, uuid: randomUUID() };
+  return { type: "user", message: { role: "user", content }, parent_tool_use_id: null, uuid: randomUUID2() };
 }
 function safeBase642(path) {
   try {
@@ -34440,6 +34598,11 @@ class LimitsPeers {
     }
     return newest;
   }
+  notices() {
+    if (!this.directory.told || !this.directory.isPeer)
+      return [];
+    return [...this.peers].flatMap(([key, kept]) => this.directory.isPeer(key) ? kept.accounts.flatMap((a) => a.notices ?? []) : []);
+  }
   rows(own) {
     const now = this.now();
     const self = this.directory.own();
@@ -34460,7 +34623,7 @@ class LimitsPeers {
       const due = !last || now - last.at >= TELL_AGAIN3 || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
       if (!due)
         continue;
-      this.transport.send(key, { kind: "limits", at: now, accounts, ...!last ? { ask: true } : {} }, false);
+      this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts), ...!last ? { ask: true } : {} }, false);
       this.told.set(key, { json, at: now });
     }
   }
@@ -34476,11 +34639,19 @@ class LimitsPeers {
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW2 ? now - given.at : 0;
     const accounts = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount2(account, off, now);
+      if (taken && !this.directory.isPeer?.(from)) {
+        delete taken.notices;
+        delete taken.noticeState;
+      }
       return taken ? [taken] : [];
     });
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
+    const seen = new Set(before?.accounts.flatMap((a) => a.notices?.map((n) => n.id) ?? []) ?? []);
+    const notices = accounts.flatMap((a) => a.notices ?? []).filter((n) => !seen.has(n.id));
     this.peers.set(from, { name, heard: now, accounts });
+    if (notices.length)
+      emit("kuvo.usage.notices", { notices, push: false });
     this.save();
     this.limits.peersChanged();
     if (given.ask === true || before && now - before.heard > PEER_AWAY2)
@@ -34508,7 +34679,7 @@ class LimitsPeers {
     const now = this.now();
     const accounts = this.shared();
     for (const [key, refresh] of asks)
-      this.transport.send(key, { kind: "limits", at: now, accounts, refresh }, false);
+      this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts), refresh }, false);
   }
   idOf(account, identity) {
     return identity ? `${account.service}#${identity}` : `${this.directory.own()?.key ?? ""}/${account.provider}`;
@@ -34521,8 +34692,11 @@ class LimitsPeers {
       return;
     this.answered.set(key, now);
     const accounts = this.shared();
-    this.transport.send(key, { kind: "limits", at: now, accounts }, false);
+    this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts) }, false);
     this.told.set(key, { json: JSON.stringify(accounts), at: now });
+  }
+  forPeer(key, accounts) {
+    return this.directory.isPeer?.(key) ? accounts : accounts.map(({ notices, noticeState, ...account }) => account);
   }
   shared() {
     const accounts = this.limits.list(false);
@@ -34631,6 +34805,8 @@ function takenAccount2(given, off, now) {
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
     ...text7(account.plan, 100) ? { plan: text7(account.plan, 100) } : {},
     windows,
+    notices: takeNotices(account.notices),
+    noticeState: takeStates(account.noticeState),
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
     ...extras.length ? { extras } : {},
     ...checked ? { checked } : {},
@@ -34804,6 +34980,8 @@ var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeF
 delete process.env.KUVO_TEST_PRICE_FEEDS;
 var usageFolder = join42(home3, "usage");
 var usageSettings = new UsageSettings(join42(usageFolder, "settings.json"));
+limits.settings = usageSettings;
+limits.ownKey = () => directory.own()?.key ?? "";
 var claudeUsage2 = claudeSources(usageFolder);
 var codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback);
 var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join42(machineHome, "data", "opencode") : undefined);
@@ -35017,4 +35195,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a9130358770fb96df957c678f4ff85fbb77f3be0247f190b80b581ae8893e420
+// Built from Packages/Box/src/agents 665cdf26e24bae1271581df64cad8a704efb38483aa111a8615ad4c5fd8004d1
