@@ -197,7 +197,7 @@ test("own profiles alone, machine-hashed places, and an unreadable new database 
 })
 
 
-test("per-database cache reads only changed stores, ages out idle ones, and keeps changing/unreadable stores' last events", async () => {
+test("per-database cache reads only changed stores, ages out idle ones, counts changing stores' fresh reads and keeps unreadable stores' last events", async () => {
   const own = store()
   insert(own.db, 0); own.db.close()
   const second = join(own.folder, "second.db")
@@ -221,8 +221,8 @@ test("per-database cache reads only changed stores, ages out idle ones, and keep
   changing = true
   append(own.path, 1)
   append(second, 2)
-  // The changing store keeps one, the other advances from two to three.
-  expect(await history.scan(own.home, 0)).toHaveLength(4)
+  // Both advance: the changing store's fresh read counts, though it isn't kept.
+  expect(await history.scan(own.home, 0)).toHaveLength(5)
   changing = false
   expect(await history.scan(own.home, 0)).toHaveLength(5)
   writeFileSync(own.path, "unreadable SQLite")
@@ -335,5 +335,36 @@ test("a new database written to while it's read counts what was read, is read ag
     expect(usage.view("UTC").totals.antigravity![0]!.tokens).toBe(4050)
     await usage.refresh()
     expect(reads).toHaveLength(3)
+  } finally { own.db.close() }
+})
+
+test("a busy database read before still moves every round though it's written to during every read, and isn't logged", async () => {
+  const own = store({ wal: true })
+  try {
+    insert(own.db, 0)
+    let writing = false, index = 1, reads = 0
+    const history = new AntigravityHistory(undefined, async (path) => {
+      reads++
+      const events = await readAntigravityDatabase(path)
+      if (writing) insert(own.db, index++)
+      return events
+    }, () => { throw new Error("a database written to while read isn't a failure") })
+    const folder = mkdtempSync(join(base, "busy-"))
+    const agent = { providerID: "antigravity", profile: own.home, instance: { id: "default" } } as unknown as Agent
+    const sources = antigravitySources(folder, () => "machine-one", history)
+    const usage = new Usage(() => sources([agent]), { current: () => pricing } as unknown as PricingStore, () => "0123456789abcdef", join(folder, "usage.json"), () => Date.parse(fixture.now))
+    // One quiet read, kept.
+    await usage.refresh()
+    expect(usage.view("UTC").totals.antigravity![0]!.tokens).toBe(1350)
+    // Then Antigravity writes during every read: each round counts what it read, never the quiet one's.
+    insert(own.db, index++)
+    writing = true
+    const seen: number[] = []
+    for (let round = 0; round < 3; round++) {
+      await usage.refresh()
+      seen.push(usage.view("UTC").totals.antigravity![0]!.tokens)
+    }
+    expect(seen).toEqual([2700, 4050, 5400])
+    expect(reads).toBe(4)
   } finally { own.db.close() }
 })

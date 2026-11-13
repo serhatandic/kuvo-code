@@ -7608,11 +7608,10 @@ Oversized generation records are skipped; oversized step metadata is ignored, as
 Tokens are priced with the shared catalogs and kept in UTC quarter-hour slots, then summed
 across your own computers like Claude's history. Each database's WAL and file fingerprint reuse
 unchanged reads; idle databases outside the history window aren't read. Removed databases leave
-the total. An unreadable or changing database retains its previous result while other databases
-advance. One with no previous result (new, or not read since the box started) that's written to
-while it's read counts what that read saw, and is read again next round. One with no previous
-result that can't be read, or a conversations folder that can't be listed, is logged and left out,
-as UsageKit's scanner does, and is retried next round. It never holds up the round for other
-services' logs.
+the total. A database written to while it's read counts what that read saw, and is read again next
+round. An unreadable database retains its previous result while other databases advance; one with
+no previous result that can't be read, or a conversations folder that can't be listed, is logged
+and left out, as UsageKit's scanner does, and is retried next round. It never holds up the round
+for other services' logs.
 A new account with no conversations is empty. Places are hashed with the machine ID.
 The apps read Antigravity only from the box, with no older-box fallback (#679 updates boxes first).

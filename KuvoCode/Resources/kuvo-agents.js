@@ -22144,8 +22144,6 @@ class AntigravityHistory {
         }
         const events = await this.read(path);
         if (fingerprint2(path).stamp !== stamp.stamp) {
-          if (before)
-            throw new Error("Antigravity database changed during the read");
           failing.delete(path);
           parts.push(events);
           continue;
@@ -34549,4 +34547,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f32c80ee76280326a8395e4abf7465555e7eb7ff9dbe1783816863fe23884d7a
+// Built from Packages/Box/src/agents 180bed443dce829703bcebc0eca4f31616a1eb5905ff6d7d3bf76a8cb19fe3c0
