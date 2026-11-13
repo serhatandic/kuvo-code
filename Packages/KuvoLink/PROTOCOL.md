@@ -2903,13 +2903,19 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     to a plan that goes through a coding agent (ChatGPT's through Codex, SuperGrok's through
     Grok), unless the account's signed in that way already. A client starts each as it comes,
     with its `type`, `id` and `form`, and draws its own symbol for each kind.
-  - `GET kuvo/sign-in/status?integration=<id>&attempt=<id>[&agents=1]` → the attempt's status as
-    the engine (or the bridge) says it (`status`, `message?`, `url?`, `instructions?`,
-    `userCode?`), with `failure` once it's `failed` or `expired`: what a client shows, the
-    page's OAuth code in words (`access_denied`: turned down on its page) and the engine's own
-    words otherwise. A client asks it as the sign-in goes (each second), in place of the engine's
-    status route. `404` for one the engine doesn't know (it started over), `503 {message}` while
-    the engine or the bridge isn't running, `400` without `integration` (and `attempt`).
+  - `GET kuvo/sign-in/status?integration=<id>&attempt=<id>[&agents=1][&wait=<seconds>]` → the
+    attempt's status as the engine (or the bridge) says it (`status`, `message?`, `url?`,
+    `instructions?`, `userCode?`), with `failure` once it's `failed` or `expired`: what a client
+    shows, the page's OAuth code in words (`access_denied`: turned down on its page) and the
+    engine's own words otherwise. A client asks it as the sign-in goes (every second or so), in
+    place of the engine's status route. With `wait` (at most 25), the box asks the engine each
+    second and answers once what it says changes or it ends, else after that long: for a client
+    whose every ask runs a process (a Mac asking a machine's box over SSH, with `wait=20`).
+  - Refusals, `{message}`: `400` without `integration` (and `attempt`); `404` for an account
+    neither the engine nor the bridge lists, and for a sign-in the engine doesn't know (it
+    started over: a client counts it as not heard, and gives up after a while); `503` while the
+    engine or the bridge isn't running; `504` when it didn't answer in time; the engine's own
+    status and words for another refusal, `502` for an answer that isn't one.
   - Held to `Vectors/sign-in.json` in the box, KuvoClient (`SignInMethods`, `SignInStatus`) and
     the phone's demo stand-in. A box without `sign-in.methods` needs updating: a client says so
     rather than offering ways of its own.

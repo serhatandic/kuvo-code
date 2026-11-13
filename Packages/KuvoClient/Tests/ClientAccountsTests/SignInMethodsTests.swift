@@ -50,5 +50,6 @@ struct SignInMethodsTests {
         #expect(SignInMethods.path(integration: "openai", agents: false) == "kuvo/sign-in/methods?integration=openai")
         #expect(SignInMethods.path(integration: "claude-code", agents: true) == "kuvo/sign-in/methods?integration=claude-code&agents=1")
         #expect(SignInStatus.path(integration: "a b", attempt: "att+1/&x", agents: false) == "kuvo/sign-in/status?integration=a%20b&attempt=att%2B1%2F%26x")
+        #expect(SignInStatus.path(integration: "codex", attempt: "att_1", agents: true, wait: 20) == "kuvo/sign-in/status?integration=codex&attempt=att_1&agents=1&wait=20")
     }
 }

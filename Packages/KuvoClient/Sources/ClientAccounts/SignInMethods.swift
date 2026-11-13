@@ -60,8 +60,10 @@ public struct SignInStatus: Decodable, Sendable, Equatable {
 
     public static let route = "kuvo/sign-in/status"
 
-    public static func path(integration: String, attempt: String, agents: Bool) -> String {
-        route + "?" + SignInQuery.encoded([("integration", integration), ("attempt", attempt)] + (agents ? [("agents", "1")] : []))
+    /// `wait`: seconds its box may wait for a change before it answers a sign-in still going, for
+    /// a box asked through a process run each time (a machine's, over SSH).
+    public static func path(integration: String, attempt: String, agents: Bool, wait: Int? = nil) -> String {
+        route + "?" + SignInQuery.encoded([("integration", integration), ("attempt", attempt)] + (agents ? [("agents", "1")] : []) + (wait.map { [("wait", String($0))] } ?? []))
     }
 }
 

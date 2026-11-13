@@ -51,6 +51,8 @@ const engine = await standIn(url => {
     { id: "github-copilot", name: "GitHub Copilot", methods: [{ type: "oauth", id: "device", label: "Sign in with GitHub" }, { type: "command", id: "gh", label: "Use gh" }], connections: [] },
   ];
   const attempt = url.match(/^\/api\/integration\/github-copilot\/connect\/oauth\/([^/?]+)$/)?.[1];
+  // Signed in on its page between the first ask and the second.
+  if (attempt === "att_soon") return asked.filter(each => each === url).length >= 2 ? { status: "complete" } : { status: "pending" };
   if (attempt === "att_broken") return { refused: { status: 500, message: "The engine fell over." } };
   if (attempt) return attempts[decodeURIComponent(attempt)];
   return undefined;
@@ -112,6 +114,15 @@ test("how a sign-in is going, as the engine says, with what to say once it ended
   // A coding agent's, from the bridge, with what else it says.
   const agent = await answer("GET", "kuvo/sign-in/status?integration=claude-code&attempt=att_agent&agents=1");
   assert.deepEqual(agent.json, { status: "failed", message: "server_error", userCode: "AB12-CD34", failure: "The service couldn’t sign you in just now. Try again in a moment." });
+});
+
+test("asked to wait for a change (a Mac asking a machine's box over SSH): answered once the sign-in ends, not before", async () => {
+  const before = asked.length;
+  const status = await answer("GET", "kuvo/sign-in/status?integration=github-copilot&attempt=att_soon&wait=20");
+  assert.deepEqual(status, { status: 200, json: { status: "complete" } });
+  assert.equal(asked.slice(before).filter(each => each.endsWith("/att_soon")).length, 2);
+  // One that ended already is answered at once, however long it may wait.
+  assert.deepEqual((await answer("GET", "kuvo/sign-in/status?integration=github-copilot&attempt=att_denied&wait=20")).json.failure, "The sign-in was turned down on its page. Try again to sign in.");
 });
 
 test("a sign-in the engine doesn't know (it started over), or can't say: its status and words, for the client to count", async () => {

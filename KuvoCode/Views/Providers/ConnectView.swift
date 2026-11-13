@@ -188,6 +188,11 @@ struct ConnectView: View {
         let primary = supportedMethods.filter { !$0.legacy }
         let legacy = supportedMethods.filter(\.legacy)
         return VStack(spacing: 10) {
+            if supportedMethods.isEmpty {
+                Text("There’s no way to sign in to \(title) from here.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+            }
             ForEach(Array(primary.enumerated()), id: \.element.id) { index, way in
                 let method = way.method
                 Button { start(method) } label: {
@@ -532,15 +537,23 @@ struct ConnectView: View {
             struct Info: Decodable { var features: [String]? }
             guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return offeredFailure = unreachable }
             guard info.features?.contains(SignInMethods.feature) == true else {
-                let computer = catalog.machine.map { app.name(of: .machine($0)) } ?? "This Mac"
-                return offeredFailure = "\(computer) needs a newer Kuvo Code to sign in from here. Update it, then try again."
+                guard let machine = catalog.machine else { return offeredFailure = "This Mac’s box needs a newer Kuvo Code to sign in. It updates by itself overnight." }
+                return offeredFailure = "\(app.name(of: .machine(machine))) needs a newer Kuvo Code to sign in from here. Update it, then try again."
             }
         }
-        do {
-            offered = try await box.value(SignInMethods.self, "GET", SignInMethods.path(integration: integrationID, agents: OutsideAgents.isAgent(integrationID)))
-            offeredFailure = nil
-        } catch {
-            offeredFailure = error.localizedDescription
+        let path = SignInMethods.path(integration: integrationID, agents: OutsideAgents.isAgent(integrationID))
+        while !Task.isCancelled, !left {
+            do {
+                offered = try await box.value(SignInMethods.self, "GET", path)
+                offeredFailure = nil
+                return
+            } catch let refusal as BoxRefusal where refusal.reason == "starting" {
+                // Its box still starting (with the app, or after an update): asked again in a moment.
+                try? await Task.sleep(for: .seconds(1))
+            } catch {
+                offeredFailure = error.localizedDescription
+                return
+            }
         }
     }
 
@@ -552,6 +565,8 @@ struct ConnectView: View {
         offered = nil
         Task {
             await readMethods()
+            // (Closed meanwhile: nothing starts.)
+            guard !left else { return }
             chooseOnlyMethod()
         }
     }
@@ -664,9 +679,12 @@ struct ConnectView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
-                // Not there (the coding agents starting over) counts as not knowing it.
-                let path = SignInStatus.path(integration: integrationID, attempt: attempt.attemptID, agents: OutsideAgents.isAgent(integrationID))
-                guard let box = catalog.box, let status = try? await box.value(SignInStatus.self, "GET", path) else {
+                // Not there (the coding agents starting over) counts as not knowing it. A box asked
+                // through a process run each time (a machine's) waits for a change before it answers.
+                let box = catalog.box
+                let path = SignInStatus.path(integration: integrationID, attempt: attempt.attemptID, agents: OutsideAgents.isAgent(integrationID),
+                                             wait: box.map { BoxClient.streams($0.box) } == false ? 20 : nil)
+                guard let box, let status = try? await box.value(SignInStatus.self, "GET", path) else {
                     misses += 1
                     if misses >= 10 {
                         noteFailure(method: "oauth", "engine")

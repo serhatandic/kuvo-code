@@ -5,6 +5,7 @@
 // words what it offers. Held to Packages/KuvoLink/Vectors/sign-in.json.
 
 import type { Target } from "../../shared/records";
+import { pause } from "../../shared/wait";
 import { call } from "../engine/client";
 import { planHides } from "../work/model-rule";
 import { agentsDown } from "./agents-down";
@@ -118,7 +119,13 @@ function placeOf(query: URLSearchParams, context: RouteContext): { target: Targe
   }
 }
 
-/** `GET kuvo/sign-in/methods?integration=<id>[&agents=1]` and `GET kuvo/sign-in/status?integration=<id>&attempt=<id>[&agents=1]`. */
+/** The longest a status ask waits for a change (`wait`), in seconds. */
+const MOST_WAIT = 25;
+
+/** `GET kuvo/sign-in/methods?integration=<id>[&agents=1]` and `GET kuvo/sign-in/status?integration=<id>&attempt=<id>[&agents=1][&wait=<seconds>]`:
+ * with `wait`, a sign-in still going is asked again each second, answered as soon as what it says
+ * changes or it ends, else once that long has passed (for a client that asks through a process run
+ * each time, as a Mac asks a machine's box over SSH). */
 export async function* signInRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, route, signal, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
@@ -128,6 +135,7 @@ export async function* signInRoute(context: RouteContext): AsyncGenerator<Answer
   if (!integration || attempt === "") return yield* json(400, { message: attempt === "" ? "Say which sign-in (integration, attempt)." : "Say which account (integration)." });
   const place = placeOf(query, context);
   if ("down" in place) return yield* json(503, { message: place.down });
+  // (A status ask has a limit for each read instead: one that waits for a change takes longer.)
   const deadline = AbortSignal.timeout(15_000);
   const asking = signal ? AbortSignal.any([signal, deadline]) : deadline;
   try {
@@ -138,12 +146,26 @@ export async function* signInRoute(context: RouteContext): AsyncGenerator<Answer
       if (!account) return yield* json(404, { message: `There's no ${integration} to sign in to here.` });
       return yield* json(200, signInMethods(account));
     }
-    const said = (await call(place.target, "GET", `/api/integration/${encodeURIComponent(integration)}/connect/oauth/${encodeURIComponent(attempt)}`, undefined, asking)) as Record<string, unknown> | null;
+    const statusRoute = `/api/integration/${encodeURIComponent(integration)}/connect/oauth/${encodeURIComponent(attempt)}`;
+    const read = async (): Promise<Record<string, unknown> | null> => {
+      const each = AbortSignal.timeout(15_000);
+      return (await call(place.target, "GET", statusRoute, undefined, signal ? AbortSignal.any([signal, each]) : each)) as Record<string, unknown> | null;
+    };
+    let said = await read();
+    const wait = Math.min(Math.max(Number(query.get("wait")) || 0, 0), MOST_WAIT) * 1000;
+    if (wait > 0) {
+      const first = JSON.stringify(said), until = Date.now() + wait;
+      while (said?.status === "pending" && JSON.stringify(said) === first && Date.now() < until && !signal?.aborted) {
+        await pause(1000, signal);
+        if (signal?.aborted) break;
+        said = await read();
+      }
+    }
     const status = said?.status;
     if (status !== "pending" && status !== "complete" && status !== "failed" && status !== "expired") return yield* json(502, { message: "The sign-in's status couldn't be read." });
     return yield* json(200, { ...said, ...(status === "failed" || status === "expired" ? { failure: failureWords(status, said?.message) } : {}) });
   } catch (error) {
-    if (deadline.aborted) return yield* json(504, { message: "It didn't answer in time. Try again." });
+    if (attempt === null ? deadline.aborted : (error as Error | null)?.name === "TimeoutError") return yield* json(504, { message: "It didn't answer in time. Try again." });
     const status = (error as { status?: unknown } | null)?.status;
     const message = error instanceof Error && error.message ? error.message : "It didn't answer.";
     return yield* json(typeof status === "number" && status >= 400 ? status : 502, { message });

@@ -39861,7 +39861,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "2a28e9485cb2";
+var BRIDGE_VERSION = "44c324c5470d";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -49274,6 +49274,7 @@ function placeOf(query, context) {
     return { down: engineDown() };
   }
 }
+var MOST_WAIT = 25;
 async function* signInRoute(context) {
   const { request, route, signal, json } = context;
   if (request.method.toUpperCase() !== "GET")
@@ -49296,13 +49297,28 @@ async function* signInRoute(context) {
         return yield* json(404, { message: `There's no ${integration} to sign in to here.` });
       return yield* json(200, signInMethods(account));
     }
-    const said = await call(place.target, "GET", `/api/integration/${encodeURIComponent(integration)}/connect/oauth/${encodeURIComponent(attempt)}`, undefined, asking);
+    const statusRoute = `/api/integration/${encodeURIComponent(integration)}/connect/oauth/${encodeURIComponent(attempt)}`;
+    const read = async () => {
+      const each = AbortSignal.timeout(15000);
+      return await call(place.target, "GET", statusRoute, undefined, signal ? AbortSignal.any([signal, each]) : each);
+    };
+    let said = await read();
+    const wait = Math.min(Math.max(Number(query.get("wait")) || 0, 0), MOST_WAIT) * 1000;
+    if (wait > 0) {
+      const first = JSON.stringify(said), until = Date.now() + wait;
+      while (said?.status === "pending" && JSON.stringify(said) === first && Date.now() < until && !signal?.aborted) {
+        await pause(1000, signal);
+        if (signal?.aborted)
+          break;
+        said = await read();
+      }
+    }
     const status = said?.status;
     if (status !== "pending" && status !== "complete" && status !== "failed" && status !== "expired")
       return yield* json(502, { message: "The sign-in's status couldn't be read." });
     return yield* json(200, { ...said, ...status === "failed" || status === "expired" ? { failure: failureWords(status, said?.message) } : {} });
   } catch (error) {
-    if (deadline.aborted)
+    if (attempt === null ? deadline.aborted : error?.name === "TimeoutError")
       return yield* json(504, { message: "It didn't answer in time. Try again." });
     const status = error?.status;
     const message = error instanceof Error && error.message ? error.message : "It didn't answer.";
