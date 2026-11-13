@@ -11,6 +11,7 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MessagesOnTheirWayTests {
     let engine = StubEngine(port: 47904)
     let workspace = Workspace()
+    let box = SessionsBox()
     let id = "ses_outgoing_\(UUID().uuidString.prefix(8).lowercased())"
     let first: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Fix the build"]
 
@@ -19,6 +20,7 @@ import Testing
     }
 
     private func done() {
+        box.stop()
         engine.stop()
         Drafts.shared.remove(id)
     }
@@ -37,6 +39,7 @@ import Testing
         engine.on("DELETE", "/api/session/\(id)/inbox/*", json: [:])
         engine.on("POST", "/api/session/\(id)/prompt", json: [:])
         engine.on("POST", "/api/session/\(id)/interrupt", json: ["interrupted": true])
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()

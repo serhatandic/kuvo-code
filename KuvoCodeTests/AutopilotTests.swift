@@ -51,7 +51,7 @@ import Testing
 
     private func conversation(on machine: MachineTestBox) throws -> SessionModel {
         let model = SessionModel(session: try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: session)), api: engine.api)
-        model.box = { machine.client }
+        model.box = { machine.appClient }
         return model
     }
 
@@ -99,8 +99,10 @@ import Testing
         let order = engine.asked.filter { $0 == "PUT \(Self.entry)" || $0 == "POST /api/session/ses_one/prompt" }
         #expect(order == ["PUT \(Self.entry)", "POST /api/session/ses_one/prompt"], "its agent works on Autopilot from the first word")
         let text = try #require(engine.requests("POST", "/api/session/ses_one/prompt").first?.body["text"] as? String)
-        #expect(SentMessage.split(text).text == "pick a palette and build the menu page")
-        #expect(SentMessage.keyword(of: text) == "/autopilot")
+        #expect(text.hasPrefix("pick a palette and build the menu page\n\n<sent-with>\n"))
+        let parts = (engine.requests("POST", "/api/session/ses_one/prompt").first?.body["metadata"] as? [String: Any]).flatMap { $0["kuvo"] as? [String: Any] }?["parts"] as? [String: Any]
+        #expect(parts?["words"] as? String == "pick a palette and build the menu page")
+        #expect(parts?["keyword"] as? String == "/autopilot")
 
         model.draftText = "/autopilot"
         model.submitDraft(for: nil, queue: false)

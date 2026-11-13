@@ -105,7 +105,9 @@ import Testing
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
         try await engine.listed(for: workspace)
-        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>")
+        // As its box keeps it: the text the agent read, and its parts.
+        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Summarize the commits weekly\n\n<sent-with>…</sent-with>",
+                                   metadata: .object(["kuvo": .object(["parts": .object(["words": .string("Summarize the commits weekly"), "keyword": .string("/goal")])])]))
         try await workspace.fork("ses_timer", from: message)
         #expect(Drafts.shared["ses_tried"].text == "/goal Summarize the commits weekly")
     }

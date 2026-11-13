@@ -81,10 +81,8 @@ import Testing
         #expect(parts.words == "Check the build")
         #expect(parts.keyword == "/plan")
         #expect(parts.reviewComments.map(\.location) == ["a.js:4"])
-        // Taken back, it's what you wrote, with its comments.
-        model.undo(message)
-        try await until { model.draftText == "Check the build" }
-        #expect(model.draftComments.map(\.text) == ["Call it once"])
+        // Gone back to with ↑, it's what you wrote.
+        #expect(model.sentMessages == ["Check the build"])
     }
 
     /// Another agent's message from before shows as its message, from its box's reading of it.

@@ -11,6 +11,7 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct UndoRedoTests {
     let engine = StubEngine(port: 47992)
     let workspace = Workspace()
+    let box = SessionsBox()
     let id = "ses_undo_\(UUID().uuidString.prefix(8))"
     let older: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Add a settings page"]
     let newer: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": "Make it dark"]
@@ -111,6 +112,8 @@ import Testing
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
         }
         engine.on("POST", "/api/session/\(id)/prompt", json: [:])
+        try await box.start(engine, for: workspace)
+        defer { box.stop() }
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -141,8 +144,8 @@ import Testing
     @Test func aGoalUndoneOrGoneBackToComesBackAsAGoal() async throws {
         defer { done() }
         let goal: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1],
-                                   "text": "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"]
-        let plan: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Plan the move", typed: "/plan")]
+                                   "text": KeptParts.text("Summarize the commits weekly"), "metadata": KeptParts.json(words: "Summarize the commits weekly", keyword: "/goal")]
+        let plan: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("Plan the move"), "metadata": KeptParts.json(words: "Plan the move", keyword: "/plan")]
         engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
         engine.conversation(id, [goal, plan])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in
@@ -166,7 +169,7 @@ import Testing
     @Test func aGoalUndoneBesideWhatYouTypedComesBackAsItsWords() async throws {
         defer { done() }
         let goal: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1],
-                                   "text": "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"]
+                                   "text": KeptParts.text("Summarize the commits weekly"), "metadata": KeptParts.json(words: "Summarize the commits weekly", keyword: "/goal")]
         engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
         engine.conversation(id, [goal])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in
@@ -186,7 +189,7 @@ import Testing
     @Test func undoingPastAGoalLeavesNoGoalInTheMiddle() async throws {
         defer { done() }
         let first: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "fix tests"]
-        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("ship v2", typed: "/goal")]
+        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("ship v2"), "metadata": KeptParts.json(words: "ship v2", keyword: "/goal")]
         engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
         engine.conversation(id, [first, goal])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in

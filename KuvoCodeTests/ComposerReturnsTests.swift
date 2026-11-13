@@ -1,4 +1,3 @@
-import ClientText
 import Foundation
 import OpenCodeKit
 import Testing
@@ -11,6 +10,7 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct ComposerReturnsTests {
     static let engine = "http://127.0.0.1:47994"
     let workspace = Workspace()
+    let box = SessionsBox()
     let id = "ses_composer_\(UUID().uuidString.prefix(8))"
 
     init() async {
@@ -24,11 +24,19 @@ import Testing
         let listed = StubWeb.json(["data": [session]])
         StubWeb.route(Self.engine + "/api/session") { _ in listed }
         StubWeb.route(Self.engine + "/api/session/active") { _ in StubWeb.json(["data": [:]]) }
+        // (Its box asks for it, to send it a message.)
+        let one = StubWeb.json(["data": session])
+        StubWeb.route(Self.engine + "/api/session/\(id)") { _ in one }
         workspace.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: Self.engine)!, password: "test"))
+        // This Mac's box, which messages go through, reaching the stand-in engine where it listens.
+        try? await StubWeb.listen(port: 47994)
+        try? await box.start(engine: Self.engine, for: workspace)
         await workspace.refresh()
     }
 
     private func done() {
+        box.stop()
+        StubWeb.stopListening(port: 47994)
         StubWeb.stop()
         Drafts.shared.remove(id)
     }
@@ -101,14 +109,14 @@ import Testing
         Drafts.shared.sent(sending)
     }
 
-    /// What a widget sent that didn't go comes back as its words alone, not the note naming the
-    /// widget, and leaves your review comments for your own message.
+    /// What a widget sent that didn't go comes back as its words alone, not the widget it named,
+    /// and leaves your review comments for your own message.
     @Test func aWidgetsAnswerThatDidntGoComesBackAsItsWords() async throws {
         defer { done() }
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json(["message": "Model is overloaded"], status: 400) }
         let model = try #require(workspace.model(for: id))
         model.reviewComments = [ReviewComment(file: "a.swift", line: 2, side: .new, snippet: "x", text: "Rename x")]
-        model.send(WidgetAnswer.message("Show it in minutes", from: "Build times this week"), for: nil, withComments: false)
+        model.send("Show it in minutes", for: nil, withComments: false, widget: "Build times this week")
         try await until { model.failure != nil }
         #expect(model.draftText == "Show it in minutes")
         #expect(model.reviewComments.map(\.text) == ["Rename x"])

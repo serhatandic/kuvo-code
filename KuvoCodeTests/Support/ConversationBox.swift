@@ -85,9 +85,14 @@ final class SessionsBox {
 
     /// Started once, for `workspace`'s sessions on this Mac, on `engine`.
     func start(_ engine: StubEngine, for workspace: Workspace) async throws {
-        if box == nil { box = try await TestBox(engine: engine.url) }
+        try await start(engine: engine.url, for: workspace)
+    }
+
+    /// The same, its engine StubWeb's routes at `engine` ("http://127.0.0.1:<port>"), listened on.
+    func start(engine: String, for workspace: Workspace) async throws {
+        if box == nil { box = try await TestBox(engine: engine) }
         guard let box else { return }
-        let client = box.client(engine: engine.url)
+        let client = box.client(engine: engine)
         workspace.boxes = { $0 == BoxClient.mac ? client : nil }
     }
 
