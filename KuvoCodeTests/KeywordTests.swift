@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientSessions
+import ClientText
 import Foundation
 import OpenCodeKit
 import Testing
