@@ -252,6 +252,19 @@ final class Catalog {
         Task { await readOffered(wanted, key: key) }
     }
 
+    /// A box found to be from before `models.offered` is asked again as the lists are read anew
+    /// (a machine's, updated since): once it answers it, its word is taken from then on. Until
+    /// then, nothing changes, so the picker doesn't empty while it's asked.
+    private func recheckOlderBox() async {
+        guard boxOffers == false, let box else { return }
+        struct Info: Decodable { var features: [String]? }
+        guard let info = try? await box.value(Info.self, "GET", "kuvo/info"), info.features?.contains(OfferedModels.feature) == true,
+              self.box?.box == box.box else { return }
+        boxOffers = true
+        offeredAsked = [:]
+        listsRead += 1
+    }
+
     private func readOffered(_ wanted: ModelRef?, key: String) async {
         guard let box else { return }
         if boxOffers == nil, !BoxClient.hasEveryFeature(box.box) {
@@ -565,6 +578,7 @@ final class Catalog {
     }
 
     func refresh() async {
+        await recheckOlderBox()
         await refreshEngine()
         // Apart from the engine's: an agent slow to answer (Codex starting) isn't the engine
         // still loading.
