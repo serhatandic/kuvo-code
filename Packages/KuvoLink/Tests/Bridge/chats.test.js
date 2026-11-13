@@ -1,6 +1,6 @@
 // Chats, marked by the box (PROTOCOL.md, "Chats"): a session in its chats folder carries
 // `kuvo.chat` in its metadata, naming that folder, so a client draws a chat from the session
-// itself, never from its folder. The engine (2.2.5) makes a session the newest for any write, so
+// itself, never from its folder. The engine (2.2.6) makes a session the newest for any write, so
 // the box writes the mark only as a session is made, moved or has its metadata written, never on a
 // session from before: an upgrade, an old chat written to since, and the box hearing its engine
 // again after a while leave every session where it was in every list, for clients to go by its
@@ -31,7 +31,7 @@ fs.mkdirSync(project, { recursive: true });
 fs.symlinkSync(chats, linked);
 
 // The engine: its sessions, a page at a time in the order asked (the newest first for `desc`),
-// each read and written as the real one (2.2.5) does: PATCH replaces its metadata whole and makes
+// each read and written as the real one (2.2.6) does: PATCH replaces its metadata whole and makes
 // it the newest. Every write that changed a chat mark kept, every read of all its sessions (not
 // one's subagents) counted; and its events, followed.
 const sessions = new Map();

@@ -368,6 +368,33 @@ import Testing
         // Kept on the box with its name, for when one of its sessions comes back.
         #expect(try await onBox(workspace).first { $0.directory == shop } == .init(directory: shop, name: "Shop", folders: [], removed: true))
     }
+
+    /// A project's folders changed in Edit Project reach the session open in a tab at once, given by
+    /// its box (you may write to it next), and no session merely loaded: a write makes each the
+    /// newest, which would reshuffle the project's list. Those get them as they next open or run.
+    @Test func changedFoldersReachTheSessionInATabThroughItsBoxAndNoneAtRest() async throws {
+        defer { done() }
+        engine.list([StubEngine.session("ses_open", directory: shop), StubEngine.session("ses_rest", directory: shop)])
+        for id in ["ses_open", "ses_rest"] {
+            engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, directory: shop)])
+            engine.on("PUT", "/api/experimental/session/\(id)/instructions/entries/*", json: [:])
+        }
+        let workspace = workspace()
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        workspace.saveProject(shop, settings: .init(name: "Shop"))
+        await workspace.projectsWritten()
+        for id in ["ses_open", "ses_rest"] { _ = try #require(workspace.model(for: id)) }
+        for task in workspace.givingFolders { await task.value }
+        let written = { (id: String) in engine.requests("PATCH", "/api/session/\(id)").filter { $0.body["permissions"] != nil }.count }
+        let atRest = written("ses_rest")
+
+        workspace.saveProject(shop, settings: .init(name: "Shop", folders: [blog]), shown: ["ses_open"])
+        for task in workspace.givingFolders { await task.value }
+        let rules = try #require(engine.requests("PATCH", "/api/session/ses_open").last?.body["permissions"] as? [[String: Any]])
+        #expect(rules.contains { $0["action"] as? String == "external_directory" && $0["resource"] as? String == blog + "/*" && $0["effect"] as? String == "allow" })
+        #expect(written("ses_rest") == atRest, "a session at rest isn't written")
+    }
 }
 
 /// A box whose next project change (once `holds`) waits on its way there until it's `open`ed.

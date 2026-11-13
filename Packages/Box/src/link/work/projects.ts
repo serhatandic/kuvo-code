@@ -148,7 +148,9 @@ export async function makeProject(given: NewProject, madeBy: MadeBy | null, root
   let project!: Project;
   changeProjects(projects => {
     const before = projects.find(each => each.directory === folder);
-    project = { ...before, directory: folder, folders: before?.folders ?? [], ...(path.basename(folder) !== name ? { name } : {}), ...(madeBy ? { madeBy } : {}) };
+    // (A new one's folders are a client's to set: until one does, those a Mac from before gives its
+    // sessions stay theirs, `addedByBox`.)
+    project = { ...before, directory: folder, folders: before?.folders ?? [], ...(before ? {} : { addedByBox: true }), ...(path.basename(folder) !== name ? { name } : {}), ...(madeBy ? { madeBy } : {}) };
     delete project.removed;
     return [project, ...projects.filter(each => each !== before)];
   });

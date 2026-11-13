@@ -39,7 +39,7 @@ body:
     attributes:
       label: System
       description: macOS and your Mac, or iOS and your iPhone, and the engine's version.
-      placeholder: macOS 26.1, MacBook Air M2, engine 2.2.5
+      placeholder: macOS 26.1, MacBook Air M2, engine 2.2.6
     validations:
       required: true
   - type: input

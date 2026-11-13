@@ -1594,6 +1594,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "plugins.search": ["POST", "kuvo/plugins/search"],
     programs: ["POST", "kuvo/programs"],
     projects: ["GET", "kuvo/projects"],
+    "projects.folders": ["POST", "kuvo/sessions/ses_none/folders"],
     "providers.models": ["GET", "kuvo/providers/models"],
     queue: ["GET", "kuvo/sessions/ses_none/queue"],
     // (queue/add taking a message once by its id, sent again.)
@@ -1616,7 +1617,10 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sessions.chat": ["GET", "kuvo/info"],
     "sessions.glance": ["POST", "kuvo/sessions/glance"],
     "sessions.models": ["POST", "kuvo/sessions/models"],
+    "sessions.move": ["POST", "kuvo/sessions/ses_none/move"],
     "sessions.start": ["POST", "kuvo/sessions"],
+    // (A client's start without a task, `kuvo/sessions` too.)
+    "sessions.start.empty": ["POST", "kuvo/sessions"],
     // (Your setup, and who's its main computer.)
     setup: ["GET", "kuvo/setup"],
     "setup.mainOnly": ["GET", "kuvo/setup"],

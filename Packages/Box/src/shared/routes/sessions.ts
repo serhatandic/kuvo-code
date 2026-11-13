@@ -10,10 +10,18 @@ export const CARRIED = object({ session: string });
 export type Carried = Infer<typeof CARRIED>;
 
 /** A session started: its address, title, folder and project (null for a chat), whether it shows
- * beside the conversation that started it, and with `wait`, its first answer (null for none yet). */
-export const STARTED = object({ session: string, title: nullable(string), folder: string, project: nullable(string), "answer?": nullable(string), "got?": words("askFirst", "acceptEdits", "auto") });
+ * beside the conversation that started it, and with `wait`, its first answer (null for none yet).
+ * A client's start with no task: the session as it's made (`info`, as the engine lists it), and the
+ * worktree made for it (`worktree`, as `kuvo/worktrees` makes one). */
+export const STARTED = object({ session: string, title: nullable(string), folder: string, project: nullable(string), "answer?": nullable(string), "got?": words("askFirst", "acceptEdits", "auto"), "info?": any, "worktree?": object({ project: string, root: string, "folder?": string, branch: string, "base?": string }) });
 
 export type StartedSession = Infer<typeof STARTED>;
+
+/** A conversation moved into a project (`kuvo/sessions/<id>/move`): where it goes, and the session
+ * as it is now (`info`, as the engine lists it; it moves at its next step while it's at work). */
+export const SESSION_MOVED = object({ session: string, directory: string, "info?": any });
+
+export type SessionMoved = Infer<typeof SESSION_MOVED>;
 
 /** What an agent's tool says back to it: its words, and whether it didn't do what was asked. */
 export const TOOL_ANSWER = object({ text: string, isError: bool });
@@ -102,6 +110,8 @@ export type GlanceChecks = Infer<typeof GLANCE_CHECKS>;
 
 export const SESSION_ROUTES: RouteShape[] = [
   { route: "POST kuvo/sessions/:id/agents", answers: { 200: CARRIED } },
+  { route: "POST kuvo/sessions/:id/folders", answers: { 200: object({ session: string }), 404: REFUSED, 405: REFUSED, 502: REFUSED, 503: REFUSED } },
+  { route: "POST kuvo/sessions/:id/move", answers: { 200: SESSION_MOVED, 400: REFUSED, 404: REFUSED, 405: REFUSED, 409: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions", answers: { 200: STARTED, 400: REFUSED, 403: REFUSED, 404: REFUSED, 409: object({ message: string, reason: words("fullAccessOff") }), 429: REFUSED, 502: object({ message: string, "session?": string }), 503: REFUSED } },
   { route: "POST kuvo/agent-tools", answers: { 200: TOOL_ANSWER, 400: REFUSED } },
   { route: "GET kuvo/sessions/queues/events", answers: { 200: object({ queues: map(QUEUE) }) } },

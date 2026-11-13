@@ -214,22 +214,44 @@ test("a Copilot account signed in to: its Claude models work at once, with no re
   // Copilot gives the account another model; the engine doesn't know until its models are asked of again.
   copilot.models = ["claude-opus-5.5", "claude-sonnet-5.6", "gpt-6"];
   assert.ok(!(await engine.models()).some(model => model.id === "claude-sonnet-5.6"));
-  // Refreshed while a turn is under way in the conversation's folder: that folder isn't cut.
+  const refresh = async () => {
+    const parts = [];
+    for await (const part of link.engineHandler(() => engine.target)({ method: "POST", path: "kuvo/accounts/github-copilot/refresh", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) parts.push(part);
+    return { status: parts[0].head.status, json: JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString()) };
+  };
+  const listsNew = async () => (await engine.models()).some(model => model.providerID === "github-copilot" && model.id === "claude-sonnet-5.6");
+  const open = async () => ((await engine.api("GET", "api/debug/location")).json ?? []).map(each => each.directory);
+  // Refreshed while a turn is under way in another project, this one quiet: the engine keeps
+  // Copilot's list for all its folders while any is open, so nothing is closed, the turn isn't cut,
+  // and it says when they come by themselves.
+  const other = `${root}/other`;
+  fs.mkdirSync(other, { recursive: true });
+  const elsewhere = (await engine.api("POST", "api/session", { location: { directory: other } })).json.data;
+  await engine.api("POST", `api/session/${elsewhere.id}/model`, { model: { providerID: "github-copilot", id: "claude-opus-5.5", variant: "high" } });
   copilot.hold();
   const asking = copilot.nextHeld();
-  const running = engine.say(session.id, "Take your time.");
+  const running = engine.say(elsewhere.id, "Take your time.");
   await asking;
-  const refreshed = [];
-  for await (const part of link.engineHandler(() => engine.target)({ method: "POST", path: "kuvo/accounts/github-copilot/refresh", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) refreshed.push(part);
-  assert.equal(refreshed[0].head.status, 200);
-  const waiting = JSON.parse(Buffer.concat(refreshed.filter(part => part.body).map(part => part.body)).toString()).waiting;
-  assert.ok(waiting.includes(work), `The folder at work was closed: ${JSON.stringify(waiting)}`);
+  const busy = await refresh();
+  assert.equal(busy.status, 409, JSON.stringify(busy.json));
+  assert.match(busy.json.message, /by themselves within twenty minutes/);
+  assert.ok((await open()).includes(work), "A quiet folder was closed though that brings nothing while another stays open");
+  // (What makes it so, on the engine: this folder closed and opened afresh, the other still open,
+  // still has the list from before. An engine that reads it again then lets the box close folders
+  // one at a time again.)
+  await engine.api("DELETE", `api/debug/location?${new URLSearchParams({ "location[directory]": work })}`);
+  assert.ok(!(await listsNew()), "The engine read Copilot's models afresh for a folder opened again while another stayed open");
   copilot.release();
   turn = await running;
   assert.equal(turn.idle.outcome, "succeeded", `The turn under way was cut: ${turn.failed?.error?.message}`);
-  // Its work done, the box closes it: it opens afresh, with the new model.
-  await waitFor(async () => !fs.existsSync(`${box}/run/models-due.json`), "the box to close the folder once its turn ended");
-  await waitFor(compatible("claude-sonnet-5.6"), "the engine to list the new model, with what it needs");
+  // Every project quiet: every folder is closed, and the engine reads the list afresh.
+  const refreshed = await refresh();
+  assert.equal(refreshed.status, 200, JSON.stringify(refreshed.json));
+  assert.deepEqual(refreshed.json.waiting, []);
+  for (const soon = Date.now() + 15_000; !(await compatible("claude-sonnet-5.6")());) {
+    assert.ok(Date.now() < soon, "The engine didn't list the new model, with what it needs, at once after a refresh that said it was done");
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
   // In the conversation going on, on the same engine.
   await engine.api("POST", `api/session/${session.id}/model`, { model: { providerID: "github-copilot", id: "claude-sonnet-5.6", variant: "high" } });
   turn = await engine.say(session.id, "And again.");

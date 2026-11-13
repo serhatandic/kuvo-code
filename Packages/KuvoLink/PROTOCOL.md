@@ -1096,10 +1096,25 @@ browser's tools (`browser_…`), which work in a client's own browser, aren't th
   - From a client (no `startedBy`): in `folder`, in Auto unless `approval` says (which asks first
     where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
     own first message.
-  - Either way its project's other folders are allowed to it and named in its instructions, one in
+  - A client's New Session (`sessions.start.empty`, #341): `task` left out, the session is made as
+    above and nothing is sent to it, for the user's own first message. It may name `agent` (any of
+    its engine's agents, as its picker has them; `mode` stays build or plan) and `model` as
+    `{providerID, id, variant?}`, taken as named: on the coding agents' bridge for one of theirs or
+    Auto (503 while it isn't running), else on the engine. Its answer adds `info`, the session as
+    its engine (or the bridge) lists it then, and with `worktree: true`, `worktree`, the worktree made
+    for it as `POST kuvo/worktrees` makes one (`{project, root, folder, branch, base?}`); the box
+    takes that away again, branch and all, should the session not be made (also where the client
+    goes away meanwhile). Asked for `autopilot` but its agent couldn't be told how to work on it,
+    the session goes again: 502, so it never starts asking you instead. With `wait`, or from a conversation, a
+    task is still needed (400). A box from before needs a task: a client makes the session with its
+    engine then, and gives it its project's folders, approval and Autopilot itself.
+  - Either way its project's other folders (those of the project whose folder it's in, or a
+    worktree of; none in one of those other folders) are allowed to it and named in its instructions, one in
     a worktree is told so, one filed under another folder than its own (a worktree, a project's
     other folder) carries that project from the first (`kuvo.filed`, "Projects"), and a folder
-    that's no project yet, nor one of a project's, becomes one.
+    that's no project yet, nor one of a project's, becomes one (once the box keeps its projects),
+    marked `addedByBox: true` until a client sets its `folders` (`PUT kuvo/projects`), as one
+    `make_project` makes is.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
     be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
@@ -2671,24 +2686,31 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     (`accounts.ended`); a Mac before answered them itself.
   - `POST kuvo/accounts/<provider>/refresh` is Refresh Models: the engine's lists of models made
     afresh without a restart, and what providers need from it learned again from them and applied
-    ("Settings per box"), at once. opencode reads an account's models (GitHub Copilot's, with the
-    models your plan has) as it opens a folder, and again only when the account in use changes, so
-    the box closes each folder the engine has open (`DELETE api/debug/location`), which it opens
-    afresh as it's next used: at once where nothing's going on, and once its work is done where
-    something is (a run, a question or a permission waiting on you, a terminal, a running command),
-    which closing would cut: those are kept in `run/models-due.json` for that engine and closed as
-    its events say their work ended (a run's end, a terminal's or a command's, a question
-    answered). It answers `200 {waiting: [folder]}`, the folders still to get them; the engine's
-    own folder, whose list the model pickers read, is among them only while something goes on
-    there, and a client says the rest get them once their work is done. Each folder is looked at
-    again just before it's closed, so a run started meanwhile keeps it open. Those left are closed
-    as the box follows its engine's events (on a machine, while its bridge runs; otherwise by the
-    next refresh, which looks at every open folder). Clients' pickers follow the engine's
-    `model.updated`. It helps only the providers whose lists opencode reads from your account as a
-    folder opens, and again only when the account in use changes: `GET kuvo/accounts/refreshable`
-    → `{providers: [id]}` (GitHub Copilot, GitLab Duo, Modal, DigitalOcean, OpenCode), which a
-    client offers it for, on the account in use. The rest come from models.dev's catalog, which
-    the engine reads again by itself: `409 {message}` for those. `404 {message}` for one the engine
+    ("Settings per box"), at once. opencode (2.2.6) can't be asked to read an account's models again
+    but by closing the folders it has open (`DELETE api/debug/location`), which it opens afresh as
+    they're next used; closing one cuts what goes on there (a run, a question or a permission
+    waiting on you, a terminal, a running command), so a folder at work is never closed now. Each
+    folder is looked at again just before it's closed, so a run started meanwhile keeps it open.
+    GitLab Duo's list is each folder's own, read as it opens and again only when the account in use
+    changes: the box closes each folder at once where nothing's going on, and keeps those at work in
+    `run/models-due.json` for that engine, closing each as its events say its work ended (a run's
+    end, a terminal's or a command's, a question answered), on a machine while its bridge runs,
+    otherwise by the next refresh. It answers `200 {waiting: [folder]}`, the folders still to get
+    them; the engine's own folder, whose list the model pickers read, is among them only while
+    something goes on there, and a client says the rest get them once their work is done. GitHub
+    Copilot's, DigitalOcean's, Modal's and OpenCode's lists are the whole engine's, kept while any
+    folder is open (activating the account in use again doesn't read them either) and read again by
+    itself every ten minutes (OpenCode's every minute): closing some folders brings nothing. So the
+    box closes every folder only when nothing goes on in any, opens none again until `GET
+    api/debug/location` lists none (closing those something opened meanwhile, each given half a
+    second to show it's in use first, for ten seconds at most), and answers `200 {waiting: []}`;
+    otherwise it closes nothing more and answers `409 {message}`, saying they show by themselves
+    within twenty minutes (OpenCode's within two), as a rule, or to try again when a folder kept
+    opening again; a client shows it as it shows why a refresh couldn't go. Clients' pickers follow the engine's
+    `model.updated`. It helps only the providers whose lists opencode reads from your account: `GET
+    kuvo/accounts/refreshable` → `{providers: [id]}` (GitHub Copilot, GitLab Duo, Modal,
+    DigitalOcean, OpenCode), which a client offers it for, on the account in use. The rest come from
+    models.dev's catalog, which the engine reads again by itself: `409 {message}` for those too. `404 {message}` for one the engine
     doesn't have; `503 {message}` while it can't be asked, or when it has no way to close a folder,
     which only a restart does then. Every box with `accounts.refresh`.
   - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
@@ -4653,6 +4675,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `pieces` | a machine only: `kuvo/info`'s `pieces`, which version its link, coding agents' bridge and engine run ("Updates", "A new version while it works") |
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
+| `projects.folders` | A project's `folders` reach each of its sessions as it's started or moved there, opened (`POST kuvo/sessions/<id>/folders`) and as each run starts where they changed ("Projects", #341) |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.once` | `…/queue/add` sent again under its `id` adds it once ("Sending again"): a phone sends it with `idempotency-key` only to a box that says this (#144) |
@@ -4670,7 +4693,9 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
+| `sessions.move` | `POST kuvo/sessions/<id>/move`: a conversation moved into a project, given its folders ("Projects", #341) |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
+| `sessions.start.empty` | `POST kuvo/sessions` from a client without a task, `agent`, `model` as `{providerID, id, variant?}`, and `info` and `worktree` in its answer (#341) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `setup.mainOnly` | a member refuses pairing and adding with `409 {message, primary}`, and answers `GET kuvo/hosts` from its setup ("Your setup", Only the main computer adds and pairs) |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
@@ -5059,10 +5084,12 @@ names it (a `/` can't be in a part of the path). A Mac answers from its box; a m
 there, with the settings of those it removed, the first time the machine answers; what it changes
 while a box is away goes there when it's back.
 
-- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?}]}`,
-  newest first. `name` only when it isn't the folder's own; `folders`, the project's other folders;
-  `removed`, one Remove Project took off the list, kept with its settings for when one of its
-  sessions is brought back (a client shows it then, and not before).
+- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?, madeBy?,
+  addedByBox?}]}`, newest first. `name` only when it isn't the folder's own; `folders`, the
+  project's other folders; `removed`, one Remove Project took off the list, kept with its settings
+  for when one of its sessions is brought back (a client shows it then, and not before); `madeBy`,
+  the bot that made it ("Work"); `addedByBox`, one the box added itself (a session started in a
+  folder it didn't list, `make_project`) whose folders no client has set yet (#341).
   `worktrees` (bridge 0.9.207), `{"<folder>": "<project>"}`: the project each of the box's worktrees
   belongs to, by the folder its sessions run in (and its top folder), for those it keeps, those it
   removed that can come back and those removed before; and each project's git worktrees made
@@ -5083,10 +5110,39 @@ while a box is away goes there when it's back.
   folder its `kuvo.filed` names, is filed under that project (#311).
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
   adds the project or changes what's given (an empty string is none), and brings a removed one
-  back unless `removed` is true (a client's copy of one it removed, with its settings):
-  `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
+  back unless `removed` is true (a client's copy of one it removed, with its settings); one with
+  `folders` takes away `addedByBox`: `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
+  Its `folders` reach each of its sessions (`projects.folders`, #341), whichever client changed
+  them: on the engine and the coding agents' bridge, in its folder or one of its worktrees, a
+  session gets a rule allowing each folder (`external_directory` `<folder>/*`, and where a link
+  leads, after its approval's rules; a bot's own folder's rule stays) and the instruction
+  `kuvo.project-folders` naming them, or neither once there are none: as it's started or moved
+  there, as a client opens it (`POST kuvo/sessions/<id>/folders` → `200 {session}`, 404 for none
+  here, 502 where the engine didn't take it: so it has them before you write to it), and as each of
+  its runs starts where they changed since (for one nobody opens: a wake-up's, a letter's; that run's
+  first step may go without them). Each is
+  written only where they changed, the instruction also where an earlier write lost it (a write
+  makes a session the newest). One filed under a project that's the same place by another name
+  (`kuvo.filed`, a link) has that project's; one in a project's other folder, none (it works there
+  alone). A folder Settings › Permissions names is Settings' to say, as when a session's rules are
+  made, by where it really is (a link and where it leads are one folder): the project adds no rule
+  for it (no second copy in Auto; a Don't Allow there holds), and an allow a session has for it
+  stays only in Auto and Full Access, which allow what Settings asks about, while Settings' last rule
+  for it asks; Don't Allows a lead brought from another computer (`kuvo.held`) stay
+  last. Only for a project the box lists with folders a client set: a session of one it doesn't
+  list (its Mac keeps them, or hasn't handed them over yet), or of one it added itself
+  (`addedByBox`), keeps the rules and instruction it has; one moved into one it added gets none. Not a subagent's, nor a hidden run's (a group chat's seat, an engine run, a review's part).
+  A box from before doesn't: a client gives each session it opens its folders then.
+- `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
+  project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at
+  its next step), and it gets that project's other folders as above. `200 {session, directory,
+  info?}` (`info`, the session as its engine lists it now); 400 for a folder that isn't here; 404
+  for no such conversation; 409 for a coding agent's session (their sessions keep the folder they
+  started in), one moving to another computer, and a subagent's or hidden run's; 502 where the engine didn't take it; 503 with no
+  engine. A box from before: a client moves it with the engine's `POST api/session/<id>/move` and
+  gives it the project's folders itself.
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
   other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on
@@ -5107,7 +5163,7 @@ again as its event comes, `kuvo/search`'s `info`, a session a move brought), not
 mark naming another folder than the session's own is no mark: one moved out of the chats while no
 box could take its mark off is never kept a chat by it.
 
-The engine (2.2.5) and the coding agents' bridge make a session the newest for any write, its
+The engine (2.2.6) and the coding agents' bridge make a session the newest for any write, its
 metadata alone too, so a mark is written only as a session is made, moved or has its metadata
 written (each of which made it the newest already), never on a session from before:
 
@@ -5305,7 +5361,7 @@ settings file of the box's own beside yours in its engine's settings folder (`op
 under the engine's `XDG_CONFIG_HOME`: a machine's `~/.kuvo-code/config`, this Mac's
 `KUVO_ENGINE_CONFIG`), never in your settings. opencode reads it with `opencode.json` and reads it
 again as it changes, so what the box learns applies to the engine running now, with no restart: a
-conversation going on uses it from its next message. (opencode 2.2.5 reads `OPENCODE_CONFIG_CONTENT`
+conversation going on uses it from its next message. (opencode 2.2.6 reads `OPENCODE_CONFIG_CONTENT`
 only as it starts, `POST api/location/reload` stops every terminal and command and drops the
 questions waiting on you, `PATCH api/experimental/config` takes only `shell`, and a machine's
 `OPENCODE_CONFIG` is your settings.) The file's first line starts `// Kept by Kuvo Code`; one there
@@ -5572,7 +5628,7 @@ and as a box starts.
 ### Working outside the project
 
 Settings › Permissions shows "Work outside the project: Ask" as the default, and every box keeps
-to it, sandbox or not: opencode 2.2.5's agents allow `external_directory` on their own, so each box
+to it, sandbox or not: opencode 2.2.6's agents allow `external_directory` on their own, so each box
 writes the engine a plugin, `kuvo-defaults.js` in its settings' `opencode/plugins` (as it starts,
 and back each minute if it's gone or changed), that gives the engine's agents
 `{external_directory, "*", ask}`. The engine sets up plugins before it adds the rules in your

@@ -295,7 +295,7 @@ struct MainView: View {
                 settings.run = given(settings.run) ?? existing.run
                 settings.terminal = given(settings.terminal) ?? existing.terminal
             }
-            let primary = workspace.saveProject(primary, settings: settings)
+            let primary = workspace.saveProject(primary, settings: settings, shown: Set(tabs.keys.compactMap(\.sessionID)))
             if request.project == nil { tabs.newSession(in: primary) }
         } close: {
             tabs.projectEditor = nil
