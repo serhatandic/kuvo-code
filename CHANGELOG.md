@@ -6,6 +6,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- New sessions in every project open as conversations. The project’s terminal-command setting and terminal tabs in the main window have been removed; existing projects keep their names, folders and Run commands. Terminals remain available in the side panel.
+
 - Antigravity's limits and conversation spend are read by your computers with the sign-ins you made in Kuvo Code, including on Linux, with the app closed. The Antigravity app's own login and history are no longer read.
 
 ### Highlights
@@ -597,7 +599,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A machine Kuvo Code finds at two addresses no longer shows a group chat as talking there while it's away, and a chat that starts talking just as it's read again keeps showing so.
 - Each new session you're writing has a side panel of its own: a terminal opened while writing one no longer shows beside another, or goes to whichever session is sent first.
 - Run again after a new session is sent, or after a conversation moves to the coding agents, restarts the command in the same terminal instead of starting a second copy beside the first.
-- Archiving a session, here or from your phone, ends its terminals in the side panel, and removing a machine ends the terminals on it, in the side panel and the window's tabs, rather than leaving them running out of sight (a dev server holding its port). A conversation moved to the coding agents keeps its terminals.
+- Archiving a session, here or from your phone, ends its terminals in the side panel, and removing a machine ends the terminals on it, in the side panel, rather than leaving them running out of sight (a dev server holding its port). A conversation moved to the coding agents keeps its terminals.
 - In Changes, the review button on a branch reviews what the branch changed since main, rather than finding nothing to review.
 - Settings › Integrations no longer shows Notion, Linear and other signed-in integrations as needing a sign-in when the engine is too busy to say who's signed in.
 - "Retrying (attempt 2)…" goes once its step is over: when you stop the agent while it waits to retry, or it goes on in a new step, rather than staying under the reply until the conversation is read again.
