@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut, plainName } from "../../shared/text";
-import { listOf, writePrivate } from "../files";
+import { listOf, locked, writePrivate } from "../files";
 import { KEY } from "../peers/known";
 import { ITEM_ID, OWNER, WORK_QUEUE, whoOf as keptWho, type Who } from "./store";
 import type { ItemSummary, OwnerFacts } from "./view";
@@ -144,16 +144,40 @@ export function readTold(key: string): Told | null {
   }
 }
 
+// (One process at a time changes what's kept: the link takes what's told, a route patches it.)
+const LOCK = path.join(WORK_QUEUE, ".told.lock");
+
 /** `told` kept as what `key` said, unless what's kept is newer: whether it was. */
 export function keepTold(key: string, told: Omit<Told, "heard">, now = Date.now()): boolean {
   if (!KEY.test(key)) return false;
-  const kept = readTold(key);
-  // Older than what's kept: mail come late, unless it's a good while older (its clock was set back),
-  // when it's the newer word after all.
-  if (kept && kept.at > told.at && kept.at - told.at < 600_000 && kept.id !== told.id) return false;
   fs.mkdirSync(TOLD, { recursive: true, mode: 0o700 });
-  writePrivate(fileOf(key), JSON.stringify({ ...told, heard: now } satisfies Told));
-  return true;
+  return locked(LOCK, () => {
+    const kept = readTold(key);
+    // Older than what's kept: mail come late, unless it's a good while older (its clock was set
+    // back), when it's the newer word after all.
+    if (kept && kept.at > told.at && kept.at - told.at < 600_000 && kept.id !== told.id) return false;
+    writePrivate(fileOf(key), JSON.stringify({ ...told, heard: now } satisfies Told));
+    return true;
+  });
+}
+
+/** A change you made to item `id` on the computer `key`, through this box, put in what that computer
+ * last told, as its box answered it (`item`; null, deleted: taken out), until it tells again: what
+ * it says of its sessions stays as it told it. */
+export function patchTold(key: string, id: string, item: unknown): void {
+  if (!KEY.test(key)) return;
+  const fresh = toldItemOf(item);
+  try {
+    locked(LOCK, () => {
+      const kept = readTold(key);
+      if (!kept) return;
+      const before = kept.items.find(each => each.id === id);
+      const others = kept.items.filter(each => each.id !== id);
+      const items = !fresh ? others
+        : [...others, before ? { ...before, ...fresh, sessions: before.sessions, inProgress: before.inProgress, ...(before.progress ? { progress: before.progress } : {}), ...(before.handedFrom ? { handedFrom: before.handedFrom } : {}) } : fresh];
+      writePrivate(fileOf(key), JSON.stringify({ ...kept, items }));
+    });
+  } catch {}
 }
 
 // What each computer last said of being shared, by the told file's time and size: read once a

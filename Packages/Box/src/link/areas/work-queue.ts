@@ -13,7 +13,7 @@ import { provedRequest } from "./vault";
 import { addCategory, categories, removeCategory, renameCategory } from "../work-queue/categories";
 import { importItems, importWords, parseBacklog, readBacklogFiles } from "../work-queue/import";
 import { primaryOf } from "../work-queue/numbers";
-import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
+import { changedThere, itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
 import { Refusal, refuseMoving } from "../work-queue/ops";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
@@ -238,6 +238,8 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   const { category, before, after, top } = given;
   const there = await forwardAct(far.computer, nameOf(far), { ...asked, item: far.id, ...(asked.action === "move" ? { body: { category, before, after, top } } : {}) }, signal);
   if ("refused" in there) return yield* json(there.status, { message: there.refused, computer: far.computer });
+  // What this box has of it now, as that computer's box answered (not when it next tells).
+  if (there.status === 200 && isObject(there.value) && isObject(there.value.item)) changedThere(far.computer.key, asked.method === "DELETE" ? "delete" : asked.action ?? "move", there.value.item);
   // (As this box names that computer, so a client knows where it is.)
   const value = !isObject(there.value) ? there.value
     : isObject(there.value.item) ? { ...there.value, item: { ...there.value.item, computer: far.computer } }

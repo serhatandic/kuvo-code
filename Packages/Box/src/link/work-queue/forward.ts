@@ -53,8 +53,12 @@ const waitFor = (act: { action?: unknown }) => (act.action === "file" ? forwardT
 const AGAIN_AFTER = 5_000;
 /** How soon a keeper answers an ask sent again: a file's not while it's waited for (it can be big). */
 const answerAgainAfter = (act: Act) => (act.action === "file" ? 60_000 : 4_000);
-/** How long a keeper remembers what it did for each id, and how far off an ask's `at` may be. */
+/** How long a keeper remembers what it did for each id (from when it was asked, or its `at` if
+ * that's later), and how long ago an ask's `at` may be; and how far ahead of this clock, a minute. */
 export const ACT_MEMORY = 600_000;
+const AHEAD = 60_000;
+/** The most asks a keeper remembers at once (the oldest go first past it). */
+const MOST_REMEMBERED = 2_000;
 
 /** What a client did, as it goes to the box that keeps the item: a whole read (`GET`) or one of its
  * files (`action` `file`, `name`), a delete, or a move or a bringing back (`action`), with what it
@@ -209,23 +213,35 @@ export function takeActed(sender: MailSender, given: unknown): void {
 // is answered the same (not again at once) and done once. A change's is kept on
 // disk too, so it holds across a restart; one that was under way as the box stopped is answered as
 // one that may have been done.
-interface Done { at: number; answer: Acted | null; answered?: number }
+interface Done { until: number; answer: Acted | null; answered?: number }
 const did = new Map<string, Done>();
 
-function readDone(now: number): Record<string, { at: number; answer: Acted | null }> {
-  const kept = read(DONE_FILE) ?? {};
-  const fresh: Record<string, { at: number; answer: Acted | null }> = {};
-  for (const [key, each] of Object.entries(kept)) {
-    if (isObject(each) && typeof each.at === "number" && now - each.at <= ACT_MEMORY) fresh[key] = { at: each.at, answer: isObject(each.answer) ? each.answer as unknown as Acted : null };
+// The oldest of `asks` past MOST_REMEMBERED gone (in place), and those past their time.
+function prune<T extends { until: number }>(asks: Map<string, T>, now: number): void {
+  for (const [key, each] of asks) if (each.until < now) asks.delete(key);
+  for (const key of asks.keys()) {
+    if (asks.size <= MOST_REMEMBERED) break;
+    asks.delete(key);
   }
+}
+
+function readDone(now: number): Map<string, { until: number; answer: Acted | null }> {
+  const kept = read(DONE_FILE) ?? {};
+  const fresh = new Map<string, { until: number; answer: Acted | null }>();
+  for (const [key, each] of Object.entries(kept)) {
+    if (isObject(each) && typeof each.until === "number") fresh.set(key, { until: each.until, answer: isObject(each.answer) ? each.answer as unknown as Acted : null });
+  }
+  prune(fresh, now);
   return fresh;
 }
 
 function keepDone(key: string, done: Done, now: number): void {
   try {
     const kept = readDone(now);
-    kept[key] = { at: done.at, answer: done.answer };
-    writePrivate(DONE_FILE, JSON.stringify(kept));
+    kept.delete(key);
+    kept.set(key, { until: done.until, answer: done.answer });
+    prune(kept, now);
+    writePrivate(DONE_FILE, JSON.stringify(Object.fromEntries(kept)));
   } catch {}
 }
 
@@ -240,7 +256,7 @@ export async function takeAct(sender: MailSender, given: unknown, reply: (payloa
   if (!peer) return;
   const here = ownName();
   const answer = (value: Acted) => reply({ acted: { id: act.id, ...value } });
-  for (const [id, each] of did) if (now - each.at > ACT_MEMORY) did.delete(id);
+  prune(did, now);
   const key = `${sender.key} ${act.id}`;
   const changes = act.method !== "GET";
   const mine = did.get(key);
@@ -252,18 +268,19 @@ export async function takeAct(sender: MailSender, given: unknown, reply: (payloa
   }
   // A change this box took before it last started: as it went, or, cut short then, that it may
   // have been done.
-  const kept = changes ? readDone(now)[key] : undefined;
+  const kept = changes ? readDone(now).get(key) : undefined;
   if (kept) {
     const value = kept.answer ?? { status: 409, value: { message: `${here} stopped while it was doing this, so it can't tell whether it was done. Look again in a moment.` } };
-    did.set(key, { at: kept.at, answer: value, answered: now });
+    did.set(key, { until: kept.until, answer: value, answered: now });
     return answer(value);
   }
   // (From a machine Macs share outside one setup: another person may use it. Such a machine never
   // hands one on itself; this holds against one that would, once it has told it's shared.)
   if (readTold(sender.key)?.shared) return answer({ status: 409, value: { message: `${here} doesn't take changes from ${computerName(peer)}, a machine shared with other Macs: change it from ${here}.` } });
-  // (One from long ago, sent again, or from a computer whose clock is far off: not done.)
-  if (Math.abs(now - act.at) > ACT_MEMORY) return answer({ status: 409, value: { message: `${here}'s clock and ${computerName(peer)}'s are too far apart to take it: check both computers' time.` } });
-  const entry: Done = { at: now, answer: null };
+  // (One from long ago, sent again, or from a computer whose clock is far off: not done. Each is
+  // remembered until it would be too old to take, so none is ever taken twice.)
+  if (now - act.at > ACT_MEMORY || act.at - now > AHEAD) return answer({ status: 409, value: { message: `${here}'s clock and ${computerName(peer)}'s are too far apart to take it: check both computers' time.` } });
+  const entry: Done = { until: Math.max(now, act.at) + ACT_MEMORY, answer: null };
   did.set(key, entry);
   if (changes) keepDone(key, entry, now);
   try {

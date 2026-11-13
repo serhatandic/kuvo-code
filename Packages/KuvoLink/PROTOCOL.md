@@ -4122,16 +4122,22 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   own client's (`by: {user: true}`, numbered and told as any change of yours there), and answers
   each `id` once: one that comes again is answered as it was (a few seconds after its last answer at
   the soonest, a file not again while it's waited for), never done twice; a read's answer isn't
-  kept, and one asked again later is read again. It remembers a change's ten minutes, on disk
+  kept, and one asked again later is read again. It remembers each until it would be too old to take (ten minutes from when it came,
+  or from its `at` if that's later; 2,000 at most, the oldest going first), a change's on disk too
   (`run/work-queue/acted.json`), so a restart doesn't do it again; one under way as it stopped is
-  answered 409, that it can't tell whether it was done. One whose `at` is more than ten minutes off
-  its clock is refused (409). One it doesn't have (it moved on meanwhile) is 404, never handed on
-  again. The asking box leaves
+  answered 409, that it can't tell whether it was done. One whose `at` is more than ten minutes ago
+  or more than a minute ahead of its clock is refused (409). One it doesn't have (it moved on
+  meanwhile, or it knows it only as another computer told it) is 404, "It's no longer on <box>: it
+  may have moved", never handed on again. The asking box leaves
   it in `run/work-queue/forward/<id>.json` (`{to, act}`) and waits for `<id>.answer.json` beside
   it, so its link sends it whichever process took the request (on a machine, a Mac's `box route`
   over SSH, which has no relay connection); what's past its wait is cleared at the link's next
   round. This Mac's box, whose routes run in the process that sends, sends only what its own
-  routes left there: what anything else on the Mac leaves never goes out as you.
+  routes left there: what anything else on the Mac leaves never goes out as you. A change done there
+  is put at once in what the asking box keeps of that computer's queue, as its box answered, until
+  that computer tells again (one deleted taken out of it); and one deleted there is kept 30 days
+  (`run/work-queue/deleted-there.json`, 200 at most), so bringing it back (Undo, Recently Deleted)
+  reaches that computer after it has told without it.
 
 ### Side questions, handoffs and reviews
 

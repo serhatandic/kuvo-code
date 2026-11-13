@@ -100,16 +100,21 @@ export function fileOf(ref: ItemRef, name: string): { type: string; bytes: Buffe
  * (`forward.ts`): done as this box's own client's, and answered as the route would; a file's bytes
  * in base64 (`{type, data}`), up to a few MB. One that isn't here (it moved on meanwhile) isn't
  * handed on again. */
-export function actForPeer(act: Act, targets: Target[]): Promise<Acted> {
+export async function actForPeer(act: Act, targets: Target[]): Promise<Acted> {
   const ref = refOf(act.item);
-  if (!ref) return Promise.resolve({ status: 404, value: { message: "There's no such item." } });
+  const here = ownName();
+  const gone: Acted = { status: 404, value: { message: `It's no longer on ${here}: it may have moved. Look again in a moment.` } };
+  if (!ref || !matching(allItems(), ref)[0]) return gone;
   if (act.action === "file") {
     const file = fileOf(ref, act.name ?? "");
-    if (!file) return Promise.resolve({ status: 404, value: { message: "There's no such file." } });
-    if (file.bytes.length > MOST_FORWARDED_FILE) return Promise.resolve({ status: 413, value: { message: `${act.name} is ${Math.round(file.bytes.length / 1_000_000)} MB: too big to bring from ${ownName()} (${Math.round(MOST_FORWARDED_FILE / 1_000_000)} MB at most). Open it there.` } });
-    return Promise.resolve({ status: 200, value: { type: file.type, data: file.bytes.toString("base64") } });
+    if (!file) return { status: 404, value: { message: "There's no such file." } };
+    const mb = (bytes: number) => (bytes / 1_000_000).toFixed(1);
+    if (file.bytes.length > MOST_FORWARDED_FILE) return { status: 413, value: { message: `${act.name} is ${mb(file.bytes.length)} MB: too big to bring from ${here} (${mb(MOST_FORWARDED_FILE)} MB at most). Open it there.` } };
+    return { status: 200, value: { type: file.type, data: file.bytes.toString("base64") } };
   }
-  return actHere({ method: act.method, action: act.action, ref, given: act.body ?? {}, targets });
+  const done = await actHere({ method: act.method, action: act.action, ref, given: act.body ?? {}, targets });
+  // (Gone between the look and the change.)
+  return done.status === 404 ? gone : done;
 }
 
 /** The most of a file's bytes another of your computers' boxes is given for its client (as an item

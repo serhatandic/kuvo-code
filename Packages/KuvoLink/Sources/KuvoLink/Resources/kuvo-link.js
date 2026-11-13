@@ -12733,15 +12733,34 @@ function readTold3(key) {
     return null;
   }
 }
+var LOCK11 = path53.join(WORK_QUEUE, ".told.lock");
 function keepTold2(key, told, now = Date.now()) {
   if (!KEY.test(key))
     return false;
-  const kept = readTold3(key);
-  if (kept && kept.at > told.at && kept.at - told.at < 600000 && kept.id !== told.id)
-    return false;
   fs51.mkdirSync(TOLD, { recursive: true, mode: 448 });
-  writePrivate(fileOf3(key), JSON.stringify({ ...told, heard: now }));
-  return true;
+  return locked(LOCK11, () => {
+    const kept = readTold3(key);
+    if (kept && kept.at > told.at && kept.at - told.at < 600000 && kept.id !== told.id)
+      return false;
+    writePrivate(fileOf3(key), JSON.stringify({ ...told, heard: now }));
+    return true;
+  });
+}
+function patchTold(key, id, item) {
+  if (!KEY.test(key))
+    return;
+  const fresh = toldItemOf(item);
+  try {
+    locked(LOCK11, () => {
+      const kept = readTold3(key);
+      if (!kept)
+        return;
+      const before = kept.items.find((each) => each.id === id);
+      const others = kept.items.filter((each) => each.id !== id);
+      const items = !fresh ? others : [...others, before ? { ...before, ...fresh, sessions: before.sessions, inProgress: before.inProgress, ...before.progress ? { progress: before.progress } : {}, ...before.handedFrom ? { handedFrom: before.handedFrom } : {} } : fresh];
+      writePrivate(fileOf3(key), JSON.stringify({ ...kept, items }));
+    });
+  } catch {}
 }
 var sharedSaid = new Map;
 function toldShared(key) {
@@ -14234,7 +14253,7 @@ import path86 from "node:path";
 // Packages/Box/src/link/work-queue/categories.ts
 import path58 from "node:path";
 var CATEGORIES_FILE = path58.join(WORK_QUEUE, "categories.json");
-var LOCK11 = path58.join(WORK_QUEUE, ".categories.lock");
+var LOCK12 = path58.join(WORK_QUEUE, ".categories.lock");
 var MOST_CUSTOM = 30;
 var MOST_NAME = 40;
 var BUILT_IN = [
@@ -14266,7 +14285,7 @@ function categoryNamed(given) {
 }
 var slugOf = (name) => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 var change3 = (work) => {
-  const outcome = locked(LOCK11, () => {
+  const outcome = locked(LOCK12, () => {
     const kept = readKept2();
     const outcome = work(kept.custom, kept);
     const fromPrimary = kept.fromPrimary.filter((id) => kept.custom.some((each) => each.id === id));
@@ -23076,19 +23095,23 @@ function fileOf4(ref, name) {
     return null;
   }
 }
-function actForPeer(act, targets) {
+async function actForPeer(act, targets) {
   const ref = refOf(act.item);
-  if (!ref)
-    return Promise.resolve({ status: 404, value: { message: "There's no such item." } });
+  const here = ownName();
+  const gone = { status: 404, value: { message: `It's no longer on ${here}: it may have moved. Look again in a moment.` } };
+  if (!ref || !matching2(allItems(), ref)[0])
+    return gone;
   if (act.action === "file") {
     const file = fileOf4(ref, act.name ?? "");
     if (!file)
-      return Promise.resolve({ status: 404, value: { message: "There's no such file." } });
+      return { status: 404, value: { message: "There's no such file." } };
+    const mb = (bytes) => (bytes / 1e6).toFixed(1);
     if (file.bytes.length > MOST_FORWARDED_FILE)
-      return Promise.resolve({ status: 413, value: { message: `${act.name} is ${Math.round(file.bytes.length / 1e6)} MB: too big to bring from ${ownName()} (${Math.round(MOST_FORWARDED_FILE / 1e6)} MB at most). Open it there.` } });
-    return Promise.resolve({ status: 200, value: { type: file.type, data: file.bytes.toString("base64") } });
+      return { status: 413, value: { message: `${act.name} is ${mb(file.bytes.length)} MB: too big to bring from ${here} (${mb(MOST_FORWARDED_FILE)} MB at most). Open it there.` } };
+    return { status: 200, value: { type: file.type, data: file.bytes.toString("base64") } };
   }
-  return actHere({ method: act.method, action: act.action, ref, given: act.body ?? {}, targets });
+  const done = await actHere({ method: act.method, action: act.action, ref, given: act.body ?? {}, targets });
+  return done.status === 404 ? gone : done;
 }
 var MOST_FORWARDED_FILE = MOST_HANDED_FILES;
 
@@ -23107,6 +23130,8 @@ var waitFor = (act) => act.action === "file" ? forwardTiming.file : forwardTimin
 var AGAIN_AFTER = 5000;
 var answerAgainAfter = (act) => act.action === "file" ? 60000 : 4000;
 var ACT_MEMORY = 600000;
+var AHEAD = 60000;
+var MOST_REMEMBERED = 2000;
 var forwardsSoon = { send: () => {} };
 var left = (id) => path85.join(FORWARDS, `${id}.json`);
 var answerOf2 = (id) => path85.join(FORWARDS, `${id}.answer.json`);
@@ -23230,20 +23255,33 @@ function takeActed(sender, given) {
   } catch {}
 }
 var did = new Map;
+function prune(asks, now) {
+  for (const [key, each] of asks)
+    if (each.until < now)
+      asks.delete(key);
+  for (const key of asks.keys()) {
+    if (asks.size <= MOST_REMEMBERED)
+      break;
+    asks.delete(key);
+  }
+}
 function readDone(now) {
   const kept = read2(DONE_FILE) ?? {};
-  const fresh = {};
+  const fresh = new Map;
   for (const [key, each] of Object.entries(kept)) {
-    if (isObject(each) && typeof each.at === "number" && now - each.at <= ACT_MEMORY)
-      fresh[key] = { at: each.at, answer: isObject(each.answer) ? each.answer : null };
+    if (isObject(each) && typeof each.until === "number")
+      fresh.set(key, { until: each.until, answer: isObject(each.answer) ? each.answer : null });
   }
+  prune(fresh, now);
   return fresh;
 }
 function keepDone(key, done, now) {
   try {
     const kept = readDone(now);
-    kept[key] = { at: done.at, answer: done.answer };
-    writePrivate(DONE_FILE, JSON.stringify(kept));
+    kept.delete(key);
+    kept.set(key, { until: done.until, answer: done.answer });
+    prune(kept, now);
+    writePrivate(DONE_FILE, JSON.stringify(Object.fromEntries(kept)));
   } catch {}
 }
 async function takeAct(sender, given, reply, run, now = Date.now()) {
@@ -23256,9 +23294,7 @@ async function takeAct(sender, given, reply, run, now = Date.now()) {
     return;
   const here = ownName();
   const answer = (value) => reply({ acted: { id: act.id, ...value } });
-  for (const [id, each] of did)
-    if (now - each.at > ACT_MEMORY)
-      did.delete(id);
+  prune(did, now);
   const key = `${sender.key} ${act.id}`;
   const changes = act.method !== "GET";
   const mine = did.get(key);
@@ -23268,17 +23304,17 @@ async function takeAct(sender, given, reply, run, now = Date.now()) {
     mine.answered = now;
     return answer(mine.answer);
   }
-  const kept = changes ? readDone(now)[key] : undefined;
+  const kept = changes ? readDone(now).get(key) : undefined;
   if (kept) {
     const value = kept.answer ?? { status: 409, value: { message: `${here} stopped while it was doing this, so it can't tell whether it was done. Look again in a moment.` } };
-    did.set(key, { at: kept.at, answer: value, answered: now });
+    did.set(key, { until: kept.until, answer: value, answered: now });
     return answer(value);
   }
   if (readTold3(sender.key)?.shared)
     return answer({ status: 409, value: { message: `${here} doesn't take changes from ${computerName2(peer)}, a machine shared with other Macs: change it from ${here}.` } });
-  if (Math.abs(now - act.at) > ACT_MEMORY)
+  if (now - act.at > ACT_MEMORY || act.at - now > AHEAD)
     return answer({ status: 409, value: { message: `${here}'s clock and ${computerName2(peer)}'s are too far apart to take it: check both computers' time.` } });
-  const entry = { at: now, answer: null };
+  const entry = { until: Math.max(now, act.at) + ACT_MEMORY, answer: null };
   did.set(key, entry);
   if (changes)
     keepDone(key, entry, now);
@@ -23550,13 +23586,55 @@ function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = fals
 }
 function itemElsewhere(ref, link = readLink(), { asTold = false } = {}) {
   let found = null;
-  for (const peer of peersOf(link)) {
+  const peers = peersOf(link);
+  const computerOf = (peer) => ({ key: peer.key, name: computerName2(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} });
+  for (const peer of peers) {
     const told = readTold3(peer.key);
     const item = told?.items.find((each) => refNames(ref, each));
     if (item && (!found || newer(item, told.at, found.item, found.at)))
-      found = { item: { ...asTold ? item : asAway(item, awaySince(peer.key)), computer: { key: peer.key, name: computerName2(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} } }, at: told.at };
+      found = { item: { ...asTold ? item : asAway(item, awaySince(peer.key)), computer: computerOf(peer) }, at: told.at };
+  }
+  if (!found) {
+    for (const [, each] of Object.entries(readDeletedThere())) {
+      const peer = peers.find((one) => one.key === each.key);
+      const item = toldItemOf(each.item);
+      if (peer && item && refNames(ref, item))
+        return { ...item, removed: { at: each.at, by: { user: true } }, computer: computerOf(peer) };
+    }
   }
   return found ? asTold ? found.item : withSeen(found.item) : null;
+}
+var DELETED_THERE = path86.join(WORK_QUEUE, "deleted-there.json");
+var DELETED_LOCK = path86.join(WORK_QUEUE, ".deleted-there.lock");
+var DELETED_FOR = 30 * 86400000;
+function readDeletedThere(now = Date.now()) {
+  try {
+    const kept = JSON.parse(fs86.readFileSync(DELETED_THERE, "utf8"));
+    if (!isObject(kept))
+      return {};
+    return Object.fromEntries(Object.entries(kept).filter(([, each]) => isObject(each) && typeof each.key === "string" && typeof each.at === "number" && now - each.at < DELETED_FOR));
+  } catch {
+    return {};
+  }
+}
+function changedThere(key, action, item, now = Date.now()) {
+  const id = typeof item.id === "string" ? item.id : null;
+  if (!id)
+    return;
+  patchTold(key, id, action === "delete" ? null : item);
+  try {
+    locked(DELETED_LOCK, () => {
+      const kept = readDeletedThere(now);
+      if (action === "delete")
+        kept[id] = { key, at: now, item };
+      else
+        delete kept[id];
+      const latest = Object.entries(kept).sort(([, a], [, b]) => b.at - a.at).slice(0, 200);
+      writePrivate(DELETED_THERE, JSON.stringify(Object.fromEntries(latest)));
+    });
+  } catch {}
+  for (const tell of queueFollowers2)
+    tell();
 }
 var asAway = (item, away) => away === null || !item.inProgress && !item.sessions.some((each) => each.working) ? item : { ...item, inProgress: false, sessions: item.sessions.map((each) => ({ ...each, working: false })) };
 var newer = (a, aAt, b, bAt) => a.updated.at > b.updated.at || a.updated.at === b.updated.at && aAt > bAt;
@@ -27360,7 +27438,7 @@ async function stopBotWork(bot, targets, signal, { tell = true } = {}) {
 
 // Packages/Box/src/link/work/goals.ts
 var GOALS_FILE = path97.join(WORK_FOLDER, "goals.json");
-var LOCK12 = path97.join(WORK_FOLDER, ".goals.lock");
+var LOCK13 = path97.join(WORK_FOLDER, ".goals.lock");
 var HERE_FILE = path97.join(WORK_FOLDER, "here.json");
 var MODES = ["interactive", "autopilot"];
 var modeOf = (goal) => goal.mode ?? "interactive";
@@ -27385,7 +27463,7 @@ var runningGoalOf = (conversation, bot, file = GOALS_FILE) => readKept4(file).fi
 function changeKept(change, file = GOALS_FILE) {
   fs96.mkdirSync(WORK_FOLDER, { recursive: true });
   let changed = false;
-  const result = locked(LOCK12, () => {
+  const result = locked(LOCK13, () => {
     const goals = readKept4(file);
     const value = change(goals);
     const latest = new Map;
@@ -30714,7 +30792,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
 
 // Packages/Box/src/link/work/asks.ts
 var WORK_ASKS2 = path104.join(WORK_FOLDER, "asks.json");
-var LOCK13 = path104.join(WORK_FOLDER, ".asks.lock");
+var LOCK14 = path104.join(WORK_FOLDER, ".asks.lock");
 var WORK_ACTIONS = ["makeProject", "cloneProject"];
 var askFollowers = new Set;
 var readKept5 = (file = WORK_ASKS2) => {
@@ -30727,7 +30805,7 @@ var readKept5 = (file = WORK_ASKS2) => {
 };
 function changeKept2(change, file = WORK_ASKS2) {
   fs102.mkdirSync(WORK_FOLDER, { recursive: true });
-  const result = locked(LOCK13, () => {
+  const result = locked(LOCK14, () => {
     const asks = readKept5(file);
     const value = change(asks);
     const kept = asks.filter((each) => each.answered ? Date.now() - each.answered.at < 15 * 60000 || each.late === true && !each.toldLate && Date.now() - each.answered.at < 7 * 86400000 : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86400000);
@@ -37173,7 +37251,7 @@ var BROWSER = () => path121.join(K, "browser");
 var CURRENT = () => path121.join(BROWSER(), "current");
 var STATE = () => path121.join(RUN, "browser-install.json");
 var NEXT = () => path121.join(RUN, "browser.next");
-var LOCK14 = () => path121.join(RUN, ".browser-installing");
+var LOCK15 = () => path121.join(RUN, ".browser-installing");
 var STAGING2 = ".box-staging-";
 var SOURCES = [
   "https://storage.googleapis.com/chrome-for-testing-public/",
@@ -37304,10 +37382,10 @@ function note2(change) {
 function installing() {
   let pid = 0;
   try {
-    pid = Number(fs119.readFileSync(path121.join(LOCK14(), "pid"), "utf8"));
+    pid = Number(fs119.readFileSync(path121.join(LOCK15(), "pid"), "utf8"));
   } catch {
     try {
-      return Date.now() - fs119.statSync(LOCK14()).mtimeMs < 60000;
+      return Date.now() - fs119.statSync(LOCK15()).mtimeMs < 60000;
     } catch {
       return false;
     }
@@ -37507,20 +37585,20 @@ function freeRoom(folder) {
 function takeLock2() {
   fs119.mkdirSync(RUN, { recursive: true, mode: 448 });
   try {
-    fs119.mkdirSync(LOCK14(), { mode: 448 });
+    fs119.mkdirSync(LOCK15(), { mode: 448 });
   } catch {
     if (installing())
       return false;
     const holder = (() => {
       try {
-        return fs119.readFileSync(path121.join(LOCK14(), "pid"), "utf8");
+        return fs119.readFileSync(path121.join(LOCK15(), "pid"), "utf8");
       } catch {
         return null;
       }
     })();
-    const aside = `${LOCK14()}.gone-${process.pid}-${crypto48.randomBytes(4).toString("hex")}`;
+    const aside = `${LOCK15()}.gone-${process.pid}-${crypto48.randomBytes(4).toString("hex")}`;
     try {
-      fs119.renameSync(LOCK14(), aside);
+      fs119.renameSync(LOCK15(), aside);
     } catch {
       return false;
     }
@@ -37530,7 +37608,7 @@ function takeLock2() {
     } catch {}
     if (moved !== holder) {
       try {
-        fs119.renameSync(aside, LOCK14());
+        fs119.renameSync(aside, LOCK15());
       } catch {
         fs119.rmSync(aside, { recursive: true, force: true });
       }
@@ -37538,12 +37616,12 @@ function takeLock2() {
     }
     fs119.rmSync(aside, { recursive: true, force: true });
     try {
-      fs119.mkdirSync(LOCK14(), { mode: 448 });
+      fs119.mkdirSync(LOCK15(), { mode: 448 });
     } catch {
       return false;
     }
   }
-  fs119.writeFileSync(path121.join(LOCK14(), "pid"), String(process.pid), { mode: 384 });
+  fs119.writeFileSync(path121.join(LOCK15(), "pid"), String(process.pid), { mode: 384 });
   return true;
 }
 function place(id, bundle) {
@@ -37740,7 +37818,7 @@ async function installBrowser(asked = {}) {
   } finally {
     if (staging)
       fs119.rmSync(staging, { recursive: true, force: true });
-    fs119.rmSync(LOCK14(), { recursive: true, force: true });
+    fs119.rmSync(LOCK15(), { recursive: true, force: true });
   }
 }
 function linksInside(folder) {
@@ -39590,7 +39668,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "e687834a87cf";
+var BRIDGE_VERSION = "47d88eaeb252";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -40141,12 +40219,12 @@ function note3(what, now = Date.now()) {
 `, { mode: 384 });
     if (now - prunedAt > DAY5) {
       prunedAt = now;
-      prune(now);
+      prune2(now);
     }
   });
   return entry;
 }
-function prune(now) {
+function prune2(now) {
   const lines = readLines();
   const kept = lines.filter((entry) => now - entry.at < KEPT_DAYS * DAY5);
   if (kept.length === lines.length)
@@ -42609,6 +42687,8 @@ async function* workQueueRoute(context, match) {
   const there = await forwardAct(far.computer, nameOf2(far), { ...asked, item: far.id, ...asked.action === "move" ? { body: { category, before, after, top } } : {} }, signal);
   if ("refused" in there)
     return yield* json(there.status, { message: there.refused, computer: far.computer });
+  if (there.status === 200 && isObject(there.value) && isObject(there.value.item))
+    changedThere(far.computer.key, asked.method === "DELETE" ? "delete" : asked.action ?? "move", there.value.item);
   const value = !isObject(there.value) ? there.value : isObject(there.value.item) ? { ...there.value, item: { ...there.value.item, computer: far.computer } } : there.status === 200 ? there.value : { ...there.value, computer: far.computer };
   return yield* json(there.status, value);
 }
@@ -45053,6 +45133,7 @@ export {
   pushRows,
   pushTo,
   queryFor,
+  actForPeer as queueActForPeer,
   forwardTiming as queueForwardTiming,
   forwardsSoon as queueForwardsSoon,
   mailsFor as queueMailsFor,
@@ -45159,6 +45240,7 @@ export {
   takeNumbersMail,
   takePersonalities,
   takePersonalitiesDocument,
+  takeAct as takeQueueAct,
   takePart as takeQueuePart,
   takeRows,
   takeSeat,

@@ -870,6 +870,7 @@ test("what you do to an item another computer keeps, asked of this box, is done 
   assert.equal(moved.body.item.category, "later", "lab's word, not the Mac's");
   assert.deepEqual(moved.body.item.computer, { key: lab.pub, name: "lab", kind: "machine", id: "lab" }, "said to be on lab, as this box names it");
   assert.deepEqual(fs.readdirSync(forwards), [], "nothing left behind");
+  assert.equal((await view("all")).items.find(item => item.number === 500).category, "later", "shown where it went at once, not when lab next tells");
 
   // Refused there: lab's words, as lab said them.
   const restoring = route("POST", "kuvo/work-queue/items/501/restore");
@@ -964,6 +965,20 @@ test("a Mac's request over SSH (`box route`, a process with no relay connection)
   assert.equal(deleted.status, 200);
   assert.equal(deleted.body.item.removed.by.user, true);
   assert.deepEqual(fs.readdirSync(forwards), []);
+  // Gone from this box's views at once, beside Undo; and Undo still brings it back on lab once lab
+  // has told without it.
+  assert.equal((await view("all")).items.some(item => item.number === 500), false);
+  receive(lab, { workQueue: telling([]) });
+  mailTo(lab);
+  const again = relay();
+  link.queueForwardsSoon.send = () => link.sendQueueForwards(again.connection);
+  const undoing = route("POST", `kuvo/work-queue/items/${told(500).id}/restore`);
+  const [undo] = await again.sentTo(lab);
+  assert.equal(undo.workQueue.act.action, "restore");
+  receive(lab, { workQueue: { acted: { id: undo.workQueue.act.id, status: 200, value: { item: told(500, "ses_far") } } } });
+  assert.equal((await undoing).status, 200);
+  assert.equal((await view("all")).items.some(item => item.number === 500), true, "back at once");
+  link.queueForwardsSoon.send = () => {};
   // One whose asker went (its process stopped mid-wait), and an answer left with no ask: cleared at
   // the link's next round, never sent.
   const stale = actID();
@@ -1051,7 +1066,7 @@ test("asked by another of your computers' boxes, this box does it to the item it
   assert.equal((await moves()).length, 1);
   // One that was under way as this box stopped: it can't tell whether it was done.
   const cut = { id: actID(), method: "POST", action: "move", item: id, body: { category: "next" }, at: Date.now() };
-  write(path.join(queues, "acted.json"), { ...read(path.join(queues, "acted.json")), [`${mac.pub} ${cut.id}`]: { at: Date.now(), answer: null } });
+  write(path.join(queues, "acted.json"), { ...read(path.join(queues, "acted.json")), [`${mac.pub} ${cut.id}`]: { until: Date.now() + 600_000, answer: null } });
   await takeFrom(mac, { act: cut });
   assert.deepEqual(mailTo(mac)[0].workQueue.acted, { id: cut.id, status: 409, value: { message: "devbox stopped while it was doing this, so it can't tell whether it was done. Look again in a moment." } });
   assert.equal((await moves()).length, 1);
@@ -1084,6 +1099,33 @@ test("asked by another of your computers' boxes, this box does it to the item it
   await takeFrom(lab, { act: old });
   assert.equal(mailTo(lab)[0].workQueue.acted.status, 409);
   assert.equal(await deleted(), true);
+  // An ask dated ahead of this clock by more than a minute: refused, as one long ago is. One a little
+  // ahead is remembered until it would be too old to take, so it's never taken twice.
+  const ahead = { id: actID(), method: "POST", action: "restore", item: id, at: Date.now() + 5 * 60_000 };
+  await takeFrom(mac, { act: ahead });
+  assert.equal(mailTo(mac)[0].workQueue.acted.status, 409);
+  assert.equal(await deleted(), true);
+  const doneFor = act => link.queueActForPeer(act, targets);
+  const answers = [];
+  const start = Date.now();
+  const soon = { id: actID(), method: "POST", action: "restore", item: id, at: start + 50_000 };
+  await link.takeQueueAct(mac.peer, soon, payload => answers.push(payload.acted), doneFor, start);
+  assert.equal(answers[0].status, 200);
+  await link.takeQueueAct(mac.peer, { id: actID(), method: "DELETE", item: id, at: start }, payload => answers.push(payload.acted), doneFor, start);
+  assert.equal(await deleted(), true);
+  link.forgetQueueActs();
+  await link.takeQueueAct(mac.peer, soon, payload => answers.push(payload.acted), doneFor, start + 630_000);
+  assert.deepEqual(answers.at(-1), answers[0], "answered as it was, not brought back again");
+  assert.equal(await deleted(), true);
+
+  // One it knows only as a third computer told it: no longer here, and never handed on (no loops).
+  receive(lab, { workQueue: telling([told(500, "ses_far")]) });
+  sent.length = 0;
+  await takeFrom(mac, { act: { id: actID(), method: "DELETE", item: told(500).id, at: Date.now() } });
+  const [noLonger] = mailTo(mac);
+  assert.deepEqual([noLonger.workQueue.acted.status, noLonger.workQueue.acted.value], [404, { message: "It's no longer on devbox: it may have moved. Look again in a moment." }]);
+  assert.deepEqual(mailTo(lab), [], "nothing sent on to lab");
+
   // From a machine Macs share outside one setup (another person may use it): refused.
   receive(lab, { workQueue: telling([], { shared: true }) });
   sent.length = 0;
