@@ -137,8 +137,6 @@ final class Keeper {
             link.hasMachines = { Machines.anySaved }
             box.host.phoneLink = link
             box.host.appAnswers = false
-            // kuvo-wake run for the wake-up tools gets your shell's environment, as the engine does.
-            tools.boxTools.shell = { [box] in box.shell }
             do {
                 box.tools = try await tools.start()
             } catch {

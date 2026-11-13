@@ -23,16 +23,29 @@ enum SidebarBox: Hashable, Identifiable {
         self = id == "mac" ? .mac : .machine(id)
     }
 
-    /// Where `directory` is: this Mac, or the machine it's on.
+    /// Where `directory` is: this Mac (its box, as `Workspace.box(of:)` has it), or the machine it's on.
     init(directory: String) {
-        self = RemoteFolder.machine(of: directory).map(SidebarBox.machine) ?? .mac
+        self.init(id: Workspace.box(of: directory))
     }
 
     init(machine: String?) {
         self = machine.map(SidebarBox.machine) ?? .mac
     }
 
-    var symbol: String { machine == nil ? "laptopcomputer" : "server.rack" }
+    /// This Mac's own box, already here, which the app attached to in place (#183): a machine to
+    /// the app, reached with no SSH (`SSHConnection.thisMac`).
+    static let attached = SidebarBox.machine(SSHConnection.thisMac)
+
+    /// This Mac: its app's own box, or the box attached in place.
+    var isThisMac: Bool { self == .mac || self == .attached }
+
+    /// This Mac's box now (`BoxClient.thisMac`): what has no computer of its own is on.
+    static var thisMac: SidebarBox {
+        let id = BoxClient.thisMac
+        return id == BoxClient.mac ? .mac : .machine(id)
+    }
+
+    var symbol: String { isThisMac ? "laptopcomputer" : "server.rack" }
 }
 
 extension EnvironmentValues {

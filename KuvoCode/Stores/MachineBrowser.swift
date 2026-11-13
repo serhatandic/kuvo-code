@@ -146,7 +146,8 @@ final class MachineBrowser {
     func takeOver(_ on: Bool) {
         guard let page = shownPage else { return }
         hold(page, on)
-        if on { Analytics.shared.track("browser_taken_over", ["machine": true]) }
+        // (The browser of the box attached in place runs on this Mac: counted as this Mac's.)
+        if on { Analytics.shared.track("browser_taken_over", ["machine": BoxClient.isMachine(machine.id)]) }
     }
 
     /// You moved on from a page you took over: back to its agent.
@@ -1055,8 +1056,9 @@ final class MachineBrowser {
                 }
                 // As long as the copy takes (SSH notices a machine gone away by itself).
                 let script = "cat -- '" + download.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-                let copied = try? await ChildProcess.run("/usr/bin/ssh", connection.arguments(running: script), output: .file(partial),
-                                                         errors: .discard, cancellable: false)
+                let started = connection.invocation(running: script)
+                let copied = try? await ChildProcess.run(started.executable, started.arguments, environment: started.environment, directory: started.directory,
+                                                         output: .file(partial), errors: .discard, cancellable: false)
                 guard copied?.succeeded == true else { return .failed("The file isn't on the machine any more.") }
                 // Marked as downloaded, as a browser marks what it saves: macOS checks it before it
                 // opens (an app, a script) as it would any download.
@@ -1226,8 +1228,11 @@ final class MachineBrowserLink {
     }
 
     init(connection: SSHConnection, command: String) {
-        process.executableURL = URL(filePath: "/usr/bin/ssh")
-        process.arguments = connection.arguments(running: command, shared: false)
+        let started = connection.invocation(running: command, shared: false)
+        process.executableURL = URL(filePath: started.executable)
+        process.arguments = started.arguments
+        if let environment = started.environment { process.environment = environment }
+        if let directory = started.directory { process.currentDirectoryURL = directory }
         reader = Reader()
     }
 

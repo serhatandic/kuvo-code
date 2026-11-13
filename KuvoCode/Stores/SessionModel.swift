@@ -1996,7 +1996,8 @@ final class SessionModel {
             queueFollow = nil
             return
         }
-        guard queueFollow == nil, let box = box(), box.box != BoxClient.mac else { return }
+        // (The app's own box's queues stream to `Workspace.followQueues`.)
+        guard queueFollow == nil, let box = box(), !BoxClient.streams(box.box) else { return }
         struct Listed: Decodable { var queues: [String: BoxQueue] }
         let id = id
         queueFollow = Task { [weak self] in
@@ -2030,7 +2031,7 @@ final class SessionModel {
     private func carriesQueue() async -> Bool {
         if let boxCarriesQueue { return boxCarriesQueue }
         guard let box = box() else { return true }
-        guard box.box != BoxClient.mac else {
+        guard !BoxClient.hasEveryFeature(box.box) else {
             boxCarriesQueue = true
             return true
         }
@@ -2059,14 +2060,14 @@ final class SessionModel {
     /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
     func boxHas(_ feature: String) async -> Bool {
         guard let box = box() else { return false }
-        guard box.box != BoxClient.mac else { return true }
+        guard !BoxClient.hasEveryFeature(box.box) else { return true }
         return await boxFeatures().contains(feature)
     }
 
     private func boxFeatures() async -> Set<String> {
         if let readFeatures { return readFeatures }
         guard let box = box() else { return [] }
-        if box.box == BoxClient.mac { return ["queue", "queue.waits"] }
+        if BoxClient.hasEveryFeature(box.box) { return ["queue", "queue.waits"] }
         struct Info: Decodable { var features: [String]? }
         guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return [] }
         readFeatures = Set(info.features ?? [])

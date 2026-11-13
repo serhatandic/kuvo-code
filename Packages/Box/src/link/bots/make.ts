@@ -166,7 +166,9 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     // bot that works in a project: there it's the project's.
     if (!project) fs.mkdirSync(path.join(folder, "memory"), { recursive: true });
     fs.writeFileSync(path.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
-    const rules = [...(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
+    // Its own folder; the rest are made just below for this computer's default approval and its
+    // Settings › Permissions.
+    const rules = [{ action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
     // The session it made, as far as its id.
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules, metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");

@@ -33,7 +33,7 @@ extension AppModel {
         let added = try await self.box(boxID(box)).value(Added.self, "POST", "kuvo/integrations/\(entry.id)", body: Given(keys: keys))
         // Back again: what its removal left to do on this machine, out of reach then, isn't done.
         if let machine = box.machine { machines.dropWaiting(marked: Machines.integrationMark(entry.id), on: machine) }
-        if !entry.added { Analytics.shared.track("integration_added", ["integration": entry.id, "machine": box.machine != nil]) }
+        if !entry.added { Analytics.shared.track("integration_added", ["integration": entry.id, "machine": BoxClient.isMachine(box.machine)]) }
         // The engine's settings as the box has them now, for the pages that show them.
         config(for: box).reload()
         return added.integration

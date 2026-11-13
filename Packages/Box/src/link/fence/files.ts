@@ -8,7 +8,8 @@
 // now is used from the next command on, with no restart.
 
 import { MOST_FOLDERS } from "./allowed";
-import { HIDE } from "./landlock";
+import { HIDE, MAKE_GIT } from "./landlock";
+import { alikeName } from "./lookalike";
 import { AGENT_FOLDERS } from "./seatbelt";
 
 /** Where the box keeps the sandbox's own files (profiles, the plugin's note, commands' temporary
@@ -85,9 +86,12 @@ export function launcherScript(places: FencePlaces): string {
         `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
         // In a namespace of its own, where your session's services aren't (fence/landlock.ts, HIDE):
         // the box names the `unshare` that gives it one, or `-` where it runs without, as it was set up.
+        // There, git's own files in the repositories it writes are kept as they are, once the
+        // launcher has given each what it lacks of them (`MAKE_GIT`, `KEEP_GIT`).
         `ns=$(cat "$F/namespace" 2>/dev/null)`,
+        MAKE_GIT,
         `set -- "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
-        `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
+        `case $ns in /*) git_made_all "$work" "$git" "$allowed"; set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$work" "$git" "$allowed" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
         `PATH=$user_path KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$@"`,
       ];
   return [
@@ -359,15 +363,17 @@ function topOf(folder) {
   }
   return ""
 }
-// What the read tool reads instead of a file that isn't there: the one file beside it whose name is
-// the same but for how it's written (composed accents, no-break spaces, curly quotes).
-function lookalike(where) {
-  const same = (name) => name.normalize("NFC").replace(/[\u00a0\u202f]/g, " ").replace(/[\u2018\u2019]/g, "'")
+// What the read tool reads instead of a file that isn't there: one beside it whose name looks the
+// same (fence/lookalike.ts), a plain file (engine 2.2.5) in the same folder as the name it was given.
+// Whether something beside \`where\` (which isn't there) has such a name (\`links\`: a link): one
+// the engine (or one that followed links) would read in its place, while what's asked about, and
+// judged, is the name given.
+const same = ${alikeName.toString()}
+function lookalikeBeside(where, links) {
   const name = same(path.basename(where))
   try {
-    const found = fs.readdirSync(path.dirname(where)).filter(each => same(each) === name && fs.statSync(path.join(path.dirname(where), each)).isFile())
-    return found.length === 1 ? path.join(path.dirname(where), found[0]) : ""
-  } catch { return "" }
+    return fs.readdirSync(path.dirname(where), { withFileTypes: true }).some(each => (!links || each.isSymbolicLink()) && same(each.name) === name)
+  } catch { return false }
 }
 
 // The engine's own file tools run outside the sandbox, and tell a place outside the conversation's
@@ -461,17 +467,19 @@ export default {
     })
     const top = moved ? moved.top || "" : work ? topOf(work) : ""
     const ours = [work, folder, top].filter(Boolean)
-    const really = (given, tool) => {
+    const really = (given) => {
       if (typeof given !== "string" || !given || !work) return given
       const written = resolved(work, given)
       if (!ours.some(each => within(written, each))) return given
-      let where = located(written)
-      // A file that isn't there, which read takes a look-alike's place for.
-      if (tool === "read" && ours.some(each => within(where, each))) {
-        try { fs.statSync(written) } catch { where = located(lookalike(written) || written) }
-      }
+      const where = located(written)
       return ours.some(each => within(where, each)) ? given : where
     }
+    // A read of a file that isn't there, beside a link whose name looks the same: refused, in the
+    // folder or out of it (where the link leads is never what the box judged, nor asked about).
+    const LOOKALIKE = "This names a file that isn't there, where a link has that name or one that looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name a file that's there exactly as it's written, or ask the user."
+    // And one through a link out of the folder to a file that isn't there, beside one whose name looks
+    // the same, which read would take in its place.
+    const NOWHERE = "This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name the file exactly as it's written, or ask the user."
     // The engine reads a \\ in a path as a / where it weighs your rules for folders outside the
     // project, and the system doesn't: \`notes\\x\` would pass for a file in \`notes\` (one
     // you allowed) while it's a folder beside it. So no file tool's path has one.
@@ -482,7 +490,14 @@ export default {
       const field = PATHS[call.tool]
       if (field && typeof input[field] === "string" && input[field].includes("\\\\")) throw new Error(SLASHED)
       if (field) {
-        const given = really(input[field], call.tool)
+        const given = really(input[field])
+        if (call.tool === "read" && typeof given === "string" && given && work) {
+          const opens = resolved(work, given)
+          let there = true
+          try { fs.statSync(opens) } catch { there = false }
+          if (!there && given !== input[field] && lookalikeBeside(opens, false)) throw new Error(NOWHERE)
+          if (!there && lookalikeBeside(opens, true)) throw new Error(LOOKALIKE)
+        }
         if (given !== input[field]) call.input = { ...input, [field]: given }
       } else if ((call.tool === "patch" || call.tool === "apply_patch") && typeof input.patchText === "string") {
         const patchText = input.patchText.split("\\n").map((line) => {
@@ -552,8 +567,9 @@ export default {
 /** What the engine tells its agents while their commands run in the sandbox here (`run/fence/agents.md`,
  * among the instructions each box starts its engine with): what they can't do, and how builds and
  * tools that would fail in it run. `tmuxFits`: whether tmux's socket fits in commands' temporary
- * folders here, which a home folder's long path can keep from it. */
-export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): string {
+ * folders here, which a home folder's long path can keep from it. `gitKept`: on Linux, whether its
+ * commands' namespace keeps git's own files (fence/landlock.ts, KEEP_GIT). */
+export function agentsNote(platform: "darwin" | "linux", tmuxFits = true, gitKept = false): string {
   const mac = platform === "darwin";
   return [
     "# Commands run in a sandbox here",
@@ -568,7 +584,8 @@ export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): strin
     "- A conversation the user started in one of those folders (a project in Documents, `~/.config/nvim`) writes its own folder freely. A session you start can't be in what runs later" + (mac ? ", `~/Library`" : "") + " or a personal folder itself: ask the user to start it there.",
     "- A tool that moves a new copy over a file (`sed -i`, some installers) can't change one outside the folders it writes freely: make the copy in the project or `$TMPDIR`, then `cp` it over.",
     "- Docker's socket, SSH's shared connections and terminals' and editors' servers aren't reachable.",
-    ...(mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."] : []),
+    ...(mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."]
+      : gitKept ? ["- In this conversation's git repository it can't change git's hooks or settings, where its common folder is, its worktrees' links or its submodules' repositories: `git config`, `git worktree add`, `git submodule update --init` and `git sparse-checkout` fail, and `git checkout -b x origin/x` makes the branch without its upstream; git commits, branches and fetches as ever. If a task needs one of those, ask the user."] : []),
     ...(mac
       ? [
           "",

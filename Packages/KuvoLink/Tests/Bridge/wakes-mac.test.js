@@ -214,7 +214,7 @@ test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as
   assert.deepEqual(fs.readdirSync(path.join(folder, "wakes")), [], "sent, so it's gone and never goes twice");
 });
 
-// The wake-up's own kuvo-wake, as its agent's tool runs it (`WakeUps.call`): `add` with a summary.
+// The wake-up's own kuvo-wake, as its agent's tool runs it (`letters/own-tools.ts`): `add` with a summary.
 const kuvoWake = (folder, ...args) => new Promise((resolve, reject) => execFile(process.env.KUVO_WAKE_COMMAND, [folder, ...args], { encoding: "utf8" },
   (error, out, said) => error ? reject(new Error(said || error.message)) : resolve(out)));
 

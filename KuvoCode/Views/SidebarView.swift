@@ -251,7 +251,7 @@ struct SidebarView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             isSearchingConversations = true
-            searchAsked = [BoxClient.mac] + workspace.connectedMachines.sorted()
+            searchAsked = Workspace.thisMacThenMachines(workspace.connectedMachines)
             searchAnswered = []
             // What an earlier search found doesn't stay under this one's while it's asked.
             conversationFinds = [:]
@@ -308,7 +308,7 @@ struct SidebarView: View {
         // KUVO_DEMO_BOXES: stand-in machines by name, comma-separated, for how the name strip looks
         // with many and with long names (their pages are empty).
         if let names = ProcessInfo.processInfo.environment["KUVO_DEMO_BOXES"] {
-            return [.mac] + names.split(separator: ",").map { .machine(String($0)) }
+            return [app.thisMacsBox] + names.split(separator: ",").map { .machine(String($0)) }
         }
         #endif
         return app.boxes
@@ -317,7 +317,7 @@ struct SidebarView: View {
     /// The box in view: the one last picked, while it's still there.
     private var box: SidebarBox {
         let picked = SidebarBox(id: boxID)
-        return boxes.contains(picked) ? picked : .mac
+        return boxes.contains(picked) ? picked : app.thisMacsBox
     }
 
     private var boxBinding: Binding<SidebarBox> {
@@ -501,7 +501,7 @@ struct SidebarView: View {
             }
             if isSearchingConversations && searchAsked.count > 1 {
                 ForEach(searchAsked, id: \.self) { box in
-                    SearchedComputer(name: box == BoxClient.mac ? "This Mac" : app.machines.engine(box)?.machine.name ?? box,
+                    SearchedComputer(name: BoxClient.isThisMac(box) ? "This Mac" : app.machines.engine(box)?.machine.name ?? box,
                                      found: searchAnswered.contains(box) ? (conversationFinds[box]?.count ?? 0) : nil)
                 }
             }

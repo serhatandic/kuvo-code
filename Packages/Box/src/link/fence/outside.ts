@@ -26,6 +26,8 @@ import { findConversation, heldUnreached, inAuto, inFullAccess, refusalWords, re
 import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
 import { askedAbout, fencePolicy, macMayAsk, type FencePolicy } from "./policy";
+import { notOnWords } from "./state";
+import { sandboxGap } from "../work/sandbox";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
 export interface SandboxAnswer {
@@ -230,6 +232,10 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   if (answered.answer === "always" && always) {
     try { await addRule({ project, ...always, ...(answered.client ? { by: answered.client } : {}) }); how = "always"; } catch {}
   }
+  // Allowed by Auto's reviewer, which counts on the sandbox: only while it's still on (its check may
+  // have failed, or not finished, while the reviewer decided).
+  const notNow = verdict?.decision === "allow" ? stillOff(at?.agents ?? true) : null;
+  if (notNow) { forgetFetched(fetched); return { text: notNow, isError: false }; }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
   const { shown, code, timedOut } = await runOutside(fetched?.command ?? command, project, seconds, signal).finally(() => forgetFetched(fetched));
@@ -288,6 +294,10 @@ export async function stoppedInAuto(caller: Caller, input: Record<string, unknow
     .catch(error => ({ decision: "refuse" as const, reason: `Auto's reviewer couldn't review it (${String((error as Error)?.message ?? error).slice(0, 120)}).`, by: "code" as const, held: false, why: "failed" as const, paused: false, fetched: undefined }));
   if (!verdict) return null;
   if (verdict.decision === "refuse") return { text: refusalWords(verdict) };
+  // (Only while the sandbox is still on, which Auto counts on: its check may have failed, or not
+  // finished, while the reviewer decided.)
+  const notNow = stillOff(at.agents);
+  if (notNow) { forgetFetched(verdict.fetched); return { text: notNow }; }
   // (A shell tool's timeout is in milliseconds, and none is the most; within what the call has left.)
   const asked = Number(input.timeout);
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
@@ -299,6 +309,16 @@ export async function stoppedInAuto(caller: Caller, input: Record<string, unknow
   const ran = await runOutside(verdict.fetched?.command ?? command, folder, seconds, stop.signal).finally(() => { clearInterval(watching); forgetFetched(verdict.fetched); });
   const head = verdict.by === "you" ? "The sandbox stopped it · Ran again outside the sandbox · Approved by the user" : `The sandbox stopped it · Ran again outside the sandbox · Allowed by Auto's reviewer: ${verdict.reason}`;
   return { text: `${head}\n\n${ran.shown.trimEnd()}${ran.timedOut ? `\n\nIt was stopped after ${seconds} seconds.` : ""}`, exit: ran.timedOut ? 124 : ran.code ?? 1 };
+}
+
+/** Why Auto lets nothing out of the sandbox now, as Auto itself goes by it (`sandboxGap`, for a
+ * conversation on the coding agents or the engine): checked again after its reviewer decides, as the
+ * sandbox may have gone while it did. Null where it's still all there. */
+function stillOff(agents: boolean): string | null {
+  const gap = sandboxGap(agents);
+  if (gap === "partial") return "Auto needs the whole sandbox, and on this computer it can't keep commands from your login's services now, so nothing is let out of it: run the command with your shell tool, which asks the user first.";
+  if (gap === "agents") return "Auto needs the coding agents' own programs in the sandbox, and some still run outside it, so nothing is let out of it: run the command with your shell tool, which asks the user first.";
+  return gap ? notOnWords() : null;
 }
 
 /** `command` run outside the sandbox in `folder`, for at most `seconds`: its output, cut to the

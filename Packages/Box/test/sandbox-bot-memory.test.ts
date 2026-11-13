@@ -72,11 +72,13 @@ test.skipIf(!canFence)("a bot's agent saves its memory as Claude Code saves a fi
   try {
     const project = join(box.root, "ship-project")
     mkdirSync(project)
-    const runtime = process.execPath
+    // (On a machine's engine, Bun only with BUN_BE_BUN, which the sandbox keeps from what it runs:
+    // so the command names it, as a program run as Bun would be started.)
+    const runtime = process.env.BUN_BE_BUN ? `BUN_BE_BUN=1 ${JSON.stringify(process.execPath)}` : JSON.stringify(process.execPath)
     // Its own conversation, in its folder; its seat in a group chat, in its project's, named by the bridge.
     for (const [session, directory, bot] of [["ses_ship", box.work, undefined], ["ses_seat", project, "bot_ship"]] as const) {
       const text = `# Ship\n\n- saved from ${session}\n`
-      const agent = asAgent(box, "/bin/sh", ["-c", `${JSON.stringify(runtime)} -e '${savesLikeClaudeCode.replaceAll("'", "'\\''")}' ${JSON.stringify(box.memory)} '${text}'`], directory, session, { bot, env: process.env.BUN_BE_BUN ? { BUN_BE_BUN: process.env.BUN_BE_BUN } : {} })
+      const agent = asAgent(box, "/bin/sh", ["-c", `${runtime} -e '${savesLikeClaudeCode.replaceAll("'", "'\\''")}' ${JSON.stringify(box.memory)} '${text}'`], directory, session, { bot })
       const ran = Bun.spawnSync(agent.command, { cwd: directory, env: agent.env })
       expect({ session, out: ran.stdout.toString() + ran.stderr.toString(), status: ran.exitCode }).toEqual({ session, out: "saved in place\n", status: 0 })
       expect(readFileSync(box.memory, "utf8")).toBe(text)

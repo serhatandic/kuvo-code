@@ -123,21 +123,18 @@ final class BrowserToolServer {
             // agents bridge, in a header.
             var caller = (params["_meta"] as? [String: Any])?["ai.opencode/sessionID"] as? String ?? session
             if let named = caller, let owner, let own = await owner(named) { caller = own }
-            // Not the browser's: no page to serve it.
-            if name == BrowserTools.showInPanel { return reply(BrowserTools.showInPanelCall(arguments, caller: caller)) }
-            if name == BrowserTools.showFile { return reply(BrowserTools.showFileCall(arguments)) }
-            if name == BrowserTools.markFinal { return reply(BrowserTools.markFinalCall(arguments)) }
-            if name == BrowserTools.showWidget { return reply(BrowserTools.showWidgetCall(arguments)) }
             let key = Self.key(id, client: client)
             let call: Task<CallResult, Never>
-            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob || BrowserTools.isVault(name) || BrowserTools.isSandbox(name) || BrowserTools.isWorkQueue(name) {
+            if BrowserTools.boxTools.contains(name) || BrowserTools.isVault(name) || BrowserTools.isSandbox(name) || BrowserTools.isWorkQueue(name) {
+                // Not the browser's: this Mac's box answers them, as every box does. show_in_panel's
+                // answer says whether the user sees it now, which only the window knows.
+                let inView = name == BrowserTools.showInPanel ? caller.map(BrowserTools.isInView) : nil
                 // Stopped as the others are: one waiting for an answer stops waiting.
                 call = Task {
                     let result = BrowserTools.isVault(name) ? await BrowserTools.vault(name, arguments, caller)
                         : BrowserTools.isSandbox(name) ? await BrowserTools.sandbox(name, arguments, caller)
                         : BrowserTools.isWorkQueue(name) ? await BrowserTools.workQueue(name, arguments, caller)
-                        : name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
-                        : BrowserTools.wakeTools.contains(name) ? await BrowserTools.wake(name, arguments, caller) : await BrowserTools.mail(name, arguments, caller)
+                        : await BrowserTools.mail(name, arguments, caller, inView)
                     return CallResult(value: ["content": [["type": "text", "text": result.text]], "isError": result.isError])
                 }
             } else {
@@ -356,10 +353,12 @@ enum BrowserTools {
     /// draws it from the call (see `WidgetCard`), for a session here or on a machine alike.
     nonisolated static let showWidget = "show_widget"
 
-    /// The tools agents write to each other and run their sessions with, answered by this Mac's box
-    /// (see `AgentMail`).
-    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits"]
-    /// Carries out their calls from this Mac's conversations.
+    /// Kuvo Code's own tools, which every box answers alike (`POST kuvo/agent-tools`, see
+    /// `AgentMail`): agents writing to each other and running their sessions, a conversation's
+    /// wake-ups, a bot's job, and the checks before something is shown (which the window and the
+    /// transcript then show from the call).
+    nonisolated static let boxTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits",
+                                                    "schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", setJob, showInPanel, showFile, markFinal, showWidget]
     /// The added integrations' sites, which the browser sends the agent away from, to their tools.
     static var integrationSites: () -> [Integrations.Site] = { [] }
     /// When a conversation was sent away from an integration's site, by conversation and site:
@@ -410,7 +409,9 @@ enum BrowserTools {
         return site.note
     }
 
-    static var mail: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
+    /// Carries out their calls from this Mac's conversations, with whether the user is looking at
+    /// the conversation now (only for show_in_panel).
+    static var mail: (_ name: String, _ arguments: [String: Any], _ caller: String?, _ inView: Bool?) async -> (text: String, isError: Bool) = { _, _, _, _ in ("Not available.", true) }
     /// The vault's tools (`vault_items`, `vault_ask`, `vault_run`): this Mac's box lists them and
     /// carries them out (KuvoLink's PROTOCOL.md, "Vault").
     nonisolated static func isVault(_ name: String) -> Bool { name.hasPrefix("vault_") }
@@ -429,36 +430,11 @@ enum BrowserTools {
     nonisolated static func isWorkQueue(_ name: String) -> Bool { name.hasPrefix("queue_") }
     static var workQueueDefinitions: () async -> (tools: [[String: Any]], instructions: String) = { ([], "") }
     static var workQueue: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
-    /// The tool a bot keeps its job with, in its box's record (`PATCH kuvo/bots/<id>` with `job`).
+    /// The tool a bot keeps its job with, in its box's record (the box answers it).
     nonisolated static let setJob = "set_job"
-    /// Carries out its calls from this Mac's conversations.
-    static var job: (_ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _ in ("Only a bot keeps a job, and this conversation isn't one.", true) }
-    /// The tools a conversation's wake-ups are set with (see `WakeUps.call`).
-    nonisolated static let wakeTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up"]
-    /// Carries out their calls from this Mac's conversations.
-    static var wake: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
 
-    /// Says it's shown; the conversation draws it.
-    nonisolated static func showWidgetCall(_ arguments: [String: Any]) -> [String: Any] {
-        guard let html = arguments["html"] as? String, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return ["content": [["type": "text", "text": "Missing html."]], "isError": true]
-        }
-        return ["content": [["type": "text", "text": "Shown in the conversation, live. The user sees it now; what they click in it that calls kuvo.send comes to you as their message."]], "isError": false]
-    }
-
-    /// What its call says when it goes ahead: shown now, or kept until the user comes back to the
-    /// conversation (`inView` nil: on a machine, which can't tell). It also tells a folder from a
-    /// file (see `shownFolder`).
-    nonisolated static func shown(_ path: String, isFolder: Bool, inView: Bool?) -> String {
-        let what = "the \(isFolder ? "folder" : "file") \(path)"
-        switch inView {
-        case true?: return "Shown: \(what) is open in Kuvo Code's side panel, beside this conversation."
-        case false?: return "Kept for later: \(what) opens in Kuvo Code's side panel when the user comes back to this conversation. They're in another one right now, so don't say it's open."
-        case nil: return "Sent: \(what) opens in Kuvo Code's side panel beside this conversation, at once if the user is looking at it, or else when they come back to it."
-        }
-    }
-
-    /// Whether a call's answer says it went ahead, and with a folder: nil for an error. Machines
+    /// Whether a show_in_panel call's answer (in its box's words, `shownWords` in
+    /// `letters/own-tools.ts`) says it went ahead, and with a folder: nil for an error. Machines
     /// that haven't taken the new script yet answer "Showing the file …".
     nonisolated static func shownFolder(in said: String) -> Bool? {
         for prefix in ["Shown: ", "Kept for later: ", "Sent: ", "Showing "] where said.hasPrefix(prefix) {
@@ -467,53 +443,6 @@ enum BrowserTools {
             if rest.hasPrefix("the file ") { return false }
         }
         return nil
-    }
-
-    /// Checks the path, here, and says whether the user sees it now. The window shows it once the
-    /// call succeeds (see `Workspace.onShowInPanel`).
-    static func showInPanelCall(_ arguments: [String: Any], caller: String?) -> [String: Any] {
-        func text(_ value: String, error: Bool = false) -> [String: Any] { ["content": [["type": "text", "text": value]], "isError": error] }
-        guard let raw = arguments["path"] as? String, !raw.isEmpty else { return text("Missing path.", error: true) }
-        // A relative one is in the folder the conversation works in.
-        let expanded = (raw as NSString).expandingTildeInPath
-        let base = caller.flatMap(sessionFolder) ?? FileManager.default.currentDirectoryPath
-        // A full path is taken as given: standardizing would take /private off /private/var/…,
-        // where projects in the temporary folder are, and call the agent's own path wrong.
-        let clean = expanded.hasPrefix("/") && !expanded.split(separator: "/").contains { $0 == ".." || $0 == "." }
-        let full = clean ? expanded : (expanded.hasPrefix("/") ? URL(filePath: expanded) : URL(filePath: base).appending(path: expanded)).standardizedFileURL.path
-        // A folder's path may end in "/", which expanding drops.
-        var given = raw
-        while given.count > 1, given.hasSuffix("/") { given.removeLast() }
-        guard full == given else { return text("Give the full path: \(full)", error: true) }
-        var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: full, isDirectory: &isFolder) else { return text("There's nothing at \(full).", error: true) }
-        return text(shown(full, isFolder: isFolder.boolValue, inView: caller.map(isInView)))
-    }
-
-    /// Checks the file is there, here: the transcript shows it from the call.
-    static func showFileCall(_ arguments: [String: Any]) -> [String: Any] {
-        func text(_ value: String, error: Bool = false) -> [String: Any] { ["content": [["type": "text", "text": value]], "isError": error] }
-        guard let raw = arguments["path"] as? String, !raw.isEmpty else { return text("Missing path.", error: true) }
-        // As given, which is what the conversation shows it from: a full path, nothing to expand.
-        let full = raw
-        guard full.hasPrefix("/"), !full.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else {
-            return text("Give the file's full path" + (raw.hasPrefix("~") ? ": \((raw as NSString).expandingTildeInPath)" : "."), error: true)
-        }
-        var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: full, isDirectory: &isFolder) else { return text("There's nothing at \(full).", error: true) }
-        guard !isFolder.boolValue else { return text("\(full) is a folder: show a file in it, or the folder with show_in_panel.", error: true) }
-        return text("Shown in the conversation: the file \(full). The user sees it there, on their Mac and their phone.")
-    }
-
-    /// Checks the file is there: the box's record pins it, from the call.
-    static func markFinalCall(_ arguments: [String: Any]) -> [String: Any] {
-        func text(_ value: String, error: Bool = false) -> [String: Any] { ["content": [["type": "text", "text": value]], "isError": error] }
-        guard let full = arguments["path"] as? String, full.hasPrefix("/"), !full.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else {
-            return text("Give the file's full path.", error: true)
-        }
-        var isFolder: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: full, isDirectory: &isFolder), !isFolder.boolValue else { return text("There's no file at \(full).", error: true) }
-        return text("Marked final: \(full). It's kept at the top of what you made, for the user.")
     }
 
     /// How long the engine lets a tool run: longer than the agent waits for the user.

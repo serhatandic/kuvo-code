@@ -8,12 +8,13 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { askedArgs, ownArgsLater } from "../../shared/git";
+import { askedArgsLater, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
 import type { GitChanges, GitChangesCount, PullRequestDraft } from "../../shared/routes/changes";
 import { IS_MAC, K } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { FILE_LIMIT } from "./file";
+import { commitPrompt, moveGitSettings, pullRequestPrompt } from "./git-words";
 import { readWorktrees } from "./worktree-records";
 import { linkPull } from "../glance/pulls";
 
@@ -40,8 +41,8 @@ interface Ran {
  * hooks, a push), takes as long as it takes.
  */
 async function git(folder: string, given: string[], changing = false, more: Record<string, string> = {}, program = "git", timeout = 600_000): Promise<Ran> {
-  const args = program !== "git" ? given : changing ? askedArgs(given) : await ownArgsLater(given, folder);
-  if (!args) return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it." };
+  const args = program !== "git" ? given : changing ? await askedArgsLater(given, folder) : await ownArgsLater(given, folder);
+  if (!args) return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it, or lead git to another repository’s." };
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }), ...more };
   if (!changing) {
     return new Promise(resolve => {
@@ -640,7 +641,11 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
   if (route === "kuvo/git/commit" || route === "kuvo/git/commit-diff") {
     const directory = folderAt(body.directory);
     if (!directory) return yield* json(404, { message: "That folder isn’t there." });
-    if (route === "kuvo/git/commit-diff") return yield* json(200, await commitDiff(directory));
+    if (route === "kuvo/git/commit-diff") {
+      const taken = await commitDiff(directory);
+      // With what a model is asked to write its message from, your instructions here in it.
+      return yield* json(200, body.prompt === true ? { ...taken, prompt: commitPrompt(taken.diff) } : taken);
+    }
     const message = typeof body.message === "string" ? body.message : "";
     if (!message.trim()) return yield* json(400, { message: "Write a commit message." });
     const done = await commit(directory, message, body.push === true, authorOf(body));
@@ -649,8 +654,15 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
   if (route === "kuvo/git/pull-request/draft") {
     const directory = folderAt(body.directory);
     if (!directory) return yield* json(404, { message: "That folder isn’t there." });
-    const draft = await pullRequestDraft(directory, body.summary === true);
-    return yield* "failed" in draft ? json(draft.status, { message: draft.failed }) : json(200, draft);
+    const draft = await pullRequestDraft(directory, body.summary === true || body.prompt === true);
+    if ("failed" in draft) return yield* json(draft.status, { message: draft.failed });
+    // With what a model is asked to write it from, your instructions here in it.
+    return yield* json(200, body.prompt === true ? { ...draft, prompt: pullRequestPrompt(draft.summary ?? "") } : draft);
+  }
+  // COMPAT(0.7 mac-git-settings): a Mac's Settings › Git from before, kept here once. Goes 3 months after 0.8.0.
+  if (route === "kuvo/git/settings/move") {
+    const moved = moveGitSettings(body);
+    return yield* moved.status === 200 ? json(200, { moved: moved.moved }) : json(moved.status, { message: moved.message });
   }
   if (route === "kuvo/git/push" || route === "kuvo/git/merge" || route === "kuvo/git/pull-request") {
     const directory = folderAt(body.directory);

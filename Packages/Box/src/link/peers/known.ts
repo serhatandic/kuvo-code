@@ -50,10 +50,12 @@ export interface MovedSession {
 /** Who sent a mail: one of this box's peers, or one of its Macs. */
 export type MailSender = Peer | { key: string; kind: "mac" };
 
-/** A mail opened (`openMail`): who sent it, and what it says. */
+/** A mail opened (`openMail`): who sent it, and what it says. `vouched`: from a box only a peer
+ * vouches for (`vouchedOf`), whose plan limits alone this box takes. */
 export interface OpenedMail {
   sender: MailSender;
   payload: Record<string, unknown>;
+  vouched?: true;
 }
 
 /** A Mac's word on its boxes: those it names, and the conversations it moved. */
@@ -261,7 +263,7 @@ export function ownKey(link: Pick<LinkState, "key">): string | null {
 
 // A mail frame's body opened: from one of this box's Macs, or one of its peers. `{sender, payload}`,
 // or null for one from anyone else (or that isn't one).
-export function openMail(body: Buffer, link: LinkState | null | undefined): OpenedMail | null {
+export function openMail(body: Buffer, link: LinkState | null | undefined, vouched: () => Peer[] = () => []): OpenedMail | null {
   if (!link?.key) return null;
   const key = Buffer.from(link.key, "base64url");
   const senders = [...macsOf(link).map(mac => ({ key: mac, kind: "mac" as const })), ...peersOf(link).filter(peer => !macsOf(link).includes(peer.key))];
@@ -269,6 +271,12 @@ export function openMail(body: Buffer, link: LinkState | null | undefined): Open
     try {
       const payload = JSON.parse(openOneWay(body, key, Buffer.from(sender.key, "base64url")).payload.toString("utf8"));
       return isObject(payload) ? { sender: peersOf(link).find(peer => peer.key === sender.key) ?? sender, payload } : null;
+    } catch {}
+  }
+  for (const sender of vouched()) {
+    try {
+      const payload = JSON.parse(openOneWay(body, key, Buffer.from(sender.key, "base64url")).payload.toString("utf8"));
+      return isObject(payload) ? { sender, payload, vouched: true } : null;
     } catch {}
   }
   return null;
