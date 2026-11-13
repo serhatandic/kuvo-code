@@ -469,9 +469,17 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
     noteUpdate({ last: { at: clock(), result: "failed", message, from: before } });
     return { result: "failed", message };
   } finally {
-    for (const name of listOf(UPDATES)) if (name !== "rollback" && name !== "installed.json") fs.rmSync(path.join(UPDATES, name), { recursive: true, force: true });
+    clearUpdateStaging();
     fs.rmSync(UPDATE_LOCK, { recursive: true, force: true });
   }
+}
+
+/** What an update staged in `updates` taken away as it ends, whatever came of it: never what's kept
+ * there for good (its rollback, what it installed, and a move of this Mac's box, `rehome`: its
+ * state and kept originals, which `rehome/state.ts` keeps there). */
+export function clearUpdateStaging(folder = UPDATES): void {
+  const kept = new Set(["rollback", "installed.json", "rehome"]);
+  for (const name of listOf(folder)) if (!kept.has(name)) fs.rmSync(path.join(folder, name), { recursive: true, force: true });
 }
 
 // The new bridge, once an update put it there: well, the update's done. What was kept goes, and
