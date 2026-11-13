@@ -339,6 +339,9 @@ test("the models offered: every one that runs, the engine's in its picker's orde
   ]);
   assert.equal(offered.models[0].name, "Claude Opus 5.5");
   assert.deepEqual(offered.known, { engine: true, agents: true });
+  // Accounts whose list isn't all they run yet: one of theirs not listed may still run. Codex signed
+  // in with none listed, Claude Code with only its usual ones, a Codex that can't say its list is whole.
+  assert.deepEqual(offered.listing, ["codex-cli", "claude-code@new", "codex-cli@old"]);
   // None wanted: the engine's default, which runs.
   assert.deepEqual(offered.starting, { providerID: "anthropic", id: "claude-opus-5-5" });
 });
@@ -351,6 +354,8 @@ test("a new session starts on the model picked last where it runs, by the id its
   assert.deepEqual(await startsOn("?provider=codex-cli%40work&model=gpt-5.1-codex-mini"), { providerID: "codex-cli@work", id: "gpt-5.1-codex-mini" });
   // A coding agent's still being listed: as it is.
   assert.deepEqual(await startsOn("?provider=claude-code%40new&model=opusplan"), { providerID: "claude-code@new", id: "opusplan" });
+  // A Custom Auto list deleted: the list it runs on, your first.
+  assert.deepEqual(await startsOn("?provider=auto&model=list_deleted"), { providerID: "auto", id: "auto" });
   const fallback = { providerID: "anthropic", id: "claude-opus-5-5" };
   // Signed out of, only a key would run it, being retired, gone, or with no account here at all.
   for (const query of ["?provider=github-copilot&model=gpt-5.5", "?provider=deepseek&model=deepseek-chat", "?provider=anthropic&model=claude-sonnet-5",
@@ -368,7 +373,19 @@ test("a default that can't run, or none: the first model that runs; nothing that
   const nothing = await engineWith({ "/api/model": [model("github-copilot", "gpt-5.5", "GPT-5.5")] });
   const alone = link.engineHandler(() => ({ pid: process.pid, ...nothing, version: "2.0.32" }), { name: "Studio" }, () => null);
   const none = await offeredOn(alone);
-  assert.deepEqual([none.models, none.starting, none.known], [[], null, { engine: true, agents: true }]);
+  assert.deepEqual([none.models, none.starting], [[], null]);
+});
+
+test("a default the engine didn't say isn't taken for none, nor a bridge not running for no coding agents: a new session's model isn't said, or is the one wanted as it is", async () => {
+  const unsaid = handlerOn(await engineWith({ "/api/model/default": FAILS }));
+  assert.equal("starting" in (await offeredOn(unsaid)), false);
+  // The bridge starting, or started again: its models can't be said yet, and a model of theirs
+  // picked last stays the one a new session starts on.
+  const nothing = await engineWith();
+  const noBridge = link.engineHandler(() => ({ pid: process.pid, ...nothing, version: "2.0.32" }), { name: "Studio" }, () => null);
+  const offered = await offeredOn(noBridge, "?provider=claude-code&model=claude-opus-5-5");
+  assert.deepEqual(offered.known, { engine: true, agents: false });
+  assert.deepEqual(offered.starting, { providerID: "claude-code", id: "claude-opus-5-5" });
 });
 
 test("the models offered while the engine can't say: its models not known, and no model to start on said, rather than a coding agent's", async () => {

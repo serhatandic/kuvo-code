@@ -288,6 +288,32 @@ import Testing
         #expect(!catalog.needsAccount(sonnet, said: nil))
     }
 
+    /// Its box's first answer fails (a machine's connection drops a moment): it's asked again, and
+    /// the picker fills, rather than staying empty until an account or model changes.
+    @Test func aFailedAskIsAskedAgain() async throws {
+        defer { StubWeb.stop() }
+        nonisolated final class Asks: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+        }
+        let asks = Asks()
+        let offered = #"{"models":[{"providerID":"openai","id":"luna","name":"Luna"}],"known":{"engine":true,"agents":true},"starting":{"providerID":"openai","id":"luna"}}"#
+        catalog.offeredRetryAfter = .milliseconds(1)
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let first = request.path.hasPrefix("kuvo/models/offered") && asks.lock.withLock { asks.count += 1; return asks.count == 1 }
+                let answered = request.path.hasPrefix("kuvo/models/offered") && !first
+                continuation.yield(.head(status: answered ? 200 : 503, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"Not now."}"#).utf8)))
+                continuation.finish()
+            }
+        })
+        try await engine(accounts: [Self.account("openai", signedIn: true)], models: [Self.model("openai", "luna")], defaultModel: Self.model("openai", "luna"))
+        _ = catalog.offered
+        try await until { catalog.offered.map(\.id) == ["luna"] }
+        #expect(asks.lock.withLock { asks.count } >= 2)
+    }
+
     private func said(_ json: String) throws -> SessionModelState {
         try JSONDecoder().decode(SessionModelState.self, from: Data(json.utf8))
     }

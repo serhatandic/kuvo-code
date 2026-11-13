@@ -49,27 +49,32 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
         didSet { index = Self.index(models) }
     }
     public var known: Known
+    /// The coding agents' accounts whose list isn't all they run yet (their models still being
+    /// listed): one of theirs not in `models` may still run.
+    public var listing: [String]
     /// The model a new session starts on, for the one asked about: `.some(nil)` for none (nothing
     /// runs there); nil where it wasn't said (the engine can't say yet).
     public var starting: ModelRef??
 
-    /// `models` by provider and id, for `runs` (asked of every model a picker draws).
-    private var index: Set<String>
+    /// `models`' places in the box's order, by provider and id, for `runs` (asked of every model a
+    /// picker draws).
+    private var index: [String: Int]
 
-    private static func index(_ models: [Entry]) -> Set<String> {
-        Set(models.map { key($0.providerID, $0.id) })
+    private static func index(_ models: [Entry]) -> [String: Int] {
+        Dictionary(models.enumerated().map { (key($1.providerID, $1.id), $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private static func key(_ providerID: String, _ id: String) -> String { providerID + "\u{0}" + id }
 
-    public init(models: [Entry], known: Known, starting: ModelRef?? = nil) {
+    public init(models: [Entry], known: Known, listing: [String] = [], starting: ModelRef?? = nil) {
         self.models = models
         self.known = known
+        self.listing = listing
         self.starting = starting
         index = Self.index(models)
     }
 
-    private enum CodingKeys: String, CodingKey { case models, known, starting }
+    private enum CodingKeys: String, CodingKey { case models, known, listing, starting }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -77,6 +82,7 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
         self.models = models
         index = Self.index(models)
         known = try container.decode(Known.self, forKey: .known)
+        listing = try container.decodeIfPresent([String].self, forKey: .listing) ?? []
         starting = container.contains(.starting) ? .some(try container.decodeIfPresent(ModelRef.self, forKey: .starting)) : nil
     }
 
@@ -85,17 +91,11 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
     public static let feature = "models.offered"
 
     /// The route that asks it, as a link request's path (query and all): for a new session that
-    /// would start on `wanted` (the model picked last), in `folder` (a project's own settings may
-    /// add models there).
-    public static func path(wanted: ModelRef? = nil, folder: String? = nil) -> String {
-        var query: [URLQueryItem] = []
-        if let wanted {
-            query.append(URLQueryItem(name: "provider", value: wanted.providerID))
-            query.append(URLQueryItem(name: "model", value: wanted.id))
-            if let variant = wanted.variant { query.append(URLQueryItem(name: "variant", value: variant)) }
-        }
-        if let folder { query.append(URLQueryItem(name: "folder", value: folder)) }
-        guard !query.isEmpty else { return route }
+    /// would start on `wanted` (the model picked last).
+    public static func path(wanted: ModelRef? = nil) -> String {
+        guard let wanted else { return route }
+        var query = [URLQueryItem(name: "provider", value: wanted.providerID), URLQueryItem(name: "model", value: wanted.id)]
+        if let variant = wanted.variant { query.append(URLQueryItem(name: "variant", value: variant)) }
         var parts = URLComponents()
         parts.queryItems = query
         // ("+" stays as it is in a query; the box would read it as a space.)
@@ -108,11 +108,24 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
         isAgent(providerID) ? known.agents : known.engine
     }
 
-    /// Whether `ref` runs there now: true or false where its side was said, nil where it wasn't.
-    /// By its own id (a picker's models are listed by theirs).
+    /// Whether `ref` runs there now: true or false where its side was said, nil where it wasn't (or
+    /// its account's models are still being listed, `listing`, and it isn't among them yet). By its
+    /// own id (a picker's models are listed by theirs).
     public func runs(_ ref: ModelRef, isAgent: (String) -> Bool) -> Bool? {
         guard isKnown(ref.providerID, isAgent: isAgent) else { return nil }
-        return index.contains(Self.key(ref.providerID, ref.id))
+        if index[Self.key(ref.providerID, ref.id)] != nil { return true }
+        return listing.contains(ref.providerID) ? nil : false
+    }
+
+    /// Whether a picker offers `ref`: one that runs, and that its provider isn't retiring.
+    public func offers(_ ref: ModelRef) -> Bool {
+        index[Self.key(ref.providerID, ref.id)].map { !models[$0].retiring } ?? false
+    }
+
+    /// `ref`'s place in the box's order (its featured providers first, each provider's newest
+    /// first), for a picker to draw them in; nil for one it doesn't offer.
+    public func place(_ ref: ModelRef) -> Int? {
+        index[Self.key(ref.providerID, ref.id)]
     }
 
     /// This answer, with what `before` said of a side this one couldn't say (the agents' bridge
@@ -126,6 +139,7 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
         }
         if !known.agents, before.known.agents {
             merged.models += before.models.filter { isAgent($0.providerID) }
+            merged.listing = before.listing
             merged.known.agents = true
         }
         return merged

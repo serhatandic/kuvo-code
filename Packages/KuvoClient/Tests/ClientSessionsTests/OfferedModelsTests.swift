@@ -40,13 +40,26 @@ struct OfferedModelsTests {
         #expect(kept.runs(ModelRef(id: "default", providerID: "claude-code"), isAgent: isAgent) == true)
     }
 
+    /// An account still listing its models (Claude Code as it starts): one of its not listed yet
+    /// isn't said not to run; another account's is.
+    @Test func anAccountStillListingDoesntTurnItsModelsDown() throws {
+        let said = try offered(#"{"models":[{"providerID":"claude-code","id":"opus","name":"Opus"},{"providerID":"anthropic","id":"claude-sonnet-5","name":"Claude Sonnet 5","retiring":true}],"known":{"engine":true,"agents":true},"listing":["claude-code"]}"#)
+        #expect(said.runs(ModelRef(id: "claude-opus-5-5", providerID: "claude-code"), isAgent: isAgent) == nil)
+        #expect(said.runs(ModelRef(id: "claude-opus-5-5", providerID: "claude-code@work"), isAgent: isAgent) == false)
+        // Retiring: it runs, and a picker doesn't offer it.
+        #expect(said.runs(ModelRef(id: "claude-sonnet-5", providerID: "anthropic"), isAgent: isAgent) == true)
+        #expect(!said.offers(ModelRef(id: "claude-sonnet-5", providerID: "anthropic")))
+        #expect(said.offers(ModelRef(id: "opus", providerID: "claude-code")))
+        #expect(said.place(ModelRef(id: "claude-sonnet-5", providerID: "anthropic")) == 1)
+    }
+
     /// The model wanted goes as its parts, each read back whole by the box (a "+" in an id, a "/").
     @Test func theWantedModelGoesWhole() throws {
         #expect(OfferedModels.path() == "kuvo/models/offered")
-        let path = OfferedModels.path(wanted: ModelRef(id: "anthropic/claude+1:8b", providerID: "openrouter", variant: "high"), folder: "/Users/me/a b")
+        let path = OfferedModels.path(wanted: ModelRef(id: "anthropic/claude+1:8b", providerID: "openrouter", variant: "high"))
         let query = try #require(URLComponents(string: "x://y/" + path)?.queryItems)
-        #expect(query.map(\.name) == ["provider", "model", "variant", "folder"])
-        #expect(query.map(\.value) == ["openrouter", "anthropic/claude+1:8b", "high", "/Users/me/a b"])
+        #expect(query.map(\.name) == ["provider", "model", "variant"])
+        #expect(query.map(\.value) == ["openrouter", "anthropic/claude+1:8b", "high"])
         #expect(path.contains("%2B"))
     }
 }

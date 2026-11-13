@@ -16387,11 +16387,11 @@ function engineListsIn(engine, folder) {
   return engine ? keptOr(`engine:${engine.port}:${folder ?? ""}`, () => engineLists(engine, folder), (lists) => lists.fallback !== undefined) : Promise.resolve(null);
 }
 function bridgeListsOf(bridge) {
-  return bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge), (lists) => lists.auto !== null) : Promise.resolve({ models: [], accounts: new Map, auto: [] });
+  return bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge), (lists) => lists.auto !== null) : Promise.resolve(null);
 }
-async function listsHere(engine, bridge, folder) {
+async function listsHere(engine, bridge, folder, noBridgeIsNone = false) {
   const [fromEngine, fromBridge] = await Promise.all([engineListsIn(engine, folder), bridgeListsOf(bridge)]);
-  return { engine: fromEngine, bridge: fromBridge };
+  return { engine: fromEngine, bridge: fromBridge ?? (!bridge && noBridgeIsNone ? { models: [], accounts: new Map, auto: [] } : null) };
 }
 var accountOf = (account) => ({ id: account.id, name: account.name, ...account.label ? { label: account.label } : {} });
 function onEngine(ref, engine) {
@@ -16460,6 +16460,17 @@ function offeredHere(lists) {
     ...auto.map((list) => ({ providerID: "auto", id: list.id, name: list.name, retiring: false, agents: true, free: false }))
   ];
 }
+function stillListing(lists) {
+  if (!lists.bridge)
+    return [];
+  const bridge = lists.bridge;
+  return [...bridge.accounts.values()].filter((account) => {
+    if (!account.installed || !account.signedIn)
+      return false;
+    const ofIt = bridge.models.filter((model) => model.providerID === account.id);
+    return !ofIt.length || ofIt.every((model) => model.provisional) || !account.complete;
+  }).map((account) => account.id);
+}
 function knownHere(ref, lists) {
   if (onAgents(ref))
     return !lists.bridge || ref.providerID === "auto" || lists.bridge.accounts.has(ref.providerID);
@@ -16479,6 +16490,10 @@ function startingModel(wanted, lists) {
     }
     if (!state.runs)
       continue;
+    if (ref.providerID === "auto") {
+      const list = lists.bridge?.auto?.find((each) => each.id === ref.id) ?? lists.bridge?.auto?.[0];
+      return { model: { providerID: "auto", id: list?.id ?? ref.id }, why: "wanted" };
+    }
     const listed = listedOf(ref, lists);
     if (listed?.retiring)
       continue;
@@ -16487,6 +16502,8 @@ function startingModel(wanted, lists) {
   if (!lists.engine)
     return;
   const fallback = lists.engine.fallback;
+  if (fallback === undefined)
+    return;
   if (fallback && stateOf(fallback, lists)?.runs && !listedOf(fallback, lists)?.retiring)
     return { model: fallback, why: "default" };
   const first = offeredHere(lists).find((model) => !model.retiring && model.providerID !== "auto");
@@ -19141,7 +19158,7 @@ async function startSession(given, by, place) {
     const answering = engine ? await call(engine, "GET", "/api/provider", undefined, place.signal).then(() => true, () => false) : false;
     if (!answering && !bridge)
       return no(503, `The engine on ${HERE} isn't running.`);
-    const lists = await listsHere(engine, bridge, folder ?? undefined);
+    const lists = await listsHere(engine, bridge, folder ?? undefined, true);
     const starting = startingModel([model], lists);
     if (starting === null)
       return no(400, describeModels([]));
@@ -22405,6 +22422,11 @@ async function startingModelHere(named, readEngine, signal) {
     engine = readEngine();
   } catch {}
   if (!engine)
+    return named;
+  const starting = startingModel([named], await listsHere(engine, null));
+  if (starting)
+    return starting.why === "wanted" && named ? named : { id: starting.model.id, providerID: starting.model.providerID };
+  if (starting === null)
     return named;
   const step = signal ? AbortSignal.any([signal, AbortSignal.timeout(BOT_STEP)]) : AbortSignal.timeout(BOT_STEP);
   const models = (await usableModels(engine, null, step)).filter((model) => !model.retiring);
@@ -40446,7 +40468,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "7b21f951bf21";
+var BRIDGE_VERSION = "606e1f4221c3";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41010,11 +41032,10 @@ async function* sessionModelsRoute(context) {
 
 // Packages/Box/src/link/areas/models-offered.ts
 var MODELS_OFFERED_ROUTE = "kuvo/models/offered";
-function asked7(requestPath) {
+function wantedIn(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const providerID = query.get("provider")?.trim(), id = query.get("model")?.trim(), variant = query.get("variant")?.trim();
-  const folder = query.get("folder")?.trim();
-  return { wanted: providerID && id ? { providerID, id, ...variant ? { variant } : {} } : null, ...folder ? { folder } : {} };
+  return providerID && id ? { providerID, id, ...variant ? { variant } : {} } : null;
 }
 async function* modelsOfferedRoute(context) {
   const { request, readEngine, bridge, json } = context;
@@ -41027,12 +41048,13 @@ async function* modelsOfferedRoute(context) {
     engine = readEngine();
   } catch {}
   const agents = bridge();
-  const { wanted, folder } = asked7(request.path);
-  const lists = await listsHere(engine, agents, folder);
-  const starting = startingModel([wanted], lists);
+  const lists = await listsHere(engine, agents);
+  const starting = startingModel([wantedIn(request.path)], lists);
+  const listing = stillListing(lists);
   return yield* json(200, {
     models: offeredHere(lists).map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, ...model.retiring ? { retiring: true } : {} })),
-    known: { engine: lists.engine !== null, agents: !agents || lists.bridge !== null },
+    known: { engine: lists.engine !== null, agents: lists.bridge !== null },
+    ...listing.length ? { listing } : {},
     ...starting !== undefined ? { starting: starting?.model ?? null } : {}
   });
 }

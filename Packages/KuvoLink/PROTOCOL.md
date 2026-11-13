@@ -1343,37 +1343,48 @@ box decides it from what its engine and coding agents list, so every client show
 
 Which models a session can use on a box, and which one a new session there starts on
 (`models.offered`): decided by the same rule as "A session's model", so every client's picker offers
-the same, and a new conversation starts on the same model whichever client begins it.
+the same, and a new conversation, a new bot and a lead's session started from another computer
+start on a model by the same rule.
 
-- `GET kuvo/models/offered[?provider=<id>&model=<id>&variant=<effort>][&folder=<path>]` →
-  `{"models": [{providerID, id, name, retiring?}], "known": {"engine", "agents"}, "starting"?:
-  {providerID, id, variant?} | null}`. `405` for anything but `GET`; `503` with neither the engine
-  nor the coding agents' bridge running.
+- `GET kuvo/models/offered[?provider=<id>&model=<id>&variant=<effort>]` → `{"models":
+  [{providerID, id, name, retiring?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
+  "starting"?: {providerID, id, variant?} | null}`. `405` for anything but `GET`; `503` with
+  neither the engine nor the coding agents' bridge running.
 - `models`: every model that runs there now (`runs` in "A session's model"): the engine's, its
   featured providers first (OpenAI, GitHub Copilot, Anthropic, Google, xAI, OpenRouter, OpenCode
   Zen, DeepSeek, Mistral, Groq) and the rest by id, each provider's newest first; then the coding
   agents', as the bridge lists them (not one an agent keeps out of its picker, as Codex's hidden
   ones, though they run); then your Custom Auto lists with models in them (`providerID: "auto"`).
   `retiring`: its provider is retiring it, which a picker leaves out, though a conversation on it
-  carries on. `folder` reads the engine's lists there (a project's own settings may add to them).
+  carries on. A client may draw them in this order, or its own.
 - `known`: whether the engine's models, and the coding agents' with Custom Auto's lists, could be
-  said. One that couldn't (not answering, or an engine that hasn't loaded the folder yet) has none
-  in `models`, rather than none at all: a client keeps what the box said of that side before.
+  said. One that couldn't (not answering, an engine that hasn't loaded yet, or the bridge not
+  running: starting, or started again) has none in `models`, rather than none at all: a client
+  keeps what the box said of that side before, and asks again in a moment.
+- `listing`: the coding agents' accounts whose list isn't all they run yet (signed in and
+  installed, with none listed, only their agent's usual ones, or from a bridge or agent that can't
+  say its list is whole): one of theirs not in `models` may still run, so a client doesn't turn
+  it down.
 - `starting`: the model a new session starts on, for the one named (the model picked last on that
   client): that one while it runs and isn't retiring, under the id its provider or agent lists it by
-  (Claude Code's `default` as the model it stands for), its effort kept; one that can't be said about
-  yet but whose provider or account is there (a coding agent's models still being listed) as it is;
+  (Claude Code's `default` as the model it stands for; a Custom Auto list deleted as the list it
+  runs on, your first), its effort kept; one that can't be said about yet but whose provider or
+  account is there (a coding agent's models still being listed, its bridge not running) as it is;
   else the engine's default while it runs and isn't retiring; else the first of `models` that isn't
   retiring and isn't a Custom Auto list. `null`: nothing runs there. Left out while the engine
-  can't say (and the one named is the engine's, or no longer there): a client starts on the one
-  named, as it is.
+  can't say, or didn't say its default (and the one named is the engine's, or no longer there): a
+  client starts on the one named, as it is.
 - A lead on another computer starting a session there (`start_session` from "Peers") starts on it
-  the same way, for the lead's model.
+  the same way, for the lead's model, where a bridge not running is no coding agents there; a new
+  bot there (`kuvo/bots/templates`' `startingModel`) the same way, for the one its client named.
 - A client asks again as what the box decides from changes (its accounts, models, default model or
-  Custom Auto lists, as "A session's model" says), and for another model named. Until it has
-  answered, a client offers none of a side not said yet, and a new conversation is on the model
-  named, as it is. Clients draw it from ClientSessions' `OfferedModels`. A box without
-  `models.offered` leaves the Mac deciding from its accounts and models as it did before.
+  Custom Auto lists, as "A session's model" says), and for another model named; after an ask that
+  failed, or an answer with a side not known, again in a moment, waiting longer each time. Until it
+  has answered, a client offers none of a side not said yet, and a new conversation is on the model
+  named, as it is. Clients draw it from ClientSessions' `OfferedModels`. The Mac starts a new
+  conversation on `starting`; the phone starts one with no model of its own, on the engine's
+  default. A box without `models.offered` leaves the Mac deciding from its accounts and models as
+  it did before.
 
 ### Work
 

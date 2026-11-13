@@ -435,7 +435,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     // Which, by the one rule a new session here starts by (work/model-rule.ts), as every client's
     // new conversation does: its own where it runs here (one its agent keeps out of its picker,
     // Codex's hidden ones, too), else the default, else the first model that runs.
-    const lists = await listsHere(engine, bridge, folder ?? undefined);
+    // (No coding agents' bridge running: none of theirs can run a session started now.)
+    const lists = await listsHere(engine, bridge, folder ?? undefined, true);
     const starting = startingModel([model], lists);
     if (starting === null) return no(400, describeModels([]));
     if (starting) {

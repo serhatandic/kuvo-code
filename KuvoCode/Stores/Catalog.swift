@@ -113,7 +113,8 @@ final class Catalog {
     /// provider has deprecated (it's retired soon) isn't, as the engine's own picker leaves it out;
     /// a conversation already on one carries on (`usable`).
     var offered: [Model] {
-        usable.filter { !$0.isDeprecated }
+        guard boxDecides else { return usable.filter { !$0.isDeprecated } }
+        return usable.filter { offeredSaid?.offers($0.ref) == true }
     }
 
     /// The models you can run now, as its box says: those offered, and deprecated ones of the same
@@ -141,6 +142,13 @@ final class Catalog {
     /// The engine's models grouped by provider, providers in the order people tend to look for them.
     var modelsByProvider: [(provider: String, models: [Model])] {
         let groups = Dictionary(grouping: offered.filter { !OutsideAgents.isAgent($0.providerID) }, by: \.providerID)
+        // In the order its box gives them (its featured providers first, each one's newest first).
+        if boxDecides, let said = offeredSaid {
+            let place = { (model: Model) in said.place(model.ref) ?? .max }
+            return groups.values.map { $0.sorted { place($0) < place($1) } }
+                .sorted { place($0[0]) < place($1[0]) }
+                .map { (providerName($0[0].providerID), $0) }
+        }
         return groups.keys
             .sorted { (Self.featuredOrder[$0] ?? 99, $0) < (Self.featuredOrder[$1] ?? 99, $1) }
             .map { id in (providerName(id), groups[id]!.sorted { $0.time.released > $1.time.released }) }
@@ -211,10 +219,7 @@ final class Catalog {
     /// The model, if it's one you can use now (see `offered`).
     func offeredModel(_ ref: ModelRef?) -> Model? {
         guard let ref else { return nil }
-        if ref.providerID == OutsideAgents.autoProvider {
-            guard boxDecides else { return isAutoAvailable(ref.id) ? autoModel(ref.id) : nil }
-            return offeredSaid?.runs(ref, isAgent: OutsideAgents.runsInBridge) == true ? autoModel(ref.id) : nil
-        }
+        if ref.providerID == OutsideAgents.autoProvider { return isAutoAvailable(ref.id) ? autoModel(ref.id) : nil }
         return usable.first { $0.isNamed(by: ref) }
     }
 
@@ -230,6 +235,15 @@ final class Catalog {
     @ObservationIgnored private var boxOffers: Bool?
     /// The lists (`listsKey`) its box was last asked about, by the model wanted.
     @ObservationIgnored private var offeredAsked: [String: Int] = [:]
+    /// Its box's answers asked for, and the newest one shown: one that lands after a newer one
+    /// (asked before the agents' lists came in, say) is dropped.
+    @ObservationIgnored private var offeredReads = 0
+    @ObservationIgnored private var offeredShown = 0
+    /// Asking again after an ask that failed, or an answer that couldn't say a side yet; how long
+    /// it waits, doubled each time to a minute, and first.
+    @ObservationIgnored private var offeredRetry: Task<Void, Never>?
+    @ObservationIgnored private var offeredRetryWait: Duration?
+    @ObservationIgnored var offeredRetryAfter = Duration.seconds(2)
 
     /// Its box decides which models run and which one a new session starts on: one with
     /// `models.offered`, or not known yet. Without a box (nothing to ask), or with one from before
@@ -248,6 +262,9 @@ final class Catalog {
         let key = Self.startKey(wanted), lists = listsKey
         guard boxDecides, offeredAsked[key] != lists else { return }
         offeredAsked[key] = lists
+        // (What's asked now is newer than what the one waiting would ask.)
+        offeredRetry?.cancel()
+        offeredRetry = nil
         // (Out of a view's drawing: it changes what's observed.)
         Task { await readOffered(wanted, key: key) }
     }
@@ -269,7 +286,7 @@ final class Catalog {
         guard let box else { return }
         if boxOffers == nil, !BoxClient.hasEveryFeature(box.box) {
             struct Info: Decodable { var features: [String]? }
-            guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return }
+            guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return askAgain(wanted, key: key) }
             boxOffers = info.features?.contains(OfferedModels.feature) == true
             // (From before it: drawn as this Mac works them out, from the lists it has.)
             guard boxOffers == true else {
@@ -277,10 +294,32 @@ final class Catalog {
                 return
             }
         }
-        guard let said = try? await box.value(OfferedModels.self, "GET", OfferedModels.path(wanted: wanted)), self.box?.box == box.box else { return }
-        let kept = said.keeping(offeredSaid, isAgent: OutsideAgents.runsInBridge)
-        if kept != offeredSaid { offeredSaid = kept }
-        if let starting = said.starting, startingSaid[key] != .some(starting) { startingSaid[key] = starting }
+        offeredReads += 1
+        let order = offeredReads
+        guard let said = try? await box.value(OfferedModels.self, "GET", OfferedModels.path(wanted: wanted)) else { return askAgain(wanted, key: key) }
+        guard self.box?.box == box.box else { return }
+        if order > offeredShown {
+            offeredShown = order
+            let kept = said.keeping(offeredSaid, isAgent: OutsideAgents.runsInBridge)
+            if kept != offeredSaid { offeredSaid = kept }
+        }
+        // (Not said: as it is, until it is.)
+        if startingSaid[key] != said.starting { startingSaid[key] = said.starting }
+        if said.known.engine, said.known.agents { offeredRetryWait = nil } else { askAgain(wanted, key: key) }
+    }
+
+    /// Asks its box again in a moment: its answer failed (a machine's connection, a box busy
+    /// starting), or couldn't say a side yet. Nothing else asks until the lists change.
+    private func askAgain(_ wanted: ModelRef?, key: String) {
+        guard offeredRetry == nil else { return }
+        let wait = offeredRetryWait ?? offeredRetryAfter
+        offeredRetryWait = min(wait * 2, .seconds(60))
+        offeredRetry = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard let self, !Task.isCancelled else { return }
+            offeredRetry = nil
+            await readOffered(wanted, key: key)
+        }
     }
 
     // MARK: Auto
@@ -288,12 +327,17 @@ final class Catalog {
     /// Your Auto lists, and what's held back at a limit.
     var auto: AutoList { outsideAgents?.auto ?? AutoList() }
 
-    /// Auto can be picked: the bridge is up and one of your lists has models in it.
-    var isAutoAvailable: Bool { outsideAgents?.api != nil && auto.all.contains { !$0.entries.isEmpty } }
+    /// Auto can be picked: one of your lists runs, as its box says (the bridge up, models in it).
+    var isAutoAvailable: Bool {
+        guard boxDecides else { return outsideAgents?.api != nil && auto.all.contains { !$0.entries.isEmpty } }
+        return offeredSaid?.models.contains { $0.providerID == OutsideAgents.autoProvider } == true
+    }
 
-    /// That Auto list can be picked: the bridge is up and it has models in it.
+    /// That Auto list can be picked, as its box says.
     func isAutoAvailable(_ id: String?) -> Bool {
-        outsideAgents?.api != nil && auto.list(id)?.entries.isEmpty == false
+        guard boxDecides else { return outsideAgents?.api != nil && auto.list(id)?.entries.isEmpty == false }
+        guard let list = auto.list(id) else { return false }
+        return offeredSaid?.runs(ModelRef(id: list.id, providerID: OutsideAgents.autoProvider), isAgent: OutsideAgents.runsInBridge) == true
     }
 
     /// An Auto list, as a model the composer's chip and the picker show: by its name.

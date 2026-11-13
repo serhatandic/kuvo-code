@@ -20,15 +20,22 @@ import Testing
         catalog.box = BoxClient(box: BoxClient.mac, transport: box)
     }
 
-    /// A box that answers `kuvo/work/unanswering` with what it holds.
+    /// A box that answers `kuvo/work/unanswering` with what it holds, and offers every model the
+    /// engine lists (`kuvo/models/offered`: both accounts signed in).
     final class HeldBox: BoxTransport, @unchecked Sendable {
         private let lock = NSLock()
         private var held: [[String: Any]] = []
 
         func hold(_ held: [[String: Any]]) { lock.withLock { self.held = held } }
 
+        private static let offered: [String: Any] = [
+            "models": [("opencode", "claude-opus-5-5"), ("opencode", "big-pickle"), ("opencode", "pulse-alpha"), ("openai", "gpt-6.1")].map { ["providerID": $0.0, "id": $0.1, "name": $0.1] },
+            "known": ["engine": true, "agents": true],
+        ]
+
         func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
-            let body = request.path == "kuvo/work/unanswering" ? (try? JSONSerialization.data(withJSONObject: ["held": lock.withLock { held }])) : nil
+            let body = request.path == "kuvo/work/unanswering" ? (try? JSONSerialization.data(withJSONObject: ["held": lock.withLock { held }]))
+                : request.path.hasPrefix("kuvo/models/offered") ? (try? JSONSerialization.data(withJSONObject: Self.offered)) : nil
             return AsyncThrowingStream { continuation in
                 continuation.yield(.head(status: body == nil ? 404 : 200, headers: [:]))
                 continuation.yield(.body(body ?? Data()))
@@ -75,6 +82,9 @@ import Testing
             ["provider": "opencode", "model": "pulse-alpha", "why": "Rate limit exceeded.", "since": now.timeIntervalSince1970 * 1000, "until": soon],
         ])
         await catalog.refresh()
+        // (What its box offers comes once it's asked, as the picker draws.)
+        _ = catalog.offered
+        try await until { !catalog.offered.isEmpty }
 
         #expect(line("claude-opus-5-5", now: now) == "Out of funds")
         #expect(line("pulse-alpha", now: now) == "At its limit until \(time)")

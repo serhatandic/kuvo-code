@@ -85,12 +85,14 @@ export type SessionModel = Infer<typeof SESSION_MODEL>;
 /** The models a session can use here (`kuvo/models/offered`), as a picker offers them: every one
  * that runs now (`retiring`: its provider is retiring it, which a picker leaves out though a
  * conversation on it carries on); whether the engine's and the coding agents' could be said
- * (`known`); and the model a new session starts on, for the one wanted (`starting`: null for none
+ * (`known`); the coding agents' accounts still listing theirs (`listing`: one of theirs not
+ * listed may still run); and the model a new session starts on, for the one wanted (`starting`: null for none
  * that runs; left out while the engine can't say). */
 const MODEL_REF = object({ providerID: string, id: string, "variant?": string });
 export const MODELS_OFFERED = object({
   models: list(object({ providerID: string, id: string, name: string, "retiring?": bool })),
   known: object({ engine: bool, agents: bool }),
+  "listing?": list(string),
   "starting?": nullable(MODEL_REF),
 });
 

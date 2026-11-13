@@ -179,16 +179,18 @@ export function engineListsIn(engine: Target | null, folder: string | undefined)
   return engine ? keptOr(`engine:${engine.port}:${folder ?? ""}`, () => engineLists(engine, folder), lists => lists.fallback !== undefined) : Promise.resolve(null);
 }
 
-/** What the bridge lists, as kept; none running here, nothing (no coding agents here). */
+/** What the bridge lists, as kept; null where it can't say (not running now: starting, or
+ * started again). */
 export function bridgeListsOf(bridge: Target | null): Promise<BridgeLists | null> {
   // (Whole: Custom Auto's lists said too.)
-  return bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge), lists => lists.auto !== null) : Promise.resolve({ models: [], accounts: new Map(), auto: [] });
+  return bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge), lists => lists.auto !== null) : Promise.resolve(null);
 }
 
-/** What both places list, for a session in `folder`. */
-export async function listsHere(engine: Target | null, bridge: Target | null, folder?: string): Promise<Lists> {
+/** What both places list, for a session in `folder`. `noBridgeIsNone`: no bridge running counts as
+ * no coding agents here (a session started now can't run on one), not as one that can't say yet. */
+export async function listsHere(engine: Target | null, bridge: Target | null, folder?: string, noBridgeIsNone = false): Promise<Lists> {
   const [fromEngine, fromBridge] = await Promise.all([engineListsIn(engine, folder), bridgeListsOf(bridge)]);
-  return { engine: fromEngine, bridge: fromBridge };
+  return { engine: fromEngine, bridge: fromBridge ?? (!bridge && noBridgeIsNone ? { models: [], accounts: new Map(), auto: [] } : null) };
 }
 
 const accountOf = (account: Account): NonNullable<SessionModel["account"]> => ({ id: account.id, name: account.name, ...(account.label ? { label: account.label } : {}) });
@@ -282,6 +284,19 @@ export function offeredHere(lists: Lists): Offered[] {
   ];
 }
 
+/** The coding agents' accounts whose list isn't all they run yet: signed in and installed, with
+ * none listed, only their agent's usual ones (Claude Code's as it starts), or from a bridge (or an
+ * agent) that can't say its list is whole. One of theirs not listed may still run. */
+export function stillListing(lists: Lists): string[] {
+  if (!lists.bridge) return [];
+  const bridge = lists.bridge;
+  return [...bridge.accounts.values()].filter(account => {
+    if (!account.installed || !account.signedIn) return false;
+    const ofIt = bridge.models.filter(model => model.providerID === account.id);
+    return !ofIt.length || ofIt.every(model => model.provisional) || !account.complete;
+  }).map(account => account.id);
+}
+
 /** Whether `ref`'s place knows its provider or account, so one it can't say about yet is only
  * still being listed (a coding agent's as it starts, one a project's settings add), not one with
  * no account here at all. A bridge that can't say now knows its agents' as far as can be said. */
@@ -299,8 +314,8 @@ export type StartingWhy = "wanted" | "default" | "first";
  * kept), or one that can't be said about yet but whose provider or account is here (its models
  * still being listed), as it is; else the engine's default, if it runs and isn't being retired;
  * else the first model that does (`offeredHere`: the engine's first, then the coding agents').
- * Null for none: nothing runs here; undefined while the engine can't say (and none wanted could be
- * taken as it is). */
+ * Null for none: nothing runs here; undefined while the engine can't say, or didn't say its default
+ * (and none wanted could be taken as it is). */
 export function startingModel(wanted: (Ref | null | undefined)[], lists: Lists): { model: Ref; why: StartingWhy } | null | undefined {
   for (const ref of wanted) {
     if (!ref) continue;
@@ -312,6 +327,11 @@ export function startingModel(wanted: (Ref | null | undefined)[], lists: Lists):
       continue;
     }
     if (!state.runs) continue;
+    // A Custom Auto list deleted runs on the first (`withAgents`): that one.
+    if (ref.providerID === "auto") {
+      const list = lists.bridge?.auto?.find(each => each.id === ref.id) ?? lists.bridge?.auto?.[0];
+      return { model: { providerID: "auto", id: list?.id ?? ref.id }, why: "wanted" };
+    }
     const listed = listedOf(ref, lists);
     if (listed?.retiring) continue;
     return { model: { providerID: ref.providerID, id: listed?.id ?? ref.id, ...(ref.variant ? { variant: ref.variant } : {}) }, why: "wanted" };
@@ -319,6 +339,8 @@ export function startingModel(wanted: (Ref | null | undefined)[], lists: Lists):
   // (Not one of the coding agents' meanwhile, as if the engine had none.)
   if (!lists.engine) return undefined;
   const fallback = lists.engine.fallback;
+  // (A default it didn't say isn't none: nor can the first be taken for it.)
+  if (fallback === undefined) return undefined;
   if (fallback && stateOf(fallback, lists)?.runs && !listedOf(fallback, lists)?.retiring) return { model: fallback, why: "default" };
   const first = offeredHere(lists).find(model => !model.retiring && model.providerID !== "auto");
   return first ? { model: { providerID: first.providerID, id: first.id }, why: "first" } : null;
