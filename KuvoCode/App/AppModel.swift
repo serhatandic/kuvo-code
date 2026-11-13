@@ -357,6 +357,9 @@ final class AppModel {
             guard let self else { return }
             machines.gates.foundOlder(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
         }
+        workspace.onCurrentBox = { [weak self] box, features in
+            if BoxGate.isCurrent(features) { self?.machines.gates.letGo(box) }
+        }
         machines.gates.onLetGo = { [weak self] box in self?.workspace.boxUpdated(box) }
         BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
@@ -726,6 +729,8 @@ final class AppModel {
     /// is under way (a running session is never stopped for an update): until then the app follows
     /// it, and Settings › General and the menu bar's card say the update waits.
     private(set) var keeperMakesWay = false
+    /// This Mac's own box looked at while the update gate holds it (`followOwnBoxGate`).
+    @ObservationIgnored private var ownBoxGateFollow: Task<Void, Never>?
 
     /// Whether quitting leaves this Mac's work going (the keeper runs it): Quit takes Kuvo Code to
     /// the menu bar (`InBackground`), and Stop Background Work is there.
@@ -852,27 +857,37 @@ final class AppModel {
     }
 
     /// This Mac's own box, as the update gate holds it (#679): while an older app's keeper still runs
-    /// it (making way for this app's once the work under way ends), it's asked what it has, and
-    /// held while that's less than this app needs: nothing but its update is sent it until the
-    /// keeper of this version runs it. Let go once it has it all.
-    func checkOwnBoxGate() async {
-        let gates = machines.gates
-        guard keeperMakesWay || gates.state(of: BoxClient.mac) != nil else { return }
+    /// it (making way for this app's once the work under way ends), it's held, and asked what it has
+    /// every ten seconds: let go once it has all this app needs (the keeper of this version runs it,
+    /// or the older one turns out to have it). One that can't be asked just then is asked again.
+    func followOwnBoxGate() {
+        guard ownBoxGateFollow == nil, keeperMakesWay || machines.gates.state(of: BoxClient.mac) != nil else { return }
+        ownBoxGateFollow = Task { [weak self] in
+            while !Task.isCancelled, let self {
+                if await self.ownBoxIsCurrent() == true {
+                    self.machines.gates.letGo(BoxClient.mac)
+                    break
+                }
+                if self.machines.gates.state(of: BoxClient.mac) == nil {
+                    self.machines.gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
+                }
+                do { try await Self.ownBoxLookAgain() } catch { break }
+            }
+            self?.ownBoxGateFollow = nil
+        }
+    }
+
+    /// How long it waits between looks at this Mac's own box while it's held (a test's own).
+    nonisolated(unsafe) static var ownBoxLookAgain: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(10)) }
+
+    /// Whether this Mac's own box has all this app needs, as it says (`kuvo/info`; a 404 or 405:
+    /// from before it said); nil when it couldn't be asked.
+    private func ownBoxIsCurrent() async -> Bool? {
         struct Info: Decodable { var features: [String]? }
-        guard let (status, data) = try? await box(BoxClient.mac).send("GET", "kuvo/info") else { return }
-        let features: [String]
-        if status == 404 || status == 405 {
-            features = []
-        } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
-            features = info.features ?? []
-        } else {
-            return
-        }
-        if BoxGate.isCurrent(features) {
-            gates.letGo(BoxClient.mac)
-        } else {
-            gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
-        }
+        guard let (status, data) = try? await box(BoxClient.mac).send("GET", "kuvo/info") else { return nil }
+        if status == 404 || status == 405 { return false }
+        guard (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
+        return BoxGate.isCurrent(info.features ?? [])
     }
 
     /// The box here answered, without a chats folder: it's from before chats had one there.
@@ -906,8 +921,14 @@ final class AppModel {
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
             follower.onGone = { [weak self] in self?.keeperGone() }
             follower.onMakingWay = { [weak self] makingWay in
-                self?.keeperMakesWay = makingWay
-                Task { await self?.checkOwnBoxGate() }
+                guard let self else { return }
+                keeperMakesWay = makingWay
+                // An older app's keeper runs it: held at once, until it's asked what it has
+                // (nothing reaches it on a path it may not have meanwhile).
+                if makingWay, machines.gates.state(of: BoxClient.mac) == nil {
+                    machines.gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
+                }
+                followOwnBoxGate()
             }
             host.tellsBox = false
             // Answering again at a new address (its listener failed by itself): the keeper is told.
@@ -1004,7 +1025,7 @@ final class AppModel {
         switch state {
         case .ready(let endpoint):
             // (A newer keeper's box, say, in place of one an older app's keeper ran.)
-            Task { await checkOwnBoxGate() }
+            followOwnBoxGate()
             // Up again, somewhere new: connected anew (a start under way, waiting for it, takes it).
             if engine == .ready, api?.client.endpoint == endpoint { return }
             guard starting == nil else { return }

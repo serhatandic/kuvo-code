@@ -158,8 +158,10 @@ final class AgentMail {
             return ("Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let said = try? JSONDecoder().decode(Said.self, from: answer.body)
-        // (This Mac's box held for its update, #679: the gate's words, which say when it works again.)
         guard answer.status == 200, let text = said?.text else {
+            // This Mac's box held for its update (#679), an older app's keeper running it until the
+            // work under way ends: a tool it hasn't, said so the agent can carry on without it.
+            if [400, 404].contains(answer.status), BoxGates.isHeld(client.box) { return (Self.updating, true) }
             return (said?.message ?? "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let failed = said?.isError ?? false
@@ -168,6 +170,10 @@ final class AgentMail {
         if !failed, name == "start_session" { Task { await refresh() } }
         return (text, failed)
     }
+
+    /// What an agent hears of a tool this Mac's box can't answer while an older app's keeper still
+    /// runs it, after an update.
+    static let updating = "Kuvo Code on this Mac is finishing an update, and its background service can't do this until the work that's running ends. Try again later; if you work on your own, say what's left in your reply."
 
     private func track(_ name: String, _ arguments: [String: Any], caller: String?) {
         let waits = (arguments["wait"] as? NSNumber)?.boolValue ?? false

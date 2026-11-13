@@ -47,9 +47,14 @@ was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sig
 (`Integration.programUpdate`: under way, updated, already the newest, or why it failed, by an id
 that tells one outcome from the next), and `isInUpdateAll` whether its box's Update All updates it;
 `OpenCodeAPI.updateAllPrograms()`, `updateProgram(_:)` and `sawProgramUpdate(_:at:)` ask for
-them (with the old-box path for a box from before). Both apps draw these; the box decides.
+them (coding agents still running a build from before them say they haven't moved yet). Both apps
+draw these; the box decides.
 
 ## ClientSessions
+
+`BoxGate`: the update gate (#679, PROTOCOL.md "The update gate"), the features a box must have
+before a client uses it (`required`), the routes a held box is still asked, and both apps' words
+for it.
 
 What a client shows of a computer's sessions, the same in both apps. Rules only, on OpenCodeKit's
 `Session`: no views, no app state.

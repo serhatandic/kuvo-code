@@ -70,7 +70,8 @@ final class CursorProvider: ProviderRuntime {
             return HostLimits.shared.rows.contains { ProviderAccountID.family(of: $0.providerID) == "cursor" }
                 || !(HostHistory.shared.days["cursor"] ?? []).isEmpty
         }
-        // COMPAT(0.7 cursor-box): the host's Cursor key, for a box from before.
+        // The host's Cursor key, for a box from before (unreached since the update gate, #679:
+        // goes with #631 piece H1).
         return await loadOffMainActor { [authStore] in authStore.loadAuthState() } != nil
     }
 
@@ -81,8 +82,8 @@ final class CursorProvider: ProviderRuntime {
 
     func refresh() async -> ProviderSnapshot {
         if Self.hosted { return hostedSnapshot() }
-        // COMPAT(0.7 cursor-box): a box that doesn't state Cursor's yet: read with the host's key
-        // here, as before. Goes 3 months after 0.8.0 (#631 piece H1).
+        // A box that doesn't state Cursor's: read with the host's key here, as before (unreached
+        // since the update gate, #679: goes with #631 piece H1).
         guard let state = await loadOffMainActor({ [authStore] in authStore.loadAuthState() }) else {
             return ProviderSnapshot.error(provider: provider, error: CursorAuthError.notLoggedIn)
         }

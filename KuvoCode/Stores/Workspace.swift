@@ -328,6 +328,8 @@ final class Workspace {
     /// A box said it has less than the app needs (its features, as it said them): the app holds it
     /// for its update (#679).
     @ObservationIgnored var onOlderBox: (String, [String]) -> Void = { _, _ in }
+    /// A box said it has all the app needs (its features, as it said them): one held is let go.
+    @ObservationIgnored var onCurrentBox: (String, [String]) -> Void = { _, _ in }
 
     /// Whether `box` lists its sessions, as it says of itself: noted (`outdatedLists`); nil where it
     /// can't be asked now.
@@ -340,6 +342,7 @@ final class Workspace {
             onOlderBox(box, featuresHere[box].map { Array($0) } ?? [])
         } else if says == true {
             outdatedLists.remove(box)
+            onCurrentBox(box, featuresHere[box].map { Array($0) } ?? [])
         }
         return says
     }

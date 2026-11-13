@@ -41,8 +41,10 @@ struct BoxGateTests {
         #expect(BoxGate.missing([String]()) == BoxGate.required)
     }
 
-    // While it's held, only what says what it is and what updates it goes through.
+    // While it's held, only what says what it is and what updates it goes through, and the tool
+    // calls of the work running there (so it goes on as it was).
     @Test func aHeldBoxIsAskedOnlyAboutItsUpdate() {
+        #expect(BoxGate.isAllowed("kuvo/agent-tools"))
         #expect(BoxGate.isAllowed("kuvo/info"))
         #expect(BoxGate.isAllowed("kuvo/update"))
         #expect(BoxGate.isAllowed("kuvo/box/update"))

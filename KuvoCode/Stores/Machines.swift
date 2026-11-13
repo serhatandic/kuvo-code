@@ -809,6 +809,8 @@ final class MachineEngine {
     func retire() {
         isRetired = true
         endConnection()
+        updateFollow?.cancel()
+        updateFollow = nil
     }
 
     private struct Superseded: Error {}
@@ -898,12 +900,14 @@ final class MachineEngine {
     nonisolated(unsafe) static var updateLookAgain: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(10)) }
 
     /// The box there, as its connection leaves it: used once it has everything this app needs
-    /// (`BoxGate`), else brought up to date first, said as "Updating Kuvo Code" (`BoxGates`). Over
-    /// SSH its connection has put this app's files there already (`asItIs` false), so it does at
-    /// once. This Mac's own box attached in place is offered the release the app carries
-    /// (`kuvo/box/update {from}`) and waited for while it takes it. Anything else older than this
-    /// app needs fails, saying why: nothing falls back to an older box's way. A box that couldn't
-    /// say what it has (not answering just then) is used as before; what reads it later tells.
+    /// (`BoxGate`), else brought up to date first (`BoxGates`). Over SSH its connection has put this
+    /// app's files there already (`asItIs` false), so it does at once. This Mac's own box attached
+    /// in place is offered the release the app carries (`kuvo/box/update {from}`): its connection
+    /// goes on, its engine used (a session there waiting on you can be answered, which the box waits
+    /// for before it updates), its box's routes held, "Updating…", and looked at again until it's
+    /// taken (`followUpdate`). Anything else older than this app needs fails, saying why: nothing
+    /// falls back to an older box's way. A box that couldn't say what it has (not answering just
+    /// then) is used as before; what reads it later tells.
     private func bringUpToDate(asItIs: Bool, check: () throws -> Void) async throws {
         guard let box = catalog.box, var features = await features(of: box) else { return }
         try check()
@@ -912,8 +916,8 @@ final class MachineEngine {
             return
         }
         let name = machine.isThisMac ? "this Mac" : machine.name
-        func fail(_ why: String?) -> CouldntUpdate {
-            let words = BoxGate.Words.couldntUpdate(name, why: why)
+        func fail(_ why: String?, setUpElsewhere: Bool = true) -> CouldntUpdate {
+            let words = BoxGate.Words.couldntUpdate(name, why: why, setUpElsewhere: setUpElsewhere)
             gates?.failed(machine.id, words)
             return CouldntUpdate(errorDescription: words)
         }
@@ -922,7 +926,7 @@ final class MachineEngine {
         // Its files are this app's, yet it answers as older: they didn't take (or a newer Kuvo Code
         // set it up, one without what this one needs, which this Mac leaves as it is).
         guard machine.isThisMac else {
-            throw fail(asItIs ? "It has another Kuvo Code that this Mac doesn’t update over" : "Its files didn’t take this Mac’s version")
+            throw asItIs ? fail("It has another Kuvo Code that this Mac doesn’t update over") : fail("Its files didn’t take this Mac’s version", setUpElsewhere: false)
         }
         guard features.contains("box.update") else { throw fail("It’s from before Kuvo Code could update it from this Mac") }
         guard let release = Self.boxRelease() else { throw fail("This copy of Kuvo Code doesn’t carry a release to update it with") }
@@ -935,13 +939,27 @@ final class MachineEngine {
             let now = try? await box.value(Update.self, "GET", "kuvo/update")
             guard now?.offered != nil || now?.updating != nil else { throw fail(BoxRefusal(status: status, data: data).message) }
         }
-        // Taken at its first quiet moment: looked at again until it's there.
-        while !BoxGate.isCurrent(features) {
-            try await Self.updateLookAgain()
-            try check()
-            features = await self.features(of: box) ?? features
+        // Taken at its first quiet moment: looked at again until it's there, while this connection goes on.
+        followUpdate(of: box)
+    }
+
+    /// Following this Mac's box attached in place as it takes the release offered it: let go once
+    /// it says it has all this app needs; ended with the connection.
+    @ObservationIgnored private var updateFollow: Task<Void, Never>?
+
+    private func followUpdate(of box: BoxClient) {
+        updateFollow?.cancel()
+        let id = machine.id
+        updateFollow = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Self.updateLookAgain() } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                if let features = await self.features(of: box), BoxGate.isCurrent(features) {
+                    self.gates?.letGo(id)
+                    return
+                }
+            }
         }
-        gates?.letGo(machine.id)
     }
 
     /// What `box` says it has (`kuvo/info`'s `features`): none for one from before it said (404,
@@ -994,6 +1012,8 @@ final class MachineEngine {
     func disconnect() {
         isStopping = true
         endConnection()
+        updateFollow?.cancel()
+        updateFollow = nil
         downCheck?.cancel()
         downCheck = nil
         connections += 1

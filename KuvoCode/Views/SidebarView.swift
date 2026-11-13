@@ -327,12 +327,13 @@ struct SidebarView: View {
     private func boxName(_ box: SidebarBox) -> String { app.name(of: box) }
 
     /// The update gate's state of `box` (#679): updating, with what it waits for; or why it
-    /// couldn't be, with Try Again for a machine (connecting again brings it up to date).
+    /// couldn't be, with Try Again for a machine (connecting again brings it up to date). The
+    /// Projects can't be saved row's look, two lines, as its words say what to do.
     @ViewBuilder private func gateRow(_ gate: BoxGates.State, on box: SidebarBox) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             switch gate {
-            case .updating: Spinner(size: 11).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-            case .failed: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+            case .updating: Spinner(size: 11).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }.accessibilityHidden(true)
+            case .failed: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange).accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
                 switch gate {
@@ -349,8 +350,9 @@ struct SidebarView: View {
                         .sidebarFont(12)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                    // Connecting again brings it up to date (one connected already, too).
                     if let engine = box.machine.flatMap({ app.machines.engine($0) }) {
-                        Button("Try Again") { app.connect(engine) }
+                        Button("Try Again") { app.reconnectNow(engine) }
                             .buttonStyle(.link)
                             .sidebarFont(12, weight: .medium)
                             .padding(.top, 2)
@@ -393,6 +395,11 @@ struct SidebarView: View {
             .help("New Project… (⇧⌘N)")
             .accessibilityLabel("New Project")
         }
+        // Its box older than this app needs, held for its update (#679): said where its sessions
+        // would be, until they're there (folded or not: nothing of it shows meanwhile).
+        if let gate = app.machines.gates.state(of: box.machine ?? BoxClient.thisMac) {
+            gateRow(gate, on: box)
+        }
         if !isFolded("projects") {
             // This Mac's box keeps its projects: stopped, nothing here can be saved until it's back.
             if box.machine == nil, let failure = app.box.failure {
@@ -409,11 +416,6 @@ struct SidebarView: View {
                 }
                 .help("What keeps your projects on this Mac stopped. \(failure)")
                 .accessibilityLabel("Projects can’t be saved. Try Again")
-            }
-            // Its box older than this app needs, held for its update (#679): said where its
-            // sessions would be, until they're there.
-            if let gate = app.machines.gates.state(of: box.machine ?? BoxClient.thisMac) {
-                gateRow(gate, on: box)
             }
             // (Once its box has said what its sessions are: until then there may be some.)
             if workspace.isLoaded && workspace.isListed(box.machine ?? BoxClient.thisMac) && projects.isEmpty {

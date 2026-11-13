@@ -85,6 +85,9 @@ final class BoxGates {
         return BoxRefusal(status: 503, message: words, reason: reason)
     }
 
+    /// Whether `box` is held now, from any thread.
+    nonisolated static func isHeld(_ box: String) -> Bool { mirror.withLock { $0[box] != nil } }
+
     /// The `reason` of a held box's refusal.
     nonisolated static let reason = "updating"
 }

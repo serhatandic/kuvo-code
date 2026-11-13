@@ -36,10 +36,13 @@ public enum BoxGate {
     public static func isCurrent(_ features: some Sequence<String>) -> Bool { missing(features).isEmpty }
 
     /// The routes a held box is still asked: what it is (`kuvo/info`) and its own update
-    /// (`kuvo/update`, `kuvo/box/update`). Every other request to it waits for the update.
+    /// (`kuvo/update`, `kuvo/box/update`); and its running agents' own tool calls
+    /// (`kuvo/agent-tools`, which a Mac passes on for them), so work under way there goes on as it
+    /// was (a tool it hasn't refuses in its own words). Every other request to it waits for the
+    /// update.
     public static func isAllowed(_ path: String) -> Bool {
         let route = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
-        return ["kuvo/info", "kuvo/update", "kuvo/box/update"].contains(route)
+        return ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/agent-tools"].contains(route)
     }
 
     /// What both apps say of a box that's older than they need.
@@ -50,22 +53,28 @@ public enum BoxGate {
         public static let thisMacFinishing = "Kuvo Code on this Mac finishes updating once the work running now ends."
 
         /// This Mac's box, attached in place, taking the release the app offered it.
-        public static let thisMacTaking = "Kuvo Code on this Mac updates at the first moment nothing runs there."
+        public static let thisMacTaking = "Kuvo Code on this Mac updates at the first moment nothing runs there. A session waiting on you holds it until you answer."
+
+        /// A phone's title for a computer older than it, which it can't update itself: it waits.
+        public static let waitingTitle = "Waiting for an Update"
+        /// The same, in a row: "Waiting for update".
+        public static let waitingShort = "Waiting for update"
 
         /// What a phone says of a computer older than it: who brings it up to date. `isMac`: a
         /// Mac's box, which updates with Kuvo Code there; a machine updates when a Mac connects
         /// to it, or by itself overnight.
         public static func waiting(for name: String, isMac: Bool) -> String {
             isMac
-                ? "Update Kuvo Code on \(name) to use it from this phone. Nothing changes there meanwhile."
-                : "\(name) updates when a Mac with Kuvo Code connects to it, or by itself overnight. Nothing changes there meanwhile."
+                ? "Kuvo Code on \(name) is older than this iPhone’s. Update it there, or let it finish an update under way. Nothing changes there meanwhile."
+                : "Kuvo Code on \(name) is older than this iPhone’s. It updates when a Mac with Kuvo Code connects to it, or by itself overnight. Nothing changes there meanwhile."
         }
 
         /// Why a Mac couldn't bring `name` up to date, and what to do. `why`: what went wrong, in a
-        /// sentence (nil: it was set up by a Kuvo Code this one can't update over).
-        public static func couldntUpdate(_ name: String, why: String?) -> String {
+        /// sentence; `setUpElsewhere`: another Kuvo Code may update it (one this Mac set up itself
+        /// only gets Try Again).
+        public static func couldntUpdate(_ name: String, why: String?, setUpElsewhere: Bool = true) -> String {
             let reason = why.map { " \($0.hasSuffix(".") ? $0 : $0 + ".")" } ?? ""
-            return "Kuvo Code on \(name) couldn’t be updated.\(reason) Try again, or update it with the Kuvo Code that set it up."
+            return "Kuvo Code on \(name) couldn’t be updated.\(reason) " + (setUpElsewhere ? "Try again, or update it with the Kuvo Code that set it up." : "Try again.")
         }
     }
 }
