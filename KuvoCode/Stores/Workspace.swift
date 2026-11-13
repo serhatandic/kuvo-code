@@ -327,7 +327,7 @@ final class Workspace {
         // A machine its box hasn't answered for since this update (away at the first launch with
         // it): its sessions as last seen, where this Mac filed them before, until its box says.
         guard let listing = sessionLists[box] else { return lastFiled(session) }
-        let place = SessionLists.place(of: listing.sessions[session.id], isArchived: Self.isArchived(session))
+        let place = SessionLists.place(of: listing.facts(of: session.id), isArchived: Self.isArchived(session))
         if case .project(let project) = place { return .project(Self.here(project, on: box)) }
         return place
     }
@@ -341,7 +341,7 @@ final class Workspace {
 
     /// What `session` is, as its box says; nil for one it hasn't listed.
     func listKind(of session: Session) -> SessionLists.Kind? {
-        sessionLists[Self.box(of: session.location.directory)]?.sessions[session.id]?.kind
+        sessionLists[Self.box(of: session.location.directory)]?.facts(of: session.id)?.kind
     }
 
     /// Whether `session`'s row is in Chats, as its box says.
@@ -1113,7 +1113,7 @@ final class Workspace {
     /// one that's in none (a bot's, a subagent's) by its folder.
     func projectName(of session: Session) -> String {
         let box = Self.box(of: session.location.directory)
-        let facts = sessionLists[box]?.sessions[session.id]
+        let facts = sessionLists[box]?.facts(of: session.id)
         if facts?.kind == .chat { return "Chats" }
         let directory = facts?.project.map { Self.here($0, on: box) } ?? session.location.directory
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent

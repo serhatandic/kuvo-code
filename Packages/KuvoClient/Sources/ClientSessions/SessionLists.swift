@@ -103,8 +103,17 @@ public enum SessionLists {
         public private(set) var at: String?
         public private(set) var sessions: [String: Facts] = [:]
         public private(set) var projects: [String: Project] = [:]
+        /// What it said of sessions it has let go since (deleted there, or moved away), the latest
+        /// few hundred: for a row a client still holds as a conversation moves, which it places as
+        /// it was until it's listed where it went (`facts(of:)`).
+        public private(set) var former: [String: Facts] = [:]
 
         public init() {}
+
+        /// What its box says of session `id`: as it's listed, else as it was before it was let go.
+        public func facts(of id: String) -> Facts? {
+            sessions[id] ?? former[id]
+        }
 
         /// Whether its box has said it yet.
         public var isRead: Bool { at != nil }
@@ -127,11 +136,14 @@ public enum SessionLists {
             let before = self
             at = line.at
             if line.full == true {
+                for (id, facts) in sessions where line.sessions[id] == nil { former[id] = facts }
                 sessions = line.sessions
             } else {
                 sessions.merge(line.sessions) { _, new in new }
-                for id in line.gone ?? [] { sessions[id] = nil }
+                for id in line.gone ?? [] { former[id] = sessions.removeValue(forKey: id) ?? former[id] }
             }
+            for id in line.sessions.keys { former[id] = nil }
+            if former.count > 500 { former = [:] }
             projects = line.projects
             // (Its first line changes it either way: it's read now.)
             return before.at == nil || sessions != before.sessions || projects != before.projects
