@@ -4839,7 +4839,10 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   `compact` always. `commands` is the engine's and yours as "/" lists them: never its `goal`, and
   its `review` as `review-quick` while the keyword has the name. Read it again when the conversation
   opens and as its agents bridge comes or goes.
-- `POST` with `{"text", "files"?, "side"?, "refusal"?, "reviewer"?}`: the text as typed; whether
+- `POST` with `{"id"?, "text", "files"?, "side"?, "refusal"?, "reviewer"?}`: the send's own id
+  (or `idempotency-key`, with which the phone's link sends it again after its session drops: "Sending
+  again"), under which the box answers the same send again as it did, for ten minutes, never doing
+  it twice; the text as typed; whether
   pictures or files are attached; whether the side thread's tag is on the composer; why the
   conversation's model can't run, as the client says it; the model picked last in "Who reads it"
   (`{providerID, id}`, which wins a tie between two of the same name). It answers `200` with what it
@@ -4864,6 +4867,9 @@ client does with the rest; a client keeps the draft, puts back what it's told to
     written since: `text` into an empty composer, else `beside` where it's given (a keyword's words
     alone, which the keyword would otherwise take in; nothing for a goal's pause), else `text`;
     `error` says why, over the composer.
+- **Meanwhile** a client shows the text at once as a message waiting to go, and puts what the box
+  says in its place; "/" and "!" texts are asked one after another, and a message sent meanwhile
+  goes at once.
 - **What each keyword does:** "/plan" alone toggles Plan, with words turns it on and sends them
   (with files alone, on); "/autopilot" alone toggles it, with words or files the box turns it on
   first; "/loop <how often> <what to do>" adds a wake-up that sends the words again, first due by the

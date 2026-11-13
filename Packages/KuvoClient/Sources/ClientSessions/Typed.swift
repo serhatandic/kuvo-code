@@ -26,13 +26,17 @@ public enum Typed {
     /// thread's tag is on the composer, why the conversation's model can't run (as the client shows
     /// it), and the model picked last in "Who reads it".
     public struct Ask: Encodable, Sendable {
+        /// This send's own id: the same send again (resent after its connection dropped) is
+        /// answered as it was, never done twice.
+        public var id: String
         public var text: String
         public var files: Bool
         public var side: Bool
         public var refusal: String?
         public var reviewer: ModelRef?
 
-        public init(text: String, files: Bool, side: Bool = false, refusal: String? = nil, reviewer: ModelRef? = nil) {
+        public init(id: String, text: String, files: Bool, side: Bool = false, refusal: String? = nil, reviewer: ModelRef? = nil) {
+            self.id = id
             self.text = text
             self.files = files
             self.side = side

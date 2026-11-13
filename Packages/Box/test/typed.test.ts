@@ -244,6 +244,17 @@ describe("kuvo/sessions/<id>/typed", () => {
     expect((await ask("POST", "ses_main", { text: "/autopilot" })).json).toEqual({ keyword: "autopilot", toggleAutopilot: true })
   })
 
+  test("the same send again, by its id (a link resending after its connection dropped): answered as it was, done once", async () => {
+    bridgeSays = each => ({ status: 200, body: { data: { id: `q${bridgeAsked.length}`, question: each.body.question } } })
+    const first = await ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_1" })
+    const again = await ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_1" })
+    expect(again).toEqual(first)
+    expect(bridgeAsked.filter(each => each.method === "POST" && each.path === "/api/kuvo/btw/ses_main")).toHaveLength(1)
+    // Another send, another question.
+    await ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_2" })
+    expect(bridgeAsked.filter(each => each.method === "POST" && each.path === "/api/kuvo/btw/ses_main")).toHaveLength(2)
+  })
+
   test("a model that can't run: said, all of it kept; a \"!\" command still runs", async () => {
     expect((await ask("POST", "ses_main", { text: "fix it", refusal: "Sign in to Anthropic again." })).json).toEqual({ restore: { text: "fix it" }, error: "Sign in to Anthropic again." })
     expect((await ask("POST", "ses_main", { text: "!npm test", refusal: "Sign in to Anthropic again." })).json).toEqual({ shell: "npm test" })

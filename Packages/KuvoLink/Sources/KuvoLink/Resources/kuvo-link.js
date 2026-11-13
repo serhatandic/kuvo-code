@@ -39140,7 +39140,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "3b8517d84b93";
+var BRIDGE_VERSION = "85f3ca8eac96";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -47759,7 +47759,7 @@ async function reviewReaders(engine, folder) {
   if (!lists?.engine)
     return [];
   const accounts = lists.engine.accounts;
-  return offeredHere(lists).filter((model) => !model.agents && !model.retiring).map((model) => ({
+  return offeredHere(lists).filter((model) => !model.agents).map((model) => ({
     name: model.name,
     ref: { providerID: model.providerID, id: model.id },
     provider: model.providerID === "opencode" ? "OpenCode Zen" : accounts.get(model.providerID)?.name ?? model.providerID
@@ -47768,6 +47768,17 @@ async function reviewReaders(engine, folder) {
 var refOf2 = (value) => isObject(value) && typeof value.providerID === "string" && typeof value.id === "string" ? { providerID: value.providerID, id: value.id } : null;
 var within6 = (signal, ms) => signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
 var STEP_PATIENCE = 30000;
+async function inTime2(work, ms) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Its computer didn’t answer in time. Try again in a moment.")), ms);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 var said6 = (error, otherwise) => error instanceof Error && error.message ? error.message : otherwise;
 async function routeAnswer(pieces) {
   const answer = await collected(pieces);
@@ -47794,7 +47805,7 @@ async function doStep(step, session, place, context) {
       return { goalCleared: true };
     }
     case "askBot": {
-      const outcome = await askGoal(session, step.words, () => targetsOf({ readEngine, bridge }));
+      const outcome = await inTime2(askGoal(session, step.words, () => targetsOf({ readEngine, bridge })), STEP_PATIENCE);
       if ("refused" in outcome)
         throw new Error(outcome.refused.message);
       return { askedBot: true };
@@ -47803,7 +47814,7 @@ async function doStep(step, session, place, context) {
       if (isAutopilot(place.data))
         return {};
       const route = `kuvo/sessions/${encodeURIComponent(session)}/autopilot`;
-      const answer = await routeAnswer(autopilotRoute({ ...context, route, request: { ...request, method: "PUT", path: route, body: Buffer.from(JSON.stringify({ autopilot: true })) } }));
+      const answer = await inTime2(routeAnswer(autopilotRoute({ ...context, signal, route, request: { ...request, method: "PUT", path: route, body: Buffer.from(JSON.stringify({ autopilot: true })) } })), STEP_PATIENCE);
       if (answer.status !== 200)
         throw new Error(typeof answer.value.message === "string" ? answer.value.message : "Autopilot couldn’t be turned on. Try again.");
       return { autopilot: answer.value };
@@ -47835,7 +47846,34 @@ function answerOf3(decision, done, failure) {
     return { ...decision.keyword ? { keyword: decision.keyword } : {}, restore: failure.restore, error: failure.error };
   return { ...steps, ...done, ...command ? { command } : {}, ...send ? { send } : {}, ...restore ? { restore } : {}, ...error ? { error } : {} };
 }
+var KEPT_FOR4 = 10 * 60000;
+var answered5 = new Map;
 async function* typedRoute(context, match) {
+  const { request, json } = context;
+  const given = parsed(request.body);
+  const header = request.headers["idempotency-key"];
+  const named = isObject(given) && typeof given.id === "string" && given.id.trim() ? given.id : typeof header === "string" ? header : "";
+  const id = request.method.toUpperCase() === "POST" && named.trim() ? named.trim().slice(0, 200) : null;
+  if (!id)
+    return yield* typedAnswer(context, match);
+  const now = Date.now();
+  for (const [key, kept] of answered5)
+    if (kept.until < now)
+      answered5.delete(key);
+  const key = `${match[1]}
+${id}`;
+  let kept = answered5.get(key);
+  if (!kept) {
+    kept = { until: now + KEPT_FOR4, answer: collected(typedAnswer(context, match)).then((answer) => ({ status: answer.status, value: parsed(answer.body) ?? {} }), (error) => {
+      answered5.delete(key);
+      throw error;
+    }) };
+    answered5.set(key, kept);
+  }
+  const { status, value } = await kept.answer;
+  return yield* json(status, value);
+}
+async function* typedAnswer(context, match) {
   const { request, readEngine, bridge, signal, json } = context;
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "POST")

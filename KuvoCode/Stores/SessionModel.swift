@@ -1236,25 +1236,28 @@ final class SessionModel {
     /// message, kept by its new-session composer), so it isn't kept twice.
     func submit(_ text: String, files: [URL], for model: Model?, queue: Bool, quotes: [Drafts.Quote] = [], side: Bool = false, refusal: String? = nil, keptElsewhere: Bool = false) {
         sent += 1
-        let previous = typedAsks
-        guard Typed.asksBox(text) else {
-            // After what's being asked of the box, in the order they were sent.
-            guard let previous else { return sendMessage(text, files: files, for: model, queue: queue, keptElsewhere: keptElsewhere) }
-            typedAsks = Task {
-                await previous.value
-                sendMessage(text, files: files, for: model, queue: queue, keptElsewhere: keptElsewhere)
-            }
-            return
-        }
+        // A message goes at once, whatever is being asked of the box.
+        guard Typed.asksBox(text) else { return sendMessage(text, files: files, for: model, queue: queue, keptElsewhere: keptElsewhere) }
         guard let box = box() else {
             restore(text: text, files: files)
             failure = "This conversation’s computer can’t be reached now. Try again in a moment."
             return
         }
-        let ask = Typed.Ask(text: text, files: !files.isEmpty, side: side, refusal: refusal, reviewer: Catalog.lastReviewer)
+        // Shown at once, as a message is before the engine has it, until its box has said what it
+        // means (then what that is shows instead).
+        let shown = Identifier.message()
+        outgoing[shown] = Outgoing(state: .sending, isOurs: true, startsRun: true)
+        editTranscript { $0.addLocal(id: shown, text: text, delivery: .steer) }
+        let ask = Typed.Ask(id: shown, text: text, files: !files.isEmpty, side: side, refusal: refusal, reviewer: Catalog.lastReviewer)
         let route = Typed.route(id)
+        // ("/" and "!" texts in the order they were sent.)
+        let previous = typedAsks
         typedAsks = Task {
             await previous?.value
+            defer {
+                editTranscript { $0.removeLocal(id: shown) }
+                outgoing[shown] = nil
+            }
             // A computer whose Kuvo Code is from before: it can't say, and nothing goes.
             guard await boxHas(Typed.feature) else {
                 restore(text: text, files: files)
@@ -1266,6 +1269,9 @@ final class SessionModel {
                 // One it couldn't answer for (the conversation isn't there): back as it says.
                 let answer = status == 200 ? try JSONDecoder().decode(Typed.Answer<AutopilotShown>.self, from: body)
                     : Typed.Answer<AutopilotShown>(refused: body, status: status, written: text)
+                // What it means shows in its place.
+                editTranscript { $0.removeLocal(id: shown) }
+                outgoing[shown] = nil
                 await took(answer, written: text, files: files, quotes: quotes, for: model, queue: queue, keptElsewhere: keptElsewhere)
             } catch {
                 restore(text: text, files: files)
@@ -1280,7 +1286,8 @@ final class SessionModel {
         send(text, files: files, for: model, queue: queue, typed: typed)
     }
 
-    /// What's being asked of the box, in turn: a message sent meanwhile goes after it.
+    /// What's being asked of the box, in turn: "/" and "!" texts one after another (a message
+    /// doesn't wait for them).
     @ObservationIgnored private var typedAsks: Task<Void, Never>?
 
     /// What its box said a typed text means, done: what the box did, shown at once, before its
@@ -1352,6 +1359,8 @@ final class SessionModel {
             failure = Self.sideTakesNoFiles
             return
         }
+        // (Those still in the composer: one sent meanwhile took any it had.)
+        let quotes = quotes.filter { quote in draftQuotes.contains { $0.id == quote.id } }
         let question = Quoting.message(quotes: quotes, text: written)
         draftQuotes.removeAll { quote in quotes.contains { $0.id == quote.id } }
         askFollowUp(question)
