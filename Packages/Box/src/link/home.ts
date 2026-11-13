@@ -59,15 +59,15 @@ export function recordedKind(file = KIND_FILE): "mac" | "machine" | null {
   try { word = fs.readFileSync(file, "utf8").trim(); } catch {}
   return word === "mac" || word === "machine" ? word : null;
 }
-const RECORDED_KIND = recordedKind();
-// This Mac's box: the app says so as it starts it in its own folder (BoxProcess, `KUVO_BOX=mac`), or
-// the box recorded it (`box/kind`), laid out in its own home as a machine's is (#333).
-export const IS_MAC = process.env.KUVO_BOX === "mac" || RECORDED_KIND === "mac";
-/** This Mac's app's own folder, when its box lives in it (`<support>/box`, which BoxProcess starts
- * it in, with no kind recorded): the one box that reaches beside its home, for what its app keeps
+// This Mac's box: the app's keeper says so as it starts it in the app's folder (BoxProcess,
+// `KUVO_BOX=mac`), which wins over anything recorded there (a `box/kind` a move back left); or a box
+// in a home of its own recorded it (`box/kind`), laid out as a machine's is (#333).
+export const IS_MAC = process.env.KUVO_BOX === "mac" || recordedKind() === "mac";
+/** This Mac's app's own folder, when its box lives in it (`<support>/box`, which the app's keeper
+ * starts it in, `KUVO_BOX=mac`): the one box that reaches beside its home, for what its app keeps
  * there (its chats, the files you attach, its machines' bridges). Null for every box laid out in a
  * home of its own: a machine's, and a Mac's in `~/.kuvo-code`, which name each folder from it. */
-export const APP_FOLDER = process.env.KUVO_BOX === "mac" && RECORDED_KIND === null ? path.dirname(path.resolve(K)) : null;
+export const APP_FOLDER = process.env.KUVO_BOX === "mac" ? path.dirname(path.resolve(K)) : null;
 /** A Mac's box in a home of its own: what its app did for it in its folder, it does itself (its
  * integration keys' files, keeping the Mac awake while agents work). */
 export const OWN_HOME_MAC = IS_MAC && APP_FOLDER === null;
@@ -247,7 +247,10 @@ export const LAUNCH_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PA
   ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
 // A box whose keys its app keeps (this Mac's, KUVO_KEYS_ON_HOST), without a way to reach it: its
 // keys can't be reached, rather than kept in files of its own instead of your Keychain.
-export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
+// A Mac's box in a home of its own keeps them on its host whichever process asks (`serve`, or a
+// client's `box route`), as its kind says, not its environment: all of them agree where a key is.
+// (#333's question 1: in the Keychain, through its host. Should they be files after all, this goes.)
+export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL) || OWN_HOME_MAC;
 delete process.env.KUVO_HOST_PASSWORD;
 // This Mac's vault's two secrets from its app, which no file holds (the host interface's password
 // is in `run/host.json`, which an agent's command can read): the host's vault secret, without

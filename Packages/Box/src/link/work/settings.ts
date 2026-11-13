@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import { textOf, writePrivate } from "../files";
+import { locked, textOf, writePrivate } from "../files";
 import { BOX, homeFolder } from "../home";
 
 export const WORK_SETTINGS_FILE = path.join(BOX, "work.json");
@@ -56,13 +56,16 @@ export function setProjectsFolder(given: unknown, file = WORK_SETTINGS_FILE): { 
   return checked;
 }
 
+// One change at a time, from any of this box's processes: each keeps what another changed.
 function writeSettings(change: Record<string, unknown>, file: string) {
-  let kept: Record<string, unknown> = {};
-  try {
-    const read = JSON.parse(textOf(file) ?? "");
-    if (isObject(read)) kept = read;
-  } catch {}
-  writePrivate(file, JSON.stringify({ ...kept, ...change }, null, 2));
+  locked(`${file}.lock`, () => {
+    let kept: Record<string, unknown> = {};
+    try {
+      const read = JSON.parse(textOf(file) ?? "");
+      if (isObject(read)) kept = read;
+    } catch {}
+    writePrivate(file, JSON.stringify({ ...kept, ...change }, null, 2));
+  });
 }
 
 /** Keep This Mac Awake, as this box keeps it: on unless you turned it off (a Mac's box in a home of

@@ -7,10 +7,14 @@
 // And Keep This Mac Awake (PROTOCOL.md, "Work › Keeping this Mac awake"): a Mac's box in a home of
 // its own keeps its Mac from falling asleep by itself while agents work there, as its setting says
 // (`keepsAwake` in `box/work.json`, on unless you turn it off), where its app's keeper did by the
-// app's. Its `kuvo-start` holds nothing for it (`box/kind`).
+// app's. Its `kuvo-start` holds nothing for it while it does (`box/kind`, `WORK_AWAKE_FILE`).
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { IS_MAC, OWN_HOME_MAC } from "../home";
+import fs from "node:fs";
+import path from "node:path";
+import { alive } from "../../shared/platform";
+import { writePrivate } from "../files";
+import { IS_MAC, OWN_HOME_MAC, RUN } from "../home";
 import { keepsAwakeSetting } from "./settings";
 
 let held: ChildProcess | null = null;
@@ -71,57 +75,78 @@ export function onPower(): boolean | null {
 
 /** Whether this box keeps its Mac awake while agents work, by its own setting: a Mac's in a home of
  * its own (in its app's folder, its app's keeper does, by the app's). */
-export const holdsWhileWorking = () => OWN_HOME_MAC && process.platform === "darwin";
+export const keepsMacAwakeItself = () => OWN_HOME_MAC && process.platform === "darwin";
 
 /** What holds the Mac awake while agents work: `caffeinate -i` (idle sleep, on battery too, as the
- * app's setting always did), tied to this process. A test gives its own. */
+ * app's setting always did), tied to this process. A test gives its own (a program named so). */
 export interface WorkHold {
   command: string;
   args: string[];
 }
 const WORK_HOLD: WorkHold = { command: "/usr/bin/caffeinate", args: ["-i", "-w", String(process.pid)] };
 
+/** Where the process that keeps the Mac awake for agents' work (`serve`) says so, for every other
+ * process (a client's `box route`) and the keeper (`kuvo-start`, which holds it awake itself while
+ * nothing here does): `{"by": <its pid>, "hold": <caffeinate's pid> | null}`. */
+export const WORK_AWAKE_FILE = path.join(RUN, "work-awake.json");
+
 let working: ChildProcess | null = null;
 
-/** Whether it's held awake for agents' work now. */
-export const awakeForWork = () => working !== null && working.exitCode === null && working.signalCode === null;
+const holding = () => working !== null && working.exitCode === null && working.signalCode === null;
+
+function noteHold(): void {
+  try { writePrivate(WORK_AWAKE_FILE, JSON.stringify({ by: process.pid, hold: holding() ? working!.pid ?? null : null })); } catch {}
+}
+
+/** Whether the Mac is held awake for agents' work now, by whichever of this box's processes holds
+ * it (as it says, `WORK_AWAKE_FILE`). */
+export function awakeForWork(): boolean {
+  try {
+    const said = JSON.parse(fs.readFileSync(WORK_AWAKE_FILE, "utf8"));
+    const running = (pid: unknown) => Number.isInteger(pid) && (pid as number) > 1 && alive(pid as number);
+    return running(said?.by) && running(said?.hold);
+  } catch {
+    return false;
+  }
+}
 
 /** Holds the Mac awake (`on`) or lets it sleep again, for agents' work. */
 export function holdForWork(on: boolean, hold: WorkHold = WORK_HOLD): void {
-  if (on) {
-    if (awakeForWork()) return;
+  if (on && !holding()) {
     try {
       const child = spawn(hold.command, hold.args, { stdio: "ignore" });
-      child.on("error", () => { if (working === child) working = null; });
-      child.on("exit", () => { if (working === child) working = null; });
+      child.on("error", () => { if (working === child) { working = null; noteHold(); } });
+      child.on("exit", () => { if (working === child) { working = null; noteHold(); } });
       child.unref();
       working = child;
     } catch {
       working = null;
     }
-    return;
+  } else if (!on && working) {
+    working.kill();
+    working = null;
   }
-  working?.kill();
-  working = null;
+  noteHold();
 }
 
-/** One look: held while the setting's on and something's at work (`busy`), let go otherwise. Where
- * whether something's at work can't be told, as it was. */
-export async function lookAtWork(busy: () => Promise<boolean>, hold: WorkHold = WORK_HOLD, setting = keepsAwakeSetting): Promise<boolean> {
-  if (!setting()) {
-    holdForWork(false, hold);
-    return false;
+/** One look: held while the setting's on and something's at work (`busy`: null when that can't be
+ * told, a recorded engine not answering), let go otherwise; where it can't be told, as it was.
+ * The setting's read again once `busy` answers, so one turned off meanwhile is never undone. */
+export async function lookAtWork(busy: () => Promise<boolean | null>, hold: WorkHold = WORK_HOLD, setting = keepsAwakeSetting): Promise<boolean> {
+  const now = setting() ? await busy().catch(() => null) : false;
+  if (now === null) {
+    noteHold();
+    return holding();
   }
-  let now: boolean;
-  try { now = await busy(); } catch { return awakeForWork(); }
-  holdForWork(now, hold);
-  return now;
+  holdForWork(now && setting(), hold);
+  return holding();
 }
 
 let looking: ReturnType<typeof setTimeout> | null = null;
-/** Looked at every ten seconds while this box runs (`serve`), as the app's keeper looked. */
-export function keepAwakeWhileWorking(busy: () => Promise<boolean>, every = 10_000): void {
-  if (!holdsWhileWorking() || looking) return;
+/** Looked at every ten seconds while this box runs (`serve`), as the app's keeper looked: a change
+ * to the setting holds or lets go by the next look. */
+export function keepAwakeWhileWorking(busy: () => Promise<boolean | null>, every = 10_000): void {
+  if (!keepsMacAwakeItself() || looking) return;
   const round = async () => {
     await lookAtWork(busy).catch(() => {});
     looking = setTimeout(() => void round(), every);

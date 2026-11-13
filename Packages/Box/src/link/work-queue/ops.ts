@@ -69,12 +69,14 @@ const real = (place: string): string | null => {
 const within = (file: string, folder: string) => file === folder || file.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep);
 
 /** Whether `file` (where it really is) is in this Mac's app's folders, for a Mac's box in a home of its
- * own, whose home isn't in them: any copy's (`~/Library/<Application Support, Caches…>/run.kuvo.code…`),
- * as the sandbox keeps them (fence/policy.ts, `kuvoPatterns`). */
+ * own, whose home isn't in them: any copy's, in your Library (`~/Library/<Application Support,
+ * Caches…>/run.kuvo.code…`) or its temporary folder (`/private/var/folders/…/run.kuvo.code…`), as the
+ * sandbox keeps them (fence/policy.ts, `kuvoPatterns`). */
 function inMacApp(file: string): boolean {
   if (!OWN_HOME_MAC || process.platform !== "darwin") return false;
+  if (/^\/private\/var\/folders\/[^/]+\/[^/]+\/[^/]+\/run\.kuvo\.code[^/]*(\/|$)/i.test(file)) return true;
   return [...new Set([homeFolder(), accountHome()].map(each => real(each) ?? each))]
-    .some(home => /^run\.kuvo\.code/i.test(path.relative(path.join(home, "Library"), file).split(path.sep)[1] ?? "") && within(file, path.join(home, "Library")));
+    .some(home => within(file, path.join(home, "Library")) && /^run\.kuvo\.code/i.test(path.relative(path.join(home, "Library"), file).split(path.sep)[1] ?? ""));
 }
 
 /** A file an agent named, read into `staging` (outside the queue's lock): checked where it really

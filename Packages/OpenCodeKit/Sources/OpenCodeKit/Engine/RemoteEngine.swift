@@ -1044,9 +1044,10 @@ public final class RemoteServer: @unchecked Sendable {
           # for as long as this keeper runs (its display still sleeps). No setting of yours changes.
           # Looked at each round: one held for a keeper that has since gone is gone with it. A Mac's
           # own box (`box/kind` says `mac`) keeps its Mac awake itself, while agents work there and
-          # as its own setting says: this holds nothing for it, and lets go of one it held.
+          # as its own setting says, once its link runs to do so (`run/work-awake.json` names it):
+          # then this holds nothing for it, and lets go of one it held.
           hold() {
-            if [ "$(tr -d ' \t\r\n' <"$K/box/kind" 2>/dev/null)" = mac ]; then
+            if [ "$(tr -d ' \t\r\n' 2>/dev/null <"$K/box/kind")" = mac ] && is "$(sed -n 's/.*"by":\([0-9]*\).*/\1/p' "$R/work-awake.json" 2>/dev/null)" kuvo-link; then
               a=$(cat "$R/awake.pid" 2>/dev/null); is "$a" caffeinate && kill "$a" 2>/dev/null
               rm -f "$R/awake.pid"
               return 0
@@ -1319,7 +1320,13 @@ public final class RemoteServer: @unchecked Sendable {
         # in `box`, never a Mac's, which an older Mac may still send. What's below them goes as
         # this start begins, the engine that read it gone: the Mac's copy, and the global file once
         # it came into the box whole.
-        if [ -f "$K/box/opencode.json" ]; then
+        # A Mac's own box (`box/kind` says `mac`) has its settings in `config` from the start, its
+        # own: nothing a machine's start did (a Mac's settings, those adopted into `box`) writes
+        # over them or is read before them.
+        own_mac=; [ "$(tr -d ' \\t\\r\\n' 2>/dev/null <"$K/box/kind")" = mac ] && own_mac=1
+        if [ -n "$own_mac" ]; then
+          unset KUVO_SETTINGS \(privateSettingsVariable)
+        elif [ -f "$K/box/opencode.json" ]; then
           unset KUVO_SETTINGS \(privateSettingsVariable)
           rm -f "$K/keys/settings.json"
           [ -f "$K/box/global-adopted" ] && mkdir -p "$K/config/opencode" && (umask 077; printf '{}\\n' >"$K/config/opencode/opencode.json")
@@ -1338,8 +1345,10 @@ public final class RemoteServer: @unchecked Sendable {
           (umask 077; printenv \(privateSettingsVariable) >"$K/keys/settings.json")
           unset \(privateSettingsVariable)
         fi
-        [ -f "$K/keys/settings.json" ] && export OPENCODE_CONFIG="$K/keys/settings.json"
-        [ -f "$K/box/opencode.json" ] && export OPENCODE_CONFIG="$K/box/opencode.json"
+        if [ -z "$own_mac" ]; then
+          [ -f "$K/keys/settings.json" ] && export OPENCODE_CONFIG="$K/keys/settings.json"
+          [ -f "$K/box/opencode.json" ] && export OPENCODE_CONFIG="$K/box/opencode.json"
+        fi
         # What the engine starts with, as its box gives it (its link's `engine-config`), which also
         # puts what some providers need from the engine, as the box learned it, beside its
         # settings: after a restart with no Mac there too. A box too old to know it starts as before.

@@ -11,7 +11,7 @@ import { ENGINE_LAYER_FILE } from "./engine/compatibility";
 import { appTemporary, sandboxCaches } from "./fence/policy";
 import {
   APP_FOLDER, APP_KEY_FILES, attachmentRoots, BOT_KEYS, BOTS, BOX, BOX_KEYS, CHATS, ENGINE_CONFIG, ENGINE_DATA, INTEGRATION_DATA, IS_MAC, K, KIND_FILE,
-  OWN_HOME_MAC, RUN, SEARCH, SESSION_WAKES, SSH_AGENTS, UPDATES, WAKE_COMMAND,
+  RUN, SEARCH, SESSION_WAKES, SSH_AGENTS, UPDATES, WAKE_COMMAND,
 } from "./home";
 import { LIST_FILE, PHONE_LINK_FILE } from "./mac/machines";
 import { VAULT_FOLDER } from "./vault/store";
@@ -26,7 +26,6 @@ export function boxPlaces() {
   return {
     layout: (APP_FOLDER ? "app" : "own") as BoxLayout,
     kind: IS_MAC ? "mac" : "machine",
-    ownHomeMac: OWN_HOME_MAC,
     home: K,
     /** The app's folder around it, for a Mac's box in its app's folder; null otherwise. */
     appFolder: APP_FOLDER,

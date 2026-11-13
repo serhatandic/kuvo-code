@@ -79,6 +79,15 @@ test("the word in box/kind decides, whatever's around it: a recorded machine is 
   expect(asBox(home, { KUVO_HOME: K }, "windows\n").places.kind).toBe("machine")
 })
 
+test("the app's keeper starting its box in the app's folder wins over a kind recorded there (one a move back left)", () => {
+  const home = join(root, "back")
+  const S = join(home, "Library", "Application Support", "run.kuvo.code")
+  for (const kind of ["mac\n", "machine\n"]) {
+    const { places } = asBox(home, { KUVO_HOME: join(S, "box"), KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: join(S, "opencode", "config") }, kind)
+    expect([places.layout, places.kind, places.appFolder, places.phoneLink]).toEqual(["app", "mac", S, join(S, "phone-link.json")])
+  }
+})
+
 test("the app's box in its own folder keeps what it kept: beside it, where its app keeps them", () => {
   const home = join(root, "app")
   const S = join(home, "Library", "Application Support", "run.kuvo.code")

@@ -22,9 +22,8 @@ import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
 import { startOfDay } from "../work/clock";
-import { setKeepsAwake, setProjectsFolder, workSettings } from "../work/settings";
-import { awakeForWork, holdsWhileWorking, lookAtWork } from "../work/awake";
-import { agentsWorking } from "../updates/update";
+import { folderGiven, setKeepsAwake, setProjectsFolder, workSettings } from "../work/settings";
+import { awakeForWork, keepsMacAwakeItself } from "../work/awake";
 import { unansweringList, unansweringNow } from "../work/unanswering";
 import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
 import { call } from "../engine/client";
@@ -141,25 +140,27 @@ export async function* workAsksRoute(context: RouteContext, match: RegExpMatchAr
     return yield* json(200, unansweringList(held, Array.isArray(listed) ? listed : null));
   }
   if (route === "kuvo/work/settings") {
-    // (Keep This Mac Awake only where the box keeps its Mac awake itself.)
-    const awake = () => holdsWhileWorking() ? { now: awakeForWork() } : undefined;
+    // (Keep This Mac Awake only where the box keeps its Mac awake itself: the process that does,
+    // `serve`, holds or lets go by its next look, ten seconds at most.)
+    const awake = () => keepsMacAwakeItself() ? { now: awakeForWork() } : undefined;
     if (method === "GET") return yield* json(200, workSettings(undefined, awake()));
     if (method !== "PATCH") return yield* json(405, {});
     const given = parsed(request.body);
-    const keepsAwake = holdsWhileWorking() && isObject(given) && "keepsAwake" in given;
+    const keepsAwake = keepsMacAwakeItself() && isObject(given) && "keepsAwake" in given;
     if (!isObject(given) || (!("projectsFolder" in given) && !keepsAwake)) {
-      return yield* json(400, { message: holdsWhileWorking() ? "Send {projectsFolder}: a full path, or null; or {keepsAwake}: true or false." : "Send {projectsFolder}: a full path, or null." });
+      return yield* json(400, { message: keepsMacAwakeItself() ? "Send {projectsFolder}: a full path, or null; or {keepsAwake}: true or false." : "Send {projectsFolder}: a full path, or null." });
     }
-    if (keepsAwake) {
-      const kept = setKeepsAwake(given.keepsAwake);
-      if ("refused" in kept) return yield* json(400, { message: kept.refused });
+    // Both checked before either is kept.
+    if (keepsAwake && typeof given.keepsAwake !== "boolean") return yield* json(400, { message: "Say whether to keep this Mac awake while agents work: keepsAwake, true or false." });
+    if ("projectsFolder" in given && given.projectsFolder !== null) {
+      const checked = folderGiven(given.projectsFolder);
+      if ("refused" in checked) return yield* json(400, { message: checked.refused });
     }
+    if (keepsAwake) setKeepsAwake(given.keepsAwake);
     if ("projectsFolder" in given) {
       const set = setProjectsFolder(given.projectsFolder);
       if ("refused" in set) return yield* json(400, { message: set.refused });
     }
-    // Held or let go as the setting is now, before it's said.
-    if (keepsAwake) await lookAtWork(() => agentsWorking()).catch(() => {});
     return yield* json(200, workSettings(undefined, awake()));
   }
   if (route === "kuvo/work/asks" || match[1] === "events") {

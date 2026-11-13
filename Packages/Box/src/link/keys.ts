@@ -7,8 +7,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { lockedWhile } from "../shared/files";
 import { textOf, listOf, locked, writeSecret } from "./files";
-import { BOT_KEYS, BOX_KEYS, CONFIG_LOCK, KEYS_ON_HOST, writesKeyFiles } from "./home";
+import { BOT_KEYS, BOX_KEYS, CONFIG_LOCK, KEYS_ON_HOST, RUN, writesKeyFiles } from "./home";
 import { KeysUnavailable, NOT_ANSWERING, appHost, askHost } from "./host-interface";
 
 /** The only names the box ever asks for. */
@@ -71,34 +72,34 @@ export async function writeKey(name: string, value: unknown): Promise<void> {
   checkedKeyName(name);
   if (typeof value !== "string") throw new KeysUnavailable("A key is text.");
   const host = keyHost();
-  if (host) {
+  if (!host) return writeKeyFile(name, value);
+  if (!writesKeyFiles()) return void await askHost(host, "keys/set", { name, value });
+  // Its file for the engine once its host kept it, both while no other process changes it
+  // (`KEY_FILES_LOCK`).
+  await keyFileWork(async () => {
     await askHost(host, "keys/set", { name, value });
-    // Its file for the engine, once its host kept it.
-    if (writesKeyFiles()) writeKeyFile(name, value);
-    return;
-  }
-  // A shared one under the settings' lock, as a Mac making the machine's settings its own copies them.
-  if (name.includes("__")) writeSecret(keyFile(name), value);
-  else locked(CONFIG_LOCK, () => writeSecret(keyFile(name), value));
+    writeKeyFile(name, value);
+  });
 }
 
 /** One key gone (nothing for one there wasn't). */
 export async function deleteKey(name: string): Promise<void> {
   checkedKeyName(name);
   const host = keyHost();
-  if (host) {
-    // Its file first: an engine never reads one its host no longer keeps.
-    if (writesKeyFiles()) removeKeyFile(name);
-    return void await askHost(host, "keys/delete", { name });
-  }
-  if (name.includes("__")) fs.rmSync(keyFile(name), { force: true });
-  else locked(CONFIG_LOCK, () => fs.rmSync(keyFile(name), { force: true }));
+  if (!host) return removeKeyFile(name);
+  if (!writesKeyFiles()) return void await askHost(host, "keys/delete", { name });
+  // Its file once its host let it go: one its host still keeps (it couldn't be reached) stays.
+  await keyFileWork(async () => {
+    await askHost(host, "keys/delete", { name });
+    removeKeyFile(name);
+  });
 }
 
 /** A bot's own variable for one of an integration's, as the Mac's IntegrationKeys names it. */
 export const botVariable = (variable: string, bot: string) => `${variable}__${String(bot).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "_")}`;
 
-/** One key's file for the engine, where a machine keeps it (only you can read it). */
+/** One key's file, where a machine keeps it (only you can read it): a shared one under the
+ * settings' lock, as a Mac making the machine's settings its own copies them. */
 function writeKeyFile(name: string, value: string): void {
   if (name.includes("__")) writeSecret(keyFile(name), value);
   else locked(CONFIG_LOCK, () => writeSecret(keyFile(name), value));
@@ -109,42 +110,45 @@ function removeKeyFile(name: string): void {
   else locked(CONFIG_LOCK, () => fs.rmSync(keyFile(name), { force: true }));
 }
 
+// A key changed on the host and its file, one at a time across this box's processes (`serve`, a
+// client's `box route`): its host may wait on you for a while (a Keychain prompt, two minutes), so
+// the lock is held that long.
+const KEY_FILES_LOCK = path.join(RUN, ".key-files.lock");
+const keyFileWork = <T>(work: () => Promise<T>): Promise<T> => lockedWhile(KEY_FILES_LOCK, work, { stale: 150_000, wait: 150_000 });
+
 /** The engine's keys' files as its host keeps them now (a Mac's box in a home of its own,
- * `writesKeyFiles`): each key it keeps written, and none it doesn't left. One at a time with other
- * key work. False, and the files as they were, where its host can't say (this Mac's app or its
- * helper not answering, its Keychain locked): a list that can't be read isn't "no keys". */
-export function syncKeyFiles(): Promise<boolean> {
-  if (!writesKeyFiles()) return Promise.resolve(false);
-  return keyWork(async () => {
-    let names: string[];
-    try { names = await keyNames(); } catch { return false; }
-    let all = true;
-    for (const name of names) {
-      let value: string | null = null;
-      try { value = await readKey(name); } catch { all = false; continue; }
-      if (value === null) continue;
-      if (textOf(keyFile(name)) !== value) writeKeyFile(name, value);
-    }
-    for (const name of [...listOf(BOX_KEYS).filter(each => !each.includes("__")), ...listOf(BOT_KEYS).filter(each => each.includes("__"))]) {
-      if (STORED_KEY.test(name) && !names.includes(name)) removeKeyFile(name);
-    }
-    return all;
-  });
+ * `writesKeyFiles`): each key it keeps written, and none it doesn't left. Each file is decided on
+ * what its host says of it then, under the lock its changes take, so a key kept or removed meanwhile
+ * (from another process too) is never undone. False, and the files as they were, where its host
+ * can't list them (this Mac's app or its helper not answering, its Keychain locked): a list that
+ * can't be read isn't "no keys". One key that can't be read now stays as its file has it. */
+export async function syncKeyFiles(): Promise<boolean> {
+  if (!writesKeyFiles()) return false;
+  let names: string[];
+  try { names = await keyNames(); } catch { return false; }
+  const files = [...listOf(BOX_KEYS).filter(each => !each.includes("__")), ...listOf(BOT_KEYS).filter(each => each.includes("__"))].filter(name => STORED_KEY.test(name));
+  for (const name of [...new Set([...names, ...files])]) {
+    await keyFileWork(async () => {
+      let value: string | null;
+      try { value = await readKey(name); } catch { return; }
+      if (value === null) removeKeyFile(name);
+      else if (textOf(keyFile(name)) !== value) writeKeyFile(name, value);
+    });
+  }
+  return true;
 }
 
-let keeping: ReturnType<typeof setInterval> | null = null;
+let keeping: ReturnType<typeof setTimeout> | null = null;
 /** The keys' files kept as its host keeps them, while this box runs (`serve`): now, a minute later
- * while that couldn't be done, and twice a day after, for a key changed in the Keychain without the
- * box (an older client's Settings), as this Mac's app kept its own files. */
+ * while its host can't list them, and twice a day after, for a key changed in the Keychain without
+ * the box (an older client's Settings), as this Mac's app kept its own files. */
 export function keepKeyFiles(every = 12 * 3_600_000, retry = 60_000): void {
   if (!writesKeyFiles() || keeping) return;
-  let wait = 0;
   const round = async () => {
     const done = await syncKeyFiles().catch(() => false);
-    wait = done ? every : retry;
-    keeping = setTimeout(() => void round(), wait);
+    keeping = setTimeout(() => void round(), done ? every : retry);
     keeping.unref?.();
   };
-  keeping = setTimeout(() => void round(), wait);
+  keeping = setTimeout(() => void round(), 0);
   keeping.unref?.();
 }
