@@ -156,7 +156,9 @@ import Testing
 
         old.update()
         try await until { gates.state(of: machine) == nil }
-        try await until { old.paths.contains { $0.hasPrefix("kuvo/sessions/list") } }
+        // Let go: what reads it reaches it again.
+        _ = try await BoxClient(box: machine, transport: old).send("GET", "kuvo/projects")
+        #expect(old.paths.contains("kuvo/projects"))
     }
 
     /// A box from before `sessions.list`: its features say so, and the list's route isn't there.
