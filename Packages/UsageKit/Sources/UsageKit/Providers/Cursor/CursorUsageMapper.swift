@@ -1,5 +1,14 @@
 import Foundation
 
+/// One model's use on a day, priced (nil: it couldn't be), with the family it shows under.
+struct CursorSpendEntry: Sendable, Equatable {
+    var day: String
+    var model: String
+    var family: String
+    var tokens: Int
+    var cost: Double?
+}
+
 struct CursorMappedUsage: Equatable, Sendable {
     var plan: String?
     var lines: [MetricLine]
@@ -329,6 +338,32 @@ enum CursorUsageMapper {
         to lines: inout [MetricLine]
     ) -> ProviderUsageHistory {
         let calendar = Calendar.current
+        let entries = rows.map { row in
+            let model = row.model.trimmingCharacters(in: .whitespacesAndNewlines)
+            // `-fast` folds into the base family (`gpt-5.5-extra-high-fast` -> `gpt-5.5-fast` -> `gpt-5.5`).
+            return CursorSpendEntry(
+                day: DailyUsageAccumulator.dayKey(from: row.date, calendar: calendar),
+                model: model,
+                family: model.isEmpty ? ModelUsageEntry.unattributedModelName : pricing.familyName(for: model, stripping: ["-fast"]),
+                tokens: row.tokens.totalTokens,
+                cost: row.imputedCostDollars
+            )
+        }
+        return appendSpendLines(entries: entries, now: now, note: historyNote, to: &lines)
+    }
+
+    /// Where Cursor's spend comes from, as its tiles and trend say.
+    static let historyNote = "From your Cursor usage history"
+
+    /// The same from entries already by the day and family: this Mac's own read's, or the host's
+    /// days (fork addition), whose `unknown` models are by the day already.
+    static func appendSpendLines(
+        entries: [CursorSpendEntry],
+        unknown: [String: Set<String>] = [:],
+        now: Date,
+        note: String,
+        to lines: inout [MetricLine]
+    ) -> ProviderUsageHistory {
         var costByDay: [String: Double] = [:]
         var tokensByDay: [String: Int] = [:]
         var modelsByDay: [String: [String: ModelAccumulator]] = [:]
@@ -338,24 +373,21 @@ enum CursorUsageMapper {
         // ignores it). Their model names surface only through the warning triangle: track them per day so
         // the spend tile can warn that its figures are incomplete. Only rows that actually spent tokens
         // count — a 0-token row of an unknown model changes nothing, so it isn't worth flagging.
-        var unknownModelsByDay: [String: Set<String>] = [:]
-        for row in rows {
-            let day = DailyUsageAccumulator.dayKey(from: row.date, calendar: calendar)
-            let model = row.model.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let cost = row.imputedCostDollars else {
-                if row.tokens.totalTokens > 0, !model.isEmpty {
-                    unknownModelsByDay[day, default: []].insert(model)
+        var unknownModelsByDay = unknown
+        for entry in entries {
+            let day = entry.day
+            guard let cost = entry.cost else {
+                if entry.tokens > 0, !entry.model.isEmpty {
+                    unknownModelsByDay[day, default: []].insert(entry.model)
                 }
                 continue
             }
             costByDay[day, default: 0] += cost
-            tokensByDay[day, default: 0] += row.tokens.totalTokens
-            let modelName = model.isEmpty ? ModelUsageEntry.unattributedModelName : model
-            // `-fast` folds into the base family (`gpt-5.5-extra-high-fast` -> `gpt-5.5-fast` -> `gpt-5.5`).
-            let family = model.isEmpty ? modelName : pricing.familyName(for: model, stripping: ["-fast"])
-            modelsByDay[day, default: [:]][family, default: ModelAccumulator()].add(
+            tokensByDay[day, default: 0] += entry.tokens
+            let modelName = entry.model.isEmpty ? ModelUsageEntry.unattributedModelName : entry.model
+            modelsByDay[day, default: [:]][entry.model.isEmpty ? modelName : entry.family, default: ModelAccumulator()].add(
                 variant: modelName,
-                tokens: row.tokens.totalTokens,
+                tokens: entry.tokens,
                 costUSD: cost
             )
         }
@@ -381,11 +413,11 @@ enum CursorUsageMapper {
         SpendTileMapper.appendTokenUsage(series, to: &lines, now: now, estimated: true,
                                          unknownModelsByDay: unknownModelsByDay,
                                          modelUsage: modelUsage,
-                                         modelSourceNote: "From your Cursor usage history")
+                                         modelSourceNote: note)
         // Cursor's tokens come from the server usage history, not a local CLI log, so the trend
         // note names that source rather than the "estimated from local logs" line the log-scanning
         // providers use. Tokens are measured either way.
-        SpendTileMapper.appendUsageTrend(series, to: &lines, now: now, note: "From your Cursor usage history")
+        SpendTileMapper.appendUsageTrend(series, to: &lines, now: now, note: note)
         return ProviderUsageHistory(
             series: series,
             modelUsage: modelUsage,

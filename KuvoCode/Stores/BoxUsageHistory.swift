@@ -157,7 +157,7 @@ final class BoxUsageHistory {
     static func days(_ usage: BoxUsage) -> [String: [HostHistoryDay]] {
         usage.totals.mapValues { days in
             days.map { day in
-                HostHistoryDay(date: day.date, models: day.models.map { .init(name: $0.model, tokens: $0.tokens, cost: $0.cost) }, unknown: day.unknown, fallback: day.fallback)
+                HostHistoryDay(date: day.date, models: day.models.map { .init(name: $0.model, tokens: $0.tokens, cost: $0.cost, family: $0.family) }, unknown: day.unknown, fallback: day.fallback)
             }
         }
     }

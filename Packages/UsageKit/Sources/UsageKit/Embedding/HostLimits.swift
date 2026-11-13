@@ -135,11 +135,12 @@ public final class HostLimits {
     }
 
     /// A covered provider's limits as the panel's own lines, from this Mac's own login's row; nil
-    /// with none, or none read in the last half hour.
+    /// with none, or none read in the last half hour. Its credits left, where it has them, as a
+    /// `Credits` line (Cursor's).
     func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?, readAt: Date?, notice: String?)? {
         guard let row = ownRow(for: providerID) else { return nil }
         if let readAt = row.readAt, now.timeIntervalSince(readAt) > Self.outdated { return nil }
-        let lines: [MetricLine] = row.meters.compactMap { meter in
+        var lines: [MetricLine] = row.meters.compactMap { meter in
             if let resetsAt = meter.resetsAt, resetsAt <= now { return nil }
             if let count = meter.count, count.limit > 0 {
                 return .progress(label: meter.title, used: count.used, limit: count.limit,
@@ -147,6 +148,9 @@ public final class HostLimits {
             }
             return .progress(label: meter.title, used: ProviderParse.clampPercent(meter.fraction * 100), limit: 100, format: .percent,
                              resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
+        }
+        if let balance = row.balance, balance.unit == "usd" {
+            lines.append(.values(label: "Credits", values: [MetricValue(number: balance.left, kind: .dollars)]))
         }
         return (lines, row.plan, row.readAt, row.notice)
     }
@@ -161,7 +165,9 @@ public final class HostLimits {
         for (id, snapshot) in snapshots {
             guard let host = lines(for: id, now: now) else { continue }
             var applied = snapshot
-            applied.lines = host.lines + snapshot.lines.filter { if case .progress = $0 { false } else { true } }
+            // (The card's own credits, where it reads them, rather than the host's again.)
+            let own = snapshot.lines.filter { if case .progress = $0 { false } else { true } }
+            applied.lines = host.lines.filter { line in !(line.label == "Credits" && own.contains { $0.label == "Credits" }) } + own
             applied.plan = host.plan ?? snapshot.plan
             applied.warning = host.notice
             applied.errorCategory = nil
@@ -217,10 +223,11 @@ public final class HostLimits {
     }
 
     /// The panel's providers whose own bar reads no limits while the host covers them, so it's only
-    /// the provider's spend: Claude's (`ClaudeProvider` leaves them to this Mac's box, by this).
+    /// the provider's spend: Claude's and Cursor's (`ClaudeProvider` and `CursorProvider` leave them
+    /// to this Mac's box, by this).
     /// Every other provider's bar reads its own limits (yours, outside Kuvo Code) until this Mac's
     /// box has a row of it.
-    static let limitsOnlyFromHost: Set<String> = ["claude"]
+    static let limitsOnlyFromHost: Set<String> = ["claude", "cursor"]
 
     /// The rows that take the place of the panel's own bar of a covered provider: this Mac's own
     /// logins; with none yet, where its bar has no limits of its own, the other computers' (one row

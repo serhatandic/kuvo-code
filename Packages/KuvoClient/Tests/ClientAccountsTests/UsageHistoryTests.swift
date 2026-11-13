@@ -45,6 +45,22 @@ struct UsageHistoryTests {
         #expect(usage.rows.map(\.estimated) == [true, true])
     }
 
+    /// Cursor's row: its maker's account of the whole account (its newest computer's, not a sum),
+    /// each model with the family it shows under where that isn't its own name.
+    @Test func cursorsRowIsAccountWideAndItsModelsSayTheirFamily() throws {
+        struct Envelope: Decodable { var data: BoxUsage }
+        let answer = """
+        {"data": {"zone": "UTC", "services": ["claude", "cursor"], "rows": [
+          {"id": "cursor#eeeeeeeeeeeeeeee", "service": "cursor", "provider": "cursor", "accountWide": true, "boxes": [],
+           "days": [{"date": "2026-11-12", "tokens": 1100, "cost": 0.75, "models": [{"model": "gpt-6-high-fast", "tokens": 1000, "cost": 0.5, "family": "gpt-6"}, {"model": "gpt-6", "tokens": 100, "cost": 0.25}]}]}
+        ], "totals": {}}}
+        """
+        let usage = try JSONDecoder().decode(Envelope.self, from: Data(answer.utf8)).data
+        #expect(usage.rows.map(\.accountWide) == [true])
+        #expect(usage.rows[0].days[0].models.map(\.family) == ["gpt-6", nil])
+        #expect(try JSONDecoder().decode(Envelope.self, from: Data(self.answer.utf8)).data.rows.map(\.accountWide) == [false, false])
+    }
+
     /// What the engine's hosted models cost, as OpenCode billed it, and Grok's, priced.
     @Test func aBilledRowSaysItsNotAnEstimate() throws {
         struct Envelope: Decodable { var data: BoxUsage }

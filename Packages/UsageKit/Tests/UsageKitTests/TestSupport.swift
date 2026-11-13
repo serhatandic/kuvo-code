@@ -521,6 +521,22 @@ func makeCursorJWT(sub: String? = "google-oauth2|user", exp: Double = 9_999_999_
     return "a.\(encoded).c"
 }
 
+/// Kuvo Code's own Cursor sign-in for a test: the host's agent key.
+func cursorAgentStore(key: String = "agent-key") -> CursorAuthStore {
+    CursorAuthStore(hostSecret: { key })
+}
+
+/// A Cursor stand-in's handler that answers the agent key's exchange with `token`, and the rest as `handler` does.
+func cursorExchanging(
+    _ token: String,
+    _ handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse
+) -> @Sendable (HTTPRequest) async throws -> HTTPResponse {
+    { request in
+        guard request.url == CursorUsageClient.exchangeURL else { return try await handler(request) }
+        return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"accessToken":"\#(token)"}"#.utf8))
+    }
+}
+
 /// A key/value-table SQLite stand-in (Cursor's `state.vscdb` shape): `queryValue` returns the value
 /// whose key appears in the SQL, and `execute` records `(key, value) VALUES (…)` upserts so tests
 /// can assert what was persisted.

@@ -1,20 +1,23 @@
 import Foundation
 
+/// Kuvo Code's own Cursor sign-in (fork addition): the coding agent's API key, which the host
+/// hands over (`HostAccounts`), exchanged for an access token as it's needed and never written
+/// anywhere. The Cursor app's own login (its state database, its Keychain items) is an outside
+/// login, and isn't read (#631 piece D1). COMPAT(0.8 cursor-box): only for a host whose box doesn't
+/// state Cursor's usage yet (`HostLimits.covers("cursor")`); goes with the panel's own Cursor reads
+/// (#631 piece H1), 3 months after 0.8.0.
 struct CursorAuthState: Hashable, Sendable {
     enum Source: Hashable, Sendable {
-        case sqlite
-        case keychain
-        /// The host's: a coding agent's sign-in to Cursor (`HostAccounts`), an API key exchanged
-        /// for an access token as it's needed, and never written to Cursor's own places.
+        /// The host's: a coding agent's sign-in to Cursor (`HostAccounts`).
         case host
     }
 
     var accessToken: String?
     var refreshToken: String?
-    /// Lowercased `cursorAuth/stripeMembershipType` from the Cursor state DB when present.
+    /// The editor's billing membership, which only its own login had: none now.
     var membershipType: String?
     var source: Source
-    /// The host's Cursor API key (`source == .host`).
+    /// The host's Cursor API key.
     var apiKey: String? = nil
 }
 
@@ -28,95 +31,32 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notLoggedIn:
-            return "Not logged in. Sign in via Cursor app or run `agent login`."
-        case .sessionExpired:
-            return "Session expired. Sign in via Cursor app or run `agent login`."
-        case .tokenExpired:
-            return "Token expired. Sign in via Cursor app or run `agent login`."
-        case .agentSignInEnded:
+            return "Sign in to Cursor in Kuvo Code’s Accounts."
+        case .sessionExpired, .tokenExpired, .agentSignInEnded:
             return "Sign in to Cursor again in Kuvo Code’s Accounts."
         }
     }
 }
 
 struct CursorAuthStore: Sendable {
-    static let stateDBPath = "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
-    static let accessTokenKey = "cursorAuth/accessToken"
-    static let refreshTokenKey = "cursorAuth/refreshToken"
-    static let membershipTypeKey = "cursorAuth/stripeMembershipType"
-    static let keychainAccessTokenService = "cursor-access-token"
-    static let keychainRefreshTokenService = "cursor-refresh-token"
     static let refreshBufferSeconds: TimeInterval = 5 * 60
 
-    var sqlite: SQLiteAccessing
-    var keychain: KeychainAccessing
     var now: @Sendable () -> Date
+    /// The host's Cursor key, as it hands it over.
+    var hostSecret: @Sendable () -> String?
 
     init(
-        sqlite: SQLiteAccessing = SQLiteCLIAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        hostSecret: @escaping @Sendable () -> String? = { HostAccounts.secret(for: [HostCredential.cursorAgent]) }
     ) {
-        self.sqlite = sqlite
-        self.keychain = keychain
         self.now = now
+        self.hostSecret = hostSecret
     }
 
     func loadAuthState() -> CursorAuthState? {
-        let sqliteAccessToken = readStateValue(Self.accessTokenKey)
-        let sqliteRefreshToken = readStateValue(Self.refreshTokenKey)
-        let sqliteMembershipType = readStateValue(Self.membershipTypeKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        let keychainAccessToken = readKeychainValue(Self.keychainAccessTokenService)
-        let keychainRefreshToken = readKeychainValue(Self.keychainRefreshTokenService)
-
-        let hasSQLiteAuth = sqliteAccessToken != nil || sqliteRefreshToken != nil
-        let hasKeychainAuth = keychainAccessToken != nil || keychainRefreshToken != nil
-
-        if hasSQLiteAuth {
-            let sqliteSubject = Self.tokenSubject(sqliteAccessToken)
-            let keychainSubject = Self.tokenSubject(keychainAccessToken)
-            let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
-            if hasKeychainAuth, sqliteMembershipType == "free", subjectsDiffer {
-                // SQLite looks like a free account for a different subject; do not carry that
-                // membership onto the keychain session.
-                return CursorAuthState(
-                    accessToken: keychainAccessToken,
-                    refreshToken: keychainRefreshToken,
-                    membershipType: nil,
-                    source: .keychain
-                )
-            }
-
-            return CursorAuthState(
-                accessToken: sqliteAccessToken,
-                refreshToken: sqliteRefreshToken,
-                membershipType: sqliteMembershipType,
-                source: .sqlite
-            )
-        }
-
-        if hasKeychainAuth {
-            // Keychain-only auth has no proven link to the state-DB membership row; leave it unset
-            // rather than attaching another account's stripeMembershipType.
-            return CursorAuthState(
-                accessToken: keychainAccessToken,
-                refreshToken: keychainRefreshToken,
-                membershipType: nil,
-                source: .keychain
-            )
-        }
-
-        // No Cursor app signed in here: a coding agent's sign-in, the host's.
-        if let apiKey = HostAccounts.secret(for: [HostCredential.cursorAgent]) {
-            return CursorAuthState(accessToken: nil, refreshToken: nil, membershipType: nil, source: .host, apiKey: apiKey)
-        }
-
-        return nil
+        guard let apiKey = hostSecret()?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else { return nil }
+        return CursorAuthState(accessToken: nil, refreshToken: nil, membershipType: nil, source: .host, apiKey: apiKey)
     }
-
 
     func needsRefresh(_ accessToken: String?) -> Bool {
         guard let accessToken,
@@ -125,38 +65,6 @@ struct CursorAuthStore: Sendable {
             return true
         }
         return expiresAt.timeIntervalSince(now()) <= Self.refreshBufferSeconds
-    }
-
-    func saveAccessToken(_ accessToken: String, source: CursorAuthState.Source) throws {
-        switch source {
-        case .sqlite:
-            try writeStateValue(Self.accessTokenKey, accessToken)
-        case .keychain:
-            try keychain.writeGenericPassword(service: Self.keychainAccessTokenService, value: accessToken)
-        case .host:
-            // The host keeps its key; the token it's exchanged for lives as long as this read.
-            return
-        }
-    }
-
-    private func readStateValue(_ key: String) -> String? {
-        let sql = "SELECT value FROM ItemTable WHERE key = '\(Self.sqlEscaped(key))' LIMIT 1;"
-        guard let value = try? sqlite.queryValue(path: Self.stateDBPath, sql: sql) else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func writeStateValue(_ key: String, _ value: String) throws {
-        let sql = """
-        INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('\(Self.sqlEscaped(key))', '\(Self.sqlEscaped(value))');
-        """
-        try sqlite.execute(path: Self.stateDBPath, sql: sql)
-    }
-
-    private func readKeychainValue(_ service: String) -> String? {
-        guard let value = try? keychain.readGenericPassword(service: service) else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func tokenExpiration(_ token: String) -> Date? {
@@ -172,9 +80,5 @@ struct CursorAuthStore: Sendable {
         }
         let trimmed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func sqlEscaped(_ value: String) -> String {
-        value.replacingOccurrences(of: "'", with: "''")
     }
 }
