@@ -176,12 +176,14 @@ describe("the engine's hosted models", () => {
       for (const side of ["-wal", "-shm"]) rmSync(join(folder, name + side), { force: true })
     }
     expect(readdirSync(folder).sort()).toEqual(["opencode-next.db", "opencode.db"])
+    const bytes = () => ["opencode-next.db", "opencode.db"].map((name) => readFileSync(join(folder, name)).toString("base64"))
+    const before = bytes()
     const expected = fixture("opencode-hosted-expected.json")
     const since = Date.parse(expected.since)
     const rows = (await hostedRows(folder, since))!
     expectDays(daysIn(summed([hostedSlots(rows, "opencode-go", since), hostedSlots(rows, "opencode", since)]), "UTC", Date.parse(expected.now)), expected.days)
-    // (Still only read: nothing new beside them.)
-    expect(readdirSync(folder).sort()).toEqual(["opencode-next.db", "opencode.db"])
+    // (Only read: the databases as they were. Linux's SQLite may set up the empty side files a reader of one in WAL mode uses.)
+    expect(bytes()).toEqual(before)
   })
 
   test("a provider with no use in the window has no row; no database, none; one that isn't the engine's (no message tables) says nothing", async () => {
