@@ -356,6 +356,7 @@ final class AppModel {
             machines.gates.foundOlder(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
         }
         workspace.onCurrentBox = { [weak self] box, features in self?.machines.gates.foundCurrent(box, features: features) }
+        workspace.isHeld = { [weak self] box in self?.machines.gates.state(of: box) != nil }
         machines.gates.onLetGo = { [weak self] box in self?.workspace.boxUpdated(box) }
         BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
@@ -782,6 +783,8 @@ final class AppModel {
     private(set) var keeperMakesWay = false
     /// This Mac's own box looked at while the update gate holds it (`followOwnBoxGate`).
     @ObservationIgnored private var ownBoxGateFollow: Task<Void, Never>?
+    /// Another version's keeper runs this Mac's box now (`KeeperFollower.runsOtherVersion`).
+    @ObservationIgnored private var keeperRunsOtherVersion = false
     /// This Mac's box moving into its home of its own (#333): why it holds on, where it went wrong
     /// part way, "" while it just moves; nil otherwise. The window says so while it starts.
     private(set) var boxMoving: String?
@@ -914,19 +917,27 @@ final class AppModel {
     /// it (making way for this app's once the work under way ends), it's held, and asked what it has
     /// every ten seconds: let go once it has all this app needs (the keeper of this version runs it,
     /// or the older one turns out to have it). One that can't be asked just then is asked again.
-    func followOwnBoxGate() {
-        guard ownBoxGateFollow == nil, keeperMakesWay || machines.gates.state(of: BoxClient.mac) != nil else { return }
+    func followOwnBoxGate(again: Bool = false) {
+        // Looked at again at once (its box answering somewhere new), from the start.
+        if again {
+            ownBoxGateFollow?.cancel()
+            ownBoxGateFollow = nil
+        }
+        guard ownBoxGateFollow == nil, keeperRunsOtherVersion || machines.gates.state(of: BoxClient.mac) != nil else { return }
         ownBoxGateFollow = Task { [weak self] in
             while !Task.isCancelled, let self {
                 if await self.ownBoxIsCurrent() == true {
                     self.machines.gates.letGo(BoxClient.mac)
                     break
                 }
+                // (Cut short meanwhile, a newer look in its place.)
+                guard !Task.isCancelled else { return }
                 if self.machines.gates.state(of: BoxClient.mac) == nil {
                     self.machines.gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
                 }
-                do { try await Self.ownBoxLookAgain() } catch { break }
+                do { try await Self.ownBoxLookAgain() } catch { return }
             }
+            guard !Task.isCancelled else { return }
             self?.ownBoxGateFollow = nil
         }
     }
@@ -974,16 +985,20 @@ final class AppModel {
             follower.onEngine = { [weak self] state in self?.boxEngineChanged(state) }
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
             follower.onGone = { [weak self] in self?.keeperGone() }
-            follower.onMakingWay = { [weak self] makingWay in
+            follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
+            // Another version's keeper runs this Mac's box (an older app's, after an update): held
+            // at once, whatever it answered when asked to make way, until it's asked what it has
+            // (nothing reaches it on a path it may not have meanwhile); looked at again as soon as
+            // its box answers somewhere new.
+            follower.onOtherVersion = { [weak self] other in
                 guard let self else { return }
-                keeperMakesWay = makingWay
-                // An older app's keeper runs it: held at once, until it's asked what it has
-                // (nothing reaches it on a path it may not have meanwhile).
-                if makingWay, machines.gates.state(of: BoxClient.mac) == nil {
+                keeperRunsOtherVersion = other
+                if other, machines.gates.state(of: BoxClient.mac) == nil {
                     machines.gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
                 }
-                followOwnBoxGate()
+                followOwnBoxGate(again: true)
             }
+            follower.onServe = { [weak self] in self?.followOwnBoxGate(again: true) }
             follower.onMoving = { [weak self] moving in self?.boxMoving = moving }
             host.tellsBox = false
             // Answering again at a new address (its listener failed by itself): the keeper is told.

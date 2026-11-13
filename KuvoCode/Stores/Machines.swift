@@ -811,6 +811,7 @@ final class MachineEngine {
         endConnection()
         updateFollow?.cancel()
         updateFollow = nil
+        gates?.letGo(machine.id)
     }
 
     private struct Superseded: Error {}
@@ -909,7 +910,16 @@ final class MachineEngine {
     /// falls back to an older box's way. A box that couldn't say what it has (not answering just
     /// then) is used as before; what reads it later tells.
     private func bringUpToDate(asItIs: Bool, check: () throws -> Void) async throws {
-        guard let box = catalog.box, var features = await features(of: box) else { return }
+        guard let box = catalog.box else { return }
+        guard let features = await features(of: box) else {
+            // This Mac's box attached in place that couldn't say just now: held, and asked again,
+            // never let through unasked (a machine is: what reads it later tells).
+            if machine.isThisMac {
+                gates?.updating(machine.id, detail: nil)
+                followUpdate(of: box, release: Self.boxRelease(), offered: Self.now())
+            }
+            return
+        }
         try check()
         if BoxGate.isCurrent(features) {
             gates?.letGo(machine.id)
@@ -930,47 +940,112 @@ final class MachineEngine {
         }
         guard features.contains("box.update") else { throw fail("It’s from before Kuvo Code could update it from this Mac") }
         guard let release = Self.boxRelease() else { throw fail("This copy of Kuvo Code doesn’t carry a release to update it with") }
-        struct Offer: Encodable { let from: String }
-        let (status, data) = try await box.send("POST", "kuvo/box/update", body: JSONEncoder().encode(Offer(from: release.path(percentEncoded: false))))
+        if case .refused(let why) = await offer(release, to: box) { throw fail(why) }
         try check()
-        // Offered already and waiting, or taking it now: as good as offered.
-        if !(200..<300).contains(status) {
-            struct Update: Decodable { var offered: String?; var updating: String? }
-            let now = try? await box.value(Update.self, "GET", "kuvo/update")
-            guard now?.offered != nil || now?.updating != nil else { throw fail(BoxRefusal(status: status, data: data).message) }
-        }
         // Taken at its first quiet moment: looked at again until it's there, while this connection goes on.
-        followUpdate(of: box)
+        followUpdate(of: box, release: release, offered: Self.now())
     }
 
+    /// How an offer of the app's release went (`kuvo/box/update {from}`): taken in (or already
+    /// there, or being taken), or refused, in the box's words.
+    enum Offered: Equatable { case taken, refused(String) }
+
+    /// Offers `release` to `box`; one refused while it updates already (its night's update, say)
+    /// counts as taken: it's offered again once that's done, if it's still needed.
+    private func offer(_ release: URL, to box: BoxClient) async -> Offered {
+        struct Offer: Encodable { let from: String }
+        guard let body = try? JSONEncoder().encode(Offer(from: release.path(percentEncoded: false))),
+              let (status, data) = try? await box.send("POST", "kuvo/box/update", body: body) else { return .taken }
+        if (200..<300).contains(status) { return .taken }
+        if let now = await updateStatus(of: box), now.offered != nil || now.updating != nil { return .taken }
+        return .refused(BoxRefusal(status: status, data: data).message)
+    }
+
+    /// What `kuvo/update` says of the box's own update (PROTOCOL.md "Updates"): the step under way,
+    /// why it can't update, the release offered that waits, and how the last one went.
+    struct UpdateStatus: Decodable {
+        struct Last: Decodable { var at: Double?; var result: String?; var message: String? }
+        var updating: String?
+        var blocked: String?
+        var offered: String?
+        var last: Last?
+    }
+
+    private func updateStatus(of box: BoxClient) async -> UpdateStatus? {
+        try? await box.value(UpdateStatus.self, "GET", "kuvo/update")
+    }
+
+    /// Now, in ms since 1970, as the box notes its updates (a test's own).
+    nonisolated(unsafe) static var now: () -> Double = { Date.now.timeIntervalSince1970 * 1000 }
+
     /// Following this Mac's box attached in place as it takes the release offered it: let go once
-    /// it says it has all this app needs; ended with the connection.
+    /// it says it has all this app needs; ended with the connection. Each look also reads how its
+    /// update stands: one it can't take (it's blocked, its engine is stopped on purpose, or taking
+    /// it failed) says why, in its words; an offer that's gone (taken back after a failure, or
+    /// refused while its night's update ran) is made again. Said, it's still looked at, and goes
+    /// back to updating once it can.
     @ObservationIgnored private var updateFollow: Task<Void, Never>?
 
-    private func followUpdate(of box: BoxClient) {
+    private func followUpdate(of box: BoxClient, release: URL?, offered: Double) {
         updateFollow?.cancel()
         let id = machine.id
         updateFollow = Task { [weak self] in
+            var offeredAt = offered
             while !Task.isCancelled {
                 do { try await Self.updateLookAgain() } catch { return }
                 guard !Task.isCancelled, let self else { return }
-                if let features = await self.features(of: box), BoxGate.isCurrent(features) {
+                let info = await self.info(of: box)
+                if let features = info?.features, BoxGate.isCurrent(features) {
                     self.gates?.letGo(id)
                     return
                 }
+                // (Not answering just now: asked again.)
+                guard let info else { continue }
+                let status = await self.updateStatus(of: box)
+                let why: String? = if !info.features.contains("box.update") {
+                    "It’s from before Kuvo Code could update it from this Mac"
+                } else if release == nil {
+                    "This copy of Kuvo Code doesn’t carry a release to update it with"
+                } else if info.stopped {
+                    "Its engine is stopped: start it to update it"
+                } else if let blocked = status?.blocked {
+                    blocked
+                } else if let last = status?.last, last.result == "failed", (last.at ?? 0) >= offeredAt, status?.offered == nil {
+                    last.message ?? "Taking the update failed"
+                } else {
+                    nil
+                }
+                if let why {
+                    self.gates?.failed(id, BoxGate.Words.couldntUpdate("this Mac", why: why))
+                    continue
+                }
+                guard let status else { continue }
+                // Its offer gone, and nothing under way: offered again.
+                if status.offered == nil, status.updating == nil, let release {
+                    offeredAt = Self.now()
+                    if case .refused(let why) = await self.offer(release, to: box) {
+                        self.gates?.failed(id, BoxGate.Words.couldntUpdate("this Mac", why: why))
+                        continue
+                    }
+                }
+                self.gates?.updating(id, detail: BoxGate.Words.thisMacTaking)
             }
         }
     }
 
-    /// What `box` says it has (`kuvo/info`'s `features`): none for one from before it said (404,
-    /// 405, or no `features`); nil when it couldn't say just now.
-    private func features(of box: BoxClient) async -> [String]? {
-        struct Info: Decodable { var features: [String]? }
+    /// What `box` says it is (`kuvo/info`): its features (none for one from before it said: 404,
+    /// 405, or no `features`), and whether its engine is stopped on purpose; nil when it couldn't
+    /// say just now.
+    private func info(of box: BoxClient) async -> (features: [String], stopped: Bool)? {
+        struct Info: Decodable { var features: [String]?; var stopped: Bool? }
         guard let (status, data) = try? await box.send("GET", "kuvo/info") else { return nil }
-        if status == 404 || status == 405 { return [] }
+        if status == 404 || status == 405 { return ([], false) }
         guard (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
-        return info.features ?? []
+        return (info.features ?? [], info.stopped == true)
     }
+
+    /// What `box` says it has (`kuvo/info`'s `features`); nil when it couldn't say just now.
+    private func features(of box: BoxClient) async -> [String]? { await info(of: box)?.features }
 
     private func launchEngine(_ launch: Launch, replace: Int? = nil, starting: Bool = false) async throws -> RemoteServer.Engine {
         try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "macName": Self.noteName, "box": BoxVersion.mine],
@@ -1014,6 +1089,8 @@ final class MachineEngine {
         endConnection()
         updateFollow?.cancel()
         updateFollow = nil
+        // Not connected, it isn't held either: connecting again checks it anew.
+        gates?.letGo(machine.id)
         downCheck?.cancel()
         downCheck = nil
         connections += 1

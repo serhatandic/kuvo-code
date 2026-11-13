@@ -328,18 +328,23 @@ final class Workspace {
     /// A box said it has all the app needs (its features, as it said them): one held is let go.
     @ObservationIgnored var onCurrentBox: (String, [String]) -> Void = { _, _ in }
 
+    /// Whether `box` is held for its update now (`BoxGates`): what it has is asked again each time.
+    @ObservationIgnored var isHeld: (String) -> Bool = { _ in false }
+
     /// Whether `box` lists its sessions, as it says of itself: noted (`outdatedLists`); nil where it
-    /// can't be asked now.
+    /// can't be asked now. What it said it has goes to the update gate, against all the app needs
+    /// (`BoxGate.required`), not only its lists.
     private func checkLists(on box: String) async -> Bool? {
-        // (One that said it didn't, asked again: it may have been updated since.)
-        if outdatedLists.contains(box) { featuresHere[box] = nil }
+        // (One that said it didn't, or is held, asked again: it may have been updated since.)
+        if outdatedLists.contains(box) || isHeld(box) { featuresHere[box] = nil }
         let says = await boxSays(SessionLists.feature, on: box)
+        if let features = featuresHere[box].map(Array.init) {
+            if BoxGate.isCurrent(features) { onCurrentBox(box, features) } else { onOlderBox(box, features) }
+        }
         if says == false {
             outdatedLists.insert(box)
-            onOlderBox(box, featuresHere[box].map { Array($0) } ?? [])
         } else if says == true {
             outdatedLists.remove(box)
-            onCurrentBox(box, featuresHere[box].map { Array($0) } ?? [])
         }
         return says
     }
