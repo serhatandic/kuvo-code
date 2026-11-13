@@ -556,7 +556,13 @@ describe("plan limits across your computers", () => {
             service: "cursor",
             identity: "abcdefabcdefabcd",
             windows: [{ id: "total", used: 1, read: time, source: "usage" }],
-            extras: [{ id: "on_demand", name: "On-demand", kind: "spent", amount: 43.21, unit: "usd", secret: "x" }, { id: "x", name: "X", kind: "grants", amount: 1, unit: "usd" }, "nope"],
+            extras: [
+              { id: "on_demand", name: "On-demand", kind: "spent", amount: 43.21, unit: "usd", secret: "x" },
+              { id: "x", name: "X", kind: "grants", amount: 1, unit: "usd" },
+              "nope",
+              // (Over 1 KB as it would be passed on, its ID cut to length included: not passed on.)
+              { id: "i".repeat(300), name: "Big", kind: "grants", a: "p".repeat(190), b: "p".repeat(190), c: "p".repeat(190), d: "p".repeat(190) },
+            ],
             checked: time,
           },
         ],

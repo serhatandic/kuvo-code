@@ -17264,13 +17264,25 @@ class CursorClient {
     this.token = { key, access, until: Number.isFinite(exp) ? exp * 1000 - 5 * 60000 : 0 };
     return access;
   }
+  refuses() {
+    if (this.refused !== undefined && this.refused === fingerprint(this.key()))
+      return new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
+    const held = this.heldUntil();
+    return held ? new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false) : undefined;
+  }
   dashboard(method, access) {
+    const refused = this.refuses();
+    if (refused)
+      return Promise.reject(refused);
     return send(`${cursorEndpoints.api2}/aiserver.v1.DashboardService/${method}`, { method: "POST", headers: { Authorization: `Bearer ${access}`, ...CONNECT }, body: "{}" }, 1e4);
   }
   website(path, access, init = {}, timeout = 1e4) {
     const session = cursorSession(access);
     if (!session)
       return;
+    const refused = this.refuses();
+    if (refused)
+      return Promise.reject(refused);
     const url = new URL(`${cursorEndpoints.web}${path}`);
     for (const [name, value] of Object.entries(init.query ?? {}))
       url.searchParams.set(name, value);
@@ -17668,9 +17680,11 @@ function readingOf(mapped, identity) {
       extra.resetsAt ??= cycleEnd.resetsAt;
   return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...extras.length ? { extras } : {}, ...identity ? { identity } : {} };
 }
-async function optional(request) {
+async function optional(client, request) {
   try {
     const answer = await request();
+    if (answer?.status === 429)
+      client.holdFor(answer.headers.get("retry-after"));
     if (!answer || answer.status < 200 || answer.status >= 300)
       return;
     return object(answer.body);
@@ -17683,7 +17697,9 @@ async function readCursorPlan(client, now = Date.now) {
   const attempt = async (token) => {
     try {
       return await client.dashboard("GetCurrentPeriodUsage", token);
-    } catch {
+    } catch (error) {
+      if (error instanceof LimitsProblem)
+        throw error;
       throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
     }
   };
@@ -17704,22 +17720,22 @@ async function readCursorPlan(client, now = Date.now) {
   const user = cursorSession(access)?.user;
   const identity = user ? `cursor:${user.toLowerCase()}` : undefined;
   const membership = undefined;
-  const planBody = await optional(() => client.dashboard("GetPlanInfo", access));
+  const planBody = await optional(client, () => client.dashboard("GetPlanInfo", access));
   const planInfoName = trimmed(object(planBody?.planInfo)?.planName);
   const planInfoUnavailable = planInfoName === undefined;
   const routing = routingPlanName(planInfoName, membership);
   const display = resolvedPlanName(planInfoName, membership);
   const grokBot = async (lines) => {
-    const body = await optional(() => client.dashboard("GetSandUsageStatus", access));
+    const body = await optional(client, () => client.dashboard("GetSandUsageStatus", access));
     const line = body ? grokBotLine(body) : undefined;
     if (line)
       lines.push(line);
   };
   const fallback = requestBasedFallback(usage, routing, planInfoUnavailable);
-  const summary = () => optional(() => client.website("/api/usage-summary", access));
+  const summary = () => optional(client, () => client.website("/api/usage-summary", access));
   const requests = () => {
     const who = cursorSession(access)?.user;
-    return optional(() => who ? client.website("/api/usage", access, { query: { user: who } }) : undefined);
+    return optional(client, () => who ? client.website("/api/usage", access, { query: { user: who } }) : undefined);
   };
   try {
     if (fallback !== undefined) {
@@ -17738,9 +17754,9 @@ async function readCursorPlan(client, now = Date.now) {
         return { mapped, ...identity ? { identity } : {} };
       } catch {}
     }
-    const grants = await optional(() => client.dashboard("GetCreditGrantsBalance", access));
+    const grants = await optional(client, () => client.dashboard("GetCreditGrantsBalance", access));
     const credits = grants && typeof grants.hasCreditGrants === "boolean" && (!grants.hasCreditGrants || (numberOf(grants.totalCents) ?? 0) > 0 && (numberOf(grants.usedCents) ?? -1) >= 0) ? grants : undefined;
-    const stripe = await optional(() => client.website("/api/auth/stripe", access));
+    const stripe = await optional(client, () => client.website("/api/auth/stripe", access));
     const mapped = mapUsage(usage, planInfoName, credits, stripe && numberOf(stripe.customerBalance) !== undefined ? stripeBalanceCents(stripe) : 0);
     const label = resolvedPlanLabel(planInfoName, membership);
     if (label)
@@ -21458,8 +21474,8 @@ class CursorHistory {
       let answer;
       try {
         answer = await client.website("/api/dashboard/get-filtered-usage-events", token.access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15000);
-      } catch {
-        return "request";
+      } catch (error) {
+        return error instanceof LimitsProblem && (error.kind === "rate-limited" || error.kind === "expired") ? "held" : "request";
       }
       if (!answer)
         return "request";
@@ -21472,8 +21488,8 @@ class CursorHistory {
         token.renewing ??= client.accessToken(true).then((access) => void (token.access = access));
         try {
           await token.renewing;
-        } catch {
-          return "http";
+        } catch (error) {
+          return error instanceof LimitsProblem && (error.kind === "rate-limited" || error.kind === "expired") ? "held" : "http";
         }
         continue;
       }
@@ -33208,9 +33224,8 @@ function takenExtra(extra) {
     return [{ id: text6(extra.id), name: text6(extra.name, 100), kind: "spent", amount: extra.amount, unit: extra.unit, ...time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {} }];
   }
   const plain = Object.fromEntries(Object.entries(extra).slice(0, 20).filter(([, value]) => typeof value === "string" && value.length <= 200 || typeof value === "number" && Number.isFinite(value) || typeof value === "boolean"));
-  if (Buffer.byteLength(JSON.stringify(plain)) > MOST_EXTRA)
-    return [];
-  return [{ ...plain, id: text6(extra.id), name: text6(extra.name, 100), kind: text6(extra.kind, 40) }];
+  const taken = { ...plain, id: text6(extra.id), name: text6(extra.name, 100), kind: text6(extra.kind, 40) };
+  return Buffer.byteLength(JSON.stringify(taken)) > MOST_EXTRA ? [] : [taken];
 }
 function takenAccount2(given, off, now) {
   if (!given || typeof given !== "object")
@@ -33637,4 +33652,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ca9300c90b6027e341b641c51a7f0b1e7ca0325a178bea961310907798d23aff
+// Built from Packages/Box/src/agents 6403341c1102059aa67be0de5ad9198f4d8e67f65ac5b389147f72762224575e

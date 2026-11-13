@@ -219,8 +219,9 @@ export class CursorHistory {
       let answer
       try {
         answer = await client.website("/api/dashboard/get-filtered-usage-events", token.access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15_000)
-      } catch {
-        return "request"
+      } catch (error) {
+        // (Held off, or its key turned away, meanwhile: nothing more is asked.)
+        return error instanceof LimitsProblem && (error.kind === "rate-limited" || error.kind === "expired") ? "held" : "request"
       }
       if (!answer) return "request"
       if (answer.status === 429) {
@@ -233,8 +234,9 @@ export class CursorHistory {
         token.renewing ??= client.accessToken(true).then((access) => void (token.access = access))
         try {
           await token.renewing
-        } catch {
-          return "http"
+        } catch (error) {
+          // (The exchange held off, or its key turned away: no day more is asked with the old token.)
+          return error instanceof LimitsProblem && (error.kind === "rate-limited" || error.kind === "expired") ? "held" : "http"
         }
         continue
       }

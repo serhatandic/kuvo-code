@@ -396,10 +396,14 @@ export function readingOf(mapped: CursorMapped, identity: string | undefined): L
   return { windows, ...(mapped.plan ? { plan: mapped.plan } : {}), ...(balance ? { balance } : {}), ...(extras.length ? { extras } : {}), ...(identity ? { identity } : {}) }
 }
 
-/** An optional endpoint's JSON object, or nothing (it never fails the read). */
-async function optional(request: () => Promise<CursorAnswer> | undefined): Promise<Record<string, any> | undefined> {
+/**
+ * An optional endpoint's JSON object, or nothing (it never fails the read); a 429 holds every read
+ * of the account off (the rest of this one's included) for as long as it says.
+ */
+async function optional(client: CursorClient, request: () => Promise<CursorAnswer> | undefined): Promise<Record<string, any> | undefined> {
   try {
     const answer = await request()
+    if (answer?.status === 429) client.holdFor(answer.headers.get("retry-after"))
     if (!answer || answer.status < 200 || answer.status >= 300) return undefined
     return object(answer.body)
   } catch {
@@ -418,7 +422,8 @@ export async function readCursorPlan(client: CursorClient, now: () => number = D
   const attempt = async (token: string) => {
     try {
       return await client.dashboard("GetCurrentPeriodUsage", token)
-    } catch {
+    } catch (error) {
+      if (error instanceof LimitsProblem) throw error
       throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.")
     }
   }
@@ -437,21 +442,21 @@ export async function readCursorPlan(client: CursorClient, now: () => number = D
   const identity = user ? `cursor:${user.toLowerCase()}` : undefined
   // (A coding agent's sign-in has no editor's membership row: Cursor's own answers say the plan.)
   const membership: string | undefined = undefined
-  const planBody = await optional(() => client.dashboard("GetPlanInfo", access))
+  const planBody = await optional(client, () => client.dashboard("GetPlanInfo", access))
   const planInfoName = trimmed(object(planBody?.planInfo)?.planName)
   const planInfoUnavailable = planInfoName === undefined
   const routing = routingPlanName(planInfoName, membership)
   const display = resolvedPlanName(planInfoName, membership)
   const grokBot = async (lines: CursorLine[]) => {
-    const body = await optional(() => client.dashboard("GetSandUsageStatus", access))
+    const body = await optional(client, () => client.dashboard("GetSandUsageStatus", access))
     const line = body ? grokBotLine(body) : undefined
     if (line) lines.push(line)
   }
   const fallback = requestBasedFallback(usage, routing, planInfoUnavailable)
-  const summary = () => optional(() => client.website("/api/usage-summary", access))
+  const summary = () => optional(client, () => client.website("/api/usage-summary", access))
   const requests = () => {
     const who = cursorSession(access)?.user
-    return optional(() => (who ? client.website("/api/usage", access, { query: { user: who } }) : undefined))
+    return optional(client, () => (who ? client.website("/api/usage", access, { query: { user: who } }) : undefined))
   }
   try {
     if (fallback !== undefined) {
@@ -469,9 +474,9 @@ export async function readCursorPlan(client: CursorClient, now: () => number = D
         return { mapped, ...(identity ? { identity } : {}) }
       } catch {}
     }
-    const grants = await optional(() => client.dashboard("GetCreditGrantsBalance", access))
+    const grants = await optional(client, () => client.dashboard("GetCreditGrantsBalance", access))
     const credits = grants && typeof grants.hasCreditGrants === "boolean" && (!grants.hasCreditGrants || ((numberOf(grants.totalCents) ?? 0) > 0 && (numberOf(grants.usedCents) ?? -1) >= 0)) ? grants : undefined
-    const stripe = await optional(() => client.website("/api/auth/stripe", access))
+    const stripe = await optional(client, () => client.website("/api/auth/stripe", access))
     const mapped = mapUsage(usage, planInfoName, credits, stripe && numberOf(stripe.customerBalance) !== undefined ? stripeBalanceCents(stripe) : 0)
     const label = resolvedPlanLabel(planInfoName, membership)
     if (label) mapped.plan = label

@@ -182,8 +182,22 @@ export class CursorClient {
     return access
   }
 
+  /**
+   * Nothing goes to Cursor while it holds reads off or the key was turned away, whoever asks (the
+   * plan's optional reads, the history's workers already under way): a `LimitsProblem` instead.
+   * (Kept in memory: after a restart, the plan's saved state, `Limits.held`, keeps the history
+   * from asking, and its next read finds a turned-away key so again, once.)
+   */
+  private refuses(): LimitsProblem | undefined {
+    if (this.refused !== undefined && this.refused === fingerprint(this.key())) return new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings › Accounts.", undefined, false)
+    const held = this.heldUntil()
+    return held ? new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false) : undefined
+  }
+
   /** A Connect call to Cursor's dashboard service (`aiserver.v1.DashboardService/<method>`). */
   dashboard(method: string, access: string): Promise<CursorAnswer> {
+    const refused = this.refuses()
+    if (refused) return Promise.reject(refused)
     return send(`${cursorEndpoints.api2}/aiserver.v1.DashboardService/${method}`, { method: "POST", headers: { Authorization: `Bearer ${access}`, ...CONNECT }, body: "{}" }, 10_000)
   }
 
@@ -191,6 +205,8 @@ export class CursorClient {
   website(path: string, access: string, init: { method?: string; body?: unknown; query?: Record<string, string> } = {}, timeout = 10_000): Promise<CursorAnswer> | undefined {
     const session = cursorSession(access)
     if (!session) return undefined
+    const refused = this.refuses()
+    if (refused) return Promise.reject(refused)
     const url = new URL(`${cursorEndpoints.web}${path}`)
     for (const [name, value] of Object.entries(init.query ?? {})) url.searchParams.set(name, value)
     const headers: Record<string, string> = { Cookie: session.cookie }

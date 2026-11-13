@@ -275,8 +275,9 @@ function takenExtra(extra: any): LimitExtra[] {
       .slice(0, 20)
       .filter(([, value]) => (typeof value === "string" && value.length <= 200) || (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean"),
   )
-  if (Buffer.byteLength(JSON.stringify(plain)) > MOST_EXTRA) return []
-  return [{ ...plain, id: text(extra.id)!, name: text(extra.name, 100)!, kind: text(extra.kind, 40)! }]
+  const taken = { ...plain, id: text(extra.id)!, name: text(extra.name, 100)!, kind: text(extra.kind, 40)! }
+  // (Its names counted too: what's passed on is at most this, as it's told again.)
+  return Buffer.byteLength(JSON.stringify(taken)) > MOST_EXTRA ? [] : [taken]
 }
 
 /**
