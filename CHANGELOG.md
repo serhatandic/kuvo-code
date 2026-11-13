@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- Antigravity's limits and conversation spend are read by your computers with the sign-ins you made in Kuvo Code, including on Linux, with the app closed.
+- Antigravity's limits and conversation spend are read by your computers with the sign-ins you made in Kuvo Code, including on Linux, with the app closed. The Antigravity app's own login and history are no longer read.
 
 ### Highlights
 

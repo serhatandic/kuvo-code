@@ -4032,8 +4032,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   with the legacy per-model endpoints for older servers. Its own language server is discovered
   with ps/lsof on macOS and /proc on Linux; self-signed HTTPS is accepted only on loopback.
   An unavailable server or unreadable sign-in is stated on the row; failed reads retain the last
-  result. Refused credentials are remembered by hash in the account profile's
-  `kuvo-usage-refusals.json`, including access, refresh and CSRF refusals, so a restart or
+  result. Refused credentials are remembered by hash in the box-owned
+  `usage/antigravity/<account>/refusals.json`, including access, refresh and CSRF refusals, so a restart or
   temporary refresh failure cannot resend them. Not yet: Ollama's, which ollama.com tells only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
@@ -7595,10 +7595,11 @@ can go three months after 0.8.0 ships.
 
 Antigravity's machine-local history is read from each Kuvo Code agent's own profile only.
 SQLite databases are opened read-only; protobuf generation metadata is bounded to 1 MiB per blob.
+Oversized generation records are skipped; oversized step metadata is ignored, as in Swift.
 Tokens are priced with the shared catalogs and kept in UTC quarter-hour slots, then summed
-across your own computers like Claude's history. Database/WAL fingerprints reuse unchanged
-reads. The last complete database list is kept under `usage/antigravity-files` so a
-missing database after a restart also retains the last spend. A failed, partial or unreadable
-read keeps the last complete reading and is retried;
-missing data is never converted to zero spend. Places are hashed with the machine ID.
+across your own computers like Claude's history. Each database's WAL and file fingerprint reuse
+unchanged reads; idle databases outside the history window aren't read. Removed databases leave
+the total. An unreadable or changing database retains its previous result while other databases
+advance; one with no previous result retains the account's last complete reading for retry.
+A new account with no conversations is empty. Places are hashed with the machine ID.
 The apps read Antigravity only from the box, with no older-box fallback (#679 updates boxes first).

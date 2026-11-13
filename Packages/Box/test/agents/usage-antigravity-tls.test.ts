@@ -23,7 +23,7 @@ test("own loopback language server accepts its self-signed HTTPS certificate and
       methods.push(method)
       return Response.json(method === "GetUserStatus" ? { userStatus: { userTier: { name: "Pro" } } } : { groups: [{ buckets: ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"].map(bucketId => ({ bucketId, remainingFraction: 0.75 })) }] })
     } })
-    const plan = new AntigravityPlan(() => root, undefined, async () => [{ scheme: "https", port: server!.port!, csrf: "fixture-csrf" }], ["http://127.0.0.1:1"])
+    const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [{ scheme: "https", port: server!.port!, csrf: "fixture-csrf" }], ["http://127.0.0.1:1"])
     const result = await plan.limits.read!(1000)
     expect(result?.windows).toHaveLength(4)
     expect(result?.plan).toBe("Pro")
