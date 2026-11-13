@@ -566,7 +566,7 @@ final class AppModel {
                 var outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
                                               home: Self.hereHome, checked: Self.engineOverride == nil)
                 // (Its home's box just made, its helper starting it: a moment for it to be there.)
-                for _ in 0..<5 where Self.movesOwnBox && outcome == .own && OwnBoxHome.keysAreTheBoxs {
+                for _ in 0..<5 where outcome == .own && BackgroundWork.boxStartsOnItsOwn {
                     try? await Task.sleep(for: .seconds(1))
                     outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
                                               home: Self.hereHome, checked: false)
@@ -611,9 +611,9 @@ final class AppModel {
                 case .own:
                     // None here now: the box that was is no longer this Mac's.
                     detachHere()
-                    // Its box in its home of its own (or moving there): never a second one in the
-                    // app's folder.
-                    if Self.movesOwnBox, OwnBoxHome.keysAreTheBoxs {
+                    // Its box made in its home of its own, before it first ran there: never a
+                    // second one in the app's folder.
+                    if BackgroundWork.boxStartsOnItsOwn {
                         BackgroundWork.heldBack = "This Mac’s box starts on its own."
                         throw MachineFailure(message: "This Mac’s box is starting in its own home. Try again in a moment.")
                     }

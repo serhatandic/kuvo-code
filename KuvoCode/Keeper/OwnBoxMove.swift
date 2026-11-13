@@ -204,11 +204,13 @@ final class OwnBoxMove {
         guard let said = await rehome(["--status"]) else {
             // (Its CLI can't run yet, no engine: a move the files say is under way or done waits
             // for it; nothing starts meanwhile.)
-            return underWayOnDisk || movedOnDisk ? .wait : .startOld
+            return underWayOnDisk || movedOnDisk || OwnBoxHome.kind(in: folder) == "mac" ? .wait : .startOld
         }
         let state = said.answer["state"] as? String
         if underWayOnDisk || state == "moving" || state == "clearing" { return await resume() }
         if state == "done", said.answer["way"] as? String == "move" { return await finish(owed: said.answer["owed"] as? [String] ?? []) }
+        // (A new Mac's box made there, with nothing moved: its helper starts it, never this keeper.)
+        if state == nil, OwnBoxHome.kind(in: folder) == "mac" { return await finish(owed: []) }
         return await wentBack()
     }
 
