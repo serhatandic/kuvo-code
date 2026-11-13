@@ -10,9 +10,10 @@
 // with `KUVO_TEST_MODEL=<id>` for another of OpenCode's free models than the engine's default. For a
 // provider's model with a key of its own (say OpenCode Go's), also `KUVO_TEST_PROVIDER=<its id>` and
 // `KUVO_TEST_AUTH=<an engine's sign-ins>`: its `opencode.db` (the engine's data folder) or an
-// opencode `auth.json`. Only that provider's key is read from it, never written to it, and only this
-// test's own engine gets it, in its folders deleted afterwards; a sign-in that renews itself is refused,
-// as the copy renewing it would sign the original out.
+// opencode `auth.json`, with KUVO_TEST_MODEL, so it never runs on a paid default nobody picked. Only
+// that provider's key is read from it, opened read-only, and only this test's own engine gets it, in
+// its folders deleted afterwards; a sign-in that renews itself is refused, as the copy renewing it
+// would sign the original out.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -20,7 +21,6 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
@@ -29,20 +29,29 @@ const binary = process.env.OPENCODE_TEST_BINARY;
 const provider = process.env.KUVO_TEST_PROVIDER ?? "opencode";
 
 /** `provider`'s key in the engine's sign-ins at `file`, in the engine's form for `api/credential`
- * (`{type: "key", key}`): from its database, or from an `auth.json`. Opened only to read. */
-function keyFrom(file, provider) {
+ * (`{type: "key", key}`): from its database, or from an `auth.json`. Opened only to read; what
+ * fails to read says nothing of what's in it. */
+async function keyFrom(file, provider) {
+  const start = Buffer.alloc(16);
+  const handle = fs.openSync(file, "r");
+  try { fs.readSync(handle, start, 0, 16, 0); } finally { fs.closeSync(handle); }
   let value;
-  if (fs.readFileSync(file).subarray(0, 16).toString() === "SQLite format 3\0") {
-    const db = new DatabaseSync(file, { readOnly: true });
-    try {
-      const row = db.prepare("SELECT value FROM credential WHERE integration_id = ? AND active = 1 ORDER BY time_updated DESC LIMIT 1").get(provider);
-      value = row && JSON.parse(row.value);
-    } finally {
-      db.close();
+  try {
+    if (start.toString("latin1") === "SQLite format 3\0") {
+      const { DatabaseSync } = await import("node:sqlite");
+      const db = new DatabaseSync(file, { readOnly: true });
+      try {
+        const row = db.prepare("SELECT value FROM credential WHERE integration_id = ? AND active = 1 ORDER BY time_updated DESC LIMIT 1").get(provider);
+        value = row && JSON.parse(row.value);
+      } finally {
+        db.close();
+      }
+    } else {
+      const entry = JSON.parse(fs.readFileSync(file, "utf8"))[provider];
+      value = entry?.type === "api" ? { type: "key", key: entry.key, ...(entry.metadata ? { metadata: entry.metadata } : {}) } : entry;
     }
-  } else {
-    const entry = JSON.parse(fs.readFileSync(file, "utf8"))[provider];
-    value = entry?.type === "api" ? { type: "key", key: entry.key, ...(entry.metadata ? { metadata: entry.metadata } : {}) } : entry;
+  } catch {
+    assert.fail(`${file} isn't an engine's database or an auth.json, or can't be read`);
   }
   assert.ok(value, `${file} has no sign-in for ${provider}`);
   assert.ok(value.type === "key" && typeof value.key === "string" && value.key, `${provider}'s sign-in in ${file} isn't a key (${value.type}): a copy renewing it would sign the original out`);
@@ -101,14 +110,22 @@ test("answering a bot's question takes it off its goal's list at once, and what 
   // The engine's default model, or the one KUVO_TEST_MODEL names (a free one, or with KUVO_TEST_AUTH's
   // key, KUVO_TEST_PROVIDER's), which the engine must list.
   if (process.env.KUVO_TEST_AUTH) {
-    const value = keyFrom(process.env.KUVO_TEST_AUTH, provider);
+    assert.ok(process.env.KUVO_TEST_MODEL, "KUVO_TEST_AUTH needs KUVO_TEST_MODEL, the model to run on with that key");
+    const value = await keyFrom(process.env.KUVO_TEST_AUTH, provider);
     const stored = await api("POST", "api/credential", { integrationID: provider, label: "API key", value, activate: true });
     assert.ok(stored.status < 300, `The engine didn't take ${provider}'s key (${stored.status})`);
   }
   const model = process.env.KUVO_TEST_MODEL ? { model: { providerID: provider, id: process.env.KUVO_TEST_MODEL } } : {};
   if (model.model) {
-    const listed = ((await api("GET", "api/model")).json?.data ?? []).filter(each => each.providerID === provider).map(each => each.id);
-    assert.ok(listed.includes(model.model.id), `The engine doesn't list ${provider}/${model.model.id}; it lists ${listed.join(", ") || "none of that provider's"}`);
+    // (Its list can change a moment after it starts, or after a key: it's given half a minute.)
+    let listed = [];
+    const end = Date.now() + 30_000;
+    for (;;) {
+      listed = ((await api("GET", "api/model")).json?.data ?? []).filter(each => each.providerID === provider).map(each => each.id);
+      if (listed.includes(model.model.id)) break;
+      assert.ok(Date.now() < end, `The engine doesn't list ${provider}/${model.model.id}; it lists ${listed.join(", ") || "none of that provider's"}`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
   const session = (await api("POST", "api/session", { title: "Pixel", location: { directory: workspace }, ...model })).json.data.id;
 
