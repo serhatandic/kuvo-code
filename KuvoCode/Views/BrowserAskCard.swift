@@ -245,22 +245,24 @@ struct BrowserAskCard: View {
 
     private func use(_ login: Passwords.Login) {
         username = login.account
-        password = Passwords.password(for: login) ?? ""
+        Task { password = await Passwords.password(for: login) ?? "" }
     }
 
     private func send() {
         switch ask.kind {
         case .signIn:
             guard !username.isEmpty || !password.isEmpty else { return }
-            let savedPassword = saved.first { $0.account == username }.flatMap(Passwords.password(for:))
-            let typed = BrowserAsks.handling(password: password, saving: saves, secure: BrowserAsks.isSecure(ask.host), savedPassword: savedPassword).typedNow
+            let savedLogin = saved.first { $0.account == username }
             let answer = BrowserAsks.Answer.signIn(username: username.isEmpty ? nil : username, password: password.isEmpty ? nil : password)
             let wantsAgents = allowsAgents && BrowserAsks.isSecure(ask.host) && !password.isEmpty
             // A password you typed now is yours to allow; one filled in from the vault asks you
             // first, as showing it in Settings does. Saved once the page has it.
             let host = ask.host, id = ask.id, asks = app.browserAsks, answerUsername = username, answerPassword = password, saving = saves
             let conversation = ask.session.flatMap { app.workspace.model(for: $0) }
+            let secure = BrowserAsks.isSecure(ask.host)
             Task {
+                let savedPassword = if let savedLogin { await Passwords.password(for: savedLogin) } else { String?.none }
+                let typed = BrowserAsks.handling(password: answerPassword, saving: saving, secure: secure, savedPassword: savedPassword).typedNow
                 let allowed = wantsAgents ? (typed ? true : await Passwords.authenticate(reason: "let agents sign in to \(host) with its saved password")) : false
                 asks.answer(id, answer)
                 // Said over its conversation's composer, where the card was.

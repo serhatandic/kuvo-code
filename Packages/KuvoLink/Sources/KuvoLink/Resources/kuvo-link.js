@@ -2,7 +2,7 @@
 
 // Packages/Box/src/link/main.ts
 import { spawn as spawn16 } from "node:child_process";
-import crypto55 from "node:crypto";
+import crypto56 from "node:crypto";
 import fs153 from "node:fs";
 import os21 from "node:os";
 import path155 from "node:path";
@@ -2207,6 +2207,7 @@ var FEATURES = [
   "bots.keys",
   "bots.make",
   "box.app",
+  "box.appKeys",
   "box.helper",
   "box.ownHome",
   "box.rehome",
@@ -3529,6 +3530,7 @@ var ownSign = (link) => {
     return null;
   }
 };
+var signWith = (seed, bytes) => crypto7.sign(null, bytes, edPrivate(seed)).toString("base64url");
 var shortHash = (bytes) => crypto7.createHash("sha256").update(bytes).digest().subarray(0, 8).toString("base64url");
 var bodyHash = (body) => shortHash(Buffer.from(JSON.stringify(body)));
 var docBytes = (origin, kind, n, body) => Buffer.from(JSON.stringify({ v: 1, kind, origin, n, body }));
@@ -25203,7 +25205,8 @@ function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, lock = C
 }
 
 // Packages/Box/src/link/areas/integrations.ts
-var INTEGRATIONS_FILE = path92.join(K, "bin", "integrations.json");
+var MAC_INTEGRATIONS = path92.join(K, "bin", "integrations-mac.json");
+var INTEGRATIONS_FILE = OWN_HOME_MAC && fs91.existsSync(MAC_INTEGRATIONS) ? MAC_INTEGRATIONS : path92.join(K, "bin", "integrations.json");
 function integrationCatalog(file = INTEGRATIONS_FILE) {
   try {
     return (JSON.parse(fs91.readFileSync(file, "utf8")).integrations ?? []).filter((each) => typeof each?.id === "string" && (IS_MAC || !each.macOnly));
@@ -39139,7 +39142,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d48908a47c67";
+var BRIDGE_VERSION = "1502029c8dc8";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -43249,7 +43252,7 @@ function privateKeyOf(text) {
   }
   return { key, ...publicBlob(key) };
 }
-function signWith(agentKey, data, flags) {
+function signWith2(agentKey, data, flags) {
   const { key, type } = agentKey;
   if (type === "ssh-ed25519")
     return Buffer.concat([str(type), str(crypto49.sign(null, data, key))]);
@@ -43281,7 +43284,7 @@ async function answer4(request, source, signal) {
       const key = (await source.keys()).find((each) => each.blob.equals(blob));
       if (!key || !await source.allow(key, signal))
         return message(FAILURE);
-      return message(SIGN_RESPONSE, str(signWith(key, data, flags)));
+      return message(SIGN_RESPONSE, str(signWith2(key, data, flags)));
     }
   } catch {}
   return message(FAILURE);
@@ -46811,6 +46814,91 @@ async function* appOpenRoute({ request, json, signal }) {
   return yield* said === null ? json(200, appStatus()) : json(503, { message: said });
 }
 
+// Packages/Box/src/link/mac/app-keys.ts
+import crypto54 from "node:crypto";
+var ONLY_APP = "Only Kuvo Code on this Mac can ask for that.";
+var ONLY_OWN_HOME = "Only a Mac's box in a home of its own does this for its app.";
+var KEY_TEXT2 = /^[A-Za-z0-9_-]{43}$/;
+var MACHINE = /^[^\0]{1,300}$/;
+async function macIdentity() {
+  const link = readLink();
+  if (typeof link?.key === "string" && typeof link.sign === "string" && KEY_TEXT2.test(link.key) && KEY_TEXT2.test(link.sign))
+    return { key: link.key, sign: link.sign };
+  const given = await linkHost("link/identity", {});
+  if (!given || ![given.key, given.sign].every((value) => typeof value === "string" && KEY_TEXT2.test(value)))
+    return null;
+  return { key: given.key, sign: given.sign };
+}
+function requestOf2(given) {
+  if (given.method === undefined && given.path === undefined && given.hash === undefined)
+    return null;
+  const { method, path, hash } = given;
+  if (typeof method !== "string" || !/^[A-Za-z]{1,10}$/.test(method) || typeof path !== "string" || !/^[^\0]{1,4000}$/.test(path) || typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash))
+    return;
+  return { method: method.toUpperCase(), path, hash };
+}
+async function* proofRoute({ request, json }) {
+  if (request.method.toUpperCase() !== "POST")
+    return yield* json(405, {});
+  if (!request.fromApp)
+    return yield* json(403, { message: ONLY_APP });
+  if (!OWN_HOME_MAC)
+    return yield* json(409, { message: ONLY_OWN_HOME });
+  const given = parsed(request.body);
+  const asked = isObject(given) ? requestOf2(given) : undefined;
+  if (!isObject(given) || typeof given.machine !== "string" || !MACHINE.test(given.machine) || asked === undefined) {
+    return yield* json(400, { message: "Say which machine (machine), and for one request its method, path and body's SHA-256 (hash)." });
+  }
+  const identity = await macIdentity();
+  const mac = identity && ownKey({ key: identity.key });
+  if (!identity || !mac)
+    return yield* json(503, { message: "This Mac's link keys can't be read from your Keychain now. Try again in a moment." });
+  const at = Date.now();
+  const nonce = crypto54.randomBytes(18).toString("base64url");
+  const signed = asked ? `kuvo-vault-request\x00${given.machine}\x00${at}\x00${nonce}\x00${asked.method}\x00${asked.path}\x00${asked.hash}` : `kuvo-vault-key\x00${given.machine}\x00${at}\x00${nonce}`;
+  return yield* json(200, { mac, at, nonce, proof: signWith(identity.sign, Buffer.from(signed)) });
+}
+async function* keptKeysRoute({ request, json }) {
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "DELETE")
+    return yield* json(405, {});
+  if (!request.fromApp)
+    return yield* json(403, { message: ONLY_APP });
+  if (!OWN_HOME_MAC)
+    return yield* json(409, { message: ONLY_OWN_HOME });
+  const bot = new URLSearchParams(request.path.split("?")[1] ?? "").get("bot") ?? "";
+  if (!/^bot_[A-Za-z0-9]{1,60}$/.test(bot))
+    return yield* json(400, { message: "Say which bot (?bot=…)." });
+  if (botHere(bot))
+    return yield* json(409, { message: "That bot is this box's own: its keys are at kuvo/bots/<id>/keys." });
+  const suffix = botVariable("", bot);
+  try {
+    const names = await keyNames({ suffix });
+    if (method === "GET") {
+      const keys = {};
+      for (const name of names) {
+        const value = await readKey(name);
+        if (value != null)
+          keys[name] = value;
+      }
+      return yield* json(200, { keys });
+    }
+    const given = parsed(request.body);
+    const asked = isObject(given) && Array.isArray(given.names) ? given.names : null;
+    if (!asked || !asked.every((name) => typeof name === "string" && names.includes(name)))
+      return yield* json(400, { message: "Say which of its keys (names), as GET lists them." });
+    await keyWork(async () => {
+      for (const name of asked)
+        await deleteKey(name);
+    });
+    return yield* json(200, {});
+  } catch (error) {
+    if (error instanceof KeysUnavailable)
+      return yield* json(503, { message: error.message });
+    throw error;
+  }
+}
+
 // Packages/Box/src/link/serve-kept.ts
 import fs149 from "node:fs";
 import path150 from "node:path";
@@ -46869,6 +46957,8 @@ var ROUTES = [
   { when: (route) => route === "kuvo/box/app", answer: appRoute },
   { when: (route) => route === "kuvo/box/app/open", answer: appOpenRoute },
   { when: (route) => route === "kuvo/box/serve", answer: serveRoute },
+  { when: (route) => route === "kuvo/box/proof", answer: proofRoute },
+  { when: (route) => route === "kuvo/box/kept-keys", answer: keptKeysRoute },
   { when: (route) => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: (route) => route === "kuvo/folders", answer: foldersRoute },
@@ -47080,7 +47170,7 @@ async function runMacLink() {
 }
 
 // Packages/Box/src/link/server/serve.ts
-import crypto54 from "node:crypto";
+import crypto55 from "node:crypto";
 import http from "node:http";
 import os20 from "node:os";
 var IDLE_TOLD = 5000;
@@ -47090,7 +47180,7 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os20.
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer({ keepAliveTimeout: IDLE_TOLD, keepAliveTimeoutBuffer: IDLE_KEPT }, async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
-    if (given.length !== expected.length || !crypto54.timingSafeEqual(given, expected)) {
+    if (given.length !== expected.length || !crypto55.timingSafeEqual(given, expected)) {
       response.writeHead(401);
       return response.end();
     }
@@ -47947,7 +48037,7 @@ async function keptServe() {
     return;
   }
   fs153.mkdirSync(RUN, { recursive: true, mode: 448 });
-  const password = crypto55.randomBytes(24).toString("hex");
+  const password = crypto56.randomBytes(24).toString("hex");
   const server = serveBox(password, engineHandler(readEngineFile, { name: os21.hostname() }, readBridgeFile));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -48104,7 +48194,7 @@ async function setup() {
   const replaced = mac && Array.isArray(input.replaces) ? input.replaces.filter((key) => typeof key === "string" && KEY.test(key) && key !== mac).slice(0, 8) : [];
   let formerMacs = [];
   updateLink((current) => {
-    const next = current ?? { secret: crypto55.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
+    const next = current ?? { secret: crypto56.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
     if (mac) {
       next.mac = mac;
@@ -48215,7 +48305,7 @@ function pair(relay) {
     process.exit(3);
   }
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto55.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os21.hostname(), phones: [] };
+    const next = current ?? { secret: crypto56.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os21.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;
@@ -48349,6 +48439,7 @@ export {
   Frame,
   IKInitiator,
   IKResponder,
+  INTEGRATIONS_FILE,
   IS_MAC,
   KEEP_FOR,
   LETTER_WAIT,
@@ -48501,6 +48592,7 @@ export {
   holdArchived,
   holdFor,
   holdForWork,
+  integrationCatalog,
   isSecretName,
   isUpdating,
   itemsElsewhere,

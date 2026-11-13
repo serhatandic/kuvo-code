@@ -40,7 +40,11 @@ export const ownSign = (link: { sign?: unknown } | null | undefined): string | n
   }
 };
 
-export const shortHash = (bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest().subarray(0, 8).toString("base64url");
+/** `bytes` signed with the signing key `seed` (Ed25519), base64url: a Mac's proof to its machines'
+ * vaults (vault.ts `provedMac`), as its app made them before its box moved (mac/app-keys.ts). */
+export const signWith = (seed: string, bytes: Buffer): string => crypto.sign(null, bytes, edPrivate(seed)).toString("base64url");
+
+export const shortHash =(bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest().subarray(0, 8).toString("base64url");
 export const bodyHash = (body: unknown) => shortHash(Buffer.from(JSON.stringify(body)));
 // The bytes an origin signs for one version of its document.
 export const docBytes = (origin: string, kind: DocKind, n: number, body: object) => Buffer.from(JSON.stringify({ v: 1, kind, origin, n, body }));

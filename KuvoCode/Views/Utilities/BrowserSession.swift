@@ -290,9 +290,9 @@ final class BrowserSession: NSObject {
     @discardableResult
     func fill(_ login: Passwords.Login) -> Task<Void, Never>? {
         guard let url = webView.url, url.scheme == "https", let host = url.host(),
-              Passwords.logins(for: host).contains(where: { $0.item == login.item }),
-              let password = Passwords.password(for: login) else { return nil }
+              Passwords.logins(for: host).contains(where: { $0.item == login.item }) else { return nil }
         return Task {
+            guard let password = await Passwords.password(for: login) else { return }
             _ = try? await webView.callAsyncJavaScript(Passwords.fillScript, arguments: ["username": login.account, "secret": password, "host": host], contentWorld: Passwords.world)
         }
     }

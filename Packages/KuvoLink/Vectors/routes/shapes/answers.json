@@ -3077,6 +3077,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.appKeys"
+           },
+           {
             "literal": "box.helper"
            },
            {
@@ -3506,6 +3509,9 @@
            },
            {
             "literal": "box.app"
+           },
+           {
+            "literal": "box.appKeys"
            },
            {
             "literal": "box.helper"

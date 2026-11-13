@@ -142,20 +142,35 @@ enum BotKeys {
     // COMPAT(0.7 bot-keys-keychain): machines' bots' keys this Mac's Keychain kept, given to their machines. Goes 3 months after 0.8.0.
     /// Keys this Mac kept for `machine`'s bots (an earlier Kuvo Code kept every bot's in your
     /// Keychain): each given to the machine (`ask`), then gone from your Keychain once it has it.
+    /// Once this Mac's box has moved into a home of its own, the keys an earlier Kuvo Code kept are its
+    /// helper's copies, which the app never reads: they come from the box (`kuvo/box/kept-keys`), and
+    /// go from there once the machine has them.
     static func handOver(on machine: String, app: AppModel, ask: Ask) async {
-        let names = await Task.detached { IntegrationKeys.names }.value
+        struct Kept: Decodable { var keys: [String: String] }
+        let ownBox = OwnBoxHome.hasMoved ? app.box(SSHConnection.thisMac) : nil
+        let names = ownBox == nil ? await Task.detached { IntegrationKeys.names }.value : []
         for bot in app.bots.list where bot.machine == machine && bot.project == nil {
-            let held = Set(IntegrationKeys.variables(ofBot: bot.id, in: names))
-            guard !held.isEmpty else { continue }
+            // This bot's own keys kept here, by their variables.
+            let kept: [String: String]
+            if let ownBox {
+                kept = (try? await ownBox.value(Kept.self, "GET", "kuvo/box/kept-keys?bot=\(bot.id)"))?.keys ?? [:]
+            } else {
+                let held = IntegrationKeys.variables(ofBot: bot.id, in: names)
+                kept = held.isEmpty ? [:] : await Task.detached {
+                    Dictionary(uniqueKeysWithValues: held.compactMap { variable in IntegrationKeys.value(variable).map { (variable, $0) } })
+                }.value
+            }
+            guard !kept.isEmpty else { continue }
             for service in services {
                 let variables = Integrations.keys(of: service.way).map { (name: $0.name, variable: IntegrationKeys.variable(service.id, $0.name, bot: bot.id)) }
-                guard variables.allSatisfy({ held.contains($0.variable) }) else { continue }
-                let values = await Task.detached {
-                    Dictionary(uniqueKeysWithValues: variables.compactMap { key in IntegrationKeys.value(key.variable).map { (key.name, $0) } })
-                }.value
-                guard values.count == variables.count,
+                let values = Dictionary(uniqueKeysWithValues: variables.compactMap { key in kept[key.variable].map { (key.name, $0) } })
+                guard !variables.isEmpty, values.count == variables.count,
                       let (status, _) = try? await ask("PUT", path(bot, service), ["keys": values]), status == 200 else { continue }
-                await Task.detached { for key in variables { IntegrationKeys.set(nil, for: key.variable) } }.value
+                if let ownBox {
+                    _ = try? await ownBox.send("DELETE", "kuvo/box/kept-keys?bot=\(bot.id)", body: JSONSerialization.data(withJSONObject: ["names": variables.map(\.variable)]))
+                } else {
+                    await Task.detached { for key in variables { IntegrationKeys.set(nil, for: key.variable) } }.value
+                }
             }
         }
     }

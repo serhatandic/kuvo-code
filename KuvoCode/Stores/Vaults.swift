@@ -28,10 +28,11 @@ final class Vaults {
     private(set) var shown: [String: Shown] = [:]
     /// Reaches a box (`AppModel.box`), set as the app starts.
     @ObservationIgnored var client: (String) -> BoxClient? = { _ in nil }
-    /// The Mac's proof for a machine it set up, to be given its vault's key (`PhoneLink.vaultProof`).
-    @ObservationIgnored var proof: (String) -> [String: Any]? = { _ in nil }
-    /// The Mac's proof for one request to a machine's vault (`PhoneLink.vaultRequestProof`).
-    @ObservationIgnored var requestProof: (_ machine: String, _ method: String, _ path: String, _ body: Data) -> String? = { _, _, _, _ in nil }
+    /// The Mac's proof for a machine it set up, to be given its vault's key (`AppModel.vaultProof`:
+    /// `PhoneLink`'s, or its box's once it has moved).
+    @ObservationIgnored var proof: @MainActor (String) async -> [String: Any]? = { _ in nil }
+    /// The Mac's proof for one request to a machine's vault (`AppModel.vaultRequestProof`).
+    @ObservationIgnored var requestProof: @MainActor (_ machine: String, _ method: String, _ path: String, _ body: Data) async -> String? = { _, _, _, _ in nil }
     /// Goes up with each read of a box, and as it's forgotten.
     @ObservationIgnored private var reads: [String: Int] = [:]
     /// The latest read whose answer shows, and the read the box was forgotten at: a read that
@@ -49,7 +50,7 @@ final class Vaults {
     /// set it up; kept once it's given. Asked for only to unlock it: what runs as you on the machine
     /// could take it on its way, so it never goes with an ordinary request.
     private func keyFromMachine(_ box: String) async throws -> String {
-        guard let proof = proof(box), let client = client(box) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
+        guard let proof = await proof(box), let client = client(box) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
         let (status, data) = try await client.send("POST", VaultRoutes.key, body: try JSONSerialization.data(withJSONObject: proof))
         guard status == 200, let key = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["key"] as? String else { throw BoxRefusal(status: status, data: data) }
         VaultKeys.keep(key, for: box)
@@ -63,7 +64,7 @@ final class Vaults {
         let sent = try body.map { try JSONSerialization.data(withJSONObject: $0) }
         var headers: [String: String] = [:]
         if BoxClient.needsVaultProof(box) {
-            guard let proof = requestProof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
+            guard let proof = await requestProof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can't reach that machine's vault now. Try again in a moment.") }
             headers["x-kuvo-vault-proof"] = proof
         }
         let (status, data) = try await client.send(method, path, body: sent, headers: headers)

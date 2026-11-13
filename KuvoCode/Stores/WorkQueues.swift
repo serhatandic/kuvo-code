@@ -439,7 +439,7 @@ final class WorkQueues {
         var headers: [String: String] = [:]
         if BoxClient.needsVaultProof(box) {
             // (A read goes without one: the machine answers it, only not what it brings from another computer.)
-            if let proof = proof(box, method, path, body ?? Data()) { headers["x-kuvo-vault-proof"] = proof }
+            if let proof = await proof(box, method, path, body ?? Data()) { headers["x-kuvo-vault-proof"] = proof }
             else if method != "GET" { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
         }
         return try await client.send(method, path, body: body, headers: headers)
@@ -471,8 +471,8 @@ final class WorkQueues {
     }
 
     /// This Mac's proof for one request to a machine (the vault's, `PhoneLink.vaultRequestProof`).
-    @ObservationIgnored var proof: (_ machine: String, _ method: String, _ path: String, _ body: Data) -> String? = { machine, method, path, body in
-        Vaults.shared.requestProof(machine, method, path, body)
+    @ObservationIgnored var proof: @MainActor (_ machine: String, _ method: String, _ path: String, _ body: Data) async -> String? = { machine, method, path, body in
+        await Vaults.shared.requestProof(machine, method, path, body)
     }
 
     // MARK: Chips

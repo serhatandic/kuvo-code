@@ -50,11 +50,13 @@ enum MachineBox {
     /// add and remove them there, a machine's with this Mac closed: each as `kuvo/integrations`
     /// describes it, in the page's order, with its settings there, its keys' variables, and the file
     /// its server keeps its sign-in in when it signs in by itself (`signInFile`). A machine's leaves
-    /// out those that use a Mac's own apps.
-    @MainActor static func integrationsJSON(forMac: Bool = false) -> Data {
+    /// out those that use a Mac's own apps. `keysInBox`: a Mac's box in a home of its own, laid out as
+    /// a machine's (#333): every integration, its keys named where that box keeps them (`box/keys`),
+    /// as a machine's are (`integrations-mac.json` in the box's release).
+    @MainActor static func integrationsJSON(forMac: Bool = false, keysInBox: Bool = false) -> Data {
         let entries: [[String: Any]] = Integrations.all.filter { forMac || !Integrations.macOnly.contains($0.id) }.map { service in
             var entry = described(service)
-            if let settings = Integrations.settings(for: service, on: forMac ? nil : "machine"), let value = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) {
+            if let settings = Integrations.settings(for: service, on: forMac && !keysInBox ? nil : "machine"), let value = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) {
                 entry["settings"] = value
             }
             let keys = Integrations.keys(of: service.way)

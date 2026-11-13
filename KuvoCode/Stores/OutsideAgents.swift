@@ -177,8 +177,9 @@ final class OutsideAgents {
         session.metadata?["kuvoAgent"]?.string != nil
     }
 
-    /// Where the bridge keeps its sessions, the agents' SDKs and its cache.
-    static var home: URL { AppInfo.supportDirectory.appending(path: "agents") }
+    /// Where the bridge keeps its sessions, the agents' SDKs and its cache: in the app's folder, or in
+    /// this Mac's box's home once it has moved there (`OwnBoxHome`), where its box runs it.
+    static var home: URL { OwnBoxHome.file("agents", inSupport: "agents") }
     /// This one's (a test's bridge keeps its own).
     @ObservationIgnored var home = OutsideAgents.home
 

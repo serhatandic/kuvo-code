@@ -45,9 +45,14 @@ enum Passwords {
         return found.sorted { $0.changed > $1.changed }.map(login)
     }
 
-    static func password(for login: Login) -> String? {
+    /// Its password, from this Mac's vault: in your Keychain, or once this Mac's box has moved into a
+    /// home of its own (its vault's values its helper's then, which the app never reads), as its box
+    /// gives it to its app (`kuvo/vault/items/<id>/values`, noted there as shown).
+    static func password(for login: Login) async -> String? {
         guard !login.item.isEmpty else { return nil }
-        return VaultValues.values(login.item)?["password"]
+        guard OwnBoxHome.hasMoved else { return VaultValues.values(login.item)?["password"] }
+        guard let item = vault?.items.first(where: { $0.id == login.item }) else { return nil }
+        return try? await Vaults.shared.values(of: item, on: BoxClient.thisMac)["password"]
     }
 
     /// Lets every agent sign in to `host` with the saved login for `account` on their own (or not),
@@ -322,7 +327,9 @@ final class PasswordCapture: NSObject, WKScriptMessageHandler {
         guard !Passwords.neverSites.contains(host) else { return }
         let account = (body["username"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let saved = Passwords.logins(for: host).first { $0.account == account }
-        if let saved, Passwords.password(for: saved) == password { return }
-        session.offerToSave(PendingLogin(host: host, account: account, password: password, isUpdate: saved != nil))
+        Task {
+            if let saved, await Passwords.password(for: saved) == password { return }
+            session.offerToSave(PendingLogin(host: host, account: account, password: password, isUpdate: saved != nil))
+        }
     }
 }
