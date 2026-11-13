@@ -6,7 +6,7 @@
 //! It runs as the Mac app runs it: with the machine's own engine runtime (the newest it has), its
 //! home `~/.kuvo-code`, and the script sent as base64 for `sh`, whatever the login shell is there.
 
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -118,7 +118,7 @@ exec "$K/engine/$E/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.
             .spawn()
             .map_err(|error| Error::Unreachable(format!("Couldn't start ssh to reach {} ({}).", self.destination, error.kind())))?;
         // What ends it from another thread: `ssh` itself, this one we started, by its process id,
-        // let go of as soon as it's been waited for.
+        // only while it hasn't been waited for.
         let running = Arc::new(Mutex::new(Some(child.id())));
         let ender = running.clone();
         if !hold(Closer::new(move || {
@@ -132,11 +132,28 @@ exec "$K/engine/$E/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.
             // (A machine that doesn't read it all has failed, which its status says.)
             let _ = stdin.write_all(input);
         }
-        let output = {
-            let result = child.wait_with_output();
-            *running.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-            result.map_err(|error| Error::Unreachable(format!("Couldn't reach {} ({}).", self.destination, error.kind())))?
+        // What it says, to its end (it closes them as it exits); then it's waited for and let go of
+        // under the one lock, so the closer never signals an id that's been waited for.
+        let mut stderr = child.stderr.take();
+        let said = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(stderr) = stderr.as_mut() {
+                let _ = stderr.read_to_end(&mut bytes);
+            }
+            bytes
+        });
+        let mut stdout = Vec::new();
+        if let Some(mut out) = child.stdout.take() {
+            let _ = out.read_to_end(&mut stdout);
+        }
+        let stderr = said.join().unwrap_or_default();
+        let status = {
+            let mut running = running.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let status = child.wait();
+            *running = None;
+            status.map_err(|error| Error::Unreachable(format!("Couldn't reach {} ({}).", self.destination, error.kind())))?
         };
+        let output = std::process::Output { status, stdout, stderr };
         if !output.status.success() {
             let said = String::from_utf8_lossy(&output.stderr);
             let said = said.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("").chars().take(300).collect::<String>();

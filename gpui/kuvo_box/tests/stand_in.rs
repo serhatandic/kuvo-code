@@ -421,12 +421,12 @@ fn a_read_landing_mid_reply_keeps_the_words_streamed_so_far() {
     // A message delivered asks for a read, which the stand-in holds.
     events.send(event("session.inbox.delivered", "ses_1", json!({ "inboxID": "msg_x" }))).unwrap();
     events.send(event("session.text.delta", "ses_1", json!({ "assistantMessageID": "msg_2", "ordinal": 0, "delta": "lo" }))).unwrap();
-    while follow.next_blocking().and_then(|update| last_words(&update)).as_deref() != Some("Hello") {}
+    while last_words(&follow.next_blocking().expect("the follow goes on")).as_deref() != Some("Hello") {}
 
     // The read comes back with none of the words: those shown stay, and nothing is doubled.
     release.send(()).unwrap();
     let after = loop {
-        if let Some(ConversationUpdate::Conversation(conversation)) = follow.next_blocking()
+        if let ConversationUpdate::Conversation(conversation) = follow.next_blocking().expect("the follow goes on")
             && conversation.messages.len() == 3
         {
             break conversation;
@@ -434,7 +434,7 @@ fn a_read_landing_mid_reply_keeps_the_words_streamed_so_far() {
     };
     assert_eq!(last_words(&ConversationUpdate::Conversation(after)).as_deref(), Some("Hello"));
     events.send(event("session.text.delta", "ses_1", json!({ "assistantMessageID": "msg_2", "ordinal": 0, "delta": "!" }))).unwrap();
-    while follow.next_blocking().and_then(|update| last_words(&update)).as_deref() != Some("Hello!") {}
+    while last_words(&follow.next_blocking().expect("the follow goes on")).as_deref() != Some("Hello!") {}
     // Only the two reads were made: streamed words ask for none.
     let reads: Vec<_> = stand_in.seen().into_iter().filter(|seen| seen.route() == "api/session/ses_1/message").collect();
     assert_eq!(reads.len(), 2);
