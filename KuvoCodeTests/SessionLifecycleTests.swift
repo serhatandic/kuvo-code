@@ -30,6 +30,8 @@ import Testing
 
     /// This Mac's box, its engine the stand-in: what makes and moves sessions, as the app asks it.
     private func box() async throws -> TestBox {
+        // (A folder there, as the box makes and moves sessions only into one.)
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
         let box = try await TestBox(engine: engine.url)
         let url = engine.url
         workspace.boxes = { $0 == BoxClient.mac ? box.client(engine: url) : nil }
@@ -142,7 +144,7 @@ import Testing
     /// in its conversation as it comes, and it has its row.
     @Test func aNewSessionShowsItsFirstTurn() async throws {
         let box = try await box()
-        defer { box.stop(); engine.stop() }
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(atPath: "/tmp/kuvo-tests-lifecycle") }
         try await start([])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
@@ -182,7 +184,7 @@ import Testing
     /// same one its turn goes to, not one of its own that stays empty.
     @Test func aSessionOpenedAsItsMadeShowsItsTurn() async throws {
         let box = try await box()
-        defer { box.stop(); engine.stop() }
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(atPath: "/tmp/kuvo-tests-lifecycle") }
         try await start([StubEngine.session("ses_open", title: "Open", directory: project)])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
@@ -244,7 +246,7 @@ import Testing
     /// project's, with the conversation it had.
     @Test func aChatMovedIntoAProject() async throws {
         let box = try await box()
-        defer { box.stop(); engine.stop() }
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(atPath: "/tmp/kuvo-tests-lifecycle") }
         try await start([StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
         engine.on("GET", "/api/session/ses_chat", json: ["data": StubEngine.session("ses_chat", title: "Question", directory: project)])
         try await workspace.move("ses_chat", toProject: project)

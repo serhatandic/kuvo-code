@@ -275,11 +275,15 @@ import Testing
         // Its box answers each route with this: the list of sessions with wake-ups, and the
         // session's own (each read takes what it knows of it).
         let answer = WakesThere()
-        SSHConnection.standIn = { [ssh] address, script in
+        SSHConnection.fedStandIn = { [ssh] address, script, input in
             ssh.note(script, to: address)
-            if script.contains(" box route") { return answer.routed }
-            return script.contains("timezone") ? "" : nil
+            guard script.contains(" box route") else { return script.contains("timezone") ? "" : nil }
+            // (What it has, as a box of this version says it.)
+            let asked = input.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if asked?["path"] as? String == "kuvo/info" { return Self.currentInfo }
+            return answer.routed
         }
+        defer { SSHConnection.fedStandIn = nil }
         let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
         answer.set(["sessions": [["session": session.id, "next": 1, "watching": false]], "wakes": [["id": due, "note": "Check the deploy"]], "watches": [], "paused": false])
         await app.wakeUps.share(with: engine)

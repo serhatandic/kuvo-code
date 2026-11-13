@@ -278,14 +278,19 @@ import Testing
     @Test func aNewConversationIsMadeWithTheModePickedForItsBoxToKeep() async throws {
         let machine = try await lab()
         defer { done(machine) }
-        engine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_new", directory: "/srv/app")])
-        engine.on("GET", "/api/session/ses_new", json: ["data": StubEngine.session("ses_new", directory: "/srv/app")])
+        // (A folder there, as its box makes a session only in one.)
+        let projects = AppInfo.testRoot.appending(path: "ApprovalModes-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: projects) }
+        let folder = projects.appending(path: "app").path
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        engine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_new", directory: folder)])
+        engine.on("GET", "/api/session/ses_new", json: ["data": StubEngine.session("ses_new", directory: folder)])
         let workspace = Workspace()
         let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: "lab"))
         workspace.machineAPI = { $0 == "lab" ? api : nil }
         workspace.boxes = { $0 == "lab" ? machine.client : nil }
 
-        _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: "lab"), model: nil, agent: "build", approval: .acceptEdits)
+        _ = try await workspace.createSession(in: RemoteFolder.folder(folder, on: "lab"), model: nil, agent: "build", approval: .acceptEdits)
         let picked = try #require(engine.requests("POST", "/api/session").last?.body)
         #expect(((picked["metadata"] as? [String: Any])?["kuvo"] as? [String: Any])?["approval"] as? String == "acceptEdits")
         #expect((picked["permissions"] as? [[String: Any]])?.contains { $0["action"] as? String == "shell" && $0["effect"] as? String == "ask" } == true)
