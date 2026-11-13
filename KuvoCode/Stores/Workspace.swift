@@ -2169,9 +2169,12 @@ final class Workspace {
     func fork(_ id: String, from message: Message.User) async throws {
         Analytics.shared.track("session_branched")
         guard let api = api(forSession: id) else { return }
+        // What goes in the new composer, known before anything's made.
+        guard let parts = await SentMessage.ensure(id: message.id, text: message.text, metadata: message.metadata, from: box(of: id, else: self.session(id)?.location.directory ?? "")()) else {
+            throw BoxRefusal(status: 503, message: SessionModel.unread)
+        }
         let session = try await branch(id, before: message.id, api: api)
         upsert(session)
-        let parts = SentMessage.parts(message)
         // The engine's copy carries the attachments; one seen arrive live has them as picked.
         let recent = (try? await api.messages(session: id, limit: 100).data) ?? []
         var stored = message

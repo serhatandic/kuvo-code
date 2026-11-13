@@ -657,7 +657,7 @@ final class SessionModel {
     private func keepCopy() {
         guard !isSubagent, !transcript.messages.isEmpty else { return }
         // The latest, as opening it reads them: earlier ones are read again as you scroll up.
-        SessionCopies.save(.init(session: session, messages: Array(transcript.messages.suffix(Self.pageSize))))
+        SessionCopies.save(.init(session: session, messages: SentMessage.keepingRead(Array(transcript.messages.suffix(Self.pageSize)))))
     }
 
     /// How many messages one read takes: the latest on opening, then as many earlier ones each
@@ -719,10 +719,13 @@ final class SessionModel {
     private func readArrivedParts() {
         let recent = Array(transcript.messages.suffix(6))
         let unread = MessageParts.unread(in: recent) { CommandMessages.shared[$0] != nil }.filter { !partsAsked.contains($0.id) }
-        guard !unread.isEmpty, let box = box() else { return }
-        partsAsked.formUnion(unread.map(\.id))
+        guard !unread.isEmpty, !partsReading, let box = box() else { return }
+        partsReading = true
         Task {
+            defer { partsReading = false }
             guard await MessageParts.read(unread, ask: { body in try await box.send("POST", MessageParts.partsRoute, body: body) }) else { return }
+            // (Asked once each, once read: one that failed is asked again with the next event.)
+            partsAsked.formUnion(unread.map(\.id))
             // Its rows drawn again, with what was read.
             partsRead += 1
         }
@@ -731,6 +734,7 @@ final class SessionModel {
     /// How many reads of parts came in after their messages showed: rows drawn again each time.
     private(set) var partsRead = 0
     @ObservationIgnored private var partsAsked: Set<String> = []
+    @ObservationIgnored private var partsReading = false
 
     /// The code in replies read, colored ahead of time, so it shows colored as it's scrolled to
     /// rather than plain for a moment first.
@@ -1075,11 +1079,13 @@ final class SessionModel {
             failure = "The message couldn't come back: its computer can't be reached."
             return
         }
-        let parts = SentMessage.parts(item)
+        let known = SentMessage.knownParts(id: item.id, text: item.text, metadata: item.metadata)
+        let parts = known ?? MessageParts(words: item.text)
         if paused { isQueuePaused = true }
         var message = MessageParts.Sending(words: parts.words, keyword: parts.keyword, widget: parts.widget, comments: parts.comments, named: parts.agents.map(\.session))
-        // Another agent's letter goes back as the agent read it, still theirs.
-        if parts.mail != nil { message = .again(text: item.text, words: parts.words) }
+        // Another agent's letter goes back as the agent read it, still theirs; so does one whose
+        // parts couldn't be read, never as words of yours.
+        if known == nil || parts.mail != nil { message = .again(text: item.text, words: parts.words) }
         post(message, files: Attachments.restored(item.files + Attachments.writeCarried(item.inlineFiles), noting: parts.paths), for: model, queue: true, holds: paused, before: paused ? before : nil,
              written: parts.words, comments: parts.reviewComments)
     }
@@ -1979,6 +1985,9 @@ final class SessionModel {
         }
     }
 
+    /// Said when a message from before can't be taken back or edited: its computer couldn't read it.
+    static let unread = "That message couldn’t be read: its computer didn’t answer. Try again in a moment."
+
     /// `message` (or a command) to its conversation through its box, which writes what the agent
     /// reads from its fields (`kuvo/sessions/<id>/send`); what it refuses, as it said it.
     private func sendThroughBox(_ message: MessageParts.Sending) async throws {
@@ -2272,6 +2281,12 @@ final class SessionModel {
         if outgoing[item.id] == nil { outgoing[item.id] = Outgoing(state: .waiting, isOurs: false) }
         move(item.id, to: .takingBack)
         Task {
+            // What comes back to the composer, known before it's taken back.
+            guard await SentMessage.ensure(id: item.id, text: item.text, metadata: item.metadata, from: box()) != nil else {
+                if outgoing[item.id]?.state == .takingBack { move(item.id, to: .waiting) }
+                failure = Self.unread
+                return
+            }
             do {
                 try await api.cancelInbox(session: id, item: item.id)
             } catch {
@@ -2415,6 +2430,11 @@ final class SessionModel {
                     try await api.wait(session: id)
                 }
                 let copy = await stored(message)
+                // What goes back to the composer, known before anything's undone.
+                guard let parts = await SentMessage.ensure(id: copy.id, text: copy.text, metadata: copy.metadata, from: box()) else {
+                    failure = Self.unread
+                    return
+                }
                 session.revert = try await api.stageRevert(session: id, messageID: copy.id)
                 // Undone further back before Redo: Redo takes them all back, so it puts back the
                 // composer as it was before the first undo (with each undo's text gone, rather
@@ -2429,7 +2449,7 @@ final class SessionModel {
                     before.text = String(now.text.dropFirst(min(now.text.count, undone.put.count + 2)))
                 }
                 // The text this undo put ahead of what was there.
-                let put = restoreDraft(SentMessage.parts(copy), files: Self.files(of: message, stored: copy))
+                let put = restoreDraft(parts, files: Self.files(of: message, stored: copy))
                 let after = composerState
                 undone = (before, after, put)
             } catch {
@@ -2483,7 +2503,8 @@ final class SessionModel {
                         $0.request = nil
                     }
                     editTranscript { $0.removeLocal(id: id) }
-                    restoreDraft(SentMessage.parts(user), files: Self.files(of: user))
+                    // (One whose parts couldn't be read stays where it was, rather than its text as words.)
+                    if let parts = SentMessage.knownParts(id: user.id, text: user.text, metadata: user.metadata) { restoreDraft(parts, files: Self.files(of: user)) }
                 }
                 fail(error)
             }

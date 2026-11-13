@@ -148,6 +148,33 @@ enum SentMessage {
     /// The parts of those of `messages` from before, which keep none, read by `box` (their
     /// conversation's): before they show, so none shows the blocks written for the agent. One its
     /// box can't read shows as it was written.
+    /// A message's parts before a draft or a send is made of it: kept with it, read already, or read
+    /// now by `box` (a few seconds at most); nil when they can't be read, and then its text is never
+    /// sent as words (it goes again as it was, or stays where it is, saying so).
+    @MainActor static func ensure(id: String, text: String, metadata: JSONValue?, from box: BoxClient?) async -> MessageParts? {
+        if let command = CommandMessages.shared[id] { return MessageParts(words: command) }
+        if let parts = MessageParts.kept(in: metadata) ?? MessageParts.known(id, text: text) { return parts }
+        guard let box else { return nil }
+        _ = await AgentMail.within(3) { await MessageParts.read([(id, text)]) { body in try await box.send("POST", MessageParts.partsRoute, body: body) } }
+        return MessageParts.known(id, text: text)
+    }
+
+    /// A message's parts, if they're known now (kept, read, or a command): nil for one not read yet.
+    @MainActor static func knownParts(id: String, text: String, metadata: JSONValue?) -> MessageParts? {
+        if let command = CommandMessages.shared[id] { return MessageParts(words: command) }
+        return MessageParts.kept(in: metadata) ?? MessageParts.known(id, text: text)
+    }
+
+    /// `messages` with the parts their box read written into each, as a saved copy keeps them: a
+    /// conversation shown from its copy (its computer away) draws them as it did.
+    static func keepingRead(_ messages: [Message]) -> [Message] {
+        messages.map { message in
+            guard case .user(var user) = message, MessageParts.kept(in: user.metadata) == nil, let parts = MessageParts.known(user.id, text: user.text) else { return message }
+            user.metadata = MessageParts.keeping(parts, in: user.metadata)
+            return .user(user)
+        }
+    }
+
     /// `waiting`: those in the engine's queue too. At most a few seconds: a box slow to answer leaves
     /// the rest to show as written meanwhile, to be read again later.
     @MainActor static func read(_ messages: [Message], waiting: [InboxItem] = [], from box: BoxClient?) async {
