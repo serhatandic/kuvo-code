@@ -671,10 +671,10 @@ export class Limits {
     for (const window of entry.windows.filter(w => ids.includes(w.id))) {
       if (settings?.layout && !settings.layout.placed.includes(metricID(account.service, window))) { delete entry.noticeState[window.id]; continue }
       const previous = entry.noticeState[window.id] ?? initialState()
-      const result = transitions(meter(window, this.now()), 1 - window.used, window.resetsAt, previous, toggles)
+      const result = transitions(meter(window, this.now()), (100 - window.used * 100) / 100, window.resetsAt, previous, toggles)
       result.state.fired.push(...result.fire)
       entry.noticeState[window.id] = { ...result.state, read: window.read }
-      for (const milestone of result.fire) created.push(newNotice(row, account.service, window, milestone, this.now()))
+      for (const milestone of result.fire) created.push(newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]!))
     }
     const present = new Set(entry.windows.filter(w => !settings?.layout || settings.layout.placed.includes(metricID(account.service, w))).map(w => w.id))
     for (const id of Object.keys(entry.noticeState)) if (!present.has(id)) delete entry.noticeState[id]

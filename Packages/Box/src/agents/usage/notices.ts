@@ -1,5 +1,5 @@
 // Quota notification decisions belong to the box that read the account. Clients only deliver IDs.
-import { randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import type { LimitWindow } from "../limits"
 import type { NotificationSettings } from "./settings"
 
@@ -14,6 +14,8 @@ export interface NoticeState {
   primed: boolean
   /** Reading that established this state, for ownership handoff. */
   read?: number
+  anchor?: number
+  counts?: Partial<Record<Milestone, number>>
 }
 export interface UsageNotice {
   id: string
@@ -34,6 +36,8 @@ export function transitions(meter: Meter, fraction: number, resetsAt: number | u
   const state = structuredClone(previous)
   if (resetsAt !== undefined && (previous.resetsAt === undefined || resetsAt - previous.resetsAt > 1000)) {
     state.fired = []
+    state.anchor = Math.round(resetsAt / 1000)
+    state.counts = {}
     state.under = false
     state.previous = "untracked"
   }
@@ -88,8 +92,12 @@ export function meter(window: LimitWindow, now: number): Meter {
   return projected <= 1 && Math.round((1 - projected) * 100) >= 1 ? "close" : "runningOut"
 }
 
-export function newNotice(row: string, service: string, window: LimitWindow, milestone: Milestone, at: number): UsageNotice {
-  return { id: `usage_${randomUUID()}`, row, service, window: window.id, milestone, at, remaining: 1 - window.used, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }
+export function newNotice(row: string, service: string, window: LimitWindow, milestone: Milestone, at: number, state: NoticeState): UsageNotice {
+  state.counts ??= {}
+  state.counts[milestone] = (state.counts[milestone] ?? 0) + 1
+  const identity = JSON.stringify([row, window.id, state.anchor ?? 0, milestone, state.counts[milestone]])
+  const id = "usage_" + createHash("sha256").update(identity).digest("hex")
+  return { id, row, service, window: window.id, milestone, at, remaining: (100 - window.used * 100) / 100, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }
 }
 
 /** Peer facts validated without deciding them again; IDs and decision timestamps survive every hop. */
@@ -102,7 +110,7 @@ export function takeStates(given: unknown): Record<string, NoticeState> {
   if (!given || typeof given !== "object" || Array.isArray(given)) return {}
   return Object.fromEntries(Object.entries(given).slice(0, 30).flatMap(([id, value]) => {
     const s = value as NoticeState
-    return s && Array.isArray(s.fired) && s.fired.every(m => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) && (s.read === undefined || Number.isFinite(s.read)) ? [[id, s]] : []
+    return s && Array.isArray(s.fired) && s.fired.every(m => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) && (s.read === undefined || Number.isFinite(s.read)) && (s.anchor === undefined || Number.isFinite(s.anchor)) && (s.counts === undefined || (s.counts && typeof s.counts === "object" && Object.entries(s.counts).every(([m, count]) => milestones.includes(m as Milestone) && Number.isSafeInteger(count) && count >= 0))) ? [[id, s]] : []
   }))
 }
 

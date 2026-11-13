@@ -353,7 +353,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ...(text(account.plan, 100) ? { plan: text(account.plan, 100) } : {}),
     windows,
     notices: takeNotices(account.notices),
-    noticeState: takeStates(account.noticeState),
+    noticeState: Object.fromEntries(Object.entries(takeStates(account.noticeState)).map(([id, state]) => [id, { ...state, ...(state.read !== undefined ? { read: moved(state.read) } : {}) }])),
     ...(balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...(typeof balance.limit === "number" ? { limit: balance.limit } : {}), unit: balance.unit } } : {}),
     ...(extras.length ? { extras } : {}),
     ...(checked ? { checked } : {}),

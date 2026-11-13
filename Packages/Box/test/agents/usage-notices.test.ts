@@ -73,3 +73,46 @@ test("large notice history cannot evict the current limits account from peer mai
   expect(sent[0].accounts[0].windows).toEqual(account.windows)
   expect(Buffer.byteLength(JSON.stringify(sent[0]))).toBeLessThan(40000)
 })
+test("turn-only Mac Claude inherits peer window dedup without checked timestamps", async () => {
+  const f = fixture(), g = fixture()
+  f.account.limits.read = undefined; g.account.limits.read = undefined
+  await f.limits.tick(); await g.limits.tick()
+  const heard = (f: ReturnType<typeof fixture>, used: number) => f.account.limits.heard!({id:"seven_day",used,minutes:100,resetsAt:reset})
+  heard(f,0.5); heard(g,0.5)
+  f.advance(0.95); heard(f,0.95)
+  expect(f.limits.list(false)[0].checked).toBeUndefined()
+  const peers = new LimitsPeers(g.limits,{followed:true,send:()=>{}},{told:true,own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isPeer:()=>true},undefined,()=>reset-599000)
+  peers.take("peer",{kind:"limits",at:reset-599000,accounts:f.limits.list(false)})
+  g.advance(0.95); heard(g,0.95)
+  expect(g.limits.list(false)[0].notices ?? []).toEqual([])
+  expect(g.limits.notices()).toEqual(f.limits.notices())
+})
+test("visibility mappings cover model-specific Codex and Antigravity windows", async () => {
+  const { metricID } = await import("../../src/agents/usage/notices")
+  const window = { id:"spark.secondary",model:"Spark",used:0.5,read:reset,source:"usage" as const }
+  expect(metricID("codex",window)).toBe("codex.sparkWeekly")
+  for (const [id,metric] of [["gemini-5h","geminiPro"],["gemini-weekly","geminiWeekly"],["argon-weekly","argonWeekly"],["3p-5h","claude"],["3p-weekly","claudeWeekly"]]) expect(metricID("antigravity",{...window,id,model:undefined})).toBe(`antigravity.${metric}`)
+})
+test("exact ten percent remaining does not trigger Almost Out", async () => {
+  const f = fixture(); await f.limits.tick(); f.advance(0.9); await f.limits.tick()
+  expect(f.limits.notices().some(n=>n.milestone==="underTenPercent")).toBe(false)
+  f.advance(0.91); await f.limits.tick()
+  expect(f.limits.notices().some(n=>n.milestone==="underTenPercent")).toBe(true)
+})
+test("parallel readers use the same occurrence IDs and recovery receives a new one", async () => {
+  const f = fixture(), g = fixture(); await f.limits.tick(); await g.limits.tick()
+  f.advance(0.95); g.advance(0.95); await f.limits.tick(); await g.limits.tick()
+  expect(f.limits.notices().map(n=>n.id)).toEqual(g.limits.notices().map(n=>n.id))
+  const first = f.limits.notices().map(n=>n.id)
+  f.advance(0.5); await f.limits.tick(); f.advance(0.95); await f.limits.tick()
+  expect(f.limits.notices().slice(2).every(n=>!first.includes(n.id))).toBe(true)
+})
+test("peer handoff timestamps are normalized to the receiver clock", async () => {
+  const f = fixture(); await f.limits.tick(); f.advance(0.95); await f.limits.tick()
+  const accounts = structuredClone(f.limits.list(false))
+  for (const state of Object.values(accounts[0].noticeState!)) state.read! += 3600000
+  const g = fixture()
+  const peers = new LimitsPeers(g.limits,{followed:true,send:()=>{}},{told:true,own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isPeer:()=>true},undefined,()=>reset-599000)
+  peers.take("peer",{kind:"limits",at:reset-599000+3600000,accounts})
+  expect(peers.noticeStates("claude",accounts[0].identity!)[0].seven_day.read).toBe(reset-599000)
+})
