@@ -1039,15 +1039,16 @@ if (main) {
     const args = process.argv.slice(3);
     const option = (name: string): string | undefined => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
     const from = option("--from");
-    const test = option("--key") && !REAL_BOX ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {};
+    const offered = args.includes("--offered");
+    const test = option("--key") && (option("--url") || from || offered) && !REAL_BOX ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {};
     const step: UpdateOptions["step"] = running => noteUpdate({ running });
-    const outcome = args.includes("--offered")
+    const outcome = offered
       ? await takeOffer({ step, ...test })
       : from && !path.isAbsolute(from)
         ? { result: "failed" as const, message: "Say which folder the release is in, as a full path." }
         : await update({ now: args.includes("--now"), from, step, ...test });
-    // (None due, as another process took it meanwhile, say: nothing happened to note.)
-    if (outcome) noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
+    // (None due, or another process took it just before this one: nothing happened to note.)
+    if (outcome && !(offered && outcome.result === "busy")) noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
     if (outcome?.result === "updated") {
       const pid = runningBridge();
       if (pid) process.kill(pid, "SIGTERM");

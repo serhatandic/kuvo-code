@@ -7928,7 +7928,7 @@ async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL,
       }
       for (const entry of fs34.readdirSync(path35.join(stage, "files", bundle), { recursive: true, encoding: "utf8" })) {
         const stat = fs34.lstatSync(path35.join(stage, "files", bundle, entry));
-        if (!stat.isDirectory() && !(stat.isFile() && listed[entry] !== undefined))
+        if (!stat.isDirectory() && !(stat.isFile() && Object.hasOwn(listed, entry)))
           throw new Error("The release's files aren't what it says.");
       }
     }
@@ -38994,7 +38994,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "5d1635854d2d";
+var BRIDGE_VERSION = "e6b6f71af842";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -47423,10 +47423,11 @@ if (main) {
     const args = process.argv.slice(3);
     const option = (name) => args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined;
     const from = option("--from");
-    const test = option("--key") && !REAL_BOX ? { url: option("--url"), keys: [option("--key")], blocked: null } : {};
+    const offered = args.includes("--offered");
+    const test = option("--key") && (option("--url") || from || offered) && !REAL_BOX ? { url: option("--url"), keys: [option("--key")], blocked: null } : {};
     const step = (running) => noteUpdate({ running });
-    const outcome = args.includes("--offered") ? await takeOffer({ step, ...test }) : from && !path151.isAbsolute(from) ? { result: "failed", message: "Say which folder the release is in, as a full path." } : await update({ now: args.includes("--now"), from, step, ...test });
-    if (outcome)
+    const outcome = offered ? await takeOffer({ step, ...test }) : from && !path151.isAbsolute(from) ? { result: "failed", message: "Say which folder the release is in, as a full path." } : await update({ now: args.includes("--now"), from, step, ...test });
+    if (outcome && !(offered && outcome.result === "busy"))
       noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
     if (outcome?.result === "updated") {
       const pid = runningBridge();

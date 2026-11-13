@@ -2086,8 +2086,8 @@ did: the box keeps working as itself ("For released Macs").
      it too when `run/update-trial` is twenty minutes old, five minutes apart (`run/update-restore`).
      After six failed tries it gives up and starts what's there. Without a bridge to start again
      (no phones, no peers), `kuvo-link.js update` confirms it itself.
-  7. It notes what it installed (`updates/installed.json`, its `files`, never its bundles). Each night it checks the files against
-     that note. A Mac notes `run/mac-installing` while it puts its files in place, and marking the
+  7. It notes what it installed (`updates/installed.json`, its `files`, never its bundles). Each
+     night it checks the files against that note. A Mac notes `run/mac-installing` while it puts its files in place, and marking the
      box clears it. Drift seen on two checks, and not while a Mac is installing, means a Mac with an
      older Kuvo Code put its own files back. The box then keeps its version mark, so no other such
      Mac takes it further back, says why, and doesn't update itself for 30 days.

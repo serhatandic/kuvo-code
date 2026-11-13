@@ -420,7 +420,7 @@ export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDA
       }
       for (const entry of fs.readdirSync(path.join(stage, "files", bundle), { recursive: true, encoding: "utf8" })) {
         const stat = fs.lstatSync(path.join(stage, "files", bundle, entry));
-        if (!stat.isDirectory() && !(stat.isFile() && listed[entry] !== undefined)) throw new Error("The release's files aren't what it says.");
+        if (!stat.isDirectory() && !(stat.isFile() && Object.hasOwn(listed, entry))) throw new Error("The release's files aren't what it says.");
       }
     }
     if (process.platform !== "darwin") bundles.length = 0;
