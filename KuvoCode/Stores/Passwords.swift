@@ -1,6 +1,7 @@
 import ClientVault
 import Foundation
 import LocalAuthentication
+import OpenCodeKit
 import Security
 import WebKit
 
@@ -47,12 +48,13 @@ enum Passwords {
 
     /// Its password, from this Mac's vault: in your Keychain, or once this Mac's box has moved into a
     /// home of its own (its vault's values its helper's then, which the app never reads), as its box
-    /// gives it to its app (`kuvo/vault/items/<id>/values`, noted there as shown).
+    /// gives it to its app (`kuvo/vault/items/<id>/values`, noted there as shown): the box attached in
+    /// place (`SSHConnection.thisMac`), its own.
     static func password(for login: Login) async -> String? {
         guard !login.item.isEmpty else { return nil }
         guard OwnBoxHome.hasMoved else { return VaultValues.values(login.item)?["password"] }
         struct Values: Decodable { var values: [String: String] }
-        return try? await Vaults.shared.ask(Values.self, "GET", VaultRoutes.values(login.item), on: BoxClient.thisMac).values["password"]
+        return try? await Vaults.shared.ask(Values.self, "GET", VaultRoutes.values(login.item), on: SSHConnection.thisMac).values["password"]
     }
 
     /// Whether `password` is the one saved for `login`; nil when that can't be told (none saved, or
@@ -62,7 +64,7 @@ enum Passwords {
         guard !login.item.isEmpty else { return nil }
         guard OwnBoxHome.hasMoved else { return VaultValues.values(login.item)?["password"].map { $0 == password } }
         struct Same: Decodable { var same: Bool }
-        return try? await Vaults.shared.ask(Same.self, "POST", VaultRoutes.same(login.item), body: ["values": ["password": password]], on: BoxClient.thisMac).same
+        return try? await Vaults.shared.ask(Same.self, "POST", VaultRoutes.same(login.item), body: ["values": ["password": password]], on: SSHConnection.thisMac).same
     }
 
     /// What a sign-in answered with `password` is compared with (`BrowserAsks.handling`): the password

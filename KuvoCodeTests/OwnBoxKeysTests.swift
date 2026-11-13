@@ -174,8 +174,9 @@ import Testing
         defer { done() }
         try moved()
         let app = AppModel()
+        let before = Vaults.shared.client
         Vaults.shared.client = { [weak app] box in app?.box(box) }
-        defer { Vaults.shared.client = { _ in nil } }
+        defer { Vaults.shared.client = before }
         let standIn = try await StandInBox.start(at: box) { request in
             switch (request.method, request.path) {
             case ("GET", "/kuvo/vault/items/item_gh/values"): return .json(["values": ["username": "me", "password": "kept-in-the-keychain"]])
