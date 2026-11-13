@@ -351,32 +351,42 @@ function readDeletedThere(now = Date.now()): DeletedThere {
   }
 }
 
+// The latest 200 kept, or the file gone when none are.
+function keepDeletedThere(entries: [string, DeletedThere[string]][]): void {
+  if (!entries.length) return void fs.rmSync(DELETED_THERE, { force: true });
+  writePrivate(DELETED_THERE, JSON.stringify(Object.fromEntries(entries.sort(([, a], [, b]) => b.at - a.at).slice(0, 200))));
+}
+
 // What's kept of items deleted there, gone for those a computer tells of again (brought back).
+// (Its ids looked at first, as they're written: most tellings name none of them.)
 function forgetDeletedThere(told: Set<string>): void {
-  if (!fs.existsSync(DELETED_THERE)) return;
+  let ids: string[];
   try {
-    locked(DELETED_LOCK, () => {
-      const kept = readDeletedThere();
-      const left = Object.entries(kept).filter(([id]) => !told.has(id));
-      if (left.length !== Object.keys(kept).length) writePrivate(DELETED_THERE, JSON.stringify(Object.fromEntries(left)));
-    });
+    const kept: unknown = JSON.parse(fs.readFileSync(DELETED_THERE, "utf8"));
+    ids = isObject(kept) ? Object.keys(kept) : [];
+  } catch {
+    return;
+  }
+  if (!ids.some(id => told.has(id))) return;
+  try {
+    locked(DELETED_LOCK, () => keepDeletedThere(Object.entries(readDeletedThere()).filter(([id]) => !told.has(id))));
   } catch {}
 }
 
 /** A change you made through this box to an item the computer `key` keeps, as its box answered
  * (`item`): what this box has of it now, so its views show it at once, not when that computer next
  * tells (one deleted is gone from them, and kept for bringing back there). */
-export function changedThere(key: string, action: "delete" | "move" | "restore", item: Record<string, unknown>, toldID: string | undefined, now = Date.now()): void {
+export function changedThere(key: string, action: "delete" | "move" | "restore", item: Record<string, unknown>, now = Date.now()): void {
   const id = typeof item.id === "string" ? item.id : null;
   if (!id) return;
-  patchTold(key, id, action === "delete" ? { deleted: true } : { item }, toldID);
+  patchTold(key, id, item, action === "delete");
+  if (action !== "delete" && !fs.existsSync(DELETED_THERE)) return;
   try {
     locked(DELETED_LOCK, () => {
       const kept = readDeletedThere(now);
       if (action === "delete") kept[id] = { key, at: now, item };
       else delete kept[id];
-      const latest = Object.entries(kept).sort(([, a], [, b]) => b.at - a.at).slice(0, 200);
-      writePrivate(DELETED_THERE, JSON.stringify(Object.fromEntries(latest)));
+      keepDeletedThere(Object.entries(kept));
     });
   } catch {}
   for (const tell of queueFollowers) tell();

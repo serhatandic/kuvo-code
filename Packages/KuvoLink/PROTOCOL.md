@@ -4135,8 +4135,7 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   round. This Mac's box, whose routes run in the process that sends, sends only what its own
   routes left there: what anything else on the Mac leaves never goes out as you. A change done there
   is put at once in what the asking box keeps of that computer's queue, as its box answered (one
-  deleted taken out of it), only over what that computer had told as it was asked (what it told
-  since is its own newer word); and one deleted there is kept a day
+  deleted taken out of it), never over newer word of that item (one it told since as changed later); and one deleted there is kept a day
   (`run/work-queue/deleted-there.json`, 200 at most, until that computer or this box has it again),
   so a client's bringing it back (Undo) and reading it reach that computer after it has told without
   it. Nothing else (agents' tools, chips) sees those.

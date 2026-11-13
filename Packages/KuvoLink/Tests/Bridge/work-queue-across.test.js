@@ -977,6 +977,18 @@ test("a Mac's request over SSH (`box route`, a process with no relay connection)
   assert.equal((await view("all")).items.some(item => item.number === 500), false);
   receive(lab, { workQueue: telling([]) });
   mailTo(lab);
+  // What's kept of it is seen nowhere else (a chip, an agent's tools): only by a client's Undo and read.
+  assert.equal((await route("GET", "kuvo/work-queue/refs?refs=500")).body.refs["500"], null);
+  assert.match((await tool("queue_show", { item: 500 }, "ses_lead")).text, /no item|isn't|There's no/i);
+  assert.equal((await route("GET", "kuvo/work-queue/items/500")).body.item.told, true);
+  // Told again by lab (brought back there some other way): forgotten here.
+  const deletedThere = path.join(queues, "deleted-there.json");
+  const keptForUndo = fs.readFileSync(deletedThere, "utf8");
+  receive(lab, { workQueue: telling([told(500, "ses_far")]) });
+  assert.equal(fs.existsSync(deletedThere), false);
+  fs.writeFileSync(deletedThere, keptForUndo);
+  receive(lab, { workQueue: telling([]) });
+  mailTo(lab);
   const again = relay();
   link.queueForwardsSoon.send = () => link.sendQueueForwards(again.connection);
   const undoing = route("POST", `kuvo/work-queue/items/${told(500).id}/restore`);

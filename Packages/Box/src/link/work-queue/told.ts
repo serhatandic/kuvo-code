@@ -163,20 +163,22 @@ export function keepTold(key: string, told: Omit<Told, "heard">, now = Date.now(
 
 /** A change you made to item `id` on the computer `key`, through this box, put in what that computer
  * last told, as its box answered it (`item`; `deleted`: taken out), until it tells again: what it
- * says of its sessions stays as it told it. Only over what it told as the change was asked
- * (`toldID`): what it told since is its own newer word. */
-export function patchTold(key: string, id: string, change: { item: unknown } | { deleted: true }, toldID: string | undefined): void {
+ * says of its sessions stays as it told it. Not over newer word of that item (told since). */
+export function patchTold(key: string, id: string, item: unknown, deleted: boolean): void {
   if (!KEY.test(key)) return;
-  const fresh = "item" in change ? toldItemOf(change.item) : null;
+  const fresh = toldItemOf(item);
   // (An answer this box can't read changes nothing.)
-  if ("item" in change && (!fresh || fresh.id !== id)) return;
+  if (!fresh || fresh.id !== id) return;
+  const removed = isObject(item) && isObject(item.removed) && typeof item.removed.at === "number" ? item.removed.at : 0;
+  const answered = Math.max(fresh.updated.at, removed);
   try {
     locked(LOCK, () => {
       const kept = readTold(key);
-      if (!kept || kept.id !== toldID) return;
+      if (!kept) return;
       const before = kept.items.find(each => each.id === id);
+      if (before && before.updated.at > answered) return;
       const others = kept.items.filter(each => each.id !== id);
-      const items = !fresh ? others
+      const items = deleted ? others
         : [...others, before ? { ...before, ...fresh, sessions: before.sessions, inProgress: before.inProgress, ...(before.progress ? { progress: before.progress } : {}), ...(before.handedFrom ? { handedFrom: before.handedFrom } : {}) } : fresh];
       writePrivate(fileOf(key), JSON.stringify({ ...kept, items }));
     });
