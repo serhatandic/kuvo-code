@@ -85,6 +85,18 @@ Older phones keep checking quiet sessions, and skip `gone`.
 IP address (4005). A device a little too fast, or sending faster than the one it sends to
 takes in, is held back: the relay stops reading from it for a moment.
 
+The phone pings the relay over its WebSocket every 25 s, and counts the connection as gone (closes
+it, and connects again) when the pong doesn't come back in 10 s and a second more for each 64 KB it
+has handed its WebSocket since the last ping that was answered, a minute more at most: the ping goes
+out behind those, and a picture on a slow connection holds its pong up as long as it takes to send
+(#144), while a path gone dead behind a big body is still noticed within about 70 s.
+
+The relay counts a device as there while it answers its pings or sends anything: a phone sending a
+picture on a slow connection has its pong behind it, later than the relay's next ping (#144).
+**Deploy order:** that relay goes out with or before the phone build that sends messages again.
+Behind a relay from before it, a big picture on a slow connection is still cut off there, and goes
+again from the start each time, until its two minutes are up.
+
 An APNs push carries `{"aps": {"alert": {"title": "Kuvo Code", "body": "New activity"},
 "mutable-content": 1}, "f": "<sender's address>", "k": "<payload, base64>"}`. The phone's
 notification extension decrypts `k` with the key of the host at `f`, and replaces the text,
@@ -2267,6 +2279,46 @@ like HTTP:
 | `{"t": "cancel", "id": 7}` | Either side stops request 7. |
 | `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session, after 15 s (a host under a heavy load can take that long to read its connection, and is still there) and a second more for each 64 KB the phone sent that no host has answered yet (by answering a request sent after it, or a ping): frames the phone's connection says it sent may still be in the system's buffers, on a slow network or at the relay, ahead of the ping. So a host whose connection died is found out that much later after a big body (a 10 MB one: about 2.5 minutes). A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
 
+**Sending again** (#144). A request with `idempotency-key` in `h` (a message's own id, as
+`POST api/session/<id>/prompt` and `kuvo/agents/api/…/prompt` carry it, and `…/queue/add` to a box
+with `queue.once`) is safe to send twice: when its session ends before the answer's head comes
+(closed, timed out, or the relay connection lost: on LTE, or as the app comes back from the
+background), the phone sends it again, whole, on a new session, for up to two minutes from when it
+first failed; past that it fails as it did at first. Meanwhile a client shows it waiting, not
+failed: with no network at all, that's two minutes before it says it couldn't send. Each computer's
+are in one line, in the order they were first sent: the first goes at once, then after 1, 2, 4 and
+8 s (8 s from then on), or as soon as a relay connection is made, or another is sent to that
+computer, whichever comes first; none goes before one sent ahead of it, and one sent while any
+waits goes behind them. A computer that isn't connected to the relay (asleep, offline), turns the
+phone away, or can't talk with it isn't tried again: that's said at once, as before. Once a try has
+gone (it was put on a session, so the computer may have it), though, a computer not on the relay is
+tried again like a dropped link (the relay or its link started again, and it's still connecting).
+One that never went still says offline at once, as its computer can't have it. A try whose wait
+ends after its two minutes (the app was suspended meanwhile) fails then, rather than going late.
+
+Stopping a request (the client stops reading, or cancels it) ends it at once: one waiting to go
+again never goes. The phone's Stop waits up to 3 s for messages still on their way, then takes back
+those waiting to go again that never reached the computer (`LinkClient.takeBack`, by their ids:
+none of them was put on a session yet), before it asks the box to stop: their words go back to the
+composer, together and in the order they were sent, with no error, and none starts a run after it.
+One that may have reached the computer (its link dropped as or after it went) isn't taken back,
+since it may be in the conversation already: it goes again and is taken once, and like one still
+on its way it can arrive after Stop. A Stop pressed on another computer can't take back the
+phone's: one waiting may still arrive after it, at most two minutes after it first failed.
+
+A box takes a message sent again under the same id once (`Packages/Box/src/link/server/sent-once.ts`,
+by where it goes, its conversation and its id): one still on its way to the conversation waits for
+it and answers as it did; one that went answers as it did then, for an hour, without the
+conversation (or the files it brought) asked again; one the engine refused, or that didn't reach
+it, is tried again. A message's way to the engine is waited for however long a busy engine takes,
+as one without an id is, and a repeat meanwhile waits with it; one the engine doesn't answer at all
+(it started again) is tried again. One taken away (`DELETE …/queue/<item>`, or out of
+the engine's inbox) is forgotten, so Undo puts it back under the same id. After a box starts again,
+or from a phone to a box from before this, the engine and the coding agents' bridge, which each take
+a message once by its id, catch a repeat; its files may then be kept on the box twice (a copy
+nothing shows, which goes with the rest when its conversation does), never a second message. The
+header is never passed to the engine.
+
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
 and a method is read in any case. Both are held to the same route scenarios (`Vectors/routes`), and
@@ -3852,7 +3904,9 @@ before (a linked item is its owner's to change). A client shows them first, as "
   and on every other computer that told of its own (the panel's All). An item on another computer
   has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
   time it changes (a change here or by another process, another computer telling of its queue, or a
-  linked session starting or stopping work).
+  linked session starting or stopping work). With `glance=1` (a client that shows only a count or
+  chips: the phone's •••, a conversation's chips on a Mac; a client follows whole only while the
+  Work Queue itself shows), either reads no issue or pull request from GitHub: each is as last read.
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
   but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,
@@ -3932,7 +3986,8 @@ link or a web address, and not after "PR", "MR", "pull request", "issue" or "ste
 else's numbers; outside sources get a prefix, `gh:owner/repo#12`). `gh:owner/repo#12` (`owner` a
 GitHub owner, `repo` a repository name, the number 1 to 10 digits; then no letter, digit or
 underscore; not in code, a link or an address either) names the item that is that issue or pull
-request. Bare numbers resolve only through the conversation's queue view (its own items, those
+request (a live one here, else on another computer, and a deleted one only where none is live).
+Bare numbers resolve only through the conversation's queue view (its own items, those
 of sessions it started, and items linked to it), never the all-items view or another conversation's
 cached refs.
 Numbers 1–10 stay plain when immediately preceded or followed by "ranked", "rank", "number",
@@ -3968,31 +4023,49 @@ never written to: nothing here changes anything on GitHub.
   longest ago first; one process at a time; again after a minute while it's open, half an hour once
   it's closed, five minutes when it couldn't be found; a host `gh` couldn't read isn't asked for five
   minutes). One another computer told of is read here only once what it told is five minutes old
-  (`seen.checked`): that computer reads what it shows. A view's or refs' answer waits
+  (`seen.checked`): that computer reads what it shows. (It tells `checked` with what it tells, but
+  a newer `checked` alone isn't a change, so it doesn't go again for that: once five minutes old,
+  a box showing it reads it itself.) A view's or refs' answer waits
   3 s at most for it; the events stream doesn't wait, and its next line has it; a request answered
   once (`box route`) never waits: a read that's due goes on in a process of its own (`kuvo-link.js
   box github-read`), kept for the next ask. One found missing where it was is read again by GitHub's
-  id (moved, or a discussion now). Agents' tools never read GitHub: they say what was last read.
+  id in the same read (moved, or a discussion now; one never read here, handed or told from another
+  computer, by its `source.id`, and at once where that computer found it gone or its `source.url`
+  is elsewhere), and only then taken as gone; that read not made (no network) holds the host off,
+  and what's kept stands. One GitHub wouldn't answer for (its `errors` say anything but `NOT_FOUND`
+  for it: an organization's SAML sign-on or IP allow list) stays as it was, and isn't asked again
+  until it's due. Agents' tools never read GitHub: they say what was last read.
 - Kept beside the queues, `run/work-queue/seen.json` (`{reads: {"<host>/<owner>/<repo>#<n>": {at,
   value, checked?, gone?}}, hosts}`), never in them: a read changes no item and no `updated`. `at`
   is since when GitHub has said what it says (a read that finds the same moves only `checked`, so
   nothing shown or told changes with it). One found missing later (gone, or no longer visible to
-  that sign-in: GitHub says the same of both) keeps what was last read, `gone`. The same reader
-  (`link/github/graphql.ts`) reads sessions' pull requests for "A session at a glance".
+  that sign-in: GitHub says the same of both) keeps what was last read, `gone`, `at` since when
+  it's been found so. The same reader (`link/github/graphql.ts`) reads sessions' pull requests for
+  "A session at a glance"; what the glance kept before it did (`{at, pull}`, not `value`) is read
+  as `value`, and written in today's shape from the next read on.
 - Each summary takes it in: `title` GitHub's; `source.name`, what a client shows in place of `#n`
   (`repo#12`, `owner/repo#12` when another owner's repository read here has that name); `seen`
   (`{state, at, gone?}`: `open`, `draft`, `completed`, `not_planned` (a duplicate too), `merged` or
   `closed` (a pull request closed unmerged), and since when; a newer box may say more); and, while it's
-  `completed`, `not_planned`, `merged` or `closed`, `category` `done` (never in progress then), its
-  own category in `keptIn`, and `doneAt` when GitHub closed it. Reopened, it's back in its own
-  category; `struck` (closed without being done: its title drawn struck through) and `closesOn`
-  (`github`: Done is GitHub's, never a place to move it to), for clients to draw by. What another
+  `completed`, `not_planned`, `merged` or `closed`, or `gone`, `category` `done` (never in progress
+  then), its own category in `keptIn`, `doneAt` when GitHub closed it (or since when it's gone), and
+  `doneAs`, what a client shows in place of its category: "Merged on GitHub", "Closed on GitHub" or
+  "Gone from GitHub". Reopened, or found again, it's back in its own category; `struck` (closed
+  without being done, or gone: its title drawn struck through) and `closesOn` (`github`: Done is
+  GitHub's, never a place to move it to), for clients to draw by. A client draws a `gone` one's
+  GitHub mark dimmed. What another
   computer tells carries the same, so a client draws it there without `gh`; its times are taken as
   no later than when it told them. Where this box read it too, the word asked of GitHub later
   (`checked`, else `at`) is shown, this box's on a tie, and one found gone only when the other is
   too.
-- Done is GitHub's: moving one into Done, or out of it while it's closed (you or an agent), is
-  refused in words (400); its title and description aren't changed here either.
+- Done is GitHub's: moving one into Done, or out of it while it's closed or gone (you or an agent),
+  is refused in words (400); its title and description aren't changed here either.
+- One item for each issue wherever it goes: an item handed here that another item here is already
+  (by its name or GitHub's id) is refused back with why; `queue_hand` refuses to hand one to a
+  computer that told of another item that's that issue; and a deleted one isn't brought back (you
+  or an agent, 400) while another item is that issue, here or on another computer. An issue's ref
+  names its live item, here or on another computer, before a deleted one (`queue_add` says where the
+  live one is, rather than offering the deleted one back).
 
 **Numbers**: one `#n` per item, unique across your computers, handed out by the primary: your
 setup's main computer ("Your setup"), the box itself when it's that; one a box can't write to yet
@@ -4354,6 +4427,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `programs` | `kuvo/programs` |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `queue.once` | `…/queue/add` sent again under its `id` adds it once ("Sending again"): a phone sends it with `idempotency-key` only to a box that says this (#144) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
 | `reviews.parts` | a review's `parts`, each on the engine read in a `session` a client can open (bridge 0.9.102) |

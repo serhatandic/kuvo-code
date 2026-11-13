@@ -194,6 +194,20 @@ export async function ownersOf(owner: string, items: Item[], facts: Facts, targe
   return { owners, titles: named };
 }
 
+/** `owners`, conversations here, by their titles (a bot's by its name), for words you read: a
+ * refusal names the one that has an issue by what you call it, not its address. One that can't be
+ * looked up now (gone, its engine not answering) or has no title has none: its address is said. */
+export async function titlesHere(owners: Iterable<string>, targets: Target[]): Promise<(owner: string) => string | undefined> {
+  const bots = listBots();
+  const titles = new Map<string, string>();
+  for (const owner of new Set(owners)) {
+    const bot = bots.find(each => each.session === owner)?.name;
+    const title = bot ?? (owner.startsWith("ses_") ? (await placeOfSession(owner, targets).catch(() => null))?.data.title : undefined);
+    if (title) titles.set(owner, title);
+  }
+  return owner => titles.get(owner);
+}
+
 /** How long ago `at` was, in words, as tools say it. */
 export function agoWords(at: number, now = Date.now()): string {
   const minutes = Math.max(0, Math.round((now - at) / 60_000));

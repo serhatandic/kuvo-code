@@ -17,6 +17,7 @@ nonisolated struct WorkItemChipAttachment: Attachment {
     let title: String
     let mark: WorkItemMark
     let struck: Bool
+    let gone: Bool
     let spokenName: String
 
     init(_ ref: WorkRef, written: String) {
@@ -26,6 +27,7 @@ nonisolated struct WorkItemChipAttachment: Attachment {
         title = ref.title
         mark = WorkItemMark(category: ref.category, inProgress: ref.inProgress, removed: ref.removed == true)
         struck = ref.isStruck
+        gone = ref.isGone
         spokenName = ref.spokenName
     }
 
@@ -33,7 +35,7 @@ nonisolated struct WorkItemChipAttachment: Attachment {
     var selectionStyle: AttachmentSelectionStyle { .text }
 
     func chip(size: CGFloat, dark: Bool) -> WorkItemChip {
-        WorkItemChip(name: name, brand: brand, title: title, mark: mark, struck: struck, spokenAs: spokenName, size: size, dark: dark)
+        WorkItemChip(name: name, brand: brand, title: title, mark: mark, struck: struck, gone: gone, spokenAs: spokenName, size: size, dark: dark)
     }
 
     /// Where a reply's text is drawn by SwiftUI rather than TextKit.
@@ -51,7 +53,7 @@ nonisolated struct WorkItemChipAttachment: Attachment {
         let renderer = ImageRenderer(content: chip.chip(size: size, dark: dark))
         renderer.scale = 2 * max(1, (NSScreen.main?.backingScaleFactor ?? 2) / 2)
         let image = renderer.nsImage ?? NSImage()
-        image.accessibilityDescription = WorkItemChip.spoken(name: chip.spokenName, title: chip.title, mark: chip.mark)
+        image.accessibilityDescription = WorkItemChip.spoken(name: chip.spokenName, title: chip.title, mark: chip.mark, gone: chip.gone)
         images[key] = image
         return image
     }
