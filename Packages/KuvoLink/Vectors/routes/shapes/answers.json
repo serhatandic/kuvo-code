@@ -3086,6 +3086,9 @@
             "literal": "btw.threads"
            },
            {
+            "literal": "claude-code"
+           },
+           {
             "literal": "config"
            },
            {
@@ -3332,9 +3335,6 @@
             "literal": "accounts.ended"
            },
            {
-            "literal": "claude-code"
-           },
-           {
             "literal": "hosts"
            },
            {
@@ -3464,6 +3464,9 @@
            },
            {
             "literal": "btw.threads"
+           },
+           {
+            "literal": "claude-code"
            },
            {
             "literal": "config"
@@ -8375,6 +8378,45 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/claude-code",
+   "answers": {
+    "200": {
+     "object": {
+      "agents": {
+       "list": {
+        "object": {
+         "name": "string",
+         "description": "string",
+         "path": {
+          "list": "string"
+         },
+         "settings": {
+          "map": "string"
+         },
+         "imported": "bool"
+        }
+       }
+      },
+      "commands": {
+       "list": {
+        "object": {
+         "name": "string",
+         "description": "string",
+         "path": {
+          "list": "string"
+         },
+         "settings": {
+          "map": "string"
+         },
+         "imported": "bool"
+        }
+       }
+      }
+     }
     }
    }
   },

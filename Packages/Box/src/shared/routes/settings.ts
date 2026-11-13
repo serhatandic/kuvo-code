@@ -42,12 +42,21 @@ export const KEYS = object({ keys: list(string) });
 /** One key's value. */
 export const KEY = object({ value: string });
 
+/** One of Claude Code's agents or commands on this computer, as it comes over: shown by `name` (a
+ * command's, the one it comes over as), written as `settings` at `path` through `kuvo/config`, and
+ * `imported` when this box's settings have it there. */
+export const CLAUDE_CODE_IMPORT = object({ name: string, description: string, path: list(string), settings: map(string), imported: bool });
+/** What Settings › Agents and Commands offer from this computer's `~/.claude`. */
+export const CLAUDE_CODE = object({ agents: list(CLAUDE_CODE_IMPORT), commands: list(CLAUDE_CODE_IMPORT) });
+
 export type Config = Infer<typeof CONFIG>;
 export type ConfigApplied = Infer<typeof CONFIG_APPLIED>;
 export type MCPCatalogServer = Infer<typeof MCP_CATALOG_SERVER>;
 export type MCPCatalog = Infer<typeof MCP_CATALOG>;
 export type Keys = Infer<typeof KEYS>;
 export type Key = Infer<typeof KEY>;
+export type ClaudeCodeImport = Infer<typeof CLAUDE_CODE_IMPORT>;
+export type ClaudeCode = Infer<typeof CLAUDE_CODE>;
 
 export const SETTINGS_ROUTES: RouteShape[] = [
   { route: "GET kuvo/config", answers: { 200: CONFIG } },
@@ -59,4 +68,5 @@ export const SETTINGS_ROUTES: RouteShape[] = [
   { route: "GET kuvo/keys/:name", answers: { 200: KEY } },
   { route: "PUT kuvo/keys/:name", answers: { 200: NOTHING } },
   { route: "DELETE kuvo/keys/:name", answers: { 200: NOTHING } },
+  { route: "GET kuvo/claude-code", answers: { 200: CLAUDE_CODE } },
 ];
