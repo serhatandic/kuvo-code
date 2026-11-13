@@ -4184,8 +4184,8 @@ answers `{item}`; a category removed only once nothing, deleted items included, 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
 tool servers add to what they tell agents); `POST kuvo/work-queue/tools {name, arguments, session}`
 → `{text, isError}`, run only while the session named is making that call (as the vault's). The
-tool servers (this Mac's app, a machine's `kuvo-browser.js`) list them and pass on every `queue_…`
-call. `queue_list` (its own and its view's items, then those on your other computers, as each last
+tool servers (this Mac's app, and its keeper while the app is closed, and a machine's
+`kuvo-browser.js`) list them and pass on every `queue_…` call. `queue_list` (its own and its view's items, then those on your other computers, as each last
 told them), `queue_show` (one on another computer as it told it, saying it lives there),
 `queue_add`, `queue_update`, `queue_hand` (into a session's queue, linked to it: one on this box at
 once; one on another computer that takes the Work Queue's mail, by address or a bot's name, by mail,

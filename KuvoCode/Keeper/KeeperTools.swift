@@ -10,8 +10,8 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 /// (`KeeperControl.Command.app`) and each call goes there as it is. While it isn't, the tools are
 /// still listed (as the app last listed them), and the box answers what a machine's box answers
 /// without any app (`KeeperBoxTools`): agents writing to each other and running their sessions,
-/// wake-ups, a bot's job, the vault, the sandbox's way out, and a file or widget shown in the
-/// conversation. Only the browser and the side panel need the app: a browser call opens it in the
+/// wake-ups, a bot's job, the vault, the sandbox's way out, the Work Queue, and a file or widget
+/// shown in the conversation. Only the browser and the side panel need the app: a browser call opens it in the
 /// background (`AppOpener`) and goes to it once it has said where its tools answer; the panel says
 /// it isn't open (nobody is looking at a window it opened by itself).
 @MainActor
@@ -177,8 +177,9 @@ final class KeeperTools {
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": "kuvo-browser", "title": "Kuvo Code browser", "version": AppInfo.version],
                 // What the tools are for, as the app tells it: a model that starts while the app
-                // is closed hears it too.
-                "instructions": BrowserTools.instructions(machine: false, vault: await listed().contains { BrowserTools.isVault($0["name"] as? String ?? "") }),
+                // is closed hears it too (the Work Queue's in the box's words).
+                "instructions": BrowserTools.instructions(machine: false, vault: await listed().contains { BrowserTools.isVault($0["name"] as? String ?? "") })
+                    + (await boxTools.workQueueDefinitions()).instructions,
             ]
         case "ping":
             result = [:]
@@ -212,14 +213,14 @@ final class KeeperTools {
     }
 
     /// The tools as the app last listed them; before it ever has, Kuvo Code's own, with the
-    /// vault's as this Mac's box lists them. The sandbox's as the box lists them now, whatever the
-    /// app last listed: only while commands here run in the sandbox.
+    /// vault's as this Mac's box lists them. The sandbox's and the Work Queue's as the box lists
+    /// them now, whatever the app last listed (the sandbox's only while commands here run in it).
     private func listed() async -> [[String: Any]] {
-        let sandbox = await boxTools.sandboxDefinitions()
+        let fromBox = await boxTools.sandboxDefinitions() + (await boxTools.workQueueDefinitions()).tools
         if let kept = (try? Data(contentsOf: Self.listFile)).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }) {
-            return kept.filter { !BrowserTools.isSandbox($0["name"] as? String ?? "") } + sandbox
+            return kept.filter { !BrowserTools.isSandbox($0["name"] as? String ?? "") && !BrowserTools.isWorkQueue($0["name"] as? String ?? "") } + fromBox
         }
-        return BrowserTools.definitions(vault: await boxTools.vaultDefinitions()) + sandbox
+        return BrowserTools.definitions(vault: await boxTools.vaultDefinitions()) + fromBox
     }
 
     private static func key(_ id: Any, client: String?) -> String { (client ?? "") + "|" + String(describing: id) }

@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- With Kuvo Code closed on your Mac, your agents there (a bot at night, say) can now keep their Work Queue: adding, updating, handing on and listing items works as it does with the app open, where before they were told to ask you to open Kuvo Code.
 - The model menu now offers the same models on your Mac and your iPhone: each computer decides which of its models can run (signed in, not retired). A new conversation on your Mac starts on the model that computer picks for it: the one you picked last where it can run there, else its default, else the first that can, so when neither your last model nor the default can run, it starts on one that can rather than on one that would only fail.
 - A lead on another of your computers can now start a session on a Codex model that Codex keeps out of its own picker: it no longer falls back to that computer's default model.
 - The model menu now also offers the models of a provider you set up with a key of your own outside Accounts (an `OPENAI_API_KEY` in the computer's environment, or one in its settings), as they run there, though Accounts doesn't show it signed in. A conversation on a Codex model that Codex keeps out of its own menu no longer asks you to choose another.
