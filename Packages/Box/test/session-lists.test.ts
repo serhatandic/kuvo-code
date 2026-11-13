@@ -9,7 +9,7 @@ import { join } from "node:path"
 // as the engine's events come, and resumed from where a client was after its stream dropped.
 
 const { factsOf, listedProjects } = await import("../src/link/lists/rule")
-const { keepList, listPlaceHeard, listRoute, noteListEvent, readList, workOut, LIST_FILE } = await import("../src/link/lists/sessions")
+const { commit, keepList, listFollowers, listPlaceHeard, listRoute, noteListEvent, readList, workOut, LIST_FILE } = await import("../src/link/lists/sessions")
 const { engineHandler } = await import("../src/link/server/router")
 
 const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/session-lists.json", import.meta.url), "utf8"))
@@ -338,6 +338,49 @@ test("a worktree an older Mac removed, handed over, files its sessions under its
   } finally {
     sessions.delete("ses_gone_tree")
     rmSync(join(home, "box", "worktrees.json"), { force: true })
+  }
+})
+
+// A Mac's change over SSH (`box route`, a process of its own): the long-running process keeping the
+// list sees the box's files change, and lists it, though nothing in it changed them.
+test("a change another process makes to the box's projects reaches the kept list at once", async () => {
+  const gone = join(home, "lists-elsewhere-tree")
+  add("ses_elsewhere", gone, 460)
+  const stop = keepList()
+  try {
+    await listPlaceHeard("engine", target)
+    expect(readList()!.sessions.ses_elsewhere!.facts.project).toBe(gone)
+    const listed = new Promise<void>(done => {
+      const look = () => { if (readList()?.sessions.ses_elsewhere?.facts.project === work) { listFollowers.delete(look); done() } }
+      listFollowers.add(look)
+    })
+    const route = Bun.spawn([process.execPath, join(import.meta.dir, "../src/link/main.ts"), "box", "route"], { env: process.env, stdin: "pipe", stdout: "pipe", stderr: "ignore" })
+    route.stdin.write(JSON.stringify({ method: "POST", path: "kuvo/worktrees/record", body: { removed: true, folder: gone, project: work } }))
+    await route.stdin.end()
+    expect(JSON.parse(await new Response(route.stdout).text()).status).toBe(200)
+    await route.exited
+    await listed
+  } finally {
+    stop()
+    sessions.delete("ses_elsewhere")
+    rmSync(join(home, "box", "worktrees.json"), { force: true })
+  }
+}, 20_000)
+
+test("a route never writes over the list the long-running process keeps, nor takes away its mark", async () => {
+  // (A process named as the long-running one is: it started as the route read the engine.)
+  const link = Bun.spawn(["/bin/sh", "-c", "while :; do sleep 1; done", "kuvo-link"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+  try {
+    const kept = { epoch: "kept", seq: 3, floor: 0, sessions: {}, gone: {}, projects: {}, owner: link.pid }
+    mkdirSync(join(LIST_FILE, ".."), { recursive: true })
+    writeFileSync(LIST_FILE, JSON.stringify(kept))
+    const answered = commit({ sessions: { ses_a: { kind: "project", project: work, directory: work, created: 1, updated: 1 } }, projects: {} })
+    expect(answered).toEqual(kept)
+    expect(readList()).toEqual(kept)
+  } finally {
+    link.kill()
+    await link.exited
+    rmSync(LIST_FILE, { force: true })
   }
 })
 

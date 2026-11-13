@@ -13,13 +13,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { listOf, locked, writePrivate } from "../files";
-import { BOTS, RUN } from "../home";
+import { BOTS, BOX, RUN } from "../home";
+import { watchFolders } from "../follow";
 import { bridgeTarget, call, engineGet } from "../engine/client";
 import { processRuns } from "../../shared/platform";
 import { isChatsFolder } from "../engine/chats";
 import { filedProjects, projectFollowers, readProjects } from "../areas/projects";
 import { botFollowers, botHere } from "../bots/here";
-import { awaySessions, moveFollowers } from "../moves/records";
+import { awaySessions, moveFollowers, MOVES } from "../moves/records";
 import { askFollowers, readAsks } from "../glance/asked";
 import { factsOf, listedProjects, type ListPlace } from "./rule";
 import type { EngineSession } from "../engine/sessions";
@@ -163,6 +164,9 @@ export function readList(file = LIST_FILE): Kept | null {
 export function commit(listed: Listed, now = Date.now(), file = LIST_FILE, owner?: number): Kept {
   return locked(file + ".lock", () => {
     const list: Kept = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
+    // A route's, while the long-running process keeps it (it started since the route looked): its
+    // list stands, mark and all.
+    if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link")) return list;
     const next = list.seq + 1;
     let changed = false;
     // (What only the file says, not the list: written, with no change to tell.)
@@ -227,8 +231,14 @@ export function answerFrom(list: Kept, since: string | null): SessionList {
 
 // MARK: The long-running process's list
 
+/** The box's files a list goes by, which another process may change (a `box route` over SSH, a
+ * move, kuvo-wake): its projects and worktrees (`box`, only those files), its bots and its moves. */
+const LIST_FILES = new Set(["projects.json", "worktrees.json"]);
+const BOT_FILES = new Set(["bot.json", "session"]);
+
 /** Starts keeping the list here (the box's long-running process), worked out again as its
- * projects, bots, moves or asks change. How to stop. */
+ * projects, worktrees, bots, moves or asks change, here or in another process (as the system says
+ * their files changed). How to stop. */
 export function keepList(): () => void {
   keeping = true;
   latest = null;
@@ -236,9 +246,18 @@ export function keepList(): () => void {
   const again = () => scheduleWorkOut();
   const followers = [projectFollowers, botFollowers, moveFollowers, askFollowers];
   for (const each of followers) each.add(again);
+  // (Only what a list goes by: the box's other files, and what a bot keeps in its folder as it
+  // works, change often and say nothing of it.)
+  const box = watchFolders([BOX], (...told: unknown[]) => { if (typeof told[1] !== "string" || LIST_FILES.has(told[1])) again(); }, { recursive: false, missed: again });
+  const moves = watchFolders([MOVES], again, { recursive: false });
+  const bots = watchFolders([BOTS], (...told: unknown[]) => {
+    const name = typeof told[1] === "string" ? told[1].split(path.sep) : null;
+    if (!name || name.length === 1 || (name.length === 2 && BOT_FILES.has(name[1]!))) again();
+  }, { missed: again });
   const whole = setInterval(() => { for (const [name, place] of placeTargets) readPlace(name, place).catch(() => {}); }, READ_EVERY);
   whole.unref?.();
   return () => {
+    for (const watch of [box, moves, bots]) watch.close();
     for (const each of followers) each.delete(again);
     clearInterval(whole);
     clearTimeout(workOutTimer);
