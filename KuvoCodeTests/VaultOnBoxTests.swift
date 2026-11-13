@@ -63,7 +63,9 @@ import WebKit
         #expect(await Passwords.ready())
         let moved = Passwords.logins()
         #expect(Set(moved.map { "\($0.host) \($0.account)" }) == ["github.com kuvo-bots", "github.com someone-else", "example.com "])
-        #expect(moved.map { Passwords.password(for: $0) ?? "" }.sorted() == ["first-password", "second-password", "third-password"])
+        var passwords: [String] = []
+        for login in moved { passwords.append(await Passwords.password(for: login) ?? "") }
+        #expect(passwords.sorted() == ["first-password", "second-password", "third-password"])
         #expect(agentsOwn("github.com") == "kuvo-bots", "agents still sign in there on their own, with that account")
         #expect(agentsOwn("example.com") == nil)
         #expect(Legacy.found(for: nil) == [], "the old ones are gone once they're in the vault")
@@ -96,7 +98,7 @@ import WebKit
         #expect(await Passwords.save(host: "example.com", account: "me@example.com", password: "second-password") != nil)
         let logins = Passwords.logins(for: "example.com")
         #expect(logins.count == 1)
-        #expect(logins.first.flatMap(Passwords.password(for:)) == "second-password")
+        #expect(await Passwords.password(for: try #require(logins.first)) == "second-password")
         #expect(agentsOwn("example.com") == "me@example.com", "still theirs")
     }
 
@@ -143,7 +145,7 @@ import WebKit
         let secure = ask("example.com")
         #expect(try await listed(secure)?["offersToSave"] as? Bool == true)
         #expect(try await phone("kuvo/asks/\(secure)", ["answer": "signIn", "username": "ada", "password": "first-password", "save": true, "agents": true]).status == 200)
-        #expect(Passwords.logins(for: "example.com").first.flatMap(Passwords.password(for:)) == "first-password")
+        #expect(await Passwords.password(for: try #require(Passwords.logins(for: "example.com").first)) == "first-password")
         #expect(agentsOwn("example.com") == "ada", "Let agents sign in here on their own, from the phone")
 
         // A saved account picked, with agents allowed: theirs too.
@@ -157,7 +159,7 @@ import WebKit
         let changed = ask("github.com")
         #expect(try await listed(changed)?["offersToSave"] as? Bool == false)
         #expect(try await phone("kuvo/asks/\(changed)", ["answer": "signIn", "username": "kuvo-bots", "password": "new-bots-password", "save": false]).status == 200)
-        #expect(Passwords.logins(for: "github.com").first.flatMap(Passwords.password(for:)) == "new-bots-password")
+        #expect(await Passwords.password(for: try #require(Passwords.logins(for: "github.com").first)) == "new-bots-password")
 
         // A saved account whose password this Mac can't read: says so, and the card stays.
         let item = try #require(Vaults.shared[BoxClient.mac].vault?.signIns(for: "github.com").first)
@@ -199,7 +201,7 @@ import WebKit
         let logins = Passwords.logins(for: "www.example.com")
         #expect(logins.count == 1, "changed, not saved twice")
         let login = try #require(logins.first)
-        #expect(Passwords.password(for: login) == "second-password")
+        #expect(await Passwords.password(for: login) == "second-password")
 
         let browser = BrowserSession()
         defer { browser.close() }

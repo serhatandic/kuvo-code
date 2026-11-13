@@ -1,15 +1,54 @@
 import ClientVault
+import CryptoKit
 import Foundation
+import KuvoLink
+import OpenCodeKit
+import os
 
 extension AppModel {
+    /// This Mac's proof for a machine it set up, to be given its vault's key (PROTOCOL.md, "Vault"):
+    /// signed with this Mac's signing key, by `PhoneLink`, or once this Mac's box has moved into a
+    /// home of its own (its keys its helper's then, which the app never reads), by that box
+    /// (`kuvo/box/proof`).
+    func vaultProof(machine: String) async -> [String: Any]? {
+        guard OwnBoxHome.hasMoved else { return phoneLink.vaultProof(machine: machine) }
+        return await proofFromOwnBox(["machine": machine])
+    }
+
+    /// This Mac's proof for one request to a machine's vault (`x-kuvo-vault-proof`), as `vaultProof`
+    /// makes it: base64url JSON.
+    func vaultRequestProof(machine: String, method: String, path: String, body: Data) async -> String? {
+        guard OwnBoxHome.hasMoved else { return phoneLink.vaultRequestProof(machine: machine, method: method, path: path, body: body) }
+        let hash = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        guard let proof = await proofFromOwnBox(["machine": machine, "method": method.uppercased(), "path": path, "hash": hash]),
+              let json = try? JSONSerialization.data(withJSONObject: proof) else { return nil }
+        return json.base64URL
+    }
+
+    /// This Mac's box, moved into a home of its own, signing a proof (`kuvo/box/proof`); nil when it
+    /// couldn't (not reached, or its Keychain locked), as the app's own read of its keys would be.
+    private func proofFromOwnBox(_ asked: [String: String]) async -> [String: Any]? {
+        do {
+            let (status, data) = try await box(SSHConnection.thisMac).send("POST", "kuvo/box/proof", body: try JSONSerialization.data(withJSONObject: asked))
+            guard status == 200, let proof = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                Logger(subsystem: "run.kuvo.code", category: "vault").error("This Mac's box didn't sign a proof (\(status))")
+                return nil
+            }
+            return proof
+        } catch {
+            Logger(subsystem: "run.kuvo.code", category: "vault").error("This Mac's box couldn't be asked for a proof: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     /// The vault's tools for this Mac's conversations, which its box lists and carries out
     /// (KuvoLink's PROTOCOL.md, "Vault"), and the fills its browser asks it for; and the sandbox's,
     /// alike ("Sandbox").
     func wireVault() {
         Vaults.shared.client = { [weak self] box in self?.box(box) }
         Sandboxes.shared.client = { [weak self] box in self?.box(box) }
-        Vaults.shared.proof = { [weak self] machine in self?.phoneLink.vaultProof(machine: machine) }
-        Vaults.shared.requestProof = { [weak self] machine, method, path, body in self?.phoneLink.vaultRequestProof(machine: machine, method: method, path: path, body: body) }
+        Vaults.shared.proof = { [weak self] machine in await self?.vaultProof(machine: machine) }
+        Vaults.shared.requestProof = { [weak self] machine, method, path, body in await self?.vaultRequestProof(machine: machine, method: method, path: path, body: body) }
         // This Mac's vault, for the panel browser's sign-ins (those kept before it moved in), once
         // its box answers.
         Task {

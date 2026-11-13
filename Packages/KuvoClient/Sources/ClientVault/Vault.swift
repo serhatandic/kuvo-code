@@ -396,6 +396,8 @@ public enum VaultRoutes {
     public static let items = "kuvo/vault/items"
     public static func item(_ id: String) -> String { "kuvo/vault/items/\(id)" }
     public static func values(_ id: String) -> String { "kuvo/vault/items/\(id)/values" }
+    /// Whether values given are the ones kept, without giving them (`vault.same`).
+    public static func same(_ id: String) -> String { "kuvo/vault/items/\(id)/same" }
     public static let grants = "kuvo/vault/grants"
     public static let pause = "kuvo/vault/pause"
     public static let key = "kuvo/vault/key"

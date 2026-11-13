@@ -10,7 +10,7 @@ import type { Integration, IntegrationAdded, IntegrationHealth, Integrations } f
 import { soon } from "../../shared/wait";
 import { call } from "../engine/client";
 import { listOf, locked, writePrivate } from "../files";
-import { BOTS, CONFIG_LOCK, INTEGRATION_DATA, IS_MAC, K, OWN_RUNTIME, SCRIPT } from "../home";
+import { BOTS, CONFIG_LOCK, INTEGRATION_DATA, IS_MAC, K, OWN_HOME_MAC, OWN_RUNTIME, SCRIPT } from "../home";
 import { answeringOnce } from "../once";
 import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
@@ -21,7 +21,11 @@ import { changeSettings, CONFIG_FILE, olderKeysNamedHere, ownsSettings, readSett
 import type { SettingChange, Settings } from "./config";
 import type { EngineCredential } from "./accounts";
 
-export const INTEGRATIONS_FILE = path.join(K, "bin", "integrations.json");
+/** The catalog a Mac's box in a home of its own reads (#333 piece 6a): every integration, those that
+ * use a Mac's own apps too, with their keys named where it keeps them (`box/keys`), as its release
+ * brings it (the app wrote the box's in its folder before, `MachineBox.writeMacCatalog`). */
+export const MAC_INTEGRATIONS = path.join(K, "bin", "integrations-mac.json");
+export const INTEGRATIONS_FILE = OWN_HOME_MAC && fs.existsSync(MAC_INTEGRATIONS) ? MAC_INTEGRATIONS : path.join(K, "bin", "integrations.json");
 
 /** An integration as its Mac's catalog has it (`bin/integrations.json`): what `kuvo/integrations`
  * lists of it, then what adding it takes: the server's `settings` it adds, its keys' `variables`
