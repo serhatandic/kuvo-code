@@ -5424,7 +5424,7 @@ app's keeper's before the move.
   proof}`, as the app made them before: `mac` the Mac's public link key, `at` now (ms), a nonce of
   its own. Its keys come from its link once it's on, else from its host (`link/identity`), never made
   here; `503 {"message"}` while the Keychain can't give them. `400` for anything else asked.
-- **`kuvo/box/kept-keys?bot=<id>`**: COMPAT(0.7 bot-keys-keychain), the keys of its own an earlier
+- **`kuvo/box/kept-keys?bot=<id>`**: for released Macs ("For released Macs", `0.7 bot-keys-keychain`), the keys of its own an earlier
   Kuvo Code kept in this Mac's Keychain for a bot on one of your machines (`<variable>__<BOT>`), which
   the app gives that machine as it connects: `GET` answers `{keys: {<variable>: <value>}}`; `DELETE
   {names}` takes those away once the machine has them (`400` for a name `GET` doesn't list). `409`

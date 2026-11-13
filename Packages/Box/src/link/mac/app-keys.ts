@@ -7,10 +7,10 @@
 // - `kuvo/box/proof` (`POST`): this Mac's proof for one of your machines, signed with its link's
 //   signing key, as a machine's vault takes one (vault.ts, `provedMac`): `{machine}` for its vault's
 //   key, `{machine, method, path, hash}` for one request. `{mac, at, nonce, proof}`.
-// - `kuvo/box/kept-keys?bot=<id>`: COMPAT(0.7 bot-keys-keychain), a machine's bot's own keys an
-//   earlier Kuvo Code kept in this Mac's Keychain, for the app to give the machine: `GET` them
-//   (`{keys: {<variable>: <value>}}`), `DELETE` those it has (`{names}`). Only a bot that isn't
-//   this box's own: this box's bots' keys are theirs (`kuvo/bots/<id>/keys`). Goes 3 months after 0.8.0.
+// - `kuvo/box/kept-keys?bot=<id>`: a machine's bot's own keys an earlier Kuvo Code kept in this
+//   Mac's Keychain, for the app to give the machine (for released Macs: `keptKeysRoute`'s marker):
+//   `GET` them (`{keys: {<variable>: <value>}}`), `DELETE` those it has (`{names}`). Only a bot that
+//   isn't this box's own: this box's bots' keys are theirs (`kuvo/bots/<id>/keys`).
 
 import crypto from "node:crypto";
 import { isObject, parsed } from "../../shared/json";
