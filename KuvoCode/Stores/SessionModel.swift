@@ -1891,6 +1891,8 @@ final class SessionModel {
             var from: String?
             var words: String?
             var before: String?
+            /// What it keeps with it (its parts, a wake-up's mark), put back with it.
+            var metadata: JSONValue?
             /// Added back as it was (`queue/add`).
             var kept: Bool?
         }

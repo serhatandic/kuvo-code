@@ -40099,7 +40099,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1effa8e998b0";
+var BRIDGE_VERSION = "4e92a5160daf";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45185,9 +45185,9 @@ async function* sendRoute(context, match) {
   if (!isObject(given) || !fields && again === null)
     return yield* json(400, { message: "Send what was written (words)." });
   const files = Array.isArray(given.files) ? given.files : [];
-  if (fields ? isEmpty(fields, files) : !again.trim() && !files.length)
-    return yield* json(400, { message: "There's nothing to send." });
   const command = fields && typeof given.command === "string" && given.command.trim() ? given.command.trim() : null;
+  if (!command && (fields ? isEmpty(fields, files) : !again.trim() && !files.length))
+    return yield* json(400, { message: "There's nothing to send." });
   if (frozen().has(session))
     return yield* json(409, { message: MOVING });
   const targets = targetsOf({ readEngine, bridge });

@@ -186,6 +186,13 @@ describe("kuvo/sessions/<id>/send", () => {
     expect(ran.body.text).toBe("the tests\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/x/y.txt\n</attached-files>")
   })
 
+  test("a command with nothing after its name runs", async () => {
+    expect((await send("ses_main", { words: "", command: "init" })).status).toBe(200)
+    const [ran] = prompted(engineAsked)
+    expect(ran.path).toBe("/api/session/ses_main/command")
+    expect(ran.body).toMatchObject({ name: "init", text: "" })
+  })
+
   test("nothing written and nothing with it isn't sent; nor is it to a conversation that isn't here", async () => {
     expect((await send("ses_main", { words: "  " })).status).toBe(400)
     expect((await send("ses_main", { text: " " })).status).toBe(400)

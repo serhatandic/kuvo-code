@@ -69,8 +69,9 @@ export async function* sendRoute(context: RouteContext, match: RegExpMatchArray)
   const fields = isObject(given) ? fieldsOf(given) : null;
   if (!isObject(given) || (!fields && again === null)) return yield* json(400, { message: "Send what was written (words)." });
   const files = Array.isArray(given.files) ? given.files : [];
-  if (fields ? isEmpty(fields, files) : !again!.trim() && !files.length) return yield* json(400, { message: "There's nothing to send." });
   const command = fields && typeof given.command === "string" && given.command.trim() ? given.command.trim() : null;
+  // (A command runs with nothing after its name: /init.)
+  if (!command && (fields ? isEmpty(fields, files) : !again!.trim() && !files.length)) return yield* json(400, { message: "There's nothing to send." });
   if (frozen().has(session)) return yield* json(409, { message: MOVING });
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
