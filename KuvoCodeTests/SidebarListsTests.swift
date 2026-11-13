@@ -161,18 +161,38 @@ import Testing
         #expect(old.paths.contains("kuvo/projects"))
     }
 
+    /// A machine that lists its sessions but lacks another name the app needs (`typed`, say) is
+    /// held too: older is judged by all of them (#679).
+    @Test func aMachineLackingAnyNameTheAppNeedsIsHeld() async throws {
+        defer { done() }
+        let machine = "m_lists_typed"
+        let gates = BoxGates()
+        defer { gates.letGo(machine) }
+        workspace.onOlderBox = { box, features in gates.foundOlder(box, features: features, name: "lab") }
+        workspace.onCurrentBox = { box, features in gates.foundCurrent(box, features: features) }
+        let old = OlderBox(before: BoxGate.required.filter { $0 != "typed" })
+        workspace.boxes = { id in id == machine ? BoxClient(box: id, transport: old) : nil }
+        let following = Task { await workspace.followSessionList(on: machine) }
+        defer { following.cancel() }
+        try await until { gates.state(of: machine) != nil }
+        #expect(gates.state(of: machine) == .failed(BoxGate.Words.couldntUpdate("lab", why: "It answers as an older version since it connected")))
+    }
+
     /// A box from before `sessions.list`: its features say so, and the list's route isn't there.
     private nonisolated final class OlderBox: BoxTransport, @unchecked Sendable {
         private let lock = NSLock()
         private var asked: [String] = []
         private var updated = false
+        /// What it says it has until it's updated.
+        private let before: [String]
+        init(before: [String] = ["projects", "worktrees"]) { self.before = before }
         var paths: [String] { lock.withLock { asked } }
         /// Brought up to date: it says it has all the app needs (and lists nothing yet).
         func update() { lock.withLock { updated = true } }
         func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
             let current = lock.withLock { asked.append(request.path); return updated }
             let info = request.path == "kuvo/info"
-            let features = current ? BoxGate.required : ["projects", "worktrees"]
+            let features = current ? BoxGate.required : before
             let body = info ? (try? JSONSerialization.data(withJSONObject: ["features": features])) ?? Data() : Data("{}".utf8)
             return AsyncThrowingStream { continuation in
                 continuation.yield(.head(status: info ? 200 : 404, headers: ["content-type": "application/json"]))
