@@ -4032,7 +4032,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   with the legacy per-model endpoints for older servers. Its own language server is discovered
   with ps/lsof on macOS and /proc on Linux; self-signed HTTPS is accepted only on loopback.
   An unavailable server or unreadable sign-in is stated on the row; failed reads retain the last
-  result. Not yet: Ollama's, which ollama.com tells only the Ollama app's own signing key.
+  result. Refused credentials are remembered by hash in the account profile's
+  `kuvo-usage-refusals.json`, including access, refresh and CSRF refusals, so a restart or
+  temporary refresh failure cannot resend them. Not yet: Ollama's, which ollama.com tells only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
   accounts are read one a minute (counted before the request goes, through a restart too), and a
