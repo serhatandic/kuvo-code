@@ -1470,6 +1470,9 @@ var patchLimit = 1e5;
 var outsideWindow = 5 * 60000;
 var stamp = (date) => date.toISOString();
 var kindsKeptWhole = new Set(["memory", "skill"]);
+var stampOf = (stat) => ({ size: stat.size, mtime: stat.mtimeMs, ctime: stat.ctimeMs, ino: stat.ino });
+var sameStamp = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime && a.ino === b.ino;
+var couldBeRewritten = (stamp, at) => at - Math.max(stamp.mtime, stamp.ctime) < (stamp.mtime % 1000 === 0 || stamp.ctime % 1000 === 0 ? 2000 : 100);
 
 class ArtifactStore {
   root;
@@ -1542,21 +1545,58 @@ class ArtifactStore {
     return this.artifacts.get(ArtifactStore.idOf(path));
   }
   asSeen(path) {
-    if (this.waiting.has(path))
+    const last = this.waiting.get(path)?.at(-1);
+    if (last === "read")
       return true;
+    let now;
+    try {
+      const stat = statSync3(path);
+      now = stat.isFile() ? stampOf(stat) : undefined;
+    } catch (error) {
+      now = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? undefined : null;
+    }
+    if (last) {
+      if ("before" in last) {
+        if (!now || now.size !== last.before.length)
+          return false;
+        const read = this.look(path);
+        return !!read?.bytes && read.bytes.equals(last.before);
+      }
+      const { seen, at } = last;
+      if (!seen || !now)
+        return seen === undefined && now === undefined;
+      if (!sameStamp(seen, now))
+        return false;
+      if (!couldBeRewritten(seen, at))
+        return true;
+      const read = this.look(path);
+      return !!read && (read.bytes && seen.bytes ? read.bytes.equals(seen.bytes) : sameStamp(read, seen));
+    }
     const artifact = this.at(path);
+    const latest = artifact?.versions.at(-1);
+    if (now === null)
+      return true;
+    if (!now)
+      return !artifact || artifact.gone !== null;
+    if (!artifact || artifact.gone || !latest || latest.size !== now.size)
+      return false;
+    const recorded = this.recorded.get(path);
+    if (recorded && !sameStamp(recorded, now))
+      return false;
+    if (recorded && !couldBeRewritten(recorded, recorded.at))
+      return true;
     const read = this.read(path);
     if (read === null)
       return true;
-    if (!read)
-      return !artifact || artifact.gone !== null;
-    return !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash;
+    return !!read && latest.hash === read.hash;
   }
   queue = Promise.resolve();
   waiting = new Map;
-  inTurn(paths, work) {
-    for (const path of paths)
-      this.waiting.set(path, (this.waiting.get(path) ?? 0) + 1);
+  recorded = new Map;
+  inTurn(paths, work, waits = "read") {
+    const recording = waits ? paths : [];
+    for (const path of recording)
+      this.waiting.set(path, [...this.waiting.get(path) ?? [], waits]);
     const next = this.queue.then(async () => {
       await this.policy.learn(paths);
       return work();
@@ -1564,11 +1604,10 @@ class ArtifactStore {
       console.error("artifacts:", error?.message ?? error);
       return;
     }).finally(() => {
-      for (const path of paths) {
-        const left = (this.waiting.get(path) ?? 1) - 1;
-        if (left > 0)
-          this.waiting.set(path, left);
-        else
+      for (const path of recording) {
+        const left = this.waiting.get(path);
+        left.shift();
+        if (!left.length)
           this.waiting.delete(path);
       }
     });
@@ -1579,8 +1618,9 @@ class ArtifactStore {
     await this.queue;
   }
   change(path, made) {
+    const at = Date.now();
     const seen = this.look(path);
-    return this.inTurn([path], () => this.changeNow(path, made, seen));
+    return this.inTurn([path], () => this.changeNow(path, made, { seen, at }), { seen, at });
   }
   changeAll(paths, made) {
     return this.inTurn(paths, () => {
@@ -1594,26 +1634,29 @@ class ArtifactStore {
     });
   }
   before(path, bytes, where = {}, at = this.now()) {
-    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at));
+    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at), !this.at(path) && !this.waiting.has(path) ? { before: bytes } : null);
   }
   pin(id, pinned) {
     const path = this.artifacts.get(id)?.path;
-    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned));
+    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned), null);
   }
   async restore(id, n, at = this.now()) {
     const path = this.artifacts.get(id)?.path;
-    return await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at)) ?? "It couldn't be put back.";
+    return await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at), null) ?? "It couldn't be put back.";
   }
   shown(path, made) {
     return this.inTurn([path], () => this.shownNow(path, made));
   }
-  changeNow(path, made, seen = this.look(path)) {
+  changeNow(path, made, looked) {
     const now = made.at ?? this.now();
+    const at = looked?.at ?? Date.now();
+    const seen = looked ? looked.seen : this.look(path);
     const read = this.read(path, seen);
     let artifact = this.at(path);
     if (read === null)
       return;
     if (!read) {
+      this.recorded.delete(path);
       if (!artifact || artifact.gone)
         return;
       artifact.gone = stamp(now);
@@ -1627,6 +1670,7 @@ class ArtifactStore {
     }
     const latest = artifact.versions.at(-1);
     if (latest && latest.hash === read.hash && (!artifact.gone || latest.status !== "deleted")) {
+      this.recorded.set(path, { size: seen.size, mtime: seen.mtime, ctime: seen.ctime, ino: seen.ino, at });
       const back = artifact.gone !== null;
       artifact.gone = null;
       if (made.keep && !latest.kept && read.bytes && !(latest.reason && privateReasons.has(latest.reason))) {
@@ -1655,7 +1699,9 @@ class ArtifactStore {
     if (!reason)
       this.keep(read.hash, read.bytes);
     const patch = reason === "git" && made.patch ? made.patch.slice(0, patchLimit) : undefined;
-    return this.add(artifact, { status: latest && latest.status !== "deleted" ? "modified" : "added", hash: read.hash, size: read.size, kept: !reason, ...reason ? { reason } : {}, ...patch ? { patch } : {} }, made, now, reason ? undefined : read.bytes);
+    const added = this.add(artifact, { status: latest && latest.status !== "deleted" ? "modified" : "added", hash: read.hash, size: read.size, kept: !reason, ...reason ? { reason } : {}, ...patch ? { patch } : {} }, made, now, reason ? undefined : read.bytes);
+    this.recorded.set(path, { size: seen.size, mtime: seen.mtime, ctime: seen.ctime, ino: seen.ino, at });
+    return added;
   }
   noCopy(artifact, size, readable) {
     if (!readable)
@@ -1686,6 +1732,7 @@ class ArtifactStore {
     };
     const version = { n: 0, at: stamp(at), by: { kind: "outside" }, via: [], status: "added", edits: 0, size: bytes.length, hash, kept: true, before: true };
     this.keep(hash, bytes);
+    this.recorded.delete(path);
     artifact.versions.push(version);
     this.artifacts.set(artifact.id, artifact);
     this.use(hash, bytes.length, 1);
@@ -1994,10 +2041,10 @@ class ArtifactStore {
     if (!stat.isFile())
       return;
     if (stat.size > copyLimit)
-      return { size: stat.size, mtime: stat.mtimeMs };
+      return stampOf(stat);
     try {
       const bytes = readFileSync3(path);
-      return { size: bytes.length, mtime: stat.mtimeMs, bytes };
+      return { ...stampOf(stat), size: bytes.length, bytes };
     } catch (error) {
       return error?.code === "ENOENT" ? undefined : null;
     }
@@ -2193,7 +2240,10 @@ function watchTree(folder, changed, failed, { limit = 4000, linux = process.plat
       if (name)
         changed(join7(folder, name));
     }, { recursive: true, missed });
-    watcher.on("error", (error) => failed(String(error?.message ?? error)));
+    watcher.on("error", (error) => {
+      watcher.close();
+      failed(String(error?.message ?? error));
+    });
     return { close: () => watcher.close() };
   }
   const watchers = new Map;
@@ -2315,17 +2365,22 @@ class BotFolders {
     this.pending.set(path, setTimeout(() => this.record(path), this.settle));
   }
   turnEnded(bot, since, made) {
-    this.flush(bot);
+    const settling = this.settling(bot);
     const folder = join7(this.bots, bot);
-    const found = changedSince(folder, since, (inside) => recordable(join7(bot, inside)));
-    this.store.changeAll(this.watching ? found.filter((path) => !this.store.asSeen(path)) : found, made("shell"));
+    const found = changedSince(folder, since, (inside) => recordable(join7(bot, inside))).filter((path) => !settling.includes(path));
+    this.store.changeAll([...settling, ...this.watching ? found.filter((path) => !this.store.asSeen(path)) : found], made("shell"));
   }
   flush(bot) {
-    for (const path of [...this.pending.keys()]) {
-      if (bot && !relative2(this.bots, path).startsWith(bot + sep5))
-        continue;
+    for (const path of this.settling(bot))
       this.record(path);
+  }
+  settling(bot) {
+    const paths = [...this.pending.keys()].filter((path) => !bot || relative2(this.bots, path).startsWith(bot + sep5));
+    for (const path of paths) {
+      clearTimeout(this.pending.get(path));
+      this.pending.delete(path);
     }
+    return paths;
   }
   record(path) {
     clearTimeout(this.pending.get(path));
@@ -31155,4 +31210,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c4d237f077b045e04c2676555652a53e43027519e469b49e527a91b91ed38a8d
+// Built from Packages/Box/src/agents 553bbbd78e1be60fa3b2c3c62750b1de6a58edc6ce6a752a5cb9398c202adfbc

@@ -41,7 +41,10 @@ export function watchTree(folder: string, changed: (path: string) => void, faile
     const watcher = watchFolder(folder, (_, name) => {
       if (name) changed(join(folder, name))
     }, { recursive: true, missed })
-    watcher.on("error", (error: any) => failed(String(error?.message ?? error)))
+    watcher.on("error", (error: any) => {
+      watcher.close()
+      failed(String(error?.message ?? error))
+    })
     return { close: () => watcher.close() }
   }
   const watchers = new Map<string, FSWatcher>()
@@ -169,18 +172,26 @@ export class BotFolders {
    * anew for longer than it looked again).
    */
   turnEnded(bot: string, since: number, made: (via: string) => Made) {
-    this.flush(bot)
+    // What's still settling goes with the rest, read once at its turn (not looked at now, and again).
+    const settling = this.settling(bot)
     const folder = join(this.bots, bot)
-    const found = changedSince(folder, since, (inside) => recordable(join(bot, inside)))
-    void this.store.changeAll(this.watching ? found.filter((path) => !this.store.asSeen(path)) : found, made("shell"))
+    const found = changedSince(folder, since, (inside) => recordable(join(bot, inside))).filter((path) => !settling.includes(path))
+    void this.store.changeAll([...settling, ...(this.watching ? found.filter((path) => !this.store.asSeen(path)) : found)], made("shell"))
   }
 
   /** What's waiting to settle in `bot`'s folder (all bots' without one), recorded now. */
   flush(bot?: string) {
-    for (const path of [...this.pending.keys()]) {
-      if (bot && !relative(this.bots, path).startsWith(bot + sep)) continue
-      this.record(path)
+    for (const path of this.settling(bot)) this.record(path)
+  }
+
+  /** What's waiting to settle in `bot`'s folder (all bots' without one), no longer waiting. */
+  private settling(bot?: string): string[] {
+    const paths = [...this.pending.keys()].filter((path) => !bot || relative(this.bots, path).startsWith(bot + sep))
+    for (const path of paths) {
+      clearTimeout(this.pending.get(path))
+      this.pending.delete(path)
     }
+    return paths
   }
 
   private record(path: string) {

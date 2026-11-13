@@ -1,5 +1,8 @@
 import "../safety"
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test"
+import fs from "node:fs"
+import { EventEmitter } from "node:events"
+import { watchTree } from "../../src/agents/artifacts/folders"
 import { spawnSync } from "node:child_process"
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -207,6 +210,101 @@ describe("a bot's memory", () => {
   })
 })
 
+describe("queued artifact reads", () => {
+  const made = { by: { kind: "outside" as const }, via: "outside" }
+
+  test("a captured change cannot hide a newer write while waiting for git", async () => {
+    const file = join(project, "queued.md")
+    writeFileSync(file, "v1")
+    const first = store.change(file, made)
+    expect(store.asSeen(file)).toBe(true)
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await first
+    expect(store.at(file)!.versions.at(-1)!.hash).toBe("sha256:" + new Bun.CryptoHasher("sha256").update("v2").digest("hex"))
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("only the last queued read can say what the file will be recorded as", async () => {
+    const file = join(project, "overlap.md")
+    writeFileSync(file, "v1")
+    const all = store.changeAll([file], made)
+    const captured = store.change(file, made)
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await Promise.all([all, captured])
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("a queued pin cannot hide a newer write", async () => {
+    const file = join(project, "pinned.md")
+    writeFileSync(file, "v0")
+    await store.change(file, made)
+    writeFileSync(file, "v1")
+    const captured = store.change(file, made)
+    const pinned = store.pin(store.at(file)!.id, { by: "you" })
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await Promise.all([captured, pinned])
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("a before that will be skipped cannot hide a newer write", async () => {
+    const file = join(project, "skipped-before.md")
+    writeFileSync(file, "v1")
+    const captured = store.change(file, made)
+    const before = store.before(file, Buffer.from("v2"))
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await Promise.all([captured, before])
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("a queued before cannot hide the current file", async () => {
+    const file = join(project, "before.md")
+    writeFileSync(file, "after")
+    const before = store.before(file, Buffer.from("before"))
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await before
+    expect(store.at(file)!.versions.at(-1)!.size).toBe(5)
+  })
+
+  test("a changed size or mtime needs no content read before changeAll", async () => {
+    const file = join(project, "stat.md")
+    writeFileSync(file, "one")
+    await store.change(file, made)
+    const read = spyOn(store as any, "look")
+    try {
+      writeFileSync(file, "longer")
+      expect(store.asSeen(file)).toBe(false)
+      expect(read).not.toHaveBeenCalled()
+      await store.changeAll([file], made)
+      read.mockClear()
+      writeFileSync(file, "others")
+      utimesSync(file, new Date(), new Date(Date.now() + 2000))
+      expect(store.asSeen(file)).toBe(false)
+      expect(read).not.toHaveBeenCalled()
+    } finally { read.mockRestore() }
+  })
+
+  test("a failed recursive watch closes and unregisters its looks", () => {
+    const watcher = Object.assign(new EventEmitter(), { close() {} })
+    const close = spyOn(watcher, "close")
+    const watch = spyOn(fs, "watch").mockReturnValue(watcher as any)
+    try {
+      const tree = watchTree(project, () => {}, () => {}, { linux: false })
+      watcher.emit("error", new Error("watch failed"))
+      expect(close).toHaveBeenCalledTimes(1)
+      tree.close()
+    } finally { watch.mockRestore(); close.mockRestore() }
+  })
+})
+
 describe("a bot's folder", () => {
   /** Its folder watched as the bridge does, with changes held until they're flushed (as its turn ends). */
   function watched() {
@@ -233,6 +331,74 @@ describe("a bot's folder", () => {
       expect(value.artifacts[0].latest).toMatchObject({ via: ["shell"], turn: { session: "ses_bot_ada", message: "msg_1" }, by: { kind: "agent", bot: "bot_ada" } })
     } finally {
       folders.stop()
+    }
+  })
+
+  // A save the watch told of goes to the record as it was then, waiting its turn behind git; one
+  // after it that the watch never told (macOS's stream made anew, #588) is still found as the turn
+  // ends, though both are the same size (#604).
+  test("a newer save the watch didn't tell, made while an earlier one waits its turn, is what the Shelf keeps", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const folders = watched()
+    try {
+      const notes = join(folder, "workspace", "notes.md")
+      writeFileSync(notes, "draft 1")
+      folders.changed(notes)
+      folders.flush()
+      writeFileSync(notes, "draft 2")
+      // (At once, before the watch could tell of it.)
+      folders.turnEnded("bot_ada", Date.now() - 60_000, (via) => ({ by: { kind: "outside" }, via }))
+      await store.settled()
+      const { value } = await route("GET", "kuvo/artifacts?bot=bot_ada")
+      const shelf = value.artifacts.find((artifact: any) => artifact.name === "notes.md")
+      expect(store.bytes(shelf.id, shelf.latest.n)?.toString()).toBe("draft 2")
+    } finally {
+      folders.stop()
+    }
+  })
+
+  // What the watch told of and is still settling as the turn ends goes with the turn's end, and
+  // is read once, at its turn (#604).
+  test("a file still settling as the turn ends is read once", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const folders = watched()
+    const look = spyOn(store as any, "look")
+    try {
+      const report = join(folder, "workspace", "report.csv")
+      writeFileSync(report, "a,b\n1,2\n")
+      folders.changed(report)
+      look.mockClear()
+      folders.turnEnded("bot_ada", Date.now() - 60_000, (via) => ({ by: { kind: "outside" }, via }))
+      await store.settled()
+      expect(look.mock.calls.filter(([path]) => path === report).length).toBe(1)
+      expect(store.bytes(store.at(report)!.id, store.at(report)!.versions.at(-1)!.n)?.toString()).toBe("a,b\n1,2\n")
+    } finally {
+      look.mockRestore()
+      folders.stop()
+    }
+  })
+
+  // A change whose copy couldn't be kept (a full disk) adds no version: the file isn't taken as the
+  // newest version's afterwards, however long ago it was written (#604).
+  // (A folder it can't write in: root writes in it all the same. "aaaa" and "bbbb"'s copies go in
+  // folders of their own, 61 and 81, so the second's has to be made.)
+  test.skipIf(process.getuid?.() === 0)("a save whose copy couldn't be kept is still not what the Shelf has", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const notes = join(folder, "workspace", "notes.md")
+    writeFileSync(notes, "aaaa")
+    await store.change(notes, { by: { kind: "outside" }, via: "outside" })
+    const copies = join(root, "artifacts", "copies")
+    chmodSync(copies, 0o500)
+    try {
+      writeFileSync(notes, "bbbb")
+      // (Looked at long after it was written: nothing could have been written again in that moment.)
+      setSystemTime(new Date(Date.now() + 60_000))
+      await store.change(notes, { by: { kind: "outside" }, via: "outside" })
+      expect(store.bytes(store.at(notes)!.id, store.at(notes)!.versions.at(-1)!.n)?.toString()).toBe("aaaa")
+      expect(store.asSeen(notes)).toBe(false)
+    } finally {
+      setSystemTime()
+      chmodSync(copies, 0o700)
     }
   })
 
