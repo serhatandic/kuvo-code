@@ -1,5 +1,7 @@
+import ClientSessions
 import Foundation
 import KuvoLink
+import os
 import Testing
 @testable import KuvoCode
 
@@ -110,15 +112,11 @@ import Testing
     }
 
     /// What the filter says when the list can't be read: this Mac's box starting keeps it loading
-    /// (`starting`, read again); one from before the list says to wait for its update, or, one
-    /// attached in place, that it needs a newer version; a folder its box can't read, why.
+    /// (`starting`, read again); a folder its box can't read, why. (A box from before the list is
+    /// held for its update and never asked: `ProjectFilesTests.aHeldBoxIsNeverAsked`.)
     @Test(arguments: [
         (503, #"{"message":"Starting.","reason":"starting"}"#, BoxClient.mac, FolderFailure.starting),
-        (404, "{}", BoxClient.mac, FolderFailure.updating),
-        (404, "{}", "attached", FolderFailure.olderService),
-        (403, "That isn't available over the link.", BoxClient.mac, FolderFailure.updating),
-        (403, "That isn't available over the link.", "attached", FolderFailure.olderService),
-        // A path refused as not what it seems says nothing: never taken for an older box.
+        // A path refused as not what it seems says nothing.
         (403, "", BoxClient.mac, FolderFailure(reason: "It said no (403).")),
         (403, #"{"message":"It can't be read here.","reason":"Permission denied"}"#, BoxClient.mac, FolderFailure.denied),
     ])
@@ -128,6 +126,25 @@ import Testing
         let listing = await ProjectFiles.listing([repo.url]) { _ in client }
         #expect(listing.files.isEmpty)
         #expect(listing.failure == failure)
+    }
+
+    /// A box held for its update (#679): the filter says so in the gate's words, and nothing is
+    /// asked of it, nor of this Mac's git or a shell there.
+    @Test func aHeldBoxIsNeverAsked() async throws {
+        let repo = try TestRepository()
+        let id = "held-\(UUID().uuidString)"
+        let gates = BoxGates()
+        gates.updating(id)
+        defer { gates.letGo(id) }
+        let asked = OSAllocatedUnfairLock(initialState: 0)
+        let client = BoxClient(box: id, transport: LocalBox { _ in
+            asked.withLock { $0 += 1 }
+            return AsyncThrowingStream { $0.finish() }
+        })
+        let listing = await ProjectFiles.listing([repo.url]) { _ in client }
+        #expect(listing.files.isEmpty)
+        #expect(listing.failure == FolderFailure(reason: BoxGate.Words.updating, said: false))
+        #expect(asked.withLock { $0 } == 0)
     }
 
     /// Newest first, by when its box says each last changed.

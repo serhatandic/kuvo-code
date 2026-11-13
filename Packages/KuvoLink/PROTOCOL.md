@@ -1292,9 +1292,9 @@ the branch, the model, effort and account, and the pull request with its checks 
 What each session is, and where every client's lists show it (`sessions.list`): the box decides it
 from its engine's and coding agents' sessions, so a client draws its sidebar from facts and works
 nothing out. A client needs a box with `sessions.list`: the app brings a box up to date before it
-uses it ("Updating…"), so no client keeps an older way; a box that hasn't the feature, or answers
-`503`, leaves a client's lists waiting ("Loading sessions") until the update gate has brought it up
-to date (#679).
+uses it ("The update gate"), so no client keeps an older way; a box that hasn't the feature is held
+by the gate ("Updating…"), and one that answers `503` leaves a client's lists waiting ("Loading
+sessions").
 
 - `GET kuvo/sessions/list[?since=<at>]` → `{at, full?, sessions: {<id>: facts}, gone?: [<id>],
   projects: {<folder>: {name?, updated?}}, pending?: ["bridge"]}`. `…/events[?since=<at>]` (ndjson) sends that now, then
@@ -2091,8 +2091,9 @@ did: the box keeps working as itself ("For released Macs").
 - **From a folder here** (`box.update`): Kuvo Code carries its version's release
   (`Contents/Resources/box-release`: `boxes.json` and `box-<version>.tar.gz`, put there by
   `scripts/app-box-release.sh` when the release is built), for it to offer the box on its computer
-  as it updates. The app doesn't offer it yet: that comes with this Mac's box in a home of its own
-  (a Mac's box in the app's folder is refused anyway, as it doesn't update itself).
+  as it updates. The app offers it to a box on this Mac it's attached to in place that's older than
+  it needs ("The update gate"); a Mac's box in the app's folder is refused, as it doesn't update
+  itself (its keeper takes the new app's).
   - `POST kuvo/box/update {from: "<folder>"}`, from Kuvo Code only (this Mac's app, or a Mac's
     `box route`; a phone gets 403): `from` is a full path to a folder with `boxes.json` and the pack
     its `pack.url` ends in, beside it. The box checks it as it would a download: a pinned key's
@@ -2165,13 +2166,16 @@ did: the box keeps working as itself ("For released Macs").
   - What the new engine did during a trial that's rolled back is lost with it.
   - The coding agents' own data (`agents`) isn't kept for a rollback.
 - **State**: `run/update.json` holds `{latest, checked, last: {at, result, message?, from?, to?},
-  running?, trial?, night?, offerFailed?: {version, at}}`.
+  running?, trial?, night?, offerFailed?: {version, at, takenBack, tries?, message?}}`.
 - `kuvo/update`:
   - `GET` answers `{setUp, version, engine, latest, last, updating, blocked}`.
     `updating` is the step under way (`checking`, `downloading`, `downloading the engine`,
     `checking it`, `installing`, `starting`) or null. `blocked` is why it can't update, or null.
     `offered` is the version of a release offered from a folder here that waits to be taken, and
-    only there while one does.
+    only there while one does. `offerFailed` `{version, at, takenBack, message?}` is how taking such
+    a release last failed (taken back once it was in place, or before anything changed, when it
+    stays offered and is tried again), apart from the night's update (`last`); gone once one's
+    taken.
   - `POST {now: true}` starts one: 202 with the status, or 409 `{message}` when it's not set up,
     is blocked, or is updating already. Other methods answer 405: there's nothing to turn off.
   - A Mac does the same over SSH with `kuvo-link.js box update-status` and `update-now`.
@@ -2267,6 +2271,55 @@ new version without cutting a turn:
     `behind` while that one is newer.
   - A client shows a line while one is `behind` (`MachinePieces`, in KuvoClient, its words for
     the coding agents by `waits`), and says nothing otherwise. A Mac's own `kuvo/info` has no `pieces`.
+
+### The update gate
+
+A client never keeps an older box's way of doing something (#679): it brings a box up to date
+before it uses it, and meanwhile says so. A box is older than a client needs when its `kuvo/info`
+`features` lack any name the client uses with no way around it (or it has no `kuvo/info`): today
+`agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
+`models.offered`, `sessions.list`, `sessions.models`, `sessions.start.empty` and `typed`
+(KuvoClient's `BoxGate.required`; a box with `sessions.list` and `typed` has what came before them
+too). A client adds a name there as it drops its fallback for a box without it, or its words that
+such a box needs a newer Kuvo Code.
+
+- **Held**: a client sends a held box nothing but `kuvo/info`, `kuvo/update` and `kuvo/box/update`,
+  and what keeps work already under way there going, so a session waiting on you can be answered:
+  its engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), the tool calls of the agents at
+  work there (`kuvo/agent-tools`; a tool that box hasn't is said to the agent as waiting for the
+  update), its asks (`kuvo/asks`, `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`) and
+  Auto's decisions (`kuvo/sessions/<id>/decisions`). Every other request is refused in the client,
+  in the gate's words (`503`, `reason: "updating"`), without reaching the box. Its sessions wait where they'd show, beside what it waits for or why it couldn't be updated.
+  A held box whose `kuvo/info` says it has everything is let go, and read again at once.
+- **A Mac, its machines** (always over SSH): connecting puts this app's files on an older box
+  ("Updates"), so its link answers as this version at once. The connection's last step reads
+  `kuvo/info`; a machine still older isn't used, and its connection fails, saying why ("Kuvo Code
+  on X couldn't be updated…"), not tried again by itself. Try Again connects again, which brings it
+  up to date. A machine found older later (its list said so) is held the same way.
+- **A Mac, its box attached in place**: offered the release the app carries (`kuvo/box/update
+  {from}`; "offered already" counts, and so does one refused while it updates already). Its
+  connection goes on, its engine used (a session waiting on you there can be answered: the box
+  takes the release at its first quiet moment), its box's routes held ("Updating…"). Every ten
+  seconds it's read again (`kuvo/info`, and `kuvo/update`: `blocked`, `offered`, `offerFailed`)
+  until it has it all: one that's blocked, whose engine is stopped on purpose, or whose take of the
+  release offered failed since it was offered (`offerFailed`, never the night's `last`) says why in
+  its own words; an offer that's gone with no failure of its own (refused while its night's update
+  ran, say) is made again. One that can't say what it has is held and asked again, never let through.
+  A box without `box.update`, a copy of the app without a release, or another refusal fails, saying
+  why.
+- **A Mac, its own box**: while another version's keeper runs it (an older app's, making way for
+  this one's once the work under way ends), whatever that keeper answered, it's held at once, and
+  read at once, again whenever its box answers somewhere new (`serve.json`), and every ten seconds
+  ("Kuvo Code on this Mac finishes updating once the work running now ends"), until it has it all.
+- **A phone** can't update a box: it holds one that's older than it (or answers `kuvo/info` 404 or
+  405), and says it waits for an update ("Waiting for an Update") and who brings it up to date: a
+  Mac's box updates with Kuvo Code on that Mac; a machine, when a Mac with Kuvo Code connects to it,
+  and by itself overnight only where its `kuvo/info` lists `update` (a 0.7 machine's doesn't). It
+  reads `kuvo/info` again each time it connects.
+- **Releases**: a phone release must not ship before a Mac release whose box has every name the
+  phone's `BoxGate.required` lists, or every computer would wait for an update that isn't out yet.
+- A machine's `kuvo/machines` step while its box is brought up to date is `updating` ("Updating Kuvo
+  Code").
 
 ### The browser on a machine
 
@@ -7999,11 +8052,6 @@ before connects (the box notes one: `run/attached`).
   covers a computer the first box doesn't hear from now (the relay down); removing the fallback
   needs an answer for that first.
   <!-- compat: 0.7 limits-merge -->
-- **Cursor's usage from before the box read it** (#631 piece D1): a Mac whose own box doesn't list
-  `cursor` in its limits' `services` (one from before, still running as the Mac updates) has its
-  usage panel read Cursor's plan and spend itself, with the Cursor agent's key in this Mac's box
-  folder, as before. Never the Cursor app's login.
-  <!-- compat: 0.7 cursor-box -->
 - **Usage settings from before the box kept them** (#631 piece F): a Mac whose own box doesn't list
   `usage.settings` in its features (one from before, still running as the Mac updates) keeps its
   panel's settings in its own stores, as before, and shares none, until #679 updates its box
@@ -8012,14 +8060,16 @@ before connects (the box notes one: `run/attached`).
 - **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
   and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
   answers that once the update is done (the same update every client sees, "Installing and
-  updating an agent's program"). The other way round, a Mac or phone of this version meeting a box
-  from before `kuvo/updates` (a 404, the bridges of 0.7.x and 0.8.0-beta.1 Macs) asks it each
-  program that way, picking what's behind from `metadata.outdated` and `metadata.updates` on the
-  own sign-in.
+  updating an agent's program"). (The other way round, a client of this version meets no box from
+  before `kuvo/updates`: "The update gate". Coding agents still running a build from before it, as
+  they move to the new one, answer `404`, which a client says as "haven't moved to this version
+  yet", asking no program the old way.)
   <!-- compat: 0.7 update-answer -->
 - **Which models run**: a box from before `models.offered` and `sessions.models` (the bridges of
   0.7.x and 0.8.0-beta.1 Macs) doesn't say which models run nor what a new session starts on, so a
   Mac works them out itself from the box's accounts and models, as it did ("The models offered").
+  The update gate holds such a box now, so only a catalog with no box yet takes this way; it goes
+  once the Mac's tests give theirs a box.
   <!-- compat: 0.7 model-rule -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
@@ -8110,28 +8160,9 @@ can go three months after 0.8.0 ships.
   "branchPrefix"}`): used as given. (A box from before kept the last one given in `box/git.json`
   for a client that sent none: no longer read.)
   <!-- compat: beta.1 worktree-prefix -->
-- Its keeper's box, still running after an update until the work under way ends, answers 400 for
-  Kuvo Code's own tools that every box answers since `agent-tools.own` ("Agents' tools"): the newer
-  app runs those calls with its own `kuvo-link.js box route`, once each, meanwhile.
-  <!-- compat: beta.1 agent-tools-own -->
-- Its keeper's box, the same, has no Merge into… (`kuvo/git/merge`, 404; nor, from before #341,
-  one without `into`, 400): the newer app says Merge into… works again once the work under way
-  ends. <!-- compat: beta.1 merge-older-box -->
-- Boxes from before #660 have no `kuvo/git/branches`, `kuvo/git/switch`, `kuvo/git/status` or
-  `kuvo/folders/tree`: 404 with nothing said, or, from 0.8.0-beta.1 (which has no `kuvo/git/…` at
-  all), `403` in plain words ("That isn't available over the link."), which the newer app takes the
-  same way for these four, Merge into… and Create Pull Request's confirmation (which say such a
-  machine needs a newer Kuvo Code); Changes' other routes, and any route's refusal of that kind,
-  say its computer needs a newer Kuvo Code. A
-  path is sent as a box writes it (`EngineRoutes.canonical`), so such a box never refuses it as one
-  that isn't what it seems. For a beta.1 machine's box, the newer app runs the machine's git (and,
-  outside a repository, `find`) over SSH, as before (a 0.7 machine, whose bridge has no `box
-  route`, isn't reached for any of it until it's updated). For its keeper's box on this Mac,
-  running on after an update until the work under way ends, it runs no git of its own: the title
-  bar's branch menu lists no branches and Switch says it works again then, the file filter says
-  so too, Delete says changes not committed may go with a worktree, and Edit Project leaves out
-  the worktree setup. A box the app is attached to in place, from before, gets the same, but
-  Switch and the file filter say it needs a newer version. <!-- compat: beta.1 git-older-box -->
+- Its keeper's box, still running after an update until the work under way ends, and a machine's
+  box from before #660, are held by the update gate ("The update gate"): no client of this version
+  runs Kuvo Code's own tools, git or a file walk itself for them any more.
 
 ### Antigravity conversation history
 

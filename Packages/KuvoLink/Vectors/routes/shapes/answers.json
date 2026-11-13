@@ -4101,7 +4101,15 @@
         "null"
        ]
       },
-      "offered?": "string"
+      "offered?": "string",
+      "offerFailed?": {
+       "object": {
+        "version": "string",
+        "at": "number",
+        "takenBack": "bool",
+        "message?": "string"
+       }
+      }
      }
     }
    }
@@ -4202,7 +4210,15 @@
         "null"
        ]
       },
-      "offered?": "string"
+      "offered?": "string",
+      "offerFailed?": {
+       "object": {
+        "version": "string",
+        "at": "number",
+        "takenBack": "bool",
+        "message?": "string"
+       }
+      }
      }
     }
    }
@@ -4303,7 +4319,15 @@
         "null"
        ]
       },
-      "offered?": "string"
+      "offered?": "string",
+      "offerFailed?": {
+       "object": {
+        "version": "string",
+        "at": "number",
+        "takenBack": "bool",
+        "message?": "string"
+       }
+      }
      }
     }
    }

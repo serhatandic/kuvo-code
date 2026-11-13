@@ -28,16 +28,6 @@ nonisolated extension Git {
         }
     }
 
-    /// Switching branches on this Mac while Kuvo Code finishes an update: its background service
-    /// moves to the new version once the work that's running ends.
-    static let switchAfterUpdate = "Kuvo Code on this Mac is finishing an update. Switching branches works again once the work that’s running now ends; try again then."
-    /// Switching branches where this Mac is attached in place to a box from before it.
-    static let switchNeedsNewerService = "Kuvo Code’s background service on this Mac needs a newer version to switch branches. It updates by itself overnight."
-
-    /// Whether a box answered as one from before the route (`BoxRefusal.olderBox`; a folder that
-    /// isn't there says why).
-    static func lacksRoute(_ status: Int, _ data: Data) -> Bool { BoxRefusal.olderBox(status: status, data: data) }
-
     private struct InFolder: Encodable { let directory: String }
 
     /// The folder's repository and its branches; nil when its box couldn't say. While this Mac's box
@@ -50,28 +40,20 @@ nonisolated extension Git {
             try? await Task.sleep(for: pause)
             answer = try? await place.client.send("POST", "kuvo/git/branches", body: asked)
         }
-        guard let (status, data) = answer, !Task.isCancelled else { return nil }
-        if (200..<300).contains(status) { return try? JSONDecoder().decode(Branches.self, from: data) }
-        guard lacksRoute(status, data), place.machine != nil else { return nil }
-        // COMPAT(beta.1 git-older-box): a machine's box from before `kuvo/git/branches`: its git over SSH, as before. Goes when 0.8.0 ships.
-        let folder = place.here(place.path)
-        guard run(["rev-parse", "--git-dir"], in: folder) != nil else { return Branches(repository: false) }
-        let listed = run(["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"], in: folder) ?? ""
-        return Branches(repository: true, branches: listed.split(separator: "\n").map(String.init))
+        // (A box held for its update, #679, or one that couldn't say: none listed.)
+        guard let (status, data) = answer, !Task.isCancelled, (200..<300).contains(status) else { return nil }
+        return try? JSONDecoder().decode(Branches.self, from: data)
     }
 
     /// Switches the folder's repository to `branch`, or (`creating`) to a new one from where it is,
-    /// on its box, its hooks run there as in your terminal; nil when it went, else why not.
-    /// `environment`: your shell's, for a machine's older box only (over SSH, as before).
-    @concurrent static func switching(to branch: String, creating: Bool, at place: GitPlace, environment: [String: String]) async -> String? {
+    /// on its box, its hooks run there as in your terminal; nil when it went, else why not (a box
+    /// held for its update says so, #679).
+    @concurrent static func switching(to branch: String, creating: Bool, at place: GitPlace) async -> String? {
         struct Asked: Encodable { let directory, branch: String; let create: Bool }
         do {
             let (status, data) = try await place.client.send("POST", "kuvo/git/switch", body: JSONEncoder().encode(Asked(directory: place.path, branch: branch, create: creating)))
             if (200..<300).contains(status) { return nil }
-            guard lacksRoute(status, data) else { return BoxRefusal(status: status, data: data).message }
-            // COMPAT(beta.1 git-older-box): this Mac's older box says Switch waits for it (running on after an update) or needs a newer version (one attached in place); a machine's box from before `kuvo/git/switch` switches with its git over SSH, as before. Goes when 0.8.0 ships.
-            guard place.machine != nil else { return place.client.box == BoxClient.mac ? switchAfterUpdate : switchNeedsNewerService }
-            return report(["switch"] + (creating ? ["-c"] : []) + [branch], in: place.here(place.path), environment: environment)
+            return BoxRefusal(status: status, data: data).message
         } catch {
             return place.unreachable(error)
         }
@@ -83,14 +65,10 @@ nonisolated extension Git {
     /// repository now), as if there were, so nothing is thrown away on a guess.
     @concurrent static func hasUncommittedChanges(at place: GitPlace) async -> Bool {
         struct Answer: Decodable { let repository: Bool; let uncommitted: Bool? }
-        guard let (status, data) = try? await place.client.send("POST", "kuvo/git/status", body: JSONEncoder().encode(InFolder(directory: place.path))) else { return true }
-        if (200..<300).contains(status) {
-            guard let answer = try? JSONDecoder().decode(Answer.self, from: data), answer.repository else { return true }
-            return answer.uncommitted ?? true
-        }
-        guard lacksRoute(status, data), place.machine != nil else { return true }
-        // COMPAT(beta.1 git-older-box): a machine's box from before `kuvo/git/status`: its git over SSH, as before. Goes when 0.8.0 ships.
-        return run(["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], in: place.here(place.path)).map { !$0.isEmpty } ?? true
+        guard let (status, data) = try? await place.client.send("POST", "kuvo/git/status", body: JSONEncoder().encode(InFolder(directory: place.path))),
+              (200..<300).contains(status),
+              let answer = try? JSONDecoder().decode(Answer.self, from: data), answer.repository else { return true }
+        return answer.uncommitted ?? true
     }
 }
 
@@ -136,10 +114,6 @@ nonisolated extension Workspace.Worktree {
         case failed(String)
     }
 
-    /// Merge into… on this Mac while Kuvo Code finishes an update: its background service moves to
-    /// the new version once the work that's running ends.
-    static let mergeAfterUpdate = "Kuvo Code on this Mac is finishing an update. Merge into… works again once the work that’s running now ends; try again then."
-
     /// Merges what's committed on the worktree's branch (`place`: the session's folder in it) into
     /// the branch it was made from, in the project's folder. Its box says whether it can go (the
     /// project's folder on that branch and not in the middle of a merge of yours, the work
@@ -156,14 +130,6 @@ nonisolated extension Workspace.Worktree {
             let into = answer?.into ?? base ?? "the project’s branch"
             if (200..<300).contains(status) { return .merged(into: into) }
             if let conflicts = answer?.conflicts, !conflicts.isEmpty { return .conflict(conflicts, into: into) }
-            // A box from before Merge into… (bridge 0.9.143) has no such route, nor, from before
-            // #341, merges without a branch named. A machine takes this Mac's as it connects, so
-            // only one not updated since.
-            if BoxRefusal.olderBox(status: status, data: data) || status == 400 && base == nil {
-                // COMPAT(beta.1 merge-older-box): says Merge into… waits while this Mac's older box runs on after an update, until the work under way ends (its keeper makes way then). Goes when 0.8.0 ships.
-                guard let machine = place.machine else { return .failed(Self.mergeAfterUpdate) }
-                return .failed("\(machine) needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac.")
-            }
             return .failed(BoxRefusal(status: status, data: data).message)
         } catch {
             return .failed(place.unreachable(error))

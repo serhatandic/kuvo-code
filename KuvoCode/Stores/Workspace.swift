@@ -318,18 +318,43 @@ final class Workspace {
     }
 
     /// Boxes from before they listed their sessions (`sessions.list` isn't among their features):
-    /// none of their sessions is drawn, and the sidebar says to update Kuvo Code there. Asked again
-    /// now and then, as it may be updated meanwhile.
+    /// none of their sessions is drawn while the update gate brings them up to date (`BoxGates`,
+    /// which the sidebar says). Asked again now and then, as it may be updated meanwhile.
     private(set) var outdatedLists: Set<String> = []
 
+    /// A box said it has less than the app needs (its features, as it said them): the app holds it
+    /// for its update (#679).
+    @ObservationIgnored var onOlderBox: (String, [String]) -> Void = { _, _ in }
+    /// A box said it has all the app needs (its features, as it said them): one held is let go.
+    @ObservationIgnored var onCurrentBox: (String, [String]) -> Void = { _, _ in }
+
+    /// Whether `box` is held for its update now (`BoxGates`): what it has is asked again each time.
+    @ObservationIgnored var isHeld: (String) -> Bool = { _ in false }
+
     /// Whether `box` lists its sessions, as it says of itself: noted (`outdatedLists`); nil where it
-    /// can't be asked now.
+    /// can't be asked now. What it said it has goes to the update gate, against all the app needs
+    /// (`BoxGate.required`), not only its lists.
     private func checkLists(on box: String) async -> Bool? {
-        // (One that said it didn't, asked again: it may have been updated since.)
-        if outdatedLists.contains(box) { featuresHere[box] = nil }
+        // (One that said it didn't, or is held, asked again: it may have been updated since.)
+        if outdatedLists.contains(box) || isHeld(box) { featuresHere[box] = nil }
         let says = await boxSays(SessionLists.feature, on: box)
-        if says == false { outdatedLists.insert(box) } else if says == true { outdatedLists.remove(box) }
+        if let features = featuresHere[box].map(Array.init) {
+            if BoxGate.isCurrent(features) { onCurrentBox(box, features) } else { onOlderBox(box, features) }
+        }
+        if says == false {
+            outdatedLists.insert(box)
+        } else if says == true {
+            outdatedLists.remove(box)
+        }
         return says
+    }
+
+    /// `box` is up to date now (the update gate let it go): what it has is asked again, and its
+    /// list read at once.
+    func boxUpdated(_ box: String) {
+        featuresHere[box] = nil
+        outdatedLists.remove(box)
+        if !BoxClient.streams(box), !isRemoved(box) { Task { await readSessionList(on: box) } }
     }
 
     /// Where `session` shows in the sidebar, as its box says (folders as named here): in its

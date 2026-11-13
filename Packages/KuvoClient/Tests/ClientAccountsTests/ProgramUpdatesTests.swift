@@ -28,32 +28,21 @@ import Testing
         #expect(try account(["agent": "codex", "programUpdate": ["state": "verifying", "at": 8]]).programUpdate == nil, "one a newer box adds")
         #expect(try account(["agent": "codex", "updateAll": true]).isInUpdateAll)
         #expect(try !account(["agent": "codex", "updateAll": false, "outdated": true, "updates": true]).isInUpdateAll, "the box picks what Update All updates")
-        // A box from before it picked them: its own sign-in, by what it says of its version.
-        #expect(try account(["agent": "codex", "accountID": "default", "outdated": true, "updates": true]).isInUpdateAll)
-        #expect(try !account(["agent": "codex", "accountID": "9a8b", "outdated": true, "updates": true]).isInUpdateAll)
+        #expect(try !account(["agent": "codex", "accountID": "default", "outdated": true, "updates": true]).isInUpdateAll, "never worked out here")
     }
 
-    /// Update All on a box from before `kuvo/updates` (0.7's, 0.8.0-beta.1's), which answers 404
-    /// there: each own sign-in behind that its installer can update is asked the old way, once a
-    /// program, and why one didn't update is said in its installer's words.
-    @Test func updateAllOnABoxFromBeforeItAsksEachOwnSignInBehindTheOldWay() async throws {
-        func agent(_ id: String, updates: Bool = true) -> [String: Any] {
-            let parts = id.split(separator: "@").map(String.init)
-            let metadata: [String: Any] = ["agent": parts[0], "accountID": parts.count == 2 ? parts[1] : "default", "outdated": true, "updates": updates]
-            return ["id": id, "name": parts[0], "methods": [], "connections": [], "metadata": metadata]
-        }
-        let accounts = try JSONDecoder().decode([Integration].self, from: JSONSerialization.data(withJSONObject: [
-            agent("codex-cli@9a8b"), agent("codex-cli"), agent("claude-code"), agent("grok-cli", updates: false),
-        ]))
+    /// Update All while a computer's coding agents still run a build from before `kuvo/updates`
+    /// (it answers 404 there): it says they haven't moved to this version yet, and no program is
+    /// asked the old way (#679: no client keeps an older box's way).
+    @Test func updateAllWhileItsAgentsHaventMovedYetSaysSo() async throws {
         let box = OldBox.start(answers: [
-            "POST /api/integration/codex-cli/update": #"{"data":{"updated":false,"version":"0.163.0","message":"npm: permission denied"}}"#,
-            "POST /api/integration/claude-code/update": #"{"data":{"updated":true,"version":"2.1.309"}}"#,
+            "POST /api/integration/codex-cli/update": #"{"data":{"updated":true,"version":"0.164.0"}}"#,
         ])
-
-        let failure = await #expect(throws: ProgramUpdateFailure.self) { try await box.api.updateAllPrograms(accounts) }
-        #expect(failure?.message == "npm: permission denied")
-        #expect(Set(box.asked) == ["POST /api/kuvo/updates", "POST /api/integration/codex-cli/update", "POST /api/integration/claude-code/update"])
-        #expect(box.asked.count == 3, "once a program; never Grok, which its installer can't update")
+        let failure = await #expect(throws: ProgramUpdateFailure.self) { try await box.api.updateAllPrograms() }
+        #expect(failure?.message == OpenCodeAPI.agentsNotMovedYet)
+        let one = await #expect(throws: ProgramUpdateFailure.self) { try await box.api.updateProgram("codex-cli") }
+        #expect(one?.message == OpenCodeAPI.agentsNotMovedYet)
+        #expect(box.asked == ["POST /api/kuvo/updates", "POST /api/kuvo/updates/codex-cli"])
     }
 }
 

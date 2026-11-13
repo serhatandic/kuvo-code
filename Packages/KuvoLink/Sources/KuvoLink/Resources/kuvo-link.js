@@ -8459,7 +8459,8 @@ function updateStatus() {
     last: state.last ?? null,
     updating: isUpdating() ? state.running ?? "checking" : null,
     blocked: updatesBlocked(),
-    ...offered ? { offered } : {}
+    ...offered ? { offered } : {},
+    ...state.offerFailed ? { offerFailed: { version: state.offerFailed.version, at: state.offerFailed.at, takenBack: state.offerFailed.takenBack, ...state.offerFailed.message ? { message: state.offerFailed.message } : {} } } : {}
   };
 }
 var updating = null;
@@ -8588,7 +8589,7 @@ async function takeOffer(options = {}) {
   if (outcome.result === "failed") {
     const before = updateState().offerFailed;
     const tries = before?.version === version && !before.takenBack ? (before.tries ?? 1) + 1 : 1;
-    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack, tries } });
+    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack, tries, ...outcome.message ? { message: outcome.message } : {} } });
   }
   if (outcome.result === "updated" || outcome.result === "current")
     noteUpdate({ offerFailed: null });
@@ -40023,7 +40024,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "7dc665d8f21b";
+var BRIDGE_VERSION = "4398a449182f";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

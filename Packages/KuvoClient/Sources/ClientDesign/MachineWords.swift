@@ -4,7 +4,7 @@ import Foundation
 /// the step its first connection is on, and what Remove's dialog says Uninstall would stop it for.
 public enum MachineWords {
     /// A connection's step in a row, by its name in `kuvo/machines` (`checking`, `downloading`,
-    /// `copying`, `starting`, `reading`): "Copying the engine". Nil for one it doesn't know.
+    /// `copying`, `starting`, `reading`, `updating`): "Copying the engine". Nil for one it doesn't know.
     public static func step(_ name: String) -> String? {
         switch name {
         case "checking": "Checking the machine"
@@ -12,6 +12,8 @@ public enum MachineWords {
         case "copying": "Copying the engine"
         case "starting": "Starting the engine"
         case "reading": "Reading its sessions"
+        // The update gate (#679): its box brought up to date before it's used.
+        case "updating": "Updating Kuvo Code"
         default: nil
         }
     }

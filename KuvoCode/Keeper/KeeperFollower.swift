@@ -35,6 +35,15 @@ final class KeeperFollower {
         didSet { if makingWay != oldValue { onMakingWay(makingWay) } }
     }
     var onMakingWay: (Bool) -> Void = { _ in }
+    /// Whether the keeper running now is another version's (an older app's, after an update),
+    /// whatever it answered when asked to make way: the update gate holds its box while it is (#679).
+    private(set) var runsOtherVersion = false {
+        didSet { if runsOtherVersion != oldValue { onOtherVersion(runsOtherVersion) } }
+    }
+    var onOtherVersion: (Bool) -> Void = { _ in }
+    /// Where its box answers changed (`serve.json`): a new keeper's box, say, to look at at once.
+    var onServe: () -> Void = {}
+    private var servedAt: ServerEndpoint?
 
     private var watch: DispatchSourceFileSystemObject?
     private var tick: Task<Void, Never>?
@@ -193,6 +202,7 @@ final class KeeperFollower {
             }
         }
         guard following else { return }
+        runsOtherVersion = record?.isOtherVersion == true
         makingWay = record != nil && keeperUpdates
         let engineRecord = Self.record("engine.json")
         let serve = Self.record("serve.json")
@@ -218,6 +228,10 @@ final class KeeperFollower {
         }
         onMoving(status["moving"] as? Bool == true ? status["movingWhy"] as? String ?? "" : nil)
         box.follow(serve, failure: (status["box"] as? [String: Any])?["failure"] as? String)
+        if serve != servedAt {
+            servedAt = serve
+            if serve != nil { onServe() }
+        }
         agents.follow(bridge, failure: (status["agents"] as? [String: Any])?["failure"] as? String)
         // One making way with nothing under way (or already going, and not answering) goes this
         // moment: its engine isn't connected to, only to start over on the new keeper's a moment

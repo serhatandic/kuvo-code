@@ -1272,12 +1272,8 @@ final class SessionModel {
                 typedRows.remove(shown)
                 dropSideShown(shown, before: shownBefore)
             }
-            // A computer whose Kuvo Code is from before: it can't say, and nothing goes.
-            guard await boxHas(Typed.feature) else {
-                restore(text: text, files: files)
-                failure = "This conversation’s computer needs a newer Kuvo Code for “/” and “!”. Update it, then send this again."
-                return
-            }
+            // (A computer whose Kuvo Code is from before is held by the update gate, #679: its
+            // refusal says so, and what was written comes back.)
             do {
                 let (status, body) = try await box.send("POST", route, body: try JSONEncoder().encode(ask))
                 // One it couldn't answer for (the conversation isn't there): back as it says.
@@ -1435,7 +1431,7 @@ final class SessionModel {
 
     /// Reads what "/" offers here from its box (again as its agents bridge comes or goes).
     func readKeywords() async {
-        guard let box = box(), await boxHas(Typed.feature), let offers = try? await box.value(Typed.Offers.self, "GET", Typed.route(id)), !Task.isCancelled else { return }
+        guard let box = box(), let offers = try? await box.value(Typed.Offers.self, "GET", Typed.route(id)), !Task.isCancelled else { return }
         if typedOffers != offers { typedOffers = offers }
     }
 
