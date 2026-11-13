@@ -380,7 +380,9 @@ describe("a bot's folder", () => {
 
   // A change whose copy couldn't be kept (a full disk) adds no version: the file isn't taken as the
   // newest version's afterwards, however long ago it was written (#604).
-  test("a save whose copy couldn't be kept is still not what the Shelf has", async () => {
+  // (A folder it can't write in: root writes in it all the same. "aaaa" and "bbbb"'s copies go in
+  // folders of their own, 61 and 81, so the second's has to be made.)
+  test.skipIf(process.getuid?.() === 0)("a save whose copy couldn't be kept is still not what the Shelf has", async () => {
     const folder = bot("bot_ada", "m\n")
     const notes = join(folder, "workspace", "notes.md")
     writeFileSync(notes, "aaaa")

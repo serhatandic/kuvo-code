@@ -1460,7 +1460,7 @@ var stamp = (date) => date.toISOString();
 var kindsKeptWhole = new Set(["memory", "skill"]);
 var stampOf = (stat) => ({ size: stat.size, mtime: stat.mtimeMs, ctime: stat.ctimeMs, ino: stat.ino });
 var sameStamp = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime && a.ino === b.ino;
-var couldBeRewritten = (stamp, at) => at - Math.max(stamp.mtime, stamp.ctime) < (stamp.mtime % 1000 === 0 && stamp.ctime % 1000 === 0 ? 2000 : 100);
+var couldBeRewritten = (stamp, at) => at - Math.max(stamp.mtime, stamp.ctime) < (stamp.mtime % 1000 === 0 || stamp.ctime % 1000 === 0 ? 2000 : 100);
 
 class ArtifactStore {
   root;
@@ -31198,4 +31198,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 77b58fb73b7259fbf480c9be2e11e1f8d0d38fbd47e725a694d1d845b5c09343
+// Built from Packages/Box/src/agents e2a0dae4502b61dc09962b6743a6ee27c740863c821684f7016374ea1272aa97

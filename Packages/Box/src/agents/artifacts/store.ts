@@ -154,11 +154,11 @@ const sameStamp = (a: Stamp, b: Stamp) => a.size === b.size && a.mtime === b.mti
 
 /**
  * Whether a file looked at `at` could have been written again since with the same stamp: its times
- * too close to `at` for its file system to tell apart. Whole seconds (HFS+; FAT's two), within 2 s;
- * finer (APFS, Linux's), within a tenth of one, past the coarse clock Linux stamps with.
+ * too close to `at` for its file system to tell apart. Either in whole seconds (HFS+; FAT's two), within
+ * 2 s; finer (APFS, Linux's), within a tenth of one, past the coarse clock Linux stamps with.
  */
 const couldBeRewritten = (stamp: Stamp, at: number) =>
-  at - Math.max(stamp.mtime, stamp.ctime) < (stamp.mtime % 1000 === 0 && stamp.ctime % 1000 === 0 ? 2000 : 100)
+  at - Math.max(stamp.mtime, stamp.ctime) < (stamp.mtime % 1000 === 0 || stamp.ctime % 1000 === 0 ? 2000 : 100)
 
 export class ArtifactStore {
   private artifacts = new Map<string, Artifact>()
