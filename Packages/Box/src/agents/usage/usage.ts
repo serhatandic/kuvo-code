@@ -23,15 +23,17 @@ import { claudeLine, dedupClaude, fromKeptClaude, keptClaude, type KeptClaudeEnt
 import { codexLine, codexSlots, codexState, codexStateFrom, fromKeptCodex, keptCodex, type CodexState, type KeptCodexEvent } from "./codex-log"
 import { engineCodexRows, engineCodexSlots, engineStamp } from "./engine-codex"
 import { dedupGrok, fromKeptGrok, grokLine, grokSlots, keptGrok, type KeptGrokEntry } from "./grok-log"
+import { cursorReachable, type CursorClient } from "./cursor-api"
+import { CursorHistory, cursorSlots, type CursorDay } from "./cursor-history"
 import { databasesStamp } from "./engine-db"
 import { HOSTED_PROVIDERS, hostedAnswers, hostedSlots, type HostedRow } from "./engine-hosted"
-import { claudeSlots, daysIn, slotsFrom, keptSlots, knownZone, noSlots, ownZone, summed, trimmed, type Day, type Slots, KEPT_DAYS } from "./history"
+import { claudeSlots, daysIn, slotsFrom, keptSlots, knownZone, noSlots, ownZone, summed, trimmed, type Day, type Slots, KEPT_DAYS, UNATTRIBUTED } from "./history"
 import { JSONLFiles, jsonlFiles } from "./jsonl"
 import type { Pricing, PricingStore } from "./pricing"
 import type { UsagePeers } from "./usage-peers"
 
 /** The services whose usage history a box states, so far (`opencode` only where it knows its engine's folder). */
-export const USAGE_SERVICES: LimitsService[] = ["claude", "codex", "grok", "opencode"]
+export const USAGE_SERVICES: LimitsService[] = ["claude", "codex", "grok", "opencode", "cursor"]
 
 const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
@@ -44,8 +46,12 @@ export interface UsageSource {
   service: LimitsService
   agent?: { kind: AgentKind; account: string }
   label?: string
-  /** Its slots from `since` (ms) on, priced (throws when its logs can't be read now). */
-  slots(pricing: Pricing, since: number): Promise<Slots>
+  /**
+   * Its slots from `since` (ms) on, priced (throws when its logs can't be read now); null when it
+   * isn't read here this round (another of your computers reads its maker's account of it): what
+   * this box has of it stays as it was.
+   */
+  slots(pricing: Pricing, since: number): Promise<Slots | null>
   /** The folders its logs are in, hashed (`placeOf`). */
   places?(): string[]
   /** What it keeps of the logs it read, shared by the accounts of its kind: told once a round is over. */
@@ -54,6 +60,11 @@ export interface UsageSource {
   quiet?: true
   /** Its dollars are what its maker billed (the engine's hosted models'), not an estimate. */
   billed?: true
+  /**
+   * Its use is its maker's account of the whole account (Cursor's), wherever it ran, not this
+   * computer's logs: a row of it takes the newest box's, never a sum of them.
+   */
+  accountWide?: true
 }
 
 /** One of this box's accounts, as it's kept and told. */
@@ -74,6 +85,8 @@ export interface OwnUsage {
   whole?: number
   /** Its dollars are what its maker billed (OpenCode's hosted models'), not an estimate. */
   estimated?: false
+  /** Its maker's account of the whole account (Cursor's), not this computer's: rows take the newest, never a sum. */
+  accountWide?: true
   /**
    * The folders its logs are in, each as a hash of its computer and the folder's real path
    * (`placeOf`): two boxes on one computer reading one folder are counted once.
@@ -119,6 +132,8 @@ export interface UsageRow {
   vouched?: true
   /** Every box of it says its dollars are what its maker billed, not an estimate. */
   estimated?: false
+  /** Its maker's account of the whole account: its slots are its newest box's, not a sum. */
+  accountWide?: true
   slots: Slots
   /** Its slots from your own computers only (not a vouched box's): what the totals add up. */
   yours: Slots
@@ -138,7 +153,11 @@ export interface UsageBox {
   accounts: OwnUsage[]
 }
 
-/** One row per account across the boxes, this box's first: one `service` with one `identity` is one account. */
+/**
+ * One row per account across the boxes, this box's first: one `service` with one `identity` is one
+ * account. Its slots are every box's added up; an account its maker states whole (`accountWide`:
+ * Cursor's), its newest box's alone (and of your own computers', yours).
+ */
 export function usageRows(boxes: UsageBox[]): UsageRow[] {
   const groups: { id: string; members: { box: UsageBox; account: OwnUsage; same: boolean }[] }[] = []
   const found = new Map<string, number>()
@@ -162,6 +181,11 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
     const base = members.find((member) => member.account.agent)?.account ?? members[0]!.account
     const label = members.map((member) => member.account.label?.trim()).find(Boolean)
     const scanned = Math.max(0, ...members.map((member) => member.account.scanned ?? 0))
+    const wide = members.some((member) => member.account.accountWide)
+    // (Newest first, by when each read it; this box's first among the same.)
+    const newest = (of: typeof members) => of.reduce<(typeof members)[number] | undefined>((best, member) => (!best || (member.account.scanned ?? 0) > (best.account.scanned ?? 0) ? member : best), undefined)
+    const counted = wide ? [newest(members.filter((member) => !member.same))].filter((member) => member !== undefined) : members.filter((member) => !member.same)
+    const yourCounted = wide ? [newest(members.filter((member) => !member.same && !member.box.vouched))].filter((member) => member !== undefined) : members.filter((member) => !member.same && !member.box.vouched)
     const row: UsageRow = {
       id,
       service: base.service,
@@ -184,16 +208,17 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
         ...(box.vouched ? { vouched: true as const } : {}),
         ...(same ? { same: true as const } : {}),
       })),
-      slots: summed(members.filter((member) => !member.same).map((member) => member.account.slots)),
-      yours: summed(members.filter((member) => !member.same && !member.box.vouched).map((member) => member.account.slots)),
+      slots: summed(counted.map((member) => member.account.slots)),
+      yours: summed(yourCounted.map((member) => member.account.slots)),
     }
-    const yours = members.filter((member) => !member.same && !member.box.vouched)
     if (members.every((member) => member.box.away)) row.away = true
-    if (members.some((member) => member.account.cut)) row.cut = true
+    if (counted.some((member) => member.account.cut)) row.cut = true
     if (members.every((member) => member.box.vouched)) row.vouched = true
     if (members.every((member) => member.account.estimated === false)) row.estimated = false
-    if (yours.some((member) => member.box.away)) row.yoursAway = true
-    if (yours.some((member) => member.account.cut)) row.yoursCut = true
+    if (wide) row.accountWide = true
+    // (Your share is short where a box counted in it is away, or told less.)
+    if (yourCounted.some((member) => member.box.away)) row.yoursAway = true
+    if (yourCounted.some((member) => member.account.cut)) row.yoursCut = true
     return row
   })
 }
@@ -277,14 +302,18 @@ export class Usage {
     let complete = true
     try {
       for (const source of sources) {
-        let slots: Slots | undefined
+        let slots: Slots | null | undefined
         try {
           slots = await source.slots(pricing, since)
         } catch (error) {
-          console.error(`usage of ${source.provider}:`, error)
+          console.error(`usage of ${source.provider}:`, error instanceof Error ? error.message : error)
         }
         const entry = this.entries.get(source.provider) ?? { slots: noSlots() }
-        if (slots) {
+        if (slots === null) {
+          // Read on another of your computers: as this box had it (none, before it ever read it).
+          if (this.entries.has(source.provider)) entry.slots = trimmed(entry.slots, at)
+          else continue
+        } else if (slots) {
           entry.slots = slots
           entry.scanned = this.now()
         } else {
@@ -335,6 +364,7 @@ export class Usage {
           slots: entry.slots,
           ...(source.places ? { places: source.places() } : {}),
           ...(source.billed ? { estimated: false as const } : {}),
+          ...(source.accountWide ? { accountWide: true as const } : {}),
         },
       ]
     })
@@ -370,13 +400,27 @@ export class Usage {
       if (of.some((row) => row.yoursAway || row.yoursCut)) partial[service] = { ...(of.some((row) => row.yoursAway) ? { away: true as const } : {}), ...(of.some((row) => row.yoursCut) ? { cut: true as const } : {}) }
     }
     const scanned = Math.max(0, ...this.own().map((account) => account.scanned ?? 0))
+    // Cursor's models by the family each shows under (its effort and speed variants as one row), as
+    // UsageKit groups them: named where it isn't the model's own.
+    const pricing = this.pricing.current()
+    const grouped = (service: string, days: Day[]): Day[] =>
+      service !== "cursor"
+        ? days
+        : days.map((day) => ({
+            ...day,
+            models: day.models.map((each) => {
+              const family = each.model === UNATTRIBUTED ? each.model : pricing.familyName(each.model, ["-fast"])
+              return family === each.model ? each : { ...each, family }
+            }),
+          }))
+    for (const service of Object.keys(totals)) totals[service] = grouped(service, totals[service]!)
     return {
       zone: asked,
       services: this.services,
       ...(scanned ? { scanned } : {}),
       // Codex's fallback model, as this box prices its own logs with it, and those it may be.
       pricing: { codex: { fallback: this.settings?.codexFallback ?? null, chosen: this.settings?.chosen ?? false, choices: this.pricing.current().fallbackOptions("codex") } },
-      rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
+      rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: grouped(row.service, daysIn(slots, asked, now)) })),
       totals,
       ...(Object.keys(partial).length ? { partial } : {}),
     }
@@ -936,4 +980,47 @@ export function engineHostedSources(folder: string | undefined, computer = ownCo
     }),
   )
   return () => sources
+}
+
+/** A Cursor account's client (`CursorAgent.cursor`), where the agent is one of Cursor's. */
+function cursorClientOf(agent: Agent): CursorClient | undefined {
+  return parseProvider(agent.providerID)?.kind === "cursor" ? (agent as Agent & { cursor?: CursorClient }).cursor : undefined
+}
+
+/**
+ * The Cursor accounts whose usage is read here, from Cursor's own record of each (cursor-history.ts),
+ * while each is signed in to Kuvo Code's own Cursor sign-in here and Cursor may be asked from this box
+ * (`cursorReachable`). Its maker's account of the whole account (`accountWide`): one of your
+ * computers asks Cursor for it at a time, the one that reads its plan limits (`elsewhere`: another
+ * does now). A round whose days and prices are as before works nothing out again. `folder`: where
+ * each user's days are kept (`cursor-history`).
+ */
+export function cursorSources(folder: string | undefined, elsewhere: (provider: string) => boolean, history = new CursorHistory(folder ? join(folder, "cursor-history") : undefined), now: () => number = Date.now): (agents: Agent[]) => UsageSource[] {
+  const last = new Map<string, { days: string; pricing: Pricing; since: number; slots: Slots }>()
+  return (agents) => {
+    if (!cursorReachable()) return []
+    return agents.flatMap((agent) => {
+      const client = cursorClientOf(agent)
+      if (!client || !client.key()) return []
+      const parsed = parseProvider(agent.providerID)!
+      const source: UsageSource = {
+        provider: agent.providerID,
+        service: "cursor",
+        agent: { kind: "cursor", account: parsed.id },
+        ...(agent.instance.label ? { label: agent.instance.label } : {}),
+        accountWide: true,
+        slots: async (pricing, since) => {
+          if (elsewhere(agent.providerID)) return null
+          const days = await history.read(client, now())
+          const said = createHash("sha256").update(JSON.stringify([...days] satisfies [string, CursorDay][])).digest("hex")
+          const before = last.get(agent.providerID)
+          if (before && before.days === said && before.pricing === pricing && before.since === since) return before.slots
+          const slots = cursorSlots(days.values(), pricing, since)
+          last.set(agent.providerID, { days: said, pricing, since, slots })
+          return slots
+        },
+      }
+      return [source]
+    })
+  }
 }

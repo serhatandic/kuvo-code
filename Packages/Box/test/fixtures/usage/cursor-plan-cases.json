@@ -1,0 +1,666 @@
+{
+ "_note": "Inputs in Cursor's own shapes; `expected` written from the box's cursor-plan.ts and checked against UsageKit's mappers (UsageBoxParityCursorTests).",
+ "cases": [
+  {
+   "name": "pro: pools, credits and prepaid balance, bounded on-demand",
+   "fn": "mapUsage",
+   "args": {
+    "usage": {
+     "enabled": true,
+     "billingCycleStart": "1762300800000",
+     "billingCycleEnd": 1764892800000,
+     "planUsage": {
+      "limit": 2000,
+      "totalSpend": 1500,
+      "remaining": 500,
+      "autoPercentUsed": 40,
+      "apiPercentUsed": 12.5,
+      "totalPercentUsed": 55
+     },
+     "spendLimitUsage": {
+      "individualLimit": 10000,
+      "individualRemaining": 7500,
+      "individualUsed": 0
+     }
+    },
+    "planName": "pro",
+    "creditGrants": {
+     "hasCreditGrants": true,
+     "totalCents": 5000,
+     "usedCents": 1250
+    },
+    "stripeBalanceCents": 700
+   },
+   "expected": {
+    "plan": "Pro",
+    "lines": [
+     {
+      "label": "Credits",
+      "dollars": 44.5
+     },
+     {
+      "label": "Total usage",
+      "used": 55,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "Cursor Models",
+      "used": 40,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "Other Models",
+      "used": 12.5,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "On-demand",
+      "used": 25,
+      "limit": 100,
+      "format": "dollars",
+      "resetsAt": null,
+      "periodMs": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "pro: no total percent, computed from spend",
+   "fn": "mapUsage",
+   "args": {
+    "usage": {
+     "planUsage": {
+      "limit": 2000,
+      "remaining": 1200
+     },
+     "billingCycleEnd": "1764892800000"
+    },
+    "planName": " ultra plan ",
+    "creditGrants": null,
+    "stripeBalanceCents": 0
+   },
+   "expected": {
+    "plan": "Ultra Plan",
+    "lines": [
+     {
+      "label": "Total usage",
+      "used": 40,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     }
+    ]
+   }
+  },
+  {
+   "name": "spend-only on-demand",
+   "fn": "mapUsage",
+   "args": {
+    "usage": {
+     "enabled": true,
+     "billingCycleStart": "1762300800000",
+     "billingCycleEnd": 1764892800000,
+     "planUsage": {
+      "limit": 2000,
+      "totalSpend": 2000
+     },
+     "spendLimitUsage": {
+      "totalSpend": 4321
+     }
+    },
+    "planName": "pro",
+    "creditGrants": null,
+    "stripeBalanceCents": 0
+   },
+   "expected": {
+    "plan": "Pro",
+    "lines": [
+     {
+      "label": "Total usage",
+      "used": 100,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "On-demand",
+      "dollars": 43.21
+     }
+    ]
+   }
+  },
+  {
+   "name": "team: dollars against the limit",
+   "fn": "mapUsage",
+   "args": {
+    "usage": {
+     "billingCycleStart": "1762300800000",
+     "billingCycleEnd": 1764892800000,
+     "planUsage": {
+      "limit": 2000,
+      "remaining": 800
+     },
+     "spendLimitUsage": {
+      "limitType": "team",
+      "pooledLimit": 50000,
+      "pooledRemaining": 40000
+     }
+    },
+    "planName": "Team",
+    "creditGrants": null,
+    "stripeBalanceCents": 0
+   },
+   "expected": {
+    "plan": "Team",
+    "lines": [
+     {
+      "label": "Total usage",
+      "used": 12,
+      "limit": 20,
+      "format": "dollars",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "On-demand",
+      "used": 100,
+      "limit": 500,
+      "format": "dollars",
+      "resetsAt": null,
+      "periodMs": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "team with model pools: the total only as Cursor says it",
+   "fn": "mapUsage",
+   "args": {
+    "usage": {
+     "billingCycleStart": "1762300800000",
+     "billingCycleEnd": 1764892800000,
+     "planUsage": {
+      "limit": 2000,
+      "totalSpend": 0,
+      "autoPercentUsed": 0,
+      "apiPercentUsed": 0,
+      "totalPercentUsed": 3
+     },
+     "spendLimitUsage": {
+      "limitType": "team"
+     }
+    },
+    "planName": "team",
+    "creditGrants": null,
+    "stripeBalanceCents": 0
+   },
+   "expected": {
+    "plan": "Team",
+    "lines": [
+     {
+      "label": "Total usage",
+      "used": 3,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "Cursor Models",
+      "used": 0,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "Other Models",
+      "used": 0,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1764892800000,
+      "periodMs": 2592000000
+     }
+    ]
+   }
+  },
+  {
+   "name": "no subscription",
+   "fn": "mapUsage",
+   "args": {
+    "usage": {
+     "enabled": false
+    },
+    "planName": null,
+    "creditGrants": null,
+    "stripeBalanceCents": 0
+   },
+   "expected": {
+    "error": "No active Cursor subscription."
+   }
+  },
+  {
+   "name": "no limit, no percent, no pools",
+   "fn": "mapUsage",
+   "args": {
+    "usage": {
+     "planUsage": {}
+    },
+    "planName": "pro",
+    "creditGrants": null,
+    "stripeBalanceCents": 0
+   },
+   "expected": {
+    "error": "Total usage limit missing from API response."
+   }
+  },
+  {
+   "name": "request-based: requests this month",
+   "fn": "mapRequestBasedUsage",
+   "args": {
+    "usage": {
+     "gpt-4": {
+      "numRequests": 120,
+      "maxRequestUsage": 500
+     },
+     "startOfMonth": "2026-11-01T00:00:00.000Z"
+    },
+    "planName": "enterprise",
+    "unavailable": "Cursor request-based usage data unavailable. Try again later."
+   },
+   "expected": {
+    "plan": "Enterprise",
+    "lines": [
+     {
+      "label": "Requests",
+      "used": 120,
+      "limit": 500,
+      "format": "count:requests",
+      "resetsAt": 1796083200000,
+      "periodMs": 2592000000
+     }
+    ]
+   }
+  },
+  {
+   "name": "request-based: none",
+   "fn": "mapRequestBasedUsage",
+   "args": {
+    "usage": {
+     "gpt-4": {
+      "numRequests": 3
+     }
+    },
+    "planName": null,
+    "unavailable": "Enterprise usage data unavailable. Try again later."
+   },
+   "expected": {
+    "error": "Enterprise usage data unavailable. Try again later."
+   }
+  },
+  {
+   "name": "summary: enterprise requests and on-demand",
+   "fn": "mapSummary",
+   "args": {
+    "summary": {
+     "billingCycleStart": "2026-11-01T00:00:00Z",
+     "billingCycleEnd": "2026-12-01T00:00:00Z",
+     "membershipType": "enterprise",
+     "individualUsage": {
+      "plan": {
+       "autoPercentUsed": 10,
+       "apiPercentUsed": 5
+      },
+      "onDemand": {
+       "enabled": true,
+       "used": 2500,
+       "limit": 10000
+      }
+     }
+    },
+    "requestUsage": {
+     "gpt-4": {
+      "numRequestsTotal": 77,
+      "maxRequestUsage": 500
+     },
+     "startOfMonth": "2026-11-03T00:00:00Z"
+    },
+    "planName": null,
+    "unavailable": "Enterprise usage data unavailable. Try again later."
+   },
+   "expected": {
+    "plan": "Enterprise",
+    "lines": [
+     {
+      "label": "Total usage",
+      "used": 77,
+      "limit": 500,
+      "format": "count:requests",
+      "resetsAt": 1796083200000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "Requests",
+      "used": 77,
+      "limit": 500,
+      "format": "count:requests",
+      "resetsAt": 1796083200000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "Cursor Models",
+      "used": 10,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1796083200000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "Other Models",
+      "used": 5,
+      "limit": 100,
+      "format": "percent",
+      "resetsAt": 1796083200000,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "On-demand",
+      "used": 25,
+      "limit": 100,
+      "format": "dollars",
+      "resetsAt": 1796083200000,
+      "periodMs": 2592000000
+     }
+    ]
+   }
+  },
+  {
+   "name": "summary: team pooled, individual placeholder off",
+   "fn": "mapSummary",
+   "args": {
+    "summary": {
+     "limitType": "team",
+     "teamUsage": {
+      "pooled": {
+       "limit": 100000,
+       "remaining": 60000
+      },
+      "onDemand": {
+       "used": 999
+      }
+     },
+     "individualUsage": {
+      "onDemand": {
+       "enabled": false,
+       "limit": 0
+      }
+     }
+    },
+    "requestUsage": null,
+    "planName": "team",
+    "unavailable": "Team request-based usage data unavailable. Try again later."
+   },
+   "expected": {
+    "plan": "Team",
+    "lines": [
+     {
+      "label": "Total usage",
+      "used": 400,
+      "limit": 1000,
+      "format": "dollars",
+      "resetsAt": null,
+      "periodMs": 2592000000
+     },
+     {
+      "label": "On-demand",
+      "dollars": 9.99
+     }
+    ]
+   }
+  },
+  {
+   "name": "summary: nothing usable",
+   "fn": "mapSummary",
+   "args": {
+    "summary": {
+     "individualUsage": {}
+    },
+    "requestUsage": {
+     "startOfMonth": "2026-11-01 00:00:00 UTC"
+    },
+    "planName": null,
+    "unavailable": "Cursor request-based usage data unavailable. Try again later."
+   },
+   "expected": {
+    "error": "Cursor request-based usage data unavailable. Try again later."
+   }
+  },
+  {
+   "name": "grok bot: its own week",
+   "fn": "grokBot",
+   "args": {
+    "usage": {
+     "usagePercent": 123,
+     "hasNonZeroIncludedLimit": true,
+     "currentPeriodStart": "2026-11-10T00:00:00.000000Z",
+     "nextResetTimestampUtc": "2026-11-17T00:00:00Z"
+    }
+   },
+   "expected": {
+    "line": {
+     "label": "Grok Bot usage",
+     "used": 100,
+     "limit": 100,
+     "format": "percent",
+     "resetsAt": 1794873600000,
+     "periodMs": 604800000
+    }
+   }
+  },
+  {
+   "name": "grok bot: no period",
+   "fn": "grokBot",
+   "args": {
+    "usage": {
+     "usagePercent": "40"
+    }
+   },
+   "expected": {
+    "line": {
+     "label": "Grok Bot usage",
+     "used": 40,
+     "limit": 100,
+     "format": "percent",
+     "resetsAt": null,
+     "periodMs": 604800000
+    }
+   }
+  },
+  {
+   "name": "grok bot: pooled",
+   "fn": "grokBot",
+   "args": {
+    "usage": {
+     "usagePercent": 40,
+     "usesPooledEnterpriseAllowance": true
+    }
+   },
+   "expected": {
+    "line": null
+   }
+  },
+  {
+   "name": "fallback: enterprise with nothing usable",
+   "fn": "fallback",
+   "args": {
+    "usage": {
+     "planUsage": {}
+    },
+    "planName": "enterprise",
+    "planInfoUnavailable": false
+   },
+   "expected": {
+    "message": "Enterprise usage data unavailable. Try again later."
+   }
+  },
+  {
+   "name": "fallback: unknown plan, plan info unavailable",
+   "fn": "fallback",
+   "args": {
+    "usage": {},
+    "planName": null,
+    "planInfoUnavailable": true
+   },
+   "expected": {
+    "message": "Cursor request-based usage data unavailable. Try again later."
+   }
+  },
+  {
+   "name": "fallback: team by shape",
+   "fn": "fallback",
+   "args": {
+    "usage": {
+     "planUsage": {
+      "totalPercentUsed": 5
+     },
+     "spendLimitUsage": {
+      "pooledLimit": 100
+     }
+    },
+    "planName": "pro",
+    "planInfoUnavailable": false
+   },
+   "expected": {
+    "message": "Cursor request-based usage data unavailable. Try again later."
+   }
+  },
+  {
+   "name": "fallback: pro with pools",
+   "fn": "fallback",
+   "args": {
+    "usage": {
+     "planUsage": {
+      "autoPercentUsed": 1,
+      "apiPercentUsed": 2
+     }
+    },
+    "planName": "pro",
+    "planInfoUnavailable": false
+   },
+   "expected": {
+    "message": null
+   }
+  },
+  {
+   "name": "missing on-demand from the summary",
+   "fn": "appendMissingOnDemand",
+   "args": {
+    "summary": {
+     "billingCycleStart": "2026-11-01T00:00:00Z",
+     "billingCycleEnd": "2026-12-01T00:00:00Z",
+     "individualUsage": {
+      "onDemand": {
+       "limit": 5000,
+       "remaining": 1000
+      }
+     }
+    }
+   },
+   "expected": {
+    "lines": [
+     {
+      "label": "On-demand",
+      "used": 40,
+      "limit": 50,
+      "format": "dollars",
+      "resetsAt": 1796083200000,
+      "periodMs": 2592000000
+     }
+    ]
+   }
+  },
+  {
+   "name": "plan names",
+   "fn": "planNames",
+   "args": {
+    "pairs": [
+     [
+      "Pro",
+      "enterprise"
+     ],
+     [
+      "pro plan",
+      "team"
+     ],
+     [
+      "Ultra",
+      "team"
+     ],
+     [
+      null,
+      "pro"
+     ],
+     [
+      null,
+      null
+     ],
+     [
+      "  ",
+      null
+     ]
+    ]
+   },
+   "expected": {
+    "names": [
+     {
+      "routing": "enterprise",
+      "resolved": "enterprise",
+      "label": "Enterprise",
+      "preferred": "enterprise"
+     },
+     {
+      "routing": "team",
+      "resolved": "team",
+      "label": "Team",
+      "preferred": "team"
+     },
+     {
+      "routing": "team",
+      "resolved": "Ultra",
+      "label": "Ultra",
+      "preferred": "team"
+     },
+     {
+      "routing": null,
+      "resolved": "pro",
+      "label": "Pro",
+      "preferred": "pro"
+     },
+     {
+      "routing": null,
+      "resolved": null,
+      "label": null,
+      "preferred": null
+     },
+     {
+      "routing": null,
+      "resolved": null,
+      "label": null,
+      "preferred": null
+     }
+    ]
+   }
+  }
+ ]
+}

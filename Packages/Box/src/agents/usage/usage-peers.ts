@@ -324,8 +324,8 @@ export class UsagePeers {
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
  * Not which fallback model estimated what (`slots.fallback`): a box from before keeps none of it,
  * and would never find its own the same. Its peers are told all of it when that changes (`tellAll`).
- * Nor whether it's billed (`estimated`), which never changes for an account, and which a box from
- * before doesn't keep either.
+ * Nor whether it's billed (`estimated`) or stated whole by its maker (`accountWide`), which never
+ * change for an account, and which a box from before doesn't keep either.
  */
 export function digestOf(accounts: ToldUsage[]): string {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])
@@ -381,5 +381,6 @@ function takenAccount(given: unknown, off: number, now: number): OwnUsage | null
     ...(Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {}),
     ...(Array.isArray(account.places) && account.places.length ? { places: account.places.filter((place: unknown): place is string => typeof place === "string" && /^[0-9a-f]{16}$/.test(place)).slice(0, 20) } : {}),
     ...(account.estimated === false ? { estimated: false as const } : {}),
+    ...(account.accountWide === true ? { accountWide: true as const } : {}),
   }
 }
