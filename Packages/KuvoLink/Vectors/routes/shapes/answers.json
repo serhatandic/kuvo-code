@@ -7707,7 +7707,6 @@
           "list": "string"
          },
          "run?": "string",
-         "terminal?": "string",
          "removed?": "bool",
          "madeBy?": {
           "object": {
@@ -7740,7 +7739,6 @@
          "list": "string"
         },
         "run?": "string",
-        "terminal?": "string",
         "removed?": "bool",
         "madeBy?": {
          "object": {
@@ -10786,7 +10784,6 @@
           "list": "string"
          },
          "run?": "string",
-         "terminal?": "string",
          "removed?": "bool",
          "madeBy?": {
           "object": {
@@ -12160,7 +12157,6 @@
          "list": "string"
         },
         "run?": "string",
-        "terminal?": "string",
         "removed?": "bool",
         "madeBy?": {
          "object": {

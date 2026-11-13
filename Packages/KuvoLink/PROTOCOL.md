@@ -6077,8 +6077,9 @@ names it (a `/` can't be in a part of the path). A Mac answers from its box; a m
 there, with the settings of those it removed, the first time the machine answers; what it changes
 while a box is away goes there when it's back.
 
-- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?, madeBy?,
-  addedByBox?}]}`, newest first. `name` only when it isn't the folder's own; `folders`, the
+- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, removed?, madeBy?,
+  addedByBox?}]}`, newest first. It never lists the retired `terminal` field. Reads do not write
+  the saved file; the next project edit drops that field. `name` only when it isn't the folder's own; `folders`, the
   project's other folders; `removed`, one Remove Project took off the list, kept with its settings
   for when one of its sessions is brought back (a client shows it then, and not before); `madeBy`,
   the bot that made it ("Work"); `addedByBox`, one the box added itself (a session started in a
@@ -6101,9 +6102,9 @@ while a box is away goes there when it's back.
   itself). A client may hear of the session from its engine before this list names a new worktree,
   and the list never names a subfolder: one whose folder the list doesn't name, still running in the
   folder its `kuvo.filed` names, is filed under that project (#311).
-- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
-  adds the project or changes what's given (an empty string is none), and brings a removed one
-  back unless `removed` is true (a client's copy of one it removed, with its settings); one with
+- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, removed}` adds the
+  project or changes what's given (an empty string is none). A supplied `terminal` field is
+  ignored. It brings a removed one back unless `removed` is true (a client's copy of one it removed, with its settings); one with
   `folders` takes away `addedByBox`: `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).

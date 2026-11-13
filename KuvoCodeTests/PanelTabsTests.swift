@@ -187,7 +187,7 @@ import Testing
         #expect(panel.selection == chosen)
     }
 
-    /// Each new session's draft, and each terminal tab of the window, has a panel of its own: a
+    /// Each new session's draft has a panel of its own: a
     /// terminal opened writing one in project A doesn't show beside one for project B, nor go to
     /// B's session once that's sent.
     @Test func eachDraftHasItsOwnPanel() {
@@ -202,8 +202,6 @@ import Testing
         #expect(!panel.visibleTabs.contains { $0.kind == .file(a) })
         panel.inView = .init(session: nil, draft: "draft:/a")
         #expect(panel.visibleTabs.contains { $0.kind == .file(a) }, "still A's draft's")
-        panel.inView = .init(session: nil, draft: "terminal:T1")
-        #expect(!panel.visibleTabs.contains { $0.kind == .file(a) })
     }
 
     /// Run again after the draft became its session, or the conversation moved on to another

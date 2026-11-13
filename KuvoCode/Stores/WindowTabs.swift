@@ -4,25 +4,21 @@ import OpenCodeKit
 import SwiftUI
 
 /// One of the window's tabs: a session, a new session's draft in a folder (it doesn't exist on
-/// the server until its first message), a group chat, or a terminal standing in for a conversation.
+/// the server until its first message), or a group chat.
 enum TabKey: Hashable, Codable {
     case session(String)
     case draft(String)
     case group(String)
-    case terminal(String)
 
     private static let draftPrefix = "draft:"
     private static let groupPrefix = "group:"
-    private static let terminalPrefix = "terminal:"
 
-    /// From its written form: `draft:<folder>`, `group:<id>`, `terminal:<id>`, else a session's ID.
+    /// From its written form: `draft:<folder>`, `group:<id>`, else a session's ID.
     init(_ text: String) {
         if text.hasPrefix(Self.draftPrefix) {
             self = .draft(String(text.dropFirst(Self.draftPrefix.count)))
         } else if text.hasPrefix(Self.groupPrefix) {
             self = .group(String(text.dropFirst(Self.groupPrefix.count)))
-        } else if text.hasPrefix(Self.terminalPrefix) {
-            self = .terminal(String(text.dropFirst(Self.terminalPrefix.count)))
         } else {
             self = .session(text)
         }
@@ -35,7 +31,6 @@ enum TabKey: Hashable, Codable {
         case .session(let id): id
         case .draft(let folder): Self.draftPrefix + folder
         case .group(let id): Self.groupPrefix + id
-        case .terminal(let id): Self.terminalPrefix + id
         }
     }
 
@@ -52,11 +47,6 @@ enum TabKey: Hashable, Codable {
     var groupID: String? {
         if case .group(let id) = self { return id }
         return nil
-    }
-
-    var isTerminal: Bool {
-        if case .terminal = self { return true }
-        return false
     }
 
     init(from decoder: Decoder) throws {
@@ -165,7 +155,6 @@ final class WindowTabs {
 
     private unowned let app: AppModel
     private var workspace: Workspace { app.workspace }
-    private var terminals: MainTerminals { app.mainTerminals }
 
     init(app: AppModel) {
         self.app = app
@@ -244,7 +233,7 @@ final class WindowTabs {
 
     /// The tab in view's folder.
     var activeDirectory: String? {
-        activeModel?.session.location.directory ?? draftDirectory ?? selection.flatMap { terminals.entry($0.text)?.directory }
+        activeModel?.session.location.directory ?? draftDirectory
     }
 
     /// The folder of the session you're working in: Run, a new terminal and Open Quickly go there.
@@ -252,7 +241,7 @@ final class WindowTabs {
         worksBeside ? splitModel?.session.location.directory ?? activeDirectory : activeDirectory
     }
 
-    /// The computer a tab is on (a session's, a bot's, a group chat's, a draft's, a terminal's);
+    /// The computer a tab is on (a session's, a bot's, a group chat's or a draft's);
     /// nil for one that's on none known. The sidebar's page slides to it as the tab comes into view.
     func box(of key: TabKey) -> SidebarBox? {
         switch key {
@@ -265,8 +254,6 @@ final class WindowTabs {
         case .group(let id):
             guard app.chats.group(id) != nil else { return nil }
             return SidebarBox(machine: app.chats.machine(of: id))
-        case .terminal:
-            return terminals.entry(key.text).map { SidebarBox(directory: $0.directory) }
         }
     }
 
@@ -334,7 +321,7 @@ final class WindowTabs {
         }
     }
 
-    /// A tab picked in the sidebar (a session, a bot, a group chat, a terminal, a search's find):
+    /// A tab picked in the sidebar (a session, a bot, a group chat, a search's find):
     /// in view, and you work in its conversation, its composer with the keyboard, as a tab picked
     /// in the tab bar. It starts fresh there, with no way back to where its tab was before.
     func choose(_ key: TabKey) {
@@ -352,7 +339,7 @@ final class WindowTabs {
     /// conversation from a group chat, a subagent from the session it works for): in that one's
     /// place in its tab, with the way back to it at its top (`back`), as a link opens in a
     /// browser's tab. One it went through already is gone back to, not round again. Opened from
-    /// elsewhere (the session beside, nothing in view, a new session or a terminal, which its tab
+    /// elsewhere (the session beside, nothing in view, a new session, which its tab
     /// keeps), it opens as from the sidebar.
     func go(to key: TabKey, from origin: TabKey?) {
         guard let origin, origin == selection, origin.sessionID != nil || origin.groupID != nil, key != origin,
@@ -456,10 +443,7 @@ final class WindowTabs {
             Analytics.shared.sessionEnded(beside)
             pairs[key] = nil
         }
-        if remember && !key.isTerminal { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
-        terminals.close(key.text)
-        // A terminal's tab doesn't come back: its panel goes with it.
-        if key.isTerminal { app.utilities.closeTabs(of: key.text) }
+        if remember { rememberClosed([ClosedTab(key: key, index: index, beside: beside)]) }
         withAnimation(.ui) {
             self.keys = keys
             if selection == key {
@@ -480,11 +464,9 @@ final class WindowTabs {
     /// Closes every tab but `key`, or all of them when it's nil.
     func closeAll(except key: TabKey?) {
         // Reopened last first, so the leftmost comes back last.
-        rememberClosed(keys.enumerated().filter { $0.element != key && !$0.element.isTerminal }.map { ClosedTab(key: $0.element, index: $0.offset, beside: pairs[$0.element]) }.reversed())
+        rememberClosed(keys.enumerated().filter { $0.element != key }.map { ClosedTab(key: $0.element, index: $0.offset, beside: pairs[$0.element]) }.reversed())
         for closed in keys where closed != key {
             Analytics.shared.sessionEnded(closed.text)
-            terminals.close(closed.text)
-            if closed.isTerminal { app.utilities.closeTabs(of: closed.text) }
             if let beside = pairs[closed] { Analytics.shared.sessionEnded(beside) }
         }
         withAnimation(.ui) {
@@ -520,7 +502,6 @@ final class WindowTabs {
         case .draft: return true
         case .session(let id): return workspace.session(id) != nil || workspace.subSession(id) != nil
         case .group(let id): return app.chats.group(id) != nil
-        case .terminal: return false
         }
     }
 
@@ -586,7 +567,7 @@ final class WindowTabs {
     }
 
     /// Deleted sessions lose their tabs; the one beside a deleted tab's session takes its tab.
-    /// Pairs whose tab or session beside is gone end; a terminal's tab goes with its shell.
+    /// Pairs whose tab or session beside is gone end; tabs whose conversations are gone close.
     func dropClosed() {
         guard workspace.isLoaded else { return }
         let known = Set(workspace.sessions.map(\.id))
@@ -601,8 +582,6 @@ final class WindowTabs {
         for key in keys {
             switch key {
             case .draft: continue
-            // A terminal's tab stays while its shell runs; one restored at launch has none.
-            case .terminal: if terminals.entry(key.text) != nil { continue }
             // A group chat's tab stays as long as the chat does.
             case .group(let id): if app.chats.group(id) != nil { continue }
             case .session(let id):
@@ -632,7 +611,6 @@ final class WindowTabs {
             case .session(let id): !isGone(id)
             case .group(let id): app.chats.group(id) != nil
             case .draft: true
-            case .terminal: terminals.entry(key.text) != nil
             }
         }
         let trails = cameFrom.filter { open.contains($0.key) }.mapValues { $0.filter(isLeft) }.filter { !$0.value.isEmpty }
@@ -830,20 +808,14 @@ final class WindowTabs {
         focus = .conversation
     }
 
-    // MARK: New sessions and terminals
+    // MARK: New sessions
 
     /// A new session in `directory`, or the project in view, or the latest one; with no project
     /// at all, a chat. A bot's own folder isn't a project: from its conversation, the latest one.
-    /// `conversation`: one, even in a project whose sessions open its terminal command.
-    func newSession(in directory: String?, conversation: Bool = false) {
+    func newSession(in directory: String?) {
         let inView = activeDirectory.map(workspace.projectDirectory).flatMap { Workspace.isBotFolder($0) ? nil : $0 }
         // (On this Mac: its box's, the app's own or the one attached in place.)
         guard let directory = (directory ?? inView ?? workspace.projects.first?.directory ?? workspace.thisMacsChats).map(Workspace.onThisMac) else { return newChat() }
-        // A project that has a terminal command for its sessions opens that, not a conversation.
-        if !conversation, let command = workspace.settings[workspace.projectDirectory(directory)]?.terminal {
-            openTerminalTab(command: command, in: directory)
-            return
-        }
         open(.draft(directory))
     }
 
@@ -864,18 +836,6 @@ final class WindowTabs {
             guard let chats = workspace.thisMacsChats else { return }
             newSession(in: chats)
         }
-    }
-
-    /// A terminal as a tab, in the folder of the tab in view (or the one given), typing `command`
-    /// in it. Without one, a plain shell: where you start `omp` or any agent yourself.
-    func openTerminalTab(command: String?, in directory: String? = nil) {
-        // A project's folder, not a bot's own or the chats' (their agents work there).
-        let directory = directory ?? Self.project(activeDirectory) ?? NSHomeDirectory()
-        Analytics.shared.track("terminal_tab_opened", ["kind": command == nil ? "shell" : "project"])
-        let key = terminals.open(in: directory, command: command, environment: app.shellEnvironment)
-        // Add to Message in its right-click menu: a new session in its folder, with what's selected.
-        terminals.entry(key)?.session.addToMessage = { [weak self] in self?.addToMessage($0) }
-        open(TabKey(key))
     }
 
     // MARK: Adding to a message
@@ -918,18 +878,16 @@ final class WindowTabs {
         } else if let model = workspace.model(for: key) {
             model.focusComposer()
         } else {
-            // No composer to type in (a terminal's tab): the keyboard stays, and so does the card.
+            // No composer available: keep the current keyboard focus.
             return
         }
         focus = worksBeside ? .split : .conversation
     }
 
-    /// With no composer in view to add to (no tab open, or a terminal's): a new conversation, in
-    /// the terminal's folder if one's in view, never a terminal (which would start the project's
-    /// command, and not have the text).
+    /// With no tab in view, start a conversation for the addition.
     private func composerForAdding() {
-        guard selection == nil || messageTarget?.isTerminal == true else { return }
-        newSession(in: selection.flatMap { terminals.entry($0.text)?.directory }, conversation: true)
+        guard selection == nil else { return }
+        newSession(in: nil)
     }
 
     // MARK: Keeping them with the window
@@ -1019,13 +977,13 @@ final class WindowTabs {
         isRestored = true
         let text = keptIn?.string(forKey: Self.keptKey) ?? text
         let saved = text.isEmpty ? older.saved : (try? JSONDecoder().decode(Saved.self, from: Data(text.utf8))) ?? Saved()
-        let opened = keys
+        let opened = keys.filter { !$0.text.hasPrefix("terminal:") }
         var restored: [TabKey] = []
-        for key in saved.tabs where !restored.contains(key) { restored.append(key) }
+        for key in saved.tabs where !key.text.hasPrefix("terminal:") && !restored.contains(key) { restored.append(key) }
         let all = restored + opened.filter { !restored.contains($0) }
         var pairs: [TabKey: String] = [:]
         // Each session in one place: in a pair at most once, never also in a tab of its own.
-        for pair in saved.pairs where restored.contains(pair.tab) && pairs[pair.tab] == nil && !pairs.values.contains(pair.beside)
+        for pair in saved.pairs where !pair.beside.hasPrefix("terminal:") && restored.contains(pair.tab) && pairs[pair.tab] == nil && !pairs.values.contains(pair.beside)
             && !all.contains(.session(pair.beside)) && !self.pairs.values.contains(pair.beside) {
             pairs[pair.tab] = pair.beside
         }
@@ -1034,7 +992,7 @@ final class WindowTabs {
         if selection == nil { selection = saved.selection.flatMap { keys.contains($0) ? $0 : nil } ?? keys.last }
         // Each conversation's panel as it was; a version before kept one for the window, which
         // they all start as.
-        app.utilities.restoreOpen(saved.panels.map { ($0.key, $0.open) }, last: saved.showsPanel, in: openView)
+        app.utilities.restoreOpen(saved.panels.filter { !$0.key.hasPrefix("terminal:") }.map { ($0.key, $0.open) }, last: saved.showsPanel, in: openView)
         showsSidebar = saved.showsSidebar ?? older.showsSidebar
     }
 }

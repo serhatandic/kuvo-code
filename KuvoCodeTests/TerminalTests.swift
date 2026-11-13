@@ -133,29 +133,11 @@ import Testing
     /// A terminal opened to run a command is named by the program that does the work: the last of
     /// commands run one after another, past what only sets up how it runs.
     @Test func aCommandsTabIsNamedByItsProgram() {
-        #expect(MainTerminals.program("npm run dev") == "npm")
-        #expect(MainTerminals.program("cd web && npm run dev") == "npm")
-        #expect(MainTerminals.program("cd web; PORT=3000 bun dev") == "bun")
-        #expect(MainTerminals.program("sudo /usr/bin/python3 serve.py") == "python3")
-        #expect(MainTerminals.program("env DEBUG=1 node app.js | tee log") == "node")
-    }
-
-    /// A project's own terminal (Terminal Instead of Chat) is named for its command until what
-    /// runs names itself; a plain shell, for its folder.
-    @Test func aProjectsTerminalIsNamedForItsCommand() {
-        let terminals = MainTerminals()
-        let command = terminals.open(in: folder.path, command: "sleep 60", environment: shell)
-        let plain = terminals.open(in: folder.path, command: nil, environment: shell)
-        let configured = terminals.open(in: folder.path, command: "KUVO_TEST=1 /bin/sleep 60", environment: shell)
-        defer {
-            terminals.close(command)
-            terminals.close(plain)
-            terminals.close(configured)
-            try? FileManager.default.removeItem(at: folder)
-        }
-        #expect(terminals.entry(command)?.session.title == "sleep")
-        #expect(terminals.entry(plain)?.session.title == folder.lastPathComponent)
-        #expect(terminals.entry(configured)?.session.title == "sleep", "the program, not its settings or its path")
+        #expect(TerminalSession.program("npm run dev") == "npm")
+        #expect(TerminalSession.program("cd web && npm run dev") == "npm")
+        #expect(TerminalSession.program("cd web; PORT=3000 bun dev") == "bun")
+        #expect(TerminalSession.program("sudo /usr/bin/python3 serve.py") == "python3")
+        #expect(TerminalSession.program("env DEBUG=1 node app.js | tee log") == "node")
     }
 
     /// Waits for the session's shell to end, as the terminal hears it.
