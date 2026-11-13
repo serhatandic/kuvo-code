@@ -71,7 +71,7 @@ public enum ConversationPictures {
     }
 
     /// The pictures a message of yours carried, in the order it carried them, then those it sent
-    /// as paths (its note of attached files names them).
+    /// as paths (its parts name them: `MessageParts.paths`).
     public static func pictures(of message: Message.User) -> [ConversationPicture] {
         let files = message.files ?? []
         let carried = files.enumerated().compactMap { index, file -> ConversationPicture? in
@@ -80,7 +80,7 @@ public enum ConversationPictures {
         }
         let own = Set(files.compactMap { $0.fileURL?.path })
         var seen = Set<String>()
-        let paths = AttachedFilesNote.split(message.text).paths.compactMap { path -> ConversationPicture? in
+        let paths = MessageParts.of(id: message.id, text: message.text, metadata: message.metadata).paths.compactMap { path -> ConversationPicture? in
             guard isPicture(path: path), !own.contains(path), seen.insert(path).inserted else { return nil }
             return ConversationPicture(id: id(message: message.id, path: path), source: .path(path), name: (path as NSString).lastPathComponent, message: message.id)
         }

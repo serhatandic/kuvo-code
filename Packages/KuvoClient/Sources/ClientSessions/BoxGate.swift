@@ -10,8 +10,9 @@ import Foundation
 public enum BoxGate {
     /// What this client uses with no way around it on a box that hasn't it. A name goes in here
     /// when the client drops its fallback for a box without it, or would say it needs a newer
-    /// Kuvo Code. `sessions.list` and `typed` (#668) came last: a box that has them has what came
-    /// before them too (plan limits' `rows`, `kuvo/updates`, Cursor's limits, `kuvo/sessions/read`).
+    /// Kuvo Code. `messages.send` (#668 item 3: a message sent as fields, the box writing what the
+    /// agent reads) came last: a box that has it has what came before it too (`sessions.list`,
+    /// `typed`, plan limits' `rows`, `kuvo/updates`, Cursor's limits, `kuvo/sessions/read`).
     public static let required: [String] = [
         "agent-tools.own",
         "folders.tree",
@@ -19,6 +20,7 @@ public enum BoxGate {
         "git.merge",
         "git.pull-request",
         "git.status",
+        "messages.send",
         "models.offered",
         "sessions.list",
         "sessions.models",
