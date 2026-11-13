@@ -61,7 +61,7 @@ import Testing
         }
         let model = try #require(workspace.model(for: id))
         model.draftText = "Fix the build"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText.isEmpty)
         // The app quitting now: the next launch reads what's kept.
         #expect(Drafts(defaults: .standard)[id].text == "Fix the build")
@@ -90,7 +90,7 @@ import Testing
         // As the new-session composer sends it: kept there until the session has it.
         Drafts.shared[draft].text = "Start the API"
         let (sending, sent) = Drafts.shared.takeOut(draft)
-        model.submit(sent.text, files: sent.files, for: nil, queue: false, commands: [], keptElsewhere: true)
+        model.submit(sent.text, files: sent.files, for: nil, queue: false, keptElsewhere: true)
         // The app quitting now.
         let next = Drafts(defaults: .standard)
         #expect(next[draft].text == "Start the API")
@@ -142,14 +142,22 @@ import Testing
 
         let conversation = try #require(workspace.model(for: id))
         conversation.draftText = "Summarize the release"
-        conversation.submitDraft(for: catalog.model(luna), queue: false, commands: [], unavailable: catalog.unavailable(luna))
+        conversation.submitDraft(for: catalog.model(luna), queue: false, unavailable: catalog.unavailable(luna))
         #expect(conversation.draftText == "Summarize the release", "kept, to send once you can")
         let said = try #require(conversation.failure)
         #expect(said.contains("Luna") && said.contains("ChatGPT plan") && said.contains("Settings › Accounts"), "\(said)")
         #expect(!StubWeb.asked.contains { $0.hasSuffix("/prompt") }, "nothing sent into the void")
-        // A "!" command needs no model, and runs.
+        // A "!" command needs no model, and runs (its box says so, as the app's does).
+        let box = try await ConversationBox(stubWeb: Self.engine)
+        defer { box.stop() }
+        let shown = StubWeb.json(["data": ["id": id, "title": "Composer", "time": ["created": 1, "updated": 2], "location": ["directory": "/tmp/kuvo-tests-composer"]]])
+        StubWeb.route(Self.engine + "/api/session/\(id)") { _ in shown }
+        StubWeb.handle(Self.engine + "/api/session/\(id)/shell") { _, _ in StubWeb.json([:]) }
+        await box.serves(conversation)
         conversation.draftText = "!ls"
-        conversation.submitDraft(for: nil, queue: false, commands: [], unavailable: catalog.unavailable(luna))
+        conversation.submitDraft(for: nil, queue: false, unavailable: catalog.unavailable(luna))
+        #expect(conversation.failure == nil)
+        try await until { StubWeb.asked.contains { $0.hasSuffix("/api/session/\(id)/shell") } }
         #expect(conversation.failure == nil)
     }
 

@@ -688,6 +688,8 @@ struct BottomStack: View {
                 model.readDecisions()
                 await model.readAutopilot()
             }
+            // What "/" offers here, as its box says: again as its agents bridge comes or goes.
+            .task(id: "\(model.id) \(model.bridgeReached)") { await model.readKeywords() }
             // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
             .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
             // What its box says of its model, read again as its model changes, and as its
@@ -896,7 +898,7 @@ struct BottomStack: View {
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
         // (One with no model of its own runs on the one its box names.)
         let unavailable = (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
-        model.submitDraft(for: catalog.model(model.session.model), queue: queue, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
+        model.submitDraft(for: catalog.model(model.session.model), queue: queue, unavailable: unavailable)
     }
 }
 

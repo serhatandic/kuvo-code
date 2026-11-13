@@ -7,7 +7,7 @@ import Testing
 /// "!" in the composer (B20): the rest runs as a command in the session's folder, as typed,
 /// without a message to the agent; files and what you were replying to wait in the composer for
 /// your next message; a command the engine doesn't take comes back to the composer, saying why.
-/// The engine is stubbed.
+/// Its box reads it as the app's does (`ConversationBox`, the real one); the engine is stubbed.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct ShellCommandsTests {
     let engine = StubEngine(port: 47999)
@@ -18,13 +18,17 @@ import Testing
         workspace.api = engine.api
     }
 
-    private func open() async throws -> SessionModel {
+    private func open() async throws -> (SessionModel, ConversationBox) {
         engine.list([StubEngine.session(id, title: "Shell", directory: "/tmp/kuvo-tests-shell")])
+        // (As the engine has it, for its box to find.)
+        engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, title: "Shell", directory: "/tmp/kuvo-tests-shell")])
         engine.conversation(id, [])
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
-        return model
+        let box = try await ConversationBox(engine: engine)
+        await box.serves(model)
+        return (model, box)
     }
 
     @Test func aCommandRunsAsTypedAndTheRestWaits() async throws {
@@ -33,12 +37,13 @@ import Testing
             Drafts.shared.remove(id)
         }
         engine.on("POST", "/api/session/\(id)/shell", json: [:])
-        let model = try await open()
+        let (model, box) = try await open()
+        defer { box.stop() }
         let file = URL(filePath: "/tmp/kuvo-tests-shell/screenshot.png")
         model.draftText = "!npm test -- --watch=false"
         model.draftFiles = [file]
         model.draftQuotes = [Drafts.Quote(text: "The build fails on CI")]
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/shell").isEmpty }
         #expect(engine.requests("POST", "/api/session/\(id)/shell").first?.body["command"] as? String == "npm test -- --watch=false")
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").isEmpty, "no message to the agent")
@@ -53,11 +58,13 @@ import Testing
             Drafts.shared.remove(id)
         }
         engine.on("POST", "/api/session/\(id)/shell", json: ["message": "Session is busy"], status: 409)
-        let model = try await open()
+        let (model, box) = try await open()
+        defer { box.stop() }
         model.draftText = "!git status"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.failure != nil }
         #expect(model.draftText == "!git status", "back as you typed it")
         #expect(model.failure != nil)
+        #expect(engine.requests("POST", "/api/session/\(id)/shell").count == 1, "the engine was asked, and said no")
     }
 }
