@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Kuvo Code Box is what macOS asks about for everything a Mac's box runs: the Apple Calendar
+	     and Reminders integration's server, under it, reads them as the app's did. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<!-- And the microphone, as the app's keeper has it today, for what an agent's command records. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
