@@ -2269,10 +2269,12 @@ too). A client adds a name there as it drops its fallback for a box without it, 
 such a box needs a newer Kuvo Code.
 
 - **Held**: a client sends a held box nothing but `kuvo/info`, `kuvo/update` and `kuvo/box/update`,
-  and a Mac the tool calls of the agents at work there (`kuvo/agent-tools`, so work under way goes
-  on; a tool that box hasn't is said to the agent as waiting for the update). Every other request is
-  refused in the client, in the gate's words (`503`, `reason: "updating"`), without reaching the
-  box. Its sessions wait where they'd show, beside what it waits for or why it couldn't be updated.
+  and what keeps work already under way there going, so a session waiting on you can be answered:
+  its engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), the tool calls of the agents at
+  work there (`kuvo/agent-tools`; a tool that box hasn't is said to the agent as waiting for the
+  update), its asks (`kuvo/asks`, `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`) and
+  Auto's decisions (`kuvo/sessions/<id>/decisions`). Every other request is refused in the client,
+  in the gate's words (`503`, `reason: "updating"`), without reaching the box. Its sessions wait where they'd show, beside what it waits for or why it couldn't be updated.
   A held box whose `kuvo/info` says it has everything is let go, and read again at once.
 - **A Mac, its machines** (always over SSH): connecting puts this app's files on an older box
   ("Updates"), so its link answers as this version at once. The connection's last step reads
@@ -2280,17 +2282,26 @@ such a box needs a newer Kuvo Code.
   on X couldn't be updated…"), not tried again by itself. Try Again connects again, which brings it
   up to date. A machine found older later (its list said so) is held the same way.
 - **A Mac, its box attached in place**: offered the release the app carries (`kuvo/box/update
-  {from}`; "offered already" counts). Its connection goes on, its engine used (a session waiting on
-  you there can be answered: the box takes the release at its first quiet moment), its box's routes
-  held ("Updating…"), and read again every ten seconds until it has it all. A box without
-  `box.update`, a copy of the app without a release, or another refusal fails, saying why.
-- **A Mac, its own box**: while an older app's keeper still runs it (making way for this one's once
-  the work under way ends), it's held at once, and read every ten seconds ("Kuvo Code on this Mac
-  finishes updating once the work running now ends") until it has it all.
+  {from}`; "offered already" counts, and so does one refused while it updates already). Its
+  connection goes on, its engine used (a session waiting on you there can be answered: the box
+  takes the release at its first quiet moment), its box's routes held ("Updating…"). Every ten
+  seconds it's read again (`kuvo/info`, and `kuvo/update`: `blocked`, `offered`, `last`) until it
+  has it all: one that's blocked, whose engine is stopped on purpose, or that failed to take it
+  says why in its own words; an offer that's gone (taken back, or refused while its night's update
+  ran) is made again. One that can't say what it has is held and asked again, never let through.
+  A box without `box.update`, a copy of the app without a release, or another refusal fails, saying
+  why.
+- **A Mac, its own box**: while another version's keeper runs it (an older app's, making way for
+  this one's once the work under way ends), whatever that keeper answered, it's held at once, and
+  read at once, again whenever its box answers somewhere new (`serve.json`), and every ten seconds
+  ("Kuvo Code on this Mac finishes updating once the work running now ends"), until it has it all.
 - **A phone** can't update a box: it holds one that's older than it (or answers `kuvo/info` 404 or
   405), and says it waits for an update ("Waiting for an Update") and who brings it up to date: a
   Mac's box updates with Kuvo Code on that Mac; a machine, when a Mac with Kuvo Code connects to it,
-  or by itself overnight. It reads `kuvo/info` again each time it connects.
+  and by itself overnight only where its `kuvo/info` lists `update` (a 0.7 machine's doesn't). It
+  reads `kuvo/info` again each time it connects.
+- **Releases**: a phone release must not ship before a Mac release whose box has every name the
+  phone's `BoxGate.required` lists, or every computer would wait for an update that isn't out yet.
 - A machine's `kuvo/machines` step while its box is brought up to date is `updating` ("Updating Kuvo
   Code").
 

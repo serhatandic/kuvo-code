@@ -51,5 +51,19 @@ struct BoxGateTests {
         #expect(!BoxGate.isAllowed("kuvo/sessions/list?since=1"))
         #expect(!BoxGate.isAllowed("kuvo/git/branches"))
         #expect(!BoxGate.isAllowed("kuvo/info/extra"))
+        // What keeps work under way there going: its engine, its coding agents, a session's asks.
+        #expect(BoxGate.isAllowed("api/session/ses_1/permissions/per_1"))
+        #expect(BoxGate.isAllowed("kuvo/agents/api/session"))
+        #expect(BoxGate.isAllowed("kuvo/sandbox/asks/ask_1"))
+        #expect(BoxGate.isAllowed("kuvo/asks"))
+        #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/decisions"))
+        #expect(!BoxGate.isAllowed("kuvo/sessions"))
+        #expect(!BoxGate.isAllowed("kuvo/askslater"))
+    }
+
+    // A phone says who brings a machine up to date: by itself overnight only where it can.
+    @Test func aMachineThatCantUpdateItselfIsntSaidTo() {
+        #expect(BoxGate.Words.waiting(for: "devbox", isMac: false, updatesItself: true).contains("by itself overnight"))
+        #expect(!BoxGate.Words.waiting(for: "old-box", isMac: false, updatesItself: false).contains("overnight"))
     }
 }

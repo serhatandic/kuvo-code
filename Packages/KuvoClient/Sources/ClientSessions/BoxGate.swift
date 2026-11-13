@@ -37,13 +37,18 @@ public enum BoxGate {
     public static func isCurrent(_ features: some Sequence<String>) -> Bool { missing(features).isEmpty }
 
     /// The routes a held box is still asked: what it is (`kuvo/info`) and its own update
-    /// (`kuvo/update`, `kuvo/box/update`); and its running agents' own tool calls
-    /// (`kuvo/agent-tools`, which a Mac passes on for them), so work under way there goes on as it
-    /// was (a tool it hasn't refuses in its own words). Every other request to it waits for the
-    /// update.
+    /// (`kuvo/update`, `kuvo/box/update`); and what keeps work already under way there going: its
+    /// engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), its running agents' own tool
+    /// calls (`kuvo/agent-tools`), and what answers a session waiting on you (its asks: `kuvo/asks`,
+    /// `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`, and Auto's decisions). A route it
+    /// hasn't says so in its own words. Every other request to it waits for the update.
     public static func isAllowed(_ path: String) -> Bool {
         let route = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
-        return ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/agent-tools"].contains(route)
+        if ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/agent-tools"].contains(route) { return true }
+        if route.hasPrefix("api/") || route.hasPrefix("kuvo/agents/") { return true }
+        for asks in ["kuvo/asks", "kuvo/sandbox/asks", "kuvo/vault/asks", "kuvo/work/asks"] where route == asks || route.hasPrefix(asks + "/") { return true }
+        let parts = route.split(separator: "/")
+        return parts.count == 4 && parts[0] == "kuvo" && parts[1] == "sessions" && parts[3] == "decisions"
     }
 
     /// What both apps say of a box that's older than they need.
@@ -62,12 +67,13 @@ public enum BoxGate {
         public static let waitingShort = "Waiting for update"
 
         /// What a phone says of a computer older than it: who brings it up to date. `isMac`: a
-        /// Mac's box, which updates with Kuvo Code there; a machine updates when a Mac connects
-        /// to it, or by itself overnight.
-        public static func waiting(for name: String, isMac: Bool) -> String {
-            isMac
-                ? "Kuvo Code on \(name) is older than this iPhone’s. Update it there, or let it finish an update under way. Nothing changes there meanwhile."
-                : "Kuvo Code on \(name) is older than this iPhone’s. It updates when a Mac with Kuvo Code connects to it, or by itself overnight. Nothing changes there meanwhile."
+        /// Mac's box, which updates with Kuvo Code there; a machine updates when a Mac connects to
+        /// it, and by itself overnight only where it can (`updatesItself`: its `kuvo/info` lists
+        /// `update`; a 0.7 machine's doesn't).
+        public static func waiting(for name: String, isMac: Bool, updatesItself: Bool) -> String {
+            if isMac { return "Kuvo Code on \(name) is older than this iPhone’s. Update it there, or let it finish an update under way. Nothing changes there meanwhile." }
+            let itself = updatesItself ? ", or by itself overnight" : ""
+            return "Kuvo Code on \(name) is older than this iPhone’s. It updates when a Mac with Kuvo Code connects to it\(itself). Nothing changes there meanwhile."
         }
 
         /// Why a Mac couldn't bring `name` up to date, and what to do. `why`: what went wrong, in a
