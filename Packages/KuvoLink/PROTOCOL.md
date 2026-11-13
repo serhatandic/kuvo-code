@@ -3748,7 +3748,8 @@ each of a comma-separated `CLAUDE_CONFIG_DIR`, else `~/.config/claude` and `~/.c
 Code's conversations there count whoever ran them, your Terminal or Claude's desktop app), never
 another tool's folders (Cowork's, claude-swap's, Pi's). It prices them as OpenUsage does (its supplement,
 LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
-hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A client reaches them as
+hourly, kept in the bridge's `usage/pricing`, only by a real box's bridge, in a Mac app's folder or
+a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
@@ -3812,8 +3813,8 @@ hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A clien
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
   dollars]], unknown?: [[slot, model]]}}`: `places`, the folders its logs are in, each 16 hex
-  characters of a hash of its computer (its machine ID: `/etc/machine-id` or D-Bus's on Linux, the
-  hardware UUID on a Mac, else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
+  characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
+  its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight
   35 days back, or past what it cut): the receiver keeps none older. Told as the receiver keeps it
   (`label` 100 characters, `provider` and model names 200), so the digests agree. As many as fit in

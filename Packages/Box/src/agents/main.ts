@@ -36,6 +36,7 @@ import { keeperEngine } from "../shared/engines"
 import { writeSecret } from "../shared/files"
 import { leftSignIns } from "./signin"
 import { commandLineOf } from "../shared/platform"
+import { isRealBridgeFolder } from "../shared/account"
 import { updateUnderWay } from "../shared/updating"
 import { spawn } from "node:child_process"
 import { bundleBuild } from "../shared/bundle"
@@ -290,8 +291,10 @@ limits.alsoServices = ENGINE_SERVICES
 // Shared with your other computers' boxes: each account read once across them, and listed on each.
 peers.limits = new LimitsPeers(limits, post, directory, join(home, "limits-peers.json"))
 // What each account used, by the quarter hour, from its agent's logs here, priced; shared the same
-// way. (Tests never fetch the price feeds: KUVO_TEST_PRICE_FEEDS=off, test-safety.js.)
-const noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off"
+// way. Prices come from the web only to a real box's bridge: never in a test, however it started
+// this (the Mac app's tests start it through the app; test-safety.js also says
+// KUVO_TEST_PRICE_FEEDS=off).
+const noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home)
 delete process.env.KUVO_TEST_PRICE_FEEDS
 const usageFolder = join(home, "usage")
 const claudeUsage = claudeSources(usageFolder)

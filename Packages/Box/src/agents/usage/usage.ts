@@ -423,11 +423,13 @@ export function placeOf(computer: string, folder: string): string {
 }
 
 /**
- * This computer, the same for every box on it and different from any other's: its machine ID (on
- * Linux `/etc/machine-id`, or D-Bus's; on a Mac its hardware UUID), else its name. It's only hashed
- * (`placeOf`), never told. Not the box's link key: two boxes on one Mac have two.
+ * This computer, the same for every box on it and different from any other's: on Linux its machine
+ * ID (`/etc/machine-id`, or D-Bus's) with its name (a machine cloned from one image can keep the
+ * image's ID); on a Mac its hardware UUID alone (its name can change with the network); else its
+ * name. It's only hashed (`placeOf`), never told. Not the box's link key: two boxes on one Mac
+ * have two.
  */
-export function thisComputer(platform: string = process.platform, read = (path: string) => readFileSync(path, "utf8"), macUUID = ioregUUID, name = hostname): string {
+export function thisComputer(platform: string = process.platform, read = (path: string) => readFileSync(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname): string {
   if (platform === "darwin") {
     const uuid = macUUID()
     if (uuid) return "mac:" + uuid
@@ -435,7 +437,7 @@ export function thisComputer(platform: string = process.platform, read = (path: 
     for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
       try {
         const id = read(path).trim()
-        if (/^[0-9a-fA-F]{16,}$/.test(id)) return "machine-id:" + id.toLowerCase()
+        if (/^[0-9a-fA-F]{16,}$/.test(id)) return "machine-id:" + id.toLowerCase() + "\n" + name()
       } catch {}
     }
   }
@@ -443,13 +445,25 @@ export function thisComputer(platform: string = process.platform, read = (path: 
 }
 
 let computer: string | undefined
-/** `thisComputer()`, worked out once. */
-export const ownComputer = () => (computer ??= thisComputer())
+/**
+ * `thisComputer()`, worked out once it's found (a Mac's `ioreg` that didn't answer is asked again
+ * next time, so two boxes on one Mac don't end up named differently).
+ */
+export function ownComputer(): string {
+  if (computer) return computer
+  const found = thisComputer()
+  if (process.platform !== "darwin" || found.startsWith("mac:")) computer = found
+  return found
+}
 
-function ioregUUID(): string | undefined {
+/** A Mac's hardware UUID, from what `ioreg -rd1 -c IOPlatformExpertDevice` says. */
+export function uuidOf(said: string | undefined): string | undefined {
+  return said ? /"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{16,})"/.exec(said)?.[1] : undefined
+}
+
+function ioreg(): string | undefined {
   try {
-    const said = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] })
-    return /"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{16,})"/.exec(said)?.[1]
+    return execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] })
   } catch {
     return undefined
   }

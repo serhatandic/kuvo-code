@@ -20269,7 +20269,7 @@ function placeOf(computer, folder) {
 `).update(computer).update(`
 `).update(real).digest("hex").slice(0, 16);
 }
-function thisComputer(platform = process.platform, read = (path) => readFileSync27(path, "utf8"), macUUID = ioregUUID, name = hostname) {
+function thisComputer(platform = process.platform, read = (path) => readFileSync27(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
   if (platform === "darwin") {
     const uuid = macUUID();
     if (uuid)
@@ -20279,18 +20279,28 @@ function thisComputer(platform = process.platform, read = (path) => readFileSync
       try {
         const id = read(path).trim();
         if (/^[0-9a-fA-F]{16,}$/.test(id))
-          return "machine-id:" + id.toLowerCase();
+          return "machine-id:" + id.toLowerCase() + `
+` + name();
       } catch {}
     }
   }
   return "host:" + name();
 }
 var computer;
-var ownComputer = () => computer ??= thisComputer();
-function ioregUUID() {
+function ownComputer() {
+  if (computer)
+    return computer;
+  const found = thisComputer();
+  if (process.platform !== "darwin" || found.startsWith("mac:"))
+    computer = found;
+  return found;
+}
+function uuidOf(said) {
+  return said ? /"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{16,})"/.exec(said)?.[1] : undefined;
+}
+function ioreg() {
   try {
-    const said = execFileSync2("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-    return /"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{16,})"/.exec(said)?.[1];
+    return execFileSync2("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
   } catch {
     return;
   }
@@ -30198,21 +30208,72 @@ function keeperEngine(root) {
   return named && there.includes(named) ? named : there.at(-1) ?? null;
 }
 
-// Packages/Box/src/shared/updating.ts
+// Packages/Box/src/shared/account.ts
+import { spawnSync as spawnSync3 } from "child_process";
 import fs8 from "fs";
+import os from "os";
 import path6 from "path";
+function homeFolder() {
+  return process.env.HOME || os.homedir();
+}
+var account;
+function accountEntry() {
+  if (account)
+    return account;
+  const uid = process.getuid?.() ?? -1;
+  let line;
+  if (process.platform === "darwin") {
+    line = spawnSync3("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout;
+  } else {
+    line = spawnSync3("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout;
+    if (!line?.trim()) {
+      try {
+        line = fs8.readFileSync("/etc/passwd", "utf8").split(`
+`).find((each) => each.split(":")[2] === String(uid));
+      } catch {}
+    }
+  }
+  const fields = line?.trim().split(":") ?? [];
+  let home = fields[process.platform === "darwin" ? 8 : 5] || "";
+  if (!path6.isAbsolute(home))
+    try {
+      home = os.userInfo().homedir;
+    } catch {
+      home = homeFolder();
+    }
+  account = { name: fields[0] || "", home };
+  return account;
+}
+function accountHome() {
+  return accountEntry().home;
+}
+function isRealBridgeFolder(folder, home = accountHome()) {
+  const located = (each) => {
+    try {
+      return fs8.realpathSync.native(each);
+    } catch {
+      return path6.resolve(each);
+    }
+  };
+  const parent = located(path6.dirname(folder));
+  return path6.basename(parent).toLowerCase().startsWith("run.kuvo.code") || parent === located(path6.join(home, ".kuvo-code"));
+}
+
+// Packages/Box/src/shared/updating.ts
+import fs9 from "fs";
+import path7 from "path";
 function updateUnderWay(run) {
-  const lock = path6.join(run, ".updating");
-  if (!fs8.existsSync(lock))
+  const lock = path7.join(run, ".updating");
+  if (!fs9.existsSync(lock))
     return false;
   let pid = null;
   try {
-    pid = Number(fs8.readFileSync(path6.join(lock, "pid"), "utf8"));
+    pid = Number(fs9.readFileSync(path7.join(lock, "pid"), "utf8"));
   } catch {}
   if (pid)
     return processRuns(pid, "kuvo-link");
   try {
-    return Date.now() - fs8.statSync(lock).mtimeMs < 60000;
+    return Date.now() - fs9.statSync(lock).mtimeMs < 60000;
   } catch {
     return false;
   }
@@ -30322,9 +30383,9 @@ class Store {
 }
 
 // Packages/Box/src/shared/hang.ts
-import fs9 from "fs";
+import fs10 from "fs";
 import net from "net";
-import path7 from "path";
+import path8 from "path";
 var LOOK_EVERY = 30000;
 var ANSWER_WITHIN = 20000;
 var HUNG_AFTER = 600000;
@@ -30430,21 +30491,21 @@ class HangWatch {
   }
   server() {
     try {
-      const { pid, port } = JSON.parse(fs9.readFileSync(this.options.record, "utf8"));
+      const { pid, port } = JSON.parse(fs10.readFileSync(this.options.record, "utf8"));
       return Number.isInteger(pid) && pid > 1 && Number.isInteger(port) && port > 0 ? { pid, port } : null;
     } catch {
       return null;
     }
   }
   stoppedOnPurpose() {
-    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs9.existsSync(path7.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs10.existsSync(path8.join(this.options.run, name)));
   }
   endedLately() {
-    const file = path7.join(this.options.run, `hung-${this.options.name}.json`);
-    if (!fs9.existsSync(file))
+    const file = path8.join(this.options.run, `hung-${this.options.name}.json`);
+    if (!fs10.existsSync(file))
       return [];
     try {
-      const times = JSON.parse(fs9.readFileSync(file, "utf8"));
+      const times = JSON.parse(fs10.readFileSync(file, "utf8"));
       return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
       return null;
@@ -30458,10 +30519,10 @@ class HangWatch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended too often lately, or there's no telling how often: it's left as it is, for you to restart.`);
       return;
     }
-    const file = path7.join(this.options.run, `hung-${this.options.name}.json`);
+    const file = path8.join(this.options.run, `hung-${this.options.name}.json`);
     try {
-      fs9.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
-      fs9.renameSync(`${file}.new`, file);
+      fs10.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
+      fs10.renameSync(`${file}.new`, file);
     } catch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
       return;
@@ -30879,7 +30940,7 @@ var engineAccounts = new EngineAccounts(() => link4.request("GET", "/api/credent
 var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join36(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
 limits.alsoServices = ENGINE_SERVICES;
 peers.limits = new LimitsPeers(limits, post, directory, join36(home3, "limits-peers.json"));
-var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off";
+var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home3);
 delete process.env.KUVO_TEST_PRICE_FEEDS;
 var usageFolder = join36(home3, "usage");
 var claudeUsage2 = claudeSources(usageFolder);
@@ -31080,4 +31141,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9f5e2df74f9faa6acda73b5a4dc26039626ee2954be780b190fe298e49276583
+// Built from Packages/Box/src/agents f5690734629a57c3bfdb4abab19e54d1000cd217b0f97745a0d585cef7de2d88

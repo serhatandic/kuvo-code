@@ -17,7 +17,8 @@ import type { Clock } from "../../src/agents/groups/peer"
 import { claudeLine, dedupClaude } from "../../src/agents/usage/claude-log"
 import { claudeSlots, daysIn } from "../../src/agents/usage/history"
 import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFrom, type PricingFetch } from "../../src/agents/usage/pricing"
-import { claudeSources, thisComputer, Usage, usageRoutes } from "../../src/agents/usage/usage"
+import { claudeSources, thisComputer, Usage, usageRoutes, uuidOf } from "../../src/agents/usage/usage"
+import { isRealBridgeFolder } from "../../src/shared/account"
 import { UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-usage-test-"))
@@ -243,6 +244,17 @@ describe("prices kept current", () => {
     store = new PricingStore(folder, null, () => at)
     expect(store.current().resolve("brand-new-model")?.input).toBe(2)
     rmSync(folder, { recursive: true, force: true })
+  })
+
+  test("only a real box's bridge fetches them, a Mac app's or a machine's: never one a test started in a folder of its own", () => {
+    const account = mkdtempSync(join(base, "account-"))
+    expect(isRealBridgeFolder(join(account, "Library", "Application Support", "run.kuvo.code", "agents"), account)).toBe(true)
+    expect(isRealBridgeFolder(join(account, "Library", "Application Support", "run.kuvo.code.debug", "agents"), account)).toBe(true)
+    expect(isRealBridgeFolder(join(account, ".kuvo-code", "agents"), account)).toBe(true)
+    // The Mac app's tests (`<their folder>/Support/agents`), a bridge test's, and a machine's own folder in another home.
+    expect(isRealBridgeFolder(join(account, "tests", "Support", "agents"), account)).toBe(false)
+    expect(isRealBridgeFolder(join(base, "bridge-test", "agents"), account)).toBe(false)
+    expect(isRealBridgeFolder(join(base, "elsewhere", ".kuvo-code", "agents"), account)).toBe(false)
   })
 
   test("new prices price the next round: a model that was unknown gets its dollars", async () => {
@@ -528,7 +540,16 @@ describe("across your computers", () => {
     writeFileSync(join(folder, "projects", "p", "log.jsonl"), reply("2026-11-12T09:00:00Z", "p1", "claude-opus-4-5", 100, 0))
     const named = (id: string) => thisComputer("linux", (path) => (path === "/etc/machine-id" ? id + "\n" : ""), () => undefined, () => "raspberrypi")
     expect(named("0123456789abcdef0123456789abcdef")).not.toBe(named("fedcba9876543210fedcba9876543210"))
+    // Two cloned from one image keep its machine ID, but not its name: still two.
+    const cloned = (name: string) => thisComputer("linux", () => "0123456789abcdef0123456789abcdef\n", () => undefined, () => name)
+    expect(cloned("ip-10-0-0-5")).not.toBe(cloned("ip-10-0-0-9"))
+    // A first boot's `uninitialized` isn't an ID: D-Bus's is taken; with neither, the name alone.
+    const dbus = (path: string) => (path === "/etc/machine-id" ? "uninitialized\n" : path === "/var/lib/dbus/machine-id" ? "ABCDEF0123456789ABCDEF0123456789\n" : "")
+    expect(thisComputer("linux", dbus, () => undefined, () => "pi")).toBe("machine-id:abcdef0123456789abcdef0123456789\npi")
     expect(thisComputer("linux", () => "", () => undefined, () => "raspberrypi")).toBe("host:raspberrypi")
+    // A Mac's, from what `ioreg` says; one that said nothing, its name.
+    expect(uuidOf('    "IOPlatformSerialNumber" = "C02XXXXXXXXX"\n    "IOPlatformUUID" = "1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D"\n')).toBe("1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D")
+    expect(thisComputer("darwin", () => "", () => uuidOf(undefined), () => "MacBook")).toBe("host:MacBook")
     const oneHome = mkdtempSync(join(base, "pi-one-"))
     const twoHome = mkdtempSync(join(base, "pi-two-"))
     const one = new PeerBox("one-key", "raspberrypi", relay, oneHome, [new TestClaude(oneHome, { id: "default", home: folder })], () => "eeeeeeeeeeeeeeee", now, undefined, named("0123456789abcdef0123456789abcdef"))
