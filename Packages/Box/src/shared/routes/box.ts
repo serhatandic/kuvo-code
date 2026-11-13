@@ -80,6 +80,7 @@ export const UPDATE = object({
   updating: nullable(STEP),
   blocked: nullable(string),
   "offered?": string,
+  "offerFailed?": object({ version: string, at: number, takenBack: bool, "message?": string }),
 });
 
 /** A step of moving this Mac's box into a home of its own (PROTOCOL.md, "Moving this Mac's box"). */

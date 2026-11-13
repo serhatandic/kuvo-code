@@ -147,7 +147,7 @@ export interface UpdateState {
   night?: string;
   /** A release offered from a folder here that failed as it was taken: its version, when, whether
    * it was put in place and taken back, and how many times in a row it failed. */
-  offerFailed?: { version: string; at: number; takenBack: boolean; tries?: number };
+  offerFailed?: { version: string; at: number; takenBack: boolean; tries?: number; message?: string };
 }
 
 /** A change to `run/update.json`: each field given, null to take it away. */
@@ -698,6 +698,9 @@ export function updateStatus(): UpdateStatus {
     updating: isUpdating() ? state.running ?? "checking" : null,
     blocked: updatesBlocked(),
     ...(offered ? { offered } : {}),
+    // How the release offered from a folder here last went, when taking it failed: its own outcome,
+    // apart from the night's (`last`), which Kuvo Code here goes by (#679).
+    ...(state.offerFailed ? { offerFailed: { version: state.offerFailed.version, at: state.offerFailed.at, takenBack: state.offerFailed.takenBack, ...(state.offerFailed.message ? { message: state.offerFailed.message } : {}) } } : {}),
   };
 }
 
@@ -844,7 +847,7 @@ export async function takeOffer(options: UpdateOptions = {}): Promise<UpdateOutc
   if (outcome.result === "failed") {
     const before = updateState().offerFailed;
     const tries = before?.version === version && !before.takenBack ? (before.tries ?? 1) + 1 : 1;
-    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack, tries } });
+    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack, tries, ...(outcome.message ? { message: outcome.message } : {}) } });
   }
   if (outcome.result === "updated" || outcome.result === "current") noteUpdate({ offerFailed: null });
   if (outcome.result === "updated" || outcome.result === "current" || takenBack) dropOffer();

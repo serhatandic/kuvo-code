@@ -251,9 +251,10 @@ import Testing
     }
 
     /// The box here taking the app's release as it stands (#679): blocked, it says why in its words;
-    /// its offer gone (refused while its night's update ran, say) and nothing under way, the release
-    /// is offered again; taking it failed, it says so; and once it has all this app needs, it's let
-    /// go. It never stays "Updating…" when it isn't.
+    /// its offer gone and nothing under way, the release is offered again; its night's update under
+    /// way, it waits, and that one failing isn't said as this release's (offered again instead);
+    /// taking the release offered failed (`offerFailed`), it says so; and once it has all this app
+    /// needs, it's let go. It never stays "Updating…" when it isn't.
     @Test func theBoxHeresUpdateIsFollowedAsItStands() async throws {
         var app: AppModel?
         let release = FileManager.default.temporaryDirectory.appending(path: "box-release-\(UUID().uuidString)")
@@ -297,10 +298,24 @@ import Testing
         try await until { asked("POST kuvo/box/update") == 2 }
         try await until { model.machines.gates.state(of: id) == .updating(detail: BoxGate.Words.thisMacTaking) }
 
-        // Taking it failed since: said so.
-        try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["last": ["at": 2_000, "result": "failed", "message": "Its new engine didn’t start."]]])
+        // Its night's update under way (an offer now is refused, as it updates already): it waits.
+        try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["updating": "installing"]])
         await looks.allow()
-        try await until { model.machines.gates.state(of: id) == .failed(BoxGate.Words.couldntUpdate("this Mac", why: "Its new engine didn’t start.")) }
+        try await until { model.machines.gates.state(of: id) == .updating(detail: BoxGate.Words.thisMacTaking) }
+        #expect(asked("POST kuvo/box/update") == 2)
+
+        // The night's failed (`last`): not this release's failure, which is offered again.
+        try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["last": ["at": 3_000, "result": "failed", "message": "The night’s update didn’t come up."]]])
+        await looks.allow()
+        try await until { asked("POST kuvo/box/update") == 3 }
+        #expect(model.machines.gates.state(of: id) == .updating(detail: BoxGate.Words.thisMacTaking))
+
+        // Taking the release offered failed before anything changed (it stays offered, and is
+        // tried again): said, in its words.
+        try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["offered": "0.9.0", "offerFailed": ["version": "0.9.0", "at": 4_000, "takenBack": false, "message": "Its engine couldn’t be downloaded."]]])
+        await looks.allow()
+        try await until { model.machines.gates.state(of: id) == .failed(BoxGate.Words.couldntUpdate("this Mac", why: "Its engine couldn’t be downloaded.")) }
+        #expect(asked("POST kuvo/box/update") == 3, "not offered again: it's there, tried again by the box")
 
         // Taken: let go.
         try boxHereAnswers(["kuvo/info": ["kind": "machine", "chats": chats, "features": BoxGate.required + ["box.update"]]])

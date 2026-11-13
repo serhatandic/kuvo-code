@@ -964,11 +964,13 @@ final class MachineEngine {
     /// What `kuvo/update` says of the box's own update (PROTOCOL.md "Updates"): the step under way,
     /// why it can't update, the release offered that waits, and how the last one went.
     struct UpdateStatus: Decodable {
-        struct Last: Decodable { var at: Double?; var result: String?; var message: String? }
+        /// How taking the release offered from a folder there last failed: its own outcome, apart
+        /// from the night's update.
+        struct OfferFailed: Decodable { var version: String?; var at: Double?; var takenBack: Bool?; var message: String? }
         var updating: String?
         var blocked: String?
         var offered: String?
-        var last: Last?
+        var offerFailed: OfferFailed?
     }
 
     private func updateStatus(of box: BoxClient) async -> UpdateStatus? {
@@ -981,9 +983,9 @@ final class MachineEngine {
     /// Following this Mac's box attached in place as it takes the release offered it: let go once
     /// it says it has all this app needs; ended with the connection. Each look also reads how its
     /// update stands: one it can't take (it's blocked, its engine is stopped on purpose, or taking
-    /// it failed) says why, in its words; an offer that's gone (taken back after a failure, or
-    /// refused while its night's update ran) is made again. Said, it's still looked at, and goes
-    /// back to updating once it can.
+    /// the release offered failed since: `offerFailed`, never the night's) says why, in its words;
+    /// an offer that's gone with no failure of its own (refused while its night's update ran) is
+    /// made again. Said, it's still looked at, and goes back to updating once it can.
     @ObservationIgnored private var updateFollow: Task<Void, Never>?
 
     private func followUpdate(of box: BoxClient, release: URL?, offered: Double) {
@@ -1010,8 +1012,10 @@ final class MachineEngine {
                     "Its engine is stopped: start it to update it"
                 } else if let blocked = status?.blocked {
                     blocked
-                } else if let last = status?.last, last.result == "failed", (last.at ?? 0) >= offeredAt, status?.offered == nil {
-                    last.message ?? "Taking the update failed"
+                } else if let failed = status?.offerFailed, (failed.at ?? 0) >= offeredAt {
+                    // Taking the release offered failed since it was offered (taken back, or before
+                    // anything changed, when it stays and is tried again): its words.
+                    failed.message ?? "Taking the update failed"
                 } else {
                     nil
                 }

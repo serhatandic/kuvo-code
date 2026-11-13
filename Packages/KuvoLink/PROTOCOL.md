@@ -2159,13 +2159,16 @@ did: the box keeps working as itself ("For released Macs").
   - What the new engine did during a trial that's rolled back is lost with it.
   - The coding agents' own data (`agents`) isn't kept for a rollback.
 - **State**: `run/update.json` holds `{latest, checked, last: {at, result, message?, from?, to?},
-  running?, trial?, night?, offerFailed?: {version, at}}`.
+  running?, trial?, night?, offerFailed?: {version, at, takenBack, tries?, message?}}`.
 - `kuvo/update`:
   - `GET` answers `{setUp, version, engine, latest, last, updating, blocked}`.
     `updating` is the step under way (`checking`, `downloading`, `downloading the engine`,
     `checking it`, `installing`, `starting`) or null. `blocked` is why it can't update, or null.
     `offered` is the version of a release offered from a folder here that waits to be taken, and
-    only there while one does.
+    only there while one does. `offerFailed` `{version, at, takenBack, message?}` is how taking such
+    a release last failed (taken back once it was in place, or before anything changed, when it
+    stays offered and is tried again), apart from the night's update (`last`); gone once one's
+    taken.
   - `POST {now: true}` starts one: 202 with the status, or 409 `{message}` when it's not set up,
     is blocked, or is updating already. Other methods answer 405: there's nothing to turn off.
   - A Mac does the same over SSH with `kuvo-link.js box update-status` and `update-now`.
@@ -2290,10 +2293,11 @@ such a box needs a newer Kuvo Code.
   {from}`; "offered already" counts, and so does one refused while it updates already). Its
   connection goes on, its engine used (a session waiting on you there can be answered: the box
   takes the release at its first quiet moment), its box's routes held ("Updating…"). Every ten
-  seconds it's read again (`kuvo/info`, and `kuvo/update`: `blocked`, `offered`, `last`) until it
-  has it all: one that's blocked, whose engine is stopped on purpose, or that failed to take it
-  says why in its own words; an offer that's gone (taken back, or refused while its night's update
-  ran) is made again. One that can't say what it has is held and asked again, never let through.
+  seconds it's read again (`kuvo/info`, and `kuvo/update`: `blocked`, `offered`, `offerFailed`)
+  until it has it all: one that's blocked, whose engine is stopped on purpose, or whose take of the
+  release offered failed since it was offered (`offerFailed`, never the night's `last`) says why in
+  its own words; an offer that's gone with no failure of its own (refused while its night's update
+  ran, say) is made again. One that can't say what it has is held and asked again, never let through.
   A box without `box.update`, a copy of the app without a release, or another refusal fails, saying
   why.
 - **A Mac, its own box**: while another version's keeper runs it (an older app's, making way for

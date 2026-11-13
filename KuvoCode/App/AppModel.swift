@@ -1097,8 +1097,9 @@ final class AppModel {
     private func boxEngineChanged(_ state: MacBoxRunner.Engine) {
         switch state {
         case .ready(let endpoint):
-            // (A newer keeper's box, say, in place of one an older app's keeper ran.)
-            followOwnBoxGate()
+            // (A newer keeper's box, say, in place of one an older app's keeper ran: looked at at
+            // once, not after the look under way waits its ten seconds.)
+            followOwnBoxGate(again: true)
             // Up again, somewhere new: connected anew (a start under way, waiting for it, takes it).
             if engine == .ready, api?.client.endpoint == endpoint { return }
             guard starting == nil else { return }
