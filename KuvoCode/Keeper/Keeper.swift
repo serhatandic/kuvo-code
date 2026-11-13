@@ -65,6 +65,8 @@ final class Keeper {
     /// move's state as it was then (its `state.json` changed since, Move Now asked say, it asks
     /// again at once).
     private var looksSinceAsked: Int?
+    /// One keeper at a time settling or moving (`OwnBoxMove.takeLock`), where this one took it.
+    private var moveLock: Int32?
     private var askedState: Date?
 
     init(box: MacBoxRunner = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface()),
@@ -95,6 +97,11 @@ final class Keeper {
             // box of the app's ran there again).
             var settled = false
             if let move = OwnBoxMove.forThisMac() {
+                // (One keeper at a time from here, before anything's settled: held for good.)
+                guard OwnBoxMove.takeLock() != nil else {
+                    log.info("Another keeper runs already")
+                    Darwin.exit(Exit.stopped.rawValue)
+                }
                 if await settledBeforeStart(move) == .retire { Darwin.exit(Exit.stopped.rawValue) }
                 settled = true
             }
@@ -167,6 +174,8 @@ final class Keeper {
         // (Settled as launchd started it, before its lock; a test's keeper, here.)
         if let move, !settled {
             settled = true
+            guard let lock = OwnBoxMove.takeLock() else { return finish(.stopped) }
+            moveLock = lock
             switch await move.settle() {
             case .retire: return finish(.stopped)
             case .wait:
@@ -216,6 +225,8 @@ final class Keeper {
         tools.stop()
         server.stop()
         KeeperRecord.forget(pid: getpid())
+        if let moveLock { close(moveLock) }
+        moveLock = nil
         if (try? String(contentsOf: KeeperRecord.run.appending(path: "box.pid"), encoding: .utf8)) == "\(getpid())" {
             try? FileManager.default.removeItem(at: KeeperRecord.run.appending(path: "box.pid"))
         }
@@ -231,7 +242,9 @@ final class Keeper {
         guard let command = KeeperControl.Command(rawValue: String(request.path.dropFirst())) else { return .init(status: 404) }
         guard request.method == (command == .status ? "GET" : "POST") else { return .init(status: 405) }
         // (Moving, the box is stopped: nothing it runs is started or told anything meanwhile.)
-        if moving, command != .status, command != .stop { return .init(status: 503) }
+        // (Nor stopped: what the move's doing would be cut short, and the box down until the next
+        // start; Stop Background Work is answered once it's done.)
+        if moving, command != .status { return .init(status: 503) }
         switch command {
         case .status:
             return .json(await status)

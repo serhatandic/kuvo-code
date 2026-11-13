@@ -210,7 +210,8 @@ final class OwnBoxMove {
         if underWayOnDisk || state == "moving" || state == "clearing" { return await resume() }
         if state == "done", said.answer["way"] as? String == "move" { return await finish(owed: said.answer["owed"] as? [String] ?? []) }
         // (A new Mac's box made there, with nothing moved: its helper starts it, never this keeper.)
-        if state == nil, OwnBoxHome.kind(in: folder) == "mac" { return await finish(owed: []) }
+        // (Switched off in Login Items, its helper stays off.)
+        if state == nil, OwnBoxHome.kind(in: folder) == "mac" { return await finish(owed: [], helperOnlyIfMissing: true) }
         return await wentBack()
     }
 
@@ -265,8 +266,8 @@ final class OwnBoxMove {
     /// Moved: what the box says the app's program still owes, done, each settled once it is, then
     /// this keeper unregistered (whatever's owed: launchd starting it again would only retire it
     /// again). The helper starts the box first, so it runs again as soon as it can.
-    private func finish(owed: [String]) async -> Next {
-        guard await helperRuns() else { return .wait }
+    private func finish(owed: [String], helperOnlyIfMissing: Bool = false) async -> Next {
+        guard await helperRuns(onlyIfMissing: helperOnlyIfMissing) else { return .wait }
         if stop(.helperLoaded) { return .wait }
         if owed.contains("keychain") {
             do {
@@ -277,24 +278,50 @@ final class OwnBoxMove {
                 return .wait
             }
             if stop(.originalsDeleted) { return .wait }
-            _ = await rehome(["--settled", "keychain"])
+            guard await settled("keychain") else { return .wait }
         }
-        // (Said before it goes: unregistering ends this process.)
-        if owed.contains("agent") { _ = await rehome(["--settled", "agent"]) }
+        // (Said before it goes, as unregistering ends this process: one that fails is tried again,
+        // from the next start, which unregisters whatever's owed.)
+        if owed.contains("agent") { guard await settled("agent") else { return .wait } }
         if let why = await identity.unregister() {
             log.error("The keeper's launch agent wasn't unregistered: \(why, privacy: .public)")
+            return .wait
         }
         log.notice("This Mac's box runs in its own home now: the keeper retires")
         return .retire
+    }
+
+    /// What's owed, settled with the box: whether it says so (or it wasn't owed any more).
+    private func settled(_ what: String) async -> Bool {
+        guard let said = await rehome(["--settled", what]), said.status == 0 else {
+            log.error("The box wasn't told \(what, privacy: .public) is settled: tried again later")
+            return false
+        }
+        return !((said.status_["owed"] as? [String])?.contains(what) ?? true)
+    }
+
+    /// A try given up on before the box's move began, counted by the box as its own refusals are,
+    /// so it waits before the next (and after three, for Move Now).
+    private func gaveUp(_ why: String) async {
+        log.error("This Mac's box didn't move: \(why, privacy: .public)")
+        _ = await rehome(["--failed", why])
     }
 
     /// The helper's launch agent in place and loaded, so launchd starts the box in its home now and
     /// at each login: whether it is. One loaded already is left running; `onlyIfMissing`, one in
     /// place at all is left as it is (switched off in Login Items, it stays off).
     private func helperRuns(onlyIfMissing: Bool = false) async -> Bool {
-        if let status = await box(["helper", "status"], ofHome: true), status.answer["agent"] as? Bool == true,
-           onlyIfMissing || status.answer["loaded"] as? Bool == true {
-            return true
+        if let status = await box(["helper", "status"], ofHome: true), status.answer["agent"] as? Bool == true {
+            if onlyIfMissing { return true }
+            // Loaded already: started if it isn't running (one that found the box moving went, and
+            // launchd leaves it so), left as it is if it is.
+            if status.answer["loaded"] as? Bool == true {
+                guard let said = await box(["helper", "start"], ofHome: true), said.status == 0 else {
+                    log.error("Kuvo Code Box wasn't started for this Mac's box: tried again later")
+                    return false
+                }
+                return true
+            }
         }
         guard let said = await box(["helper", "install", "--load", "--app", appID], ofHome: true), said.status == 0 else {
             log.error("Kuvo Code Box wasn't started for this Mac's box: tried again later")
@@ -310,11 +337,13 @@ final class OwnBoxMove {
     /// helper's launch agent put in place and loaded, so it runs there now and at each login. The
     /// app's, as it opens. Whether this Mac's box is in its home now, its helper there to start it.
     func makeNew() async -> Bool {
-        // Made already (a start cut short before its helper was put in place: put there now).
-        if OwnBoxHome.kind(in: folder) == "mac" { return await helperRuns(onlyIfMissing: true) }
-        // (A box of the app's ran in its folder: it moves instead, and the box says so; asked of
-        // the box only where its folder doesn't say it already.)
-        guard !Here.ownBoxRan(appBox: appBox) else { return false }
+        // The box says whether it's made already, or could be now (never while a move's under way,
+        // whose kind it writes before it's done), before its files are made for it.
+        guard let asked = await rehome(["--new", "--check"]) else { return false }
+        // Made already (a start cut short before its helper was put in place: put there now; one in
+        // place is left as it is, switched off in Login Items say).
+        if asked.answer["made"] as? Bool == true { return await helperRuns(onlyIfMissing: true) }
+        guard asked.answer["ready"] as? Bool == true else { return false }
         let release: URL
         do {
             release = try self.release()
@@ -323,11 +352,6 @@ final class OwnBoxMove {
             return false
         }
         defer { try? FileManager.default.removeItem(at: release) }
-        // (Never made where nothing would start it.)
-        guard FileManager.default.isExecutableFile(atPath: BoxHelperBundle.executable(of: BoxHelperBundle.installed(in: release)).path(percentEncoded: false)) else {
-            log.error("\(BoxHelperBundle.name, privacy: .public) isn't in this copy of Kuvo Code: this Mac's box is made in its folder")
-            return false
-        }
         guard let said = await rehome(["--new", "--release", release.path(percentEncoded: false)] + (keepsAwakeOff() ? ["--keeps-awake", "off"] : [])),
               said.result == "done" || said.result == "nothing" else { return false }
         log.notice("This Mac's box is made in its own home")
@@ -343,18 +367,20 @@ final class OwnBoxMove {
         do {
             release = try self.release()
         } catch {
-            log.error("The box's files for its home weren't made: \(error.localizedDescription, privacy: .public)")
+            await gaveUp("The box's files for its home weren't made: \(error.localizedDescription)")
             return .startOld
         }
         defer { try? FileManager.default.removeItem(at: release) }
-        // (Never moved without the helper that starts it there.)
-        guard FileManager.default.isExecutableFile(atPath: BoxHelperBundle.executable(of: BoxHelperBundle.installed(in: release)).path(percentEncoded: false)) else {
-            log.error("\(BoxHelperBundle.name, privacy: .public) isn't in this copy of Kuvo Code: this Mac's box stays where it is")
+        // The box's own files checked by the box before anything's copied (its helper among them:
+        // never moved where nothing would start it).
+        let ready = await rehome(["--ready", "--release", release.path(percentEncoded: false)])
+        guard ready?.answer["ready"] as? Bool == true else {
+            await gaveUp(ready?.answer["why"] as? String ?? "The box didn't say whether it's ready to move.")
             return .startOld
         }
         // Copies an earlier try left, taken away first: a copy starts afresh.
         if identity.copiesLeft(), let why = await identity.helper("uncopy") {
-            log.error("An earlier try's copies of this Mac's keys stay: \(why, privacy: .public)")
+            await gaveUp("An earlier try's copies of this Mac's keys couldn't be taken away: \(why)")
             return .startOld
         }
         do {
@@ -367,12 +393,12 @@ final class OwnBoxMove {
                 try identity.copyKeys()
             }
         } catch {
-            log.error("This Mac's keys weren't copied for its box: \(error.localizedDescription, privacy: .public)")
+            await gaveUp("This Mac's keys weren't copied for its box: \(error.localizedDescription)")
             return await wentBack()
         }
         if stop(.copied) { return .wait }
         if let why = await identity.helper("check") {
-            log.error("Kuvo Code Box couldn't read its copies of this Mac's keys: \(why, privacy: .public)")
+            await gaveUp("Kuvo Code Box couldn't read its copies of this Mac's keys: \(why)")
             return await wentBack()
         }
         if stop(.checked) { return .wait }
@@ -392,6 +418,24 @@ final class OwnBoxMove {
         }
         #endif
         return false
+    }
+
+    // MARK: One keeper at a time
+
+    /// Held by the keeper that settles or moves this Mac's box, for as long as it runs (a second, the
+    /// app kickstarting it while launchd has, goes): in the app's caches, never the box's folder in
+    /// the app's, which a moved box's keeper mustn't make again. Its descriptor, or nil while another
+    /// holds it.
+    static func takeLock() -> Int32? {
+        let folder = URL.cachesDirectory.appending(path: AppInfo.bundleID, directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let lock = open(folder.appending(path: "keeper-move.lock").path(percentEncoded: false), O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard lock >= 0 else { return nil }
+        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else {
+            close(lock)
+            return nil
+        }
+        return lock
     }
 
     // MARK: The real thing

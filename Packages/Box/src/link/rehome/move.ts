@@ -45,6 +45,17 @@ export const PROCESS_RECORD = /^(keeper\..*|serve\.json|served\.json|host\.json|
  * so a move waits for the upgrades a newer app runs as its box starts. */
 export const SERVED_FILE = "served.json";
 
+/** The box's release must bring its helper, which starts it in its home at login (#333 piece 4): a
+ * box moved or made there without it would start with nothing. */
+const RELEASE_HELPER = path.join("bin", "Kuvo Code Box.app", "Contents", "MacOS", "Kuvo Code Box");
+/** Why a release folder can't be a box's files in its home, or null. */
+function releaseRefusal(release: string | null): string | null {
+  const fileAt = (file: string) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
+  if (!release || !fileAt(path.join(release, "bin", "kuvo-start")) || !fileAt(path.join(release, "bin", "kuvo-link.js"))) return "The box's own files to put in its new home weren't given.";
+  if (!fileAt(path.join(release, RELEASE_HELPER))) return "Kuvo Code Box isn't in this copy of Kuvo Code, so nothing would start this Mac's box in its own home.";
+  return null;
+}
+
 /** What a move back says with nothing moved. */
 const NOT_MOVED = "This Mac's box hasn't moved: there's nothing to move back.";
 /** What a box that's in its own home says to a move: a machine's, on Linux. */
@@ -213,9 +224,9 @@ export function moveRefusal({ appFolder, home }: Folders, { appVersion, release,
   // (Asked whether it's ready, the files may not be said yet.)
   // (A copy of the app, a demo's or a test's, never moves into the real one's home.)
   if (located(home) === located(path.join(accountHome(), ".kuvo-code")) && path.basename(appFolder) !== "run.kuvo.code") return "Only Kuvo Code itself moves its box into ~/.kuvo-code: a copy moves into a home of its own.";
-  const fileAt = (file: string) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
-  if (release !== undefined && (!release || !fileAt(path.join(release, "bin", "kuvo-start")) || !fileAt(path.join(release, "bin", "kuvo-link.js")))) {
-    return "The box's own files to put in its new home weren't given.";
+  if (release !== undefined) {
+    const refusal = releaseRefusal(release);
+    if (refusal) return refusal;
   }
   // A box already in its home (#333 §3.7): no move, both keep running as they are. One its Mac
   // removed is set aside first.
@@ -692,22 +703,42 @@ export async function rehome(folders: Folders, options: MoveOptions = {}): Promi
 /** Why a new Mac's box can't be made in `home` from the start, or null: its release's files, the
  * engine the app downloaded, no box of the app's own ever in its folder (that one moves instead), and
  * none in `home` (one its Mac removed is set aside). */
-function newRefusal({ appFolder, home }: Folders, { release, engineData }: { release: string | null; engineData: string | undefined }): string | null {
-  const fileAt = (file: string) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
-  if (!release || !fileAt(path.join(release, "bin", "kuvo-start")) || !fileAt(path.join(release, "bin", "kuvo-link.js"))) return "The box's own files to put in its new home weren't given.";
+function newRefusal({ appFolder, home }: Folders, { release, engineData }: { release: string | null | undefined; engineData: string | undefined }): string | null {
+  if (release !== undefined) {
+    const refusal = releaseRefusal(release);
+    if (refusal) return refusal;
+  }
   if (appBoxRan(path.join(appFolder, "box"), engineData ?? path.join(appFolder, "opencode", "data", "opencode"))) return "Kuvo Code's own box is in its folder: it moves into its home instead.";
   if (located(home) === located(path.join(accountHome(), ".kuvo-code")) && path.basename(appFolder) !== "run.kuvo.code") return "Only Kuvo Code itself makes its box in ~/.kuvo-code: a copy makes it in a home of its own.";
-  const there = runsAt(home);
+  // (What a making cut short left isn't a box there: it's made again.)
+  const there = exists(newMarker(home)) ? "gone" : runsAt(home);
   if (there !== "gone" && (there === "running" || foundAt(home, false) !== null)) return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
   if (runningIn(path.join(home, "run")).length) return "Something is running in this Mac's ~/.kuvo-code: it's made there once that's stopped.";
   if (!listOf(path.join(appFolder, "engine")).length) return "The engine isn't downloaded yet: this Mac's box is made once it is.";
   return null;
 }
 
+/** Said while a new Mac's box is being made (`updates/rehome/new`): what a making cut short left is
+ * taken away as it's made again, never kept. */
+const newMarker = (home: string) => path.join(rehomeFolder(home), "new");
+/** What a new Mac's box's making puts in its home. */
+const MADE_NEW = ["bin", "bin.new", "engine", "engine.new", "box"];
+
+/** `rehome --new --check`: whether a new Mac's box is made in `home` already (`made`: its kind says
+ * so, with no move under way), or could be now (`ready`, the release aside), and why not. Changes
+ * nothing. */
+export function newReadiness(folders: Folders, { engineData }: { engineData?: string } = {}): { ready: boolean; made: boolean; why?: string } {
+  if (process.platform !== "darwin") return { ready: false, made: false, why: NOTHING_TO_MOVE };
+  if (moveUnderWay(folders.home)) return { ready: false, made: false, why: "A move of this Mac's box is under way: it's finished first." };
+  if (recordedKind(path.join(folders.home, "box", "kind")) === "mac" && !exists(newMarker(folders.home))) return { ready: false, made: true };
+  const why = newRefusal(folders, { release: undefined, engineData });
+  return why ? { ready: false, made: false, why } : { ready: true, made: false };
+}
+
 /** `rehome --new`: a new Mac's box, made in its home of its own from the start (#333 §3.7, §4.2), with
- * nothing to move: what's in `home` that isn't a box set aside in its trash (nothing deleted), the
- * release's files put in `bin`, the engine the app downloaded cloned beside them, Keep This Mac Awake
- * as the app has it, and `box/kind` last (until it's there, it's made again from the start). The
+ * nothing to move: what's in `home` that isn't a box set aside in its trash (nothing deleted; what a
+ * making cut short left, taken away), the release's files put in `bin`, the engine the app
+ * downloaded cloned beside them, Keep This Mac Awake as the app has it, and `box/kind` last. The
  * app's folder isn't changed. Made already, `nothing`. */
 export async function rehomeNew(folders: Folders, options: MoveOptions & { engineData?: string } = {}): Promise<RehomeOutcome> {
   const { appFolder, home } = folders;
@@ -716,7 +747,7 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
   // (Asked first without its lock, which makes its home: a Mac whose box moves instead gets none from asking.)
   const why = (): RehomeOutcome | null => {
     if (moveUnderWay(home)) return { result: "refused", message: "A move of this Mac's box is under way: it's finished first.", status: rehomeStatus(home) };
-    if (recordedKind(path.join(home, "box", "kind")) === "mac") return { result: "nothing", status: rehomeStatus(home) };
+    if (recordedKind(path.join(home, "box", "kind")) === "mac" && !exists(newMarker(home))) return { result: "nothing", status: rehomeStatus(home) };
     const refusal = newRefusal(folders, { release, engineData: options.engineData });
     return refusal ? { result: "refused", message: refusal, status: rehomeStatus(home) } : null;
   };
@@ -727,7 +758,10 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     const refused = why();
     if (refused) return refused;
     const now = Date.now();
-    // What's there that isn't a box (one its Mac removed, or what a try cut short left), aside.
+    // What a making cut short left, taken away; then what's there that isn't a box (one its Mac
+    // removed), aside.
+    if (exists(newMarker(home))) for (const name of MADE_NEW) fs.rmSync(path.join(home, name), { recursive: true, force: true });
+    writePrivate(newMarker(home), `${now}\n`);
     const aside = path.join(home, "trash", `earlier-box-${stamp(now)}`);
     const there = listOf(home).filter(name => name !== "updates" && name !== "trash").map(name => path.join(home, name))
       .concat(listOf(path.join(home, "updates")).filter(name => name !== "rehome").map(name => path.join(home, "updates", name)))
@@ -753,8 +787,19 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     fs.mkdirSync(box, { recursive: true, mode: 0o700 });
     if (options.keepsAwakeOff) setKeepsAwake(false, path.join(box, "work.json"));
     writePrivate(path.join(box, "kind"), "mac\n");
+    fs.rmSync(newMarker(home), { force: true });
     return { result: "done", status: rehomeStatus(home) };
   });
+}
+
+/** `rehome --failed <why>`: a try the keeper gave up on before the box's move began (the Keychain's
+ * copies made or read back, the release made), counted as the move's own refusals are: its tries and
+ * next try, and why, so `--ready` waits as it would after one. Never once a move's under way or done. */
+export function keeperFailed(home: string, message: string, now = Date.now()): boolean {
+  const record = readRecord(home);
+  if (moveUnderWay(home) || (record.state === "done" && record.way === "move")) return false;
+  noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + 1, nextTry: now + AFTER_A_FAILURE, failed: { at: now, step: "plan", message: message.slice(0, 500) }, asked: null });
+  return true;
 }
 
 /** `rehome --back`: the box in `home` moved back into the app's folder it came from. */

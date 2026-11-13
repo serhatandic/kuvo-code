@@ -7,12 +7,14 @@
 //   rehome <root> --resume                                      one that stopped part way, finished
 //   rehome <root> --back                                        moved back into the app's folder
 //   rehome <root> --new --release <folder> [--keeps-awake on|off]  a new Mac's box made there (no move)
+//   rehome <root> --new --check                                 whether it's made, or could be now
+//   rehome <root> --failed <why>                                a try the keeper gave up on, counted
 //   rehome <root> --status                                      how it stands (`kuvo/box/rehome`)
 //   rehome <root> --settled keychain|agent                      what the app owed it, done
 
 import path from "node:path";
 import { accountHome, located } from "../home";
-import { appFolderOf, homeOfRoot, NOTHING_TO_MOVE, rehome, rehomeBack, rehomeNew, rehomeReady, rehomeResume, settled, type RehomeOutcome } from "./move";
+import { appFolderOf, homeOfRoot, keeperFailed, newReadiness, NOTHING_TO_MOVE, rehome, rehomeBack, rehomeNew, rehomeReady, rehomeResume, settled, type RehomeOutcome } from "./move";
 import { moveUnderWay, rehomeStatus } from "./state";
 
 /** Each result's exit status: 0, start what's there; 1, it didn't move, start the box where it was;
@@ -20,7 +22,7 @@ import { moveUnderWay, rehomeStatus } from "./state";
  * lock, start nothing. */
 const EXIT: Record<RehomeOutcome["result"], number> = { done: 0, back: 0, nothing: 0, refused: 1, failed: 1, stuck: 3, waits: 4 };
 
-const USAGE = "Usage: kuvo-link.js rehome <root> [--new] [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent";
+const USAGE = "Usage: kuvo-link.js rehome <root> [--new] [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent | --new --check | --failed <why>";
 
 export async function rehomeCommand(root: string | undefined, args: string[]): Promise<number> {
   // (Whether something runs is told by its process, never taken from a pid alone, as `KUVO_BOX=mac`
@@ -61,6 +63,23 @@ export async function rehomeCommand(root: string | undefined, args: string[]): P
       say({ settled: settled(home, what), status: rehomeStatus(home) });
       return 0;
     }
+    if (args.includes("--failed")) {
+      const why = option("--failed");
+      if (!why) {
+        console.error(USAGE);
+        return 2;
+      }
+      say({ noted: keeperFailed(home, why), status: rehomeStatus(home) });
+      return 0;
+    }
+    if (args.includes("--new") && args.includes("--check")) {
+      let answer: ReturnType<typeof newReadiness>;
+      try { answer = newReadiness(folders(), { engineData: process.env.KUVO_ENGINE_DATA || undefined }); } catch (error) {
+        answer = { ready: false, made: false, why: error instanceof Error ? error.message : String(error) };
+      }
+      say(answer);
+      return 0;
+    }
     if (args.includes("--ready")) {
       say(await rehomeReady(home, appFolder(), { appVersion: process.env.KUVO_APP_VERSION || null, release: option("--release") }));
       return 0;
@@ -79,6 +98,23 @@ export async function rehomeCommand(root: string | undefined, args: string[]): P
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // (Asked whether it's ready: not, saying why.)
+    if (args.includes("--failed")) {
+      const why = option("--failed");
+      if (!why) {
+        console.error(USAGE);
+        return 2;
+      }
+      say({ noted: keeperFailed(home, why), status: rehomeStatus(home) });
+      return 0;
+    }
+    if (args.includes("--new") && args.includes("--check")) {
+      let answer: ReturnType<typeof newReadiness>;
+      try { answer = newReadiness(folders(), { engineData: process.env.KUVO_ENGINE_DATA || undefined }); } catch (error) {
+        answer = { ready: false, made: false, why: error instanceof Error ? error.message : String(error) };
+      }
+      say(answer);
+      return 0;
+    }
     if (args.includes("--ready")) {
       say({ ready: false, how: null, why: message, status: rehomeStatus(home) });
       return 0;

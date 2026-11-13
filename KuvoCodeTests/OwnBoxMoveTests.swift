@@ -204,6 +204,11 @@ import Testing
         #expect(try await keeper(unreadable).move() == .startOld)
         #expect(unreadable.did == ["copy", "helper check", "helper uncopy"])
         expectWhereItWas(unreadable)
+        // Counted by the box as a try of its own: the next waits (never a stop every ten minutes).
+        #expect(state["state"] as? String == "failed" && state["tries"] as? Int == 1)
+        #expect((state["failed"] as? [String: Any])?["message"] as? String == "Kuvo Code Box couldn't read its copies of this Mac's keys: unreadable: phone-link/key")
+        #expect(try await keeper(Identity()).isDue() == false)
+        try FileManager.default.removeItem(at: K.appending(path: "updates/rehome/state.json"))
 
         // The box refuses (something written where it moves from as it moved): gone back, and the
         // copies taken away.
@@ -215,10 +220,41 @@ import Testing
         #expect(state["state"] as? String == "failed")
         expectWhereItWas(refused)
 
-        // No helper in this copy of Kuvo Code: never moved where nothing would start it.
+        // No helper in this copy of Kuvo Code: never moved where nothing would start it, and the
+        // box says so before anything's copied.
+        try FileManager.default.removeItem(at: K.appending(path: "updates/rehome/state.json"))
         let noHelper = Identity()
         #expect(try await keeper(noHelper, releaseHasHelper: false).move() == .startOld)
         #expect(noHelper.did.isEmpty)
+        #expect((state["failed"] as? [String: Any])?["message"] as? String == "Kuvo Code Box isn't in this copy of Kuvo Code, so nothing would start this Mac's box in its own home.")
+        expectWhereItWas(noHelper)
+    }
+
+    /// Kuvo Code opened while the keeper moves its box, past the point the box's kind is in place
+    /// (or stopped there): the app makes nothing and starts no helper, and the keeper finishes the
+    /// move, back or on, its helper started only then.
+    @Test(arguments: ["after-place", "in-clear"])
+    func theAppOpeningDuringAMoveMakesNothingAndTheKeeperFinishesIt(_ point: String) async throws {
+        defer { done() }
+        try ranInItsFolder()
+        let identity = Identity()
+        OwnBoxMove.stopsAt = .moved
+        #expect(try await keeper(identity, environment: ["KUVO_TEST_REHOME_STOP": point]).move() == .wait)
+        OwnBoxMove.stopsAt = nil
+        #expect((try? String(contentsOf: K.appending(path: "box/kind"), encoding: .utf8)) == "mac\n")
+        // The app opens.
+        #expect(try await keeper(Identity()).makeNew() == false)
+        #expect(!exists(home.appending(path: "Library/LaunchAgents/run.kuvo.code.machine.plist")))
+        #expect(launchctlAsked.isEmpty)
+        // The keeper's next start.
+        let next = try await keeper(identity).settle()
+        if point == "in-clear" {
+            #expect(next == .retire)
+            try expectMoved(identity)
+        } else {
+            #expect(next == .startOld)
+            expectWhereItWas(identity)
+        }
     }
 
     /// The keeper killed at each of its own steps, then launchd starting it again: before the box
@@ -323,10 +359,26 @@ import Testing
         try ranInItsFolder()
         let identity = Identity()
         if !moves { identity.checkFails = "unreadable: vault/files" }
+        // What the move finds as it starts, once the keeper stopped its box for it: nothing of its
+        // box running (its records gone, its processes too), and its lock still held, so the app
+        // starts none meanwhile. (The box moved here is the test's own folder, not the one the
+        // keeper ran its box in, which the app's other tests share.)
+        var atTheMove: (records: [String], claimed: Bool)?
+        let stands = try self.keeper(identity)
+        let move = OwnBoxMove(root: stands.root, home: stands.home, appBox: stands.appBox, engineData: stands.engineData, engine: stands.engine,
+                              script: stands.script, appID: stands.appID, appVersion: stands.appVersion, keepsAwakeOff: stands.keepsAwakeOff,
+                              identity: stands.identity, release: {
+                                  let records = ["engine.json", "bridge.json", "serve.json"].filter { KeeperFollower.record($0) != nil }
+                                  let lock = open(KeeperRecord.run.appending(path: "box.lock").path(percentEncoded: false), O_RDWR | O_CLOEXEC)
+                                  defer { if lock >= 0 { close(lock) } }
+                                  atTheMove = (records, lock >= 0 && flock(lock, LOCK_EX | LOCK_NB) != 0)
+                                  return try stands.release()
+                              })
+        move.environment = stands.environment
         let keeper = Keeper(exits: { how in
             gone.how = how
             TestPulse.beat()
-        }, move: try self.keeper(identity))
+        }, move: move)
         defer {
             keeper.finish(.stopped)
             Keeper.clock = realClock
@@ -342,6 +394,9 @@ import Testing
         var engineStarts: Int { ((try? String(contentsOf: starts, encoding: .utf8)) ?? "").filter { $0 == "\n" }.count }
 
         await keeper.start()
+        if moves { try await until { gone.how != nil } } else { try await until { engineStarts == 2 } }
+        #expect(atTheMove?.records == [], "nothing of the keeper's box ran as it moved")
+        #expect(atTheMove?.claimed == true, "its lock held as it moved")
         if moves {
             try await until { gone.how != nil }
             #expect(gone.how == .stopped, "gone for good, as launchd leaves it")
@@ -379,6 +434,12 @@ import Testing
         try FileManager.default.removeItem(at: tools.appending(path: "loaded"))
         #expect(await move.makeNew())
         #expect(launchctlAsked.filter { $0.hasPrefix("bootstrap") }.count == 1)
+        // A keeper registered before (it never is for a box made there) finds it: it starts no box in
+        // the app's folder, leaves the helper as it is, and retires.
+        #expect(await move.settle() == .retire)
+        #expect(launchctlAsked.filter { $0.hasPrefix("bootstrap") || $0.hasPrefix("kickstart") }.count == 1, "the helper switched off stays off")
+        #expect(identity.did == ["unregister"])
+        #expect(!exists(appFolder.appending(path: "box/run")))
     }
 
     @Test func aMacWhoseAppsBoxRanInItsFolderGetsNoNewBoxItMovesInstead() async throws {

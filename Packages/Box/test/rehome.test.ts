@@ -203,6 +203,7 @@ function world(given: (w: World) => void = () => {}, { appFolder = "App Support"
   // The box's own files, as the app brings them.
   put(join(w.release, "bin", "kuvo-start"), "#!/bin/sh\n")
   put(join(w.release, "bin", "kuvo-link.js"), "// the link")
+  put(join(w.release, "bin", "Kuvo Code Box.app", "Contents", "MacOS", "Kuvo Code Box"), "the helper")
   given(w)
   return w
 }
@@ -402,7 +403,7 @@ test.if(mac)("the move puts this Mac's box in a home of its own, laid out as a m
   // Its run state, not its processes' records; its files from its release, not the app's bin.
   expect(readdirSync(join(K, "run")).sort()).toEqual(["fence", "link.json", "mac-link.json", "setup-card.json"])
   // (With what the app put in its box's bin that the release doesn't bring: its catalog.)
-  expect(readdirSync(join(K, "bin")).sort()).toEqual(["kuvo-link.js", "kuvo-start", "mcp-catalog.json"])
+  expect(readdirSync(join(K, "bin")).sort()).toEqual(["Kuvo Code Box.app", "kuvo-link.js", "kuvo-start", "mcp-catalog.json"])
   // The app's folder keeps only what's the app's; the originals are kept, for 30 days.
   expect(readdirSync(w.S).sort()).toEqual(["Browser", "bots.json"])
   const kept = moved.said!.status
@@ -544,6 +545,50 @@ test.if(mac)("a Mac whose app's box ran in its folder, or a box already in ~/.ku
   const noEngine = newMac(w => rmSync(join(w.S, "engine"), { recursive: true }))
   expect(rehome(noEngine, ["--new", "--release", noEngine.release]).said).toMatchObject({ result: "refused" })
   expect(existsSync(noEngine.K)).toBe(false)
+  // A release without the helper that would start it there: never made.
+  const noHelper = newMac(w => rmSync(join(w.release, "bin", "Kuvo Code Box.app"), { recursive: true }))
+  expect(rehome(noHelper, ["--new", "--release", noHelper.release]).said).toMatchObject({ result: "refused", message: "Kuvo Code Box isn't in this copy of Kuvo Code, so nothing would start this Mac's box in its own home." })
+  expect(existsSync(noHelper.K)).toBe(false)
+}, 60_000)
+
+test.if(mac)("asked whether a new Mac's box is made: never while a move is under way, whose kind is written before it's done", () => {
+  const fresh = newMac()
+  expect(rehome(fresh, ["--new", "--check"]).said).toEqual({ ready: true, made: false })
+  expect(existsSync(fresh.K)).toBe(false)
+  // A Mac whose box is moving, stopped once its kind is in place: neither made nor to make.
+  const moving = world()
+  expect(move(moving, { KUVO_TEST_REHOME_STOP: "after-place" }).signal).toBe("SIGKILL")
+  expect(readFileSync(join(moving.K, "box", "kind"), "utf8")).toBe("mac\n")
+  expect(rehome(moving, ["--new", "--check"]).said).toEqual({ ready: false, made: false, why: "A move of this Mac's box is under way: it's finished first." })
+  expect(rehome(moving, ["--new", "--release", moving.release]).said).toMatchObject({ result: "refused" })
+  // Moved: made.
+  rehome(moving, ["--resume"])
+  expect(move(moving).said).toMatchObject({ result: "done" })
+  expect(rehome(moving, ["--new", "--check"]).said).toEqual({ ready: false, made: true })
+}, 60_000)
+
+test.if(mac)("a new Mac's box whose making was cut short is made again, what it left taken away rather than kept", () => {
+  const w = newMac()
+  // Cut short: its files part way, no kind yet.
+  put(join(w.K, "updates", "rehome", "new"), "1\n")
+  put(join(w.K, "bin", "kuvo-start"), "#!/bin/sh\n")
+  put(join(w.K, "engine.new", "2.2.6", "opencode"), "part")
+  expect(rehome(w, ["--new", "--check"]).said).toEqual({ ready: true, made: false })
+  expect(rehome(w, ["--new", "--release", w.release]).said).toMatchObject({ result: "done" })
+  expect(readFileSync(join(w.K, "box", "kind"), "utf8")).toBe("mac\n")
+  expect(existsSync(join(w.K, "engine.new"))).toBe(false)
+  expect(existsSync(join(w.K, "trash"))).toBe(false)
+  expect(existsSync(join(w.K, "updates", "rehome", "new"))).toBe(false)
+}, 60_000)
+
+test.if(mac)("a try the keeper gave up on before the move began counts as one: the next waits an hour, three wait for Move Now", async () => {
+  const w = world()
+  const failed = rehome(w, ["--failed", "Your Keychain didn't give out phone-link/key."])
+  expect(failed.said).toMatchObject({ noted: true, status: { state: "failed", tries: 1, failed: { step: "plan", message: "Your Keychain didn't give out phone-link/key." } } })
+  expect(rehome(w, ["--ready"]).said).toMatchObject({ ready: false, why: "It tries again later." })
+  // Once moved, nothing the keeper says changes it.
+  expect(move(w).said).toMatchObject({ result: "done" })
+  expect(rehome(w, ["--failed", "late"]).said).toMatchObject({ noted: false, status: { state: "done" } })
 }, 60_000)
 
 test.if(mac)("a second resume waits for the lock the first holds, then finishes the move itself: back, as it stopped before clearing", async () => {

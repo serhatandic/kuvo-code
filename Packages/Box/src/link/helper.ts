@@ -100,18 +100,37 @@ export function installHelperAgent({ load, app }: { load: boolean; app: string }
   };
 }
 
-/** `helper install [--load] [--app <bundle ID>] | status`: one JSON line; 0 when done. */
+/** The helper's launch agent, loaded already, started now if it isn't running (`launchctl kickstart`,
+ * which leaves one running as it is): one that found the box moving went, and launchd leaves it so
+ * until it's asked. */
+export function startHelperAgent(): { started: boolean; message: string } {
+  const why = refusal();
+  if (why) return { started: false, message: why };
+  const tools = launchTools()!;
+  const started = spawnSync(tools.launchctl, ["kickstart", `gui/${process.getuid?.() ?? 0}/${LAUNCH_AGENT}`], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  return started.status === 0
+    ? { started: true, message: `${HELPER_NAME} runs this Mac's box.` }
+    : { started: false, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+}
+
+/** `helper install [--load] [--app <bundle ID>] | start | status`: one JSON line; 0 when done. */
 export function helperCommand(args: string[]): number {
   const [what, ...rest] = args;
   if (what === "status" && rest.length === 0) {
     console.log(JSON.stringify(helperStatus()));
     return 0;
   }
+  if (what === "start" && rest.length === 0) {
+    const done = startHelperAgent();
+    console.log(JSON.stringify(done));
+    if (!done.started) console.error(done.message);
+    return done.started ? 0 : 1;
+  }
   const appAt = rest.indexOf("--app");
   const app = appAt >= 0 ? rest[appAt + 1] : "run.kuvo.code";
   const known = rest.every((arg, index) => arg === "--load" || arg === "--app" || (index === appAt + 1 && appAt >= 0));
   if (what !== "install" || !known || !app || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(app)) {
-    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper status");
+    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper start | helper status");
     return 2;
   }
   const done = installHelperAgent({ load: rest.includes("--load"), app });

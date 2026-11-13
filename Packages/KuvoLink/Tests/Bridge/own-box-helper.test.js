@@ -108,6 +108,18 @@ test("helper install: a path with characters XML reserves is written as launchd 
   assert.equal(listed.stdout.trim(), where.K);
 });
 
+test("helper start: launchd starts the helper loaded already that went (it found the box moving), and leaves one running as it is", { skip: process.platform !== "darwin" && "only a Mac's box has the helper" }, () => {
+  const where = home("mac");
+  const done = helper(where, ["start"]);
+  assert.equal(done.status, 0, done.stderr);
+  assert.deepEqual(done.said, { started: true, message: "Kuvo Code Box runs this Mac's box." });
+  assert.deepEqual(read(path.join(where.home, "launchctl")).trim().split("\n"), [`kickstart gui/${process.getuid()}/run.kuvo.code.machine`]);
+  // Not a Mac's own box: nothing asked.
+  const machine = home("machine");
+  assert.equal(helper(machine, ["start"]).status, 1);
+  assert.equal(exists(path.join(machine.home, "launchctl")), false);
+});
+
 test("helper install refuses what isn't a Mac's own box in a home of its own, and writes nothing", () => {
   // A machine's box (its launch agent is the machines' own, /bin/sh).
   const machine = home("machine");
@@ -129,7 +141,7 @@ test("helper install refuses what isn't a Mac's own box in a home of its own, an
 
 test("helper says what it doesn't know", () => {
   const where = home("mac");
-  for (const args of [[], ["remove"], ["install", "--now"], ["install", "--app"], ["install", "--app", "not an id"], ["status", "--load"]]) {
+  for (const args of [[], ["remove"], ["install", "--now"], ["install", "--app"], ["install", "--app", "not an id"], ["status", "--load"], ["start", "--load"]]) {
     const done = helper(where, args);
     assert.equal(done.status, 2, args.join(" "));
     assert.match(done.stderr, /Usage: kuvo-link\.js helper install/);

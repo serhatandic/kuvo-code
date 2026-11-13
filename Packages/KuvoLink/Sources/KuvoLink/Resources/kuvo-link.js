@@ -39855,7 +39855,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "79bb842f15dd";
+var BRIDGE_VERSION = "fe461d1ed2f3";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -41463,6 +41463,21 @@ var BESIDE = [
 var APP_ATTACHMENTS = "Attachments";
 var PROCESS_RECORD = /^(keeper\..*|serve\.json|served\.json|host\.json|engine\.json|bridge\.json|link\.(pid|version|needed)|box\.(pid|lock)|.*\.pid|.*\.lock|\.updating|socket\.key|\.system-asking|engine-(output|stopped)|engine\.retry|agents-stopped|update-(trial|restore))$/;
 var SERVED_FILE = "served.json";
+var RELEASE_HELPER = path135.join("bin", "Kuvo Code Box.app", "Contents", "MacOS", "Kuvo Code Box");
+function releaseRefusal(release) {
+  const fileAt = (file) => {
+    try {
+      return fs130.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (!release || !fileAt(path135.join(release, "bin", "kuvo-start")) || !fileAt(path135.join(release, "bin", "kuvo-link.js")))
+    return "The box's own files to put in its new home weren't given.";
+  if (!fileAt(path135.join(release, RELEASE_HELPER)))
+    return "Kuvo Code Box isn't in this copy of Kuvo Code, so nothing would start this Mac's box in its own home.";
+  return null;
+}
 var NOT_MOVED = "This Mac's box hasn't moved: there's nothing to move back.";
 var NOTHING_TO_MOVE = "This machine's box is in its own home already: there's nothing to move.";
 var exists4 = (file) => {
@@ -41632,15 +41647,10 @@ function moveRefusal({ appFolder, home }, { appVersion, release, bridgeVersion =
     return `Something is running in this Mac's box (${running.join(", ")}): it moves once that's stopped.`;
   if (located(home) === located(path135.join(accountHome(), ".kuvo-code")) && path135.basename(appFolder) !== "run.kuvo.code")
     return "Only Kuvo Code itself moves its box into ~/.kuvo-code: a copy moves into a home of its own.";
-  const fileAt = (file) => {
-    try {
-      return fs130.statSync(file).isFile();
-    } catch {
-      return false;
-    }
-  };
-  if (release !== undefined && (!release || !fileAt(path135.join(release, "bin", "kuvo-start")) || !fileAt(path135.join(release, "bin", "kuvo-link.js")))) {
-    return "The box's own files to put in its new home weren't given.";
+  if (release !== undefined) {
+    const refusal = releaseRefusal(release);
+    if (refusal)
+      return refusal;
   }
   const there = runsAt(home);
   if (there !== "gone" && (there === "running" || foundAt2(home, false) !== null))
@@ -42075,20 +42085,16 @@ async function rehome(folders, options = {}) {
   });
 }
 function newRefusal({ appFolder, home }, { release, engineData }) {
-  const fileAt = (file) => {
-    try {
-      return fs130.statSync(file).isFile();
-    } catch {
-      return false;
-    }
-  };
-  if (!release || !fileAt(path135.join(release, "bin", "kuvo-start")) || !fileAt(path135.join(release, "bin", "kuvo-link.js")))
-    return "The box's own files to put in its new home weren't given.";
+  if (release !== undefined) {
+    const refusal = releaseRefusal(release);
+    if (refusal)
+      return refusal;
+  }
   if (appBoxRan(path135.join(appFolder, "box"), engineData ?? path135.join(appFolder, "opencode", "data", "opencode")))
     return "Kuvo Code's own box is in its folder: it moves into its home instead.";
   if (located(home) === located(path135.join(accountHome(), ".kuvo-code")) && path135.basename(appFolder) !== "run.kuvo.code")
     return "Only Kuvo Code itself makes its box in ~/.kuvo-code: a copy makes it in a home of its own.";
-  const there = runsAt(home);
+  const there = exists4(newMarker(home)) ? "gone" : runsAt(home);
   if (there !== "gone" && (there === "running" || foundAt2(home, false) !== null))
     return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
   if (runningIn(path135.join(home, "run")).length)
@@ -42096,6 +42102,18 @@ function newRefusal({ appFolder, home }, { release, engineData }) {
   if (!listOf(path135.join(appFolder, "engine")).length)
     return "The engine isn't downloaded yet: this Mac's box is made once it is.";
   return null;
+}
+var newMarker = (home) => path135.join(rehomeFolder(home), "new");
+var MADE_NEW = ["bin", "bin.new", "engine", "engine.new", "box"];
+function newReadiness(folders, { engineData } = {}) {
+  if (process.platform !== "darwin")
+    return { ready: false, made: false, why: NOTHING_TO_MOVE };
+  if (moveUnderWay(folders.home))
+    return { ready: false, made: false, why: "A move of this Mac's box is under way: it's finished first." };
+  if (recordedKind(path135.join(folders.home, "box", "kind")) === "mac" && !exists4(newMarker(folders.home)))
+    return { ready: false, made: true };
+  const why = newRefusal(folders, { release: undefined, engineData });
+  return why ? { ready: false, made: false, why } : { ready: true, made: false };
 }
 async function rehomeNew(folders, options = {}) {
   const { appFolder, home } = folders;
@@ -42105,7 +42123,7 @@ async function rehomeNew(folders, options = {}) {
   const why = () => {
     if (moveUnderWay(home))
       return { result: "refused", message: "A move of this Mac's box is under way: it's finished first.", status: rehomeStatus(home) };
-    if (recordedKind(path135.join(home, "box", "kind")) === "mac")
+    if (recordedKind(path135.join(home, "box", "kind")) === "mac" && !exists4(newMarker(home)))
       return { result: "nothing", status: rehomeStatus(home) };
     const refusal = newRefusal(folders, { release, engineData: options.engineData });
     return refusal ? { result: "refused", message: refusal, status: rehomeStatus(home) } : null;
@@ -42118,6 +42136,11 @@ async function rehomeNew(folders, options = {}) {
     if (refused)
       return refused;
     const now = Date.now();
+    if (exists4(newMarker(home)))
+      for (const name of MADE_NEW)
+        fs130.rmSync(path135.join(home, name), { recursive: true, force: true });
+    writePrivate(newMarker(home), `${now}
+`);
     const aside = path135.join(home, "trash", `earlier-box-${stamp4(now)}`);
     const there = listOf(home).filter((name) => name !== "updates" && name !== "trash").map((name) => path135.join(home, name)).concat(listOf(path135.join(home, "updates")).filter((name) => name !== "rehome").map((name) => path135.join(home, "updates", name))).concat(listOf(path135.join(home, "trash")).filter((name) => !name.startsWith("earlier-box-")).map((name) => path135.join(home, "trash", name)));
     for (const file of there.sort()) {
@@ -42141,8 +42164,16 @@ async function rehomeNew(folders, options = {}) {
       setKeepsAwake(false, path135.join(box, "work.json"));
     writePrivate(path135.join(box, "kind"), `mac
 `);
+    fs130.rmSync(newMarker(home), { force: true });
     return { result: "done", status: rehomeStatus(home) };
   });
+}
+function keeperFailed(home, message, now = Date.now()) {
+  const record = readRecord(home);
+  if (moveUnderWay(home) || record.state === "done" && record.way === "move")
+    return false;
+  noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + 1, nextTry: now + AFTER_A_FAILURE, failed: { at: now, step: "plan", message: message.slice(0, 500) }, asked: null });
+  return true;
 }
 async function rehomeBack(home, options = {}) {
   const rewriter = options.rewriter ?? PATH_REWRITER;
@@ -42272,7 +42303,7 @@ function appFolderOf(appBox, home) {
 
 // Packages/Box/src/link/rehome/command.ts
 var EXIT = { done: 0, back: 0, nothing: 0, refused: 1, failed: 1, stuck: 3, waits: 4 };
-var USAGE = "Usage: kuvo-link.js rehome <root> [--new] [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent";
+var USAGE = "Usage: kuvo-link.js rehome <root> [--new] [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent | --new --check | --failed <why>";
 async function rehomeCommand(root, args) {
   delete process.env.KUVO_BOX;
   const option = (name) => args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined;
@@ -42313,6 +42344,25 @@ async function rehomeCommand(root, args) {
       say({ settled: settled(home, what), status: rehomeStatus(home) });
       return 0;
     }
+    if (args.includes("--failed")) {
+      const why = option("--failed");
+      if (!why) {
+        console.error(USAGE);
+        return 2;
+      }
+      say({ noted: keeperFailed(home, why), status: rehomeStatus(home) });
+      return 0;
+    }
+    if (args.includes("--new") && args.includes("--check")) {
+      let answer;
+      try {
+        answer = newReadiness(folders(), { engineData: process.env.KUVO_ENGINE_DATA || undefined });
+      } catch (error) {
+        answer = { ready: false, made: false, why: error instanceof Error ? error.message : String(error) };
+      }
+      say(answer);
+      return 0;
+    }
     if (args.includes("--ready")) {
       say(await rehomeReady(home, appFolder(), { appVersion: process.env.KUVO_APP_VERSION || null, release: option("--release") }));
       return 0;
@@ -42326,6 +42376,25 @@ async function rehomeCommand(root, args) {
     return EXIT[outcome.result];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (args.includes("--failed")) {
+      const why = option("--failed");
+      if (!why) {
+        console.error(USAGE);
+        return 2;
+      }
+      say({ noted: keeperFailed(home, why), status: rehomeStatus(home) });
+      return 0;
+    }
+    if (args.includes("--new") && args.includes("--check")) {
+      let answer;
+      try {
+        answer = newReadiness(folders(), { engineData: process.env.KUVO_ENGINE_DATA || undefined });
+      } catch (error) {
+        answer = { ready: false, made: false, why: error instanceof Error ? error.message : String(error) };
+      }
+      say(answer);
+      return 0;
+    }
     if (args.includes("--ready")) {
       say({ ready: false, how: null, why: message, status: rehomeStatus(home) });
       return 0;
@@ -49857,17 +49926,32 @@ function installHelperAgent({ load, app }) {
     message: loaded ? `${HELPER_NAME} runs this Mac's box now, and at login.` : `${HELPER_NAME} starts this Mac's box at login, but launchd didn't start it now: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.`
   };
 }
+function startHelperAgent() {
+  const why = refusal3();
+  if (why)
+    return { started: false, message: why };
+  const tools = launchTools();
+  const started = spawnSync12(tools.launchctl, ["kickstart", `gui/${process.getuid?.() ?? 0}/${LAUNCH_AGENT}`], { encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
+  return started.status === 0 ? { started: true, message: `${HELPER_NAME} runs this Mac's box.` } : { started: false, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+}
 function helperCommand(args) {
   const [what, ...rest] = args;
   if (what === "status" && rest.length === 0) {
     console.log(JSON.stringify(helperStatus()));
     return 0;
   }
+  if (what === "start" && rest.length === 0) {
+    const done = startHelperAgent();
+    console.log(JSON.stringify(done));
+    if (!done.started)
+      console.error(done.message);
+    return done.started ? 0 : 1;
+  }
   const appAt = rest.indexOf("--app");
   const app = appAt >= 0 ? rest[appAt + 1] : "run.kuvo.code";
   const known = rest.every((arg, index) => arg === "--load" || arg === "--app" || index === appAt + 1 && appAt >= 0);
   if (what !== "install" || !known || !app || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(app)) {
-    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper status");
+    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper start | helper status");
     return 2;
   }
   const done = installHelperAgent({ load: rest.includes("--load"), app });
@@ -50787,7 +50871,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | helper install|status | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | helper install|start|status | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }
