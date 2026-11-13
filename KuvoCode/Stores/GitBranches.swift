@@ -58,15 +58,15 @@ nonisolated extension Workspace.Worktree {
         case failed(String)
     }
 
+    /// Merge into… on this Mac while Kuvo Code finishes an update: its background service moves to
+    /// the new version once the work that's running ends.
+    static let mergeAfterUpdate = "Kuvo Code on this Mac is finishing an update. Merge into… works again once the work that’s running now ends; try again then."
+
     /// Merges what's committed on the worktree's branch (`place`: the session's folder in it) into
     /// the branch it was made from, in the project's folder. Its box says whether it can go (the
     /// project's folder on that branch and not in the middle of a merge of yours, the work
     /// committed, something new in it), and takes back a merge that conflicts. `author`: your
     /// shell's git author, for a merge commit.
-    /// Merge into… on this Mac while Kuvo Code finishes an update: its background service moves to
-    /// the new version once the work that's running ends.
-    static let mergeAfterUpdate = "Kuvo Code on this Mac is finishing an update. Merge into… works again once the work that’s running now ends; try again then."
-
     @concurrent func mergeBack(at place: GitPlace, author: [String: String]) async -> MergeOutcome {
         struct Asked: Encodable { let directory: String; let into: String?; let author: [String: String] }
         struct Answer: Decodable { var into: String?; var message: String?; var conflicts: [String]? }
@@ -78,12 +78,11 @@ nonisolated extension Workspace.Worktree {
             let into = answer?.into ?? base ?? "the project’s branch"
             if (200..<300).contains(status) { return .merged(into: into) }
             if let conflicts = answer?.conflicts, !conflicts.isEmpty { return .conflict(conflicts, into: into) }
-            // COMPAT(beta.1 merge-older-box): says why Merge into… waits while an older box (this Mac's after an update, or a machine's not updated yet) has no such route. Goes when 0.8.0 ships.
             // A box from before Merge into… (bridge 0.9.143) has no such route, nor, from before
-            // #341, merges without a branch named. This Mac's own is one only after an update, while
-            // the work under way ends (its keeper makes way then); a machine takes this Mac's as it
-            // connects, so only one not updated since.
+            // #341, merges without a branch named. A machine takes this Mac's as it connects, so
+            // only one not updated since.
             if status == 404 && answer?.message == nil || status == 400 && base == nil {
+                // COMPAT(beta.1 merge-older-box): says Merge into… waits while this Mac's older box runs on after an update, until the work under way ends (its keeper makes way then). Goes when 0.8.0 ships.
                 guard let machine = place.machine else { return .failed(Self.mergeAfterUpdate) }
                 return .failed("\(machine) needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac.")
             }

@@ -2349,8 +2349,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   agent left running, as Stop over the Mac's composer does: SIGTERM to its process group, so the
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
   engine's own remove (which deletes the output, and the agent hears the command wasn't found).
-  Answers `200 {"stopped": "signal"}` or `200 {"stopped": "removed"}`, or `404 {}` when no such
-  command runs. A client sends `x-opencode-directory`, the session's folder, percent-encoded as
+  Answers `200 {"stopped": "signal"}` or `200 {"stopped": "removed"}`, `404 {}` when no such
+  command runs, `503 {"message"}` when neither the engine nor the coding agents' bridge answered
+  (none to say whether it runs), or `422 {"message"}` when it runs and neither the signal nor the
+  remove went. A client sends `x-opencode-directory`, the session's folder, percent-encoded as
   the engine's API takes it, for the engine to find it there; the Mac's Stop asks this of the box the session is
   on, its own too. The engine's commands, and a coding agent's (`shl_…`, through their bridge: bridge
   0.9.64; while the engine is down too, from 0.9.66). Every box does it for its own, a machine's
@@ -2966,9 +2968,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   "starting"}` while it starts, with the app or again after an update, and `503 {"message"}`
   once it can't: a client keeps loading for the first, and says it can't reach it for the
   second.) Commit, push and Merge into… run your hooks and sign-ins with none of the box's own
-  variables (`BUN_*`, `KUVO_*`, `OPENCODE_*`), and on a Mac with your login shell's environment
-  as it is now (read again once a minute old), as a terminal would; on Linux, the one the box
-  started with. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
+  variables (Bun's `BUN_BE_BUN` and `BUN_RUNTIME_TRANSPILER_CACHE_PATH`, `KUVO_*`, `OPENCODE_*`),
+  and on a Mac with your login shell's environment as it is now on top (read again once it's a
+  minute old, waiting a second at most for that; never its `DYLD_*`, `BUN_*` or `NODE_OPTIONS`),
+  as a terminal would; on Linux, the one the box started with. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
   `staged`, `branch`. `404 {"message"}` for a folder that isn't there, `400` for a scope or a
   file that makes no sense (a file is a path in the repository, never absolute or climbing out).
   - `POST kuvo/git/changes {"directory", "scope"?, "base"?}` → `{"repository": false}` outside a
@@ -6215,7 +6218,12 @@ repository written by anything.
 
 - Every git the box runs in a repository gets `-c core.fsmonitor=false -c core.pager=cat -c
   log.showSignature=false`, and its diffs (`diff`, `log`, `show`, `stash show`) `--no-ext-diff`.
-  (An empty `diff.external` would break them, so it isn't set.)
+  (An empty `diff.external` would break them, so it isn't set.) On a Mac, `-c core.fsmonitor=true`
+  follows when the last `core.fsmonitor` any settings give is a yes (git's own watcher, which runs
+  no program they name; never when they name one), for all but the commands that only read names
+  and objects: a big repository's reads stay quick. Not on Linux, whose git has no watcher of its
+  own (and before 2.36 runs a program named `true`). git starts its watcher (`git
+  fsmonitor--daemon`) for the repository then, and it runs on as it would for your terminal.
 - What the box does by itself (Changes' reads, Undo's snapshots, branch backups and taking one
   back, reviews' scopes, voice and artifacts' reads of what a turn changed, naming a worktree's
   branch) also gets `-c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c
@@ -6505,7 +6513,6 @@ can go three months after 0.8.0 ships.
   Kuvo Code's own tools that every box answers since `agent-tools.own` ("Agents' tools"): the newer
   app runs those calls with its own `kuvo-link.js box route`, once each, meanwhile.
   <!-- compat: beta.1 agent-tools-own -->
-- Its keeper's box, the same, has no Merge into… (`kuvo/git/merge`, 404), as a machine's box not
-  updated since an older Mac set it up hasn't (nor, from before #341, one without `into`, 400):
-  the newer app says Merge into… works again once the work under way ends there, or once the
-  machine updates. <!-- compat: beta.1 merge-older-box -->
+- Its keeper's box, the same, has no Merge into… (`kuvo/git/merge`, 404; nor, from before #341,
+  one without `into`, 400): the newer app says Merge into… works again once the work under way
+  ends. <!-- compat: beta.1 merge-older-box -->

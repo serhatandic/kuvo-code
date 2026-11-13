@@ -23,10 +23,18 @@ final class BoxProcess {
     static var integrations: URL { AppInfo.supportDirectory.appending(path: "integrations") }
 
     /// Where it's reached while it runs.
-    private(set) var endpoint: ServerEndpoint?
+    private(set) var endpoint: ServerEndpoint? {
+        didSet { if (oldValue == nil) != (endpoint == nil) { availability.note(up: endpoint != nil, failing: failure != nil) } }
+    }
     /// Why it isn't running: it can't start, or it keeps stopping, and says if it's tried again.
     private(set) var failure: String? {
-        didSet { if (oldValue == nil) != (failure == nil) { PhoneLink.boxFailing.withLock { [failing = failure != nil] in $0 = failing } } }
+        didSet { if (oldValue == nil) != (failure == nil) { availability.note(up: endpoint != nil, failing: failure != nil) } }
+    }
+    /// Whether it's starting, as what it answers while it isn't up says (`PhoneLink.boxUnavailable`).
+    @ObservationIgnored let availability: BoxAvailability
+
+    init(availability: BoxAvailability = PhoneLink.boxAvailability) {
+        self.availability = availability
     }
     /// Whether its last start was refused because what it runs isn't what it was (`BoxIntegrity`):
     /// then nothing else runs the box's script with the engine's Bun either.

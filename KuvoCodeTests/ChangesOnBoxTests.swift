@@ -69,6 +69,32 @@ import Testing
             == "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
     }
 
+    /// What says it's starting is its process: until it says why it isn't running, and for a
+    /// minute at most when it never does (its keeper hung), after which Changes says it can't
+    /// reach it.
+    @Test func thisMacsBoxReadsAsStartingOnlyUntilItSaysWhyNotOrAMinuteGoesBy() async throws {
+        let availability = BoxAvailability()
+        let process = BoxProcess(availability: availability)
+        let changes = { ProjectChanges(directory: self.repo.path) { id in
+            BoxClient(box: id, transport: LocalBox { _ in PhoneLink.boxUnavailable(starting: availability.isStarting()) })
+        } }
+        process.follow(nil, failure: nil)
+        let waiting = changes()
+        await waiting.refresh()
+        #expect(!waiting.isLoaded, "starting: still loading")
+
+        process.follow(nil, failure: "Kuvo Code’s background service couldn’t start.")
+        let failed = changes()
+        await failed.refresh()
+        #expect(failed.shown == .waiting, "said why: out of reach")
+
+        // Starting again (the keeper tried once more), and then nothing more for over a minute.
+        process.follow(nil, failure: nil)
+        let started = ContinuousClock.now
+        #expect(availability.isStarting(now: started))
+        #expect(!availability.isStarting(now: started + BoxAvailability.startsWithin + .seconds(1)))
+    }
+
     /// Merge into… while an older background service runs on after an update (until the work under
     /// way ends): says so in plain words, rather than asking to connect to this Mac.
     @Test func mergeIntoWhileAnOlderBackgroundServiceRunsOnSaysItsFinishingAnUpdate() async throws {
