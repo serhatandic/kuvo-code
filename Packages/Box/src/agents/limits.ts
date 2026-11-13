@@ -280,6 +280,25 @@ export class Limits {
     return [...new Map(all.filter(n => this.now() - n.at < 24 * 60 * MINUTE).map(n => [n.id, n])).values()].sort((a, b) => a.at - b.at)
   }
 
+  /** Only a current direct account holder forwards a fact; peers never decide it again. */
+  pushableNotices(): UsageNotice[] {
+    const own = this.list(false)
+    return this.notices().filter(n => {
+      if (n.forwarder) return this.peers?.ownsPush(n.forwarder) ?? n.forwarder === this.ownKey()
+      const identity = n.row.startsWith(`${n.service}#`) ? n.row.slice(n.service.length + 1) : undefined
+      if (!identity) return own.some(a => a.notices?.some(each => each.id === n.id))
+      return own.some(a => a.service === n.service && a.identity === identity) && (!this.peers || this.peers.ownsPush(this.peers.forwarder(n.service, identity) ?? ""))
+    })
+  }
+
+  deliverNotices(notices: UsageNotice[]) {
+    const pushes = new Set(this.pushableNotices().map(n => n.id))
+    for (const push of [false, true]) {
+      const facts = notices.filter(n => pushes.has(n.id) === push)
+      if (facts.length) emit("kuvo.usage.notices", { notices: facts, push })
+    }
+  }
+
   /** Every account across your computers, one row each (`limits-rows.ts`): this box's first. */
   rows(): LimitRow[] {
     const own = this.list(false)
@@ -658,7 +677,11 @@ export class Limits {
     const settings = this.settings?.values()
     const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false }
     const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service)
-    if (disabled) { entry.noticeState = {}; return }
+    const dormant = (state: NoticeState): NoticeState => ({ ...state, previous: "untracked", fired: [], under: false, primed: false })
+    if (disabled) {
+      entry.noticeState = Object.fromEntries(Object.entries(entry.noticeState ?? {}).map(([id, state]) => [id, dormant(state)]))
+      return
+    }
     const peers = entry.identity ? this.peers?.noticeStates(account.service, entry.identity) ?? [] : []
     entry.noticeState ??= {}
     const siblings = entry.identity ? [...this.entries.values()].filter(e => e !== entry && e.identity === entry.identity) : []
@@ -669,19 +692,27 @@ export class Limits {
     const row = entry.identity ? `${account.service}#${entry.identity}` : `${this.ownKey()}/${account.provider}`
     const created: UsageNotice[] = []
     for (const window of entry.windows.filter(w => ids.includes(w.id))) {
-      if (settings?.layout && !settings.layout.placed.includes(metricID(account.service, window))) { delete entry.noticeState[window.id]; continue }
+      if (settings?.layout && !settings.layout.placed.includes(metricID(account.service, window))) {
+        if (entry.noticeState[window.id]) entry.noticeState[window.id] = dormant(entry.noticeState[window.id]!)
+        continue
+      }
       const previous = entry.noticeState[window.id] ?? initialState()
       const result = transitions(meter(window, this.now()), (100 - window.used * 100) / 100, window.resetsAt, previous, toggles)
       result.state.fired.push(...result.fire)
       entry.noticeState[window.id] = { ...result.state, read: window.read }
-      for (const milestone of result.fire) created.push(newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]!))
+      for (const milestone of result.fire) {
+        const notice = newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]!)
+        const forwarder = entry.identity ? this.peers?.forwarder(account.service, entry.identity) ?? this.ownKey() : this.ownKey()
+        if (forwarder) notice.forwarder = forwarder
+        created.push(notice)
+      }
     }
     const present = new Set(entry.windows.filter(w => !settings?.layout || settings.layout.placed.includes(metricID(account.service, w))).map(w => w.id))
-    for (const id of Object.keys(entry.noticeState)) if (!present.has(id)) delete entry.noticeState[id]
+    for (const id of Object.keys(entry.noticeState)) if (!present.has(id)) entry.noticeState[id] = dormant(entry.noticeState[id]!)
     entry.notices = [...(entry.notices ?? []), ...created].filter(n => this.now() - n.at < 24 * 60 * MINUTE).slice(-100)
     // Persist the decisions before telling anyone. Delivery failure is retried by each client's ID journal.
     this.save()
-    if (created.length) emit("kuvo.usage.notices", { notices: created, push: true })
+    if (created.length) this.deliverNotices(created)
   }
 
   /** Accounts removed since: their records go. */
@@ -768,7 +799,7 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
  */
 export async function limitsRoutes(limits: Limits | undefined, method: string, rest: string[]): Promise<Response> {
   if (!limits) return json({ message: "Plan limits aren't read on this computer." }, 503)
-  const answer = () => json({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notices: limits.notices(), ownNotices: limits.list(false).flatMap(a => a.notices ?? []) } })
+  const answer = () => json({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notices: limits.notices(), ownNotices: limits.pushableNotices() } })
   if (!rest.length && method === "GET") return answer()
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
     // Here first, then on the computer each account only elsewhere is on: what's read here reaches

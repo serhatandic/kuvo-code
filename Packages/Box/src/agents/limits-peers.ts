@@ -13,7 +13,6 @@ import { dirname } from "node:path"
 import { kinds, type AgentKind } from "./accounts"
 import type { AccountLimits, LimitedAccount, LimitExtra, LimitWindow, Limits, LimitsService } from "./limits"
 import { takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
-import { emit } from "./events"
 import { limitRows, type LimitRow, type LimitsBox } from "./limits-rows"
 
 /** What one box tells another of its limits (`{"limits": …}` between links). */
@@ -114,6 +113,20 @@ export class LimitsPeers {
     return newest
   }
 
+  /** One current account holder forwards decided notices to phones, even if a peer read it. */
+  forwarder(service: string, identity: string): string | undefined {
+    const own = this.directory.own()?.key
+    if (!own || !this.directory.told || !this.directory.isPeer) return own
+    const candidates = [own]
+    for (const [key, kept] of this.peers) {
+      if (!this.directory.isPeer(key) || this.now() - kept.heard > PEER_AWAY) continue
+      if (kept.accounts.some(a => a.service === service && a.identity === identity)) candidates.push(key)
+    }
+    return candidates.sort()[0]
+  }
+
+  ownsPush(key: string): boolean { return this.directory.own()?.key === key }
+
   /** Per-window decisions, including turn-only accounts whose maker was never checked here. */
   noticeStates(service: LimitsService, identity: string): Record<string, NoticeState>[] {
     if (!this.directory.told || !this.directory.isPeer) return []
@@ -175,7 +188,7 @@ export class LimitsPeers {
     const seen = new Set(before?.accounts.flatMap(a => a.notices?.map(n => n.id) ?? []) ?? [])
     const notices = accounts.flatMap(a => a.notices ?? []).filter(n => !seen.has(n.id))
     this.peers.set(from, { name, heard: now, accounts })
-    if (notices.length) emit("kuvo.usage.notices", { notices, push: false })
+    if (notices.length) this.limits.deliverNotices(notices)
     this.save()
     this.limits.peersChanged()
     // Asked, or back after being away (it may have missed what was told meanwhile): told this box's,

@@ -13,7 +13,7 @@ const wording = {
   closeToRunningOut: ["Will Run Out", "Projected to finish before the limit resets."],
 };
 
-/** The source alone pushes; other own computers keep the identical ID for their Mac's delivery. */
+/** The selected holder alone pushes; other own computers keep the identical ID for their Mac's delivery. */
 export function usageNotices(data: Record<string, unknown>, tell: (notice: Notice) => unknown): void {
   for (const fact of takeNotices(data.notices)) {
     if (Date.now() - fact.at > 24 * 60 * 60_000) continue;

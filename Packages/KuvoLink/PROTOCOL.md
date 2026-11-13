@@ -4426,7 +4426,7 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
 Feature `usage.notices` (required by apps): the box that read a limit decides quota notices.
 `GET kuvo/agents/api/kuvo/limits` and refresh answers add `data.notices`, also carried by
 `kuvo.limits.updated`. Each fact is `{id, row, service, window, milestone, at, remaining,
-resetsAt?}`: lasting occurrence ID, limits row ID, maker's window, trigger, decision time in
+resetsAt?, forwarder?}`: lasting occurrence ID, limits row ID, maker's window, trigger, decision time in
 milliseconds, remaining share, optional reset time. Milestones are `underTenPercent` (strictly
 below 10%), `healthyToClose`, and `closeToRunningOut`. Defaults are off; the shared usage
 notification, provider and visible-meter settings apply. The first trustworthy reading primes
@@ -4436,15 +4436,20 @@ and reset jitter of at most one second does not. Failed or refused reads never d
 Account readings carry `noticeState` per window and recent `notices` in limits peer mail so a
 new reader inherits the baseline/dedup. Only your direct own computers send or receive those
 fields: accounts on computers a peer vouches for still show their limits, but never notices.
-Peers preserve the original ID and decision; they do not decide or push it again. Decisions
+Peers preserve the original ID and decision; they do not decide it again. The current account
+holder with the smallest link key among online direct peers forwards decided facts to phones,
+including facts received from another holder. Each fact pins that selection in `forwarder`,
+so a later ownership change never replays old pushes; an unavailable selected holder catches
+up when back, while the 24-hour fact is retained. This avoids duplicate pushes from known parallel
+readers; disconnected computers without a shared current peer view cannot guarantee exactly
+once background push delivery under an arbitrary network partition. Decisions
 and dedup survive box restarts. Facts are retained for 24 hours (at most 100 per account).
 
-The bridge emits `kuvo.usage.notices` `{notices, push}`: `push:true` for its own decisions and
-false for received ones. The link delivers them on the existing `kuvo/notices[/events]` path as
+The bridge emits `kuvo.usage.notices` `{notices, push}`: `push:true` when this box is the selected forwarder, false otherwise. The link delivers them on the existing `kuvo/notices[/events]` path as
 category `usage`, with box-worded title/subtitle/body, `data.notice` the stable ID and `data.row`
 the account. Usage entries there last 24 hours and are kept once per stable ID. The link catches
 up from limits on reconnect and retries unsent pushes each minute; `data.ownNotices` in the
-limits answer identifies decisions this box may push. Only the source pushes to phones,
+limits answer identifies decisions this box may forward. Only the selected account holder pushes to phones,
 through the existing encrypted notification path; each app remembers shown usage IDs across
 restarts. Apps do no threshold or pace evaluation and have no older-box fallback.
 

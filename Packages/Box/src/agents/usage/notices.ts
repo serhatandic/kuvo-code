@@ -1,7 +1,16 @@
 // Quota notification decisions belong to the box that read the account. Clients only deliver IDs.
 import { createHash } from "node:crypto"
-import type { LimitWindow } from "../limits"
 import type { NotificationSettings } from "./settings"
+
+// Structural inputs keep this pure module usable by the link's Node-only typecheck too.
+interface LimitWindow {
+  id: string
+  used: number
+  resetsAt?: number
+  minutes?: number
+  model?: string
+  amount?: { used: number; limit: number; unit: "requests" | "usd" | "credits" }
+}
 
 export type Milestone = "underTenPercent" | "healthyToClose" | "closeToRunningOut"
 export type Bucket = "untracked" | "healthy" | "close" | "runningOut"
@@ -25,6 +34,8 @@ export interface UsageNotice {
   milestone: Milestone
   at: number
   remaining: number
+  /** Chosen direct account holder: pinned so a later election never re-pushes an old fact. */
+  forwarder?: string
   resetsAt?: number
 }
 export const milestones: Milestone[] = ["underTenPercent", "healthyToClose", "closeToRunningOut"]
@@ -103,7 +114,7 @@ export function newNotice(row: string, service: string, window: LimitWindow, mil
 /** Peer facts validated without deciding them again; IDs and decision timestamps survive every hop. */
 export function takeNotices(given: unknown): UsageNotice[] {
   if (!Array.isArray(given)) return []
-  return given.slice(-100).filter((n): n is UsageNotice => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)))
+  return given.slice(-100).filter((n): n is UsageNotice => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)) && (n.forwarder === undefined || (typeof n.forwarder === "string" && n.forwarder.length <= 200)))
 }
 
 export function takeStates(given: unknown): Record<string, NoticeState> {
