@@ -1,4 +1,5 @@
-// How this bridge's group chat mail (`peer.ts`) reaches your other computers: through the box's
+// How this bridge's mail reaches your other computers (its group chats', `peer.ts`, and its plan
+// limits, `../limits-peers.ts`): through the box's
 // link (`kuvo-link.js` on a machine, the app on the Mac), which carries it over the relay, in parts
 // when it's big, and resends what mustn't be lost until it's there. The link follows what goes
 // (`/api/kuvo/peers/mail`, a line each), says which of what mustn't be lost it has taken
@@ -7,6 +8,7 @@
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { SEAT_MAIL_KINDS, type SeatLine, type SeatMailKind } from "../../shared/seats"
+import type { LimitsDirectory, LimitsMail, LimitsPeers } from "../limits-peers"
 import { RemoteHome, type Clock, type PeerBot, type PeerDirectory, type PeerTransport, type SeatMail, type SeatServer, realClock } from "./peer"
 import type { GroupRunner } from "./runner"
 
@@ -19,7 +21,7 @@ export const isSeatMail = (value: any): value is SeatMail => value !== null && t
 /** Two of what a bot remembers of a chat, for the same bot and chat. */
 const sameMemory = (one: SeatMail, other: SeatMail) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat
 
-type Line = SeatLine<SeatMail>
+type Line = SeatLine<SeatMail | LimitsMail>
 
 /** How often what goes says it's still there while nothing goes: an empty line, so the link, which
  * follows it, can tell a bridge that's alive from one that's stuck (it follows anew after a minute
@@ -42,11 +44,11 @@ export class PeerPost implements PeerTransport {
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : []
   }
 
-  send(to: string, mail: SeatMail, durable: boolean) {
+  send(to: string, mail: SeatMail | LimitsMail, durable: boolean) {
     const line: Line = { id: "sm_" + crypto.randomUUID().replaceAll("-", ""), to, mail, durable }
     if (durable) {
       // What a bot remembers of a chat, the newest only: one the link hasn't taken yet goes for it.
-      if (mail.kind === "memory") this.kept = this.kept.filter((each) => !(each.to === to && sameMemory(each.mail, mail)))
+      if (mail.kind === "memory") this.kept = this.kept.filter((each) => !(each.to === to && each.mail.kind === "memory" && sameMemory(each.mail, mail)))
       this.kept.push(line)
       this.save()
     }
@@ -104,12 +106,21 @@ export class PeerPost implements PeerTransport {
         }
         signal?.addEventListener("abort", stop, { once: true })
         for (const line of this.kept) write(line)
+        const first = this.followers.size === 0
         this.followers.add(write)
+        if (first) for (const listener of this.carried) listener()
         beating()
       },
       cancel: () => stop(),
     })
     return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } })
+  }
+
+  private carried: (() => void)[] = []
+
+  /** Told each time the link starts following what goes (again: what went while it didn't was lost). */
+  onFollowed(listener: () => void) {
+    this.carried.push(listener)
   }
 
   /** Whether the link follows what goes now. */
@@ -118,15 +129,22 @@ export class PeerPost implements PeerTransport {
   }
 }
 
-/** What this computer does with group chat mail from another (`from`, one of its peers: the link opens only theirs). */
+/**
+ * What this computer does with mail from another (`from`, one of its peers: the link opens only
+ * theirs): its group chats' (none where they don't run here), and its plan limits'.
+ */
 export interface PeerParts {
   post: PeerPost
   directory: LinkDirectory
-  server: SeatServer
-  runner: GroupRunner
+  server?: SeatServer
+  runner?: GroupRunner
+  limits?: LimitsPeers
 }
 
+const isLimitsMail = (value: any): value is LimitsMail => value !== null && typeof value === "object" && value.kind === "limits"
+
 export function receive(parts: PeerParts, from: string, mail: SeatMail) {
+  if (!parts.server || !parts.runner) return
   // Anything from it says its computer is there again: its bots here are asked again.
   parts.directory.existing(from)?.heardFrom(from)
   if (mail.kind === "state" || mail.kind === "result") parts.directory.existing(from)?.take(from, mail)
@@ -143,6 +161,7 @@ export function receive(parts: PeerParts, from: string, mail: SeatMail) {
  * one of yours any more fails, and still takes its report should it come after all.
  */
 export function gaveUp(parts: PeerParts, to: string, mail: SeatMail, at?: number) {
+  if (!parts.server || !parts.runner) return
   switch (mail.kind) {
     case "work":
       return parts.runner.workGaveUp(to, mail.work, at)
@@ -164,7 +183,7 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
  * `/api/kuvo/peers[/mail|/sent|/gaveup]`, for the box's link: what goes (`GET mail`, followed), what it has
  * taken of what mustn't be lost (`POST sent {ids}`), what of that it gave up (`POST gaveup {to,
  * mail, at}`), what came (`POST mail {from, mail}`), and who
- * your other computers and their bots are (`PUT {boxes, bots}`). 404 where group chats don't run.
+ * your other computers and their bots are (`PUT {self, boxes, bots}`).
  */
 export async function peerRoutes(parts: PeerParts | undefined, method: string, path: string[], body: () => Promise<any>, signal?: AbortSignal): Promise<Response> {
   if (!parts) return json({ message: "Group chats don't run here." }, 404)
@@ -172,11 +191,18 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
   if (what === "mail" && method === "GET") return parts.post.follow(signal)
   if (what === "mail" && method === "POST") {
     const given = await body().catch(() => undefined)
+    if (typeof given?.from === "string" && given.from && isLimitsMail(given.mail)) {
+      parts.limits?.take(given.from, given.mail)
+      return json({})
+    }
+    // Group chats that didn't start here: the link says not now, so what mustn't be lost comes again.
+    if (!parts.server || !parts.runner) return json({ message: "Group chats don't run here." }, 404)
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
     receive(parts, given.from, given.mail)
     return json({})
   }
   if (what === "gaveup" && method === "POST") {
+    if (!parts.server || !parts.runner) return json({ message: "Group chats don't run here." }, 404)
     const given = await body().catch(() => undefined)
     if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
     // Not before the link has said who your computers are: what comes of it depends on that.
@@ -195,10 +221,14 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
 }
 
 /** Your other computers and their bots, as the link last said. */
-export class LinkDirectory implements PeerDirectory {
+export class LinkDirectory implements PeerDirectory, LimitsDirectory {
   private boxes = new Map<string, { name: string; seats: boolean }>()
   private listed: PeerBot[] = []
   private homes = new Map<string, RemoteHome>()
+  private self?: { key: string; name: string }
+  /** Boxes only a peer knows (another Mac's, beside a machine two Macs share): for plan limits alone. */
+  private also = new Map<string, string>()
+  private listeners: (() => void)[] = []
   /** Whether the link has said who your computers are since this started. */
   told = false
 
@@ -215,6 +245,12 @@ export class LinkDirectory implements PeerDirectory {
       if (box && typeof box.key === "string" && box.key) boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true })
     }
     this.boxes = boxes
+    const self = given.self
+    this.self = self && typeof self === "object" && typeof self.key === "string" ? { key: self.key, name: typeof self.name === "string" ? self.name : "" } : undefined
+    this.also = new Map()
+    for (const box of Array.isArray(given.also) ? given.also : []) {
+      if (box && typeof box.key === "string" && box.key && !boxes.has(box.key)) this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer")
+    }
     this.told = true
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))
@@ -226,7 +262,23 @@ export class LinkDirectory implements PeerDirectory {
         ...(typeof bot.session === "string" ? { session: bot.session } : {}),
         ...(bot.look && typeof bot.look === "object" && !Array.isArray(bot.look) ? { look: bot.look } : {}),
       }))
+    for (const listener of this.listeners) listener()
     return true
+  }
+
+  /** Your other computers whose plan limits this box shares, by key and name: its peers, and the boxes they know. */
+  peerBoxes(): { key: string; name: string }[] {
+    return [...[...this.boxes].map(([key, box]) => ({ key, name: box.name })), ...[...this.also].map(([key, name]) => ({ key, name }))]
+  }
+
+  /** This computer, as the link names it (a link from before it didn't). */
+  own(): { key: string; name: string } | undefined {
+    return this.self
+  }
+
+  /** Told each time the link says who your computers are. */
+  listen(listener: () => void) {
+    this.listeners.push(listener)
   }
 
   bots(): PeerBot[] {

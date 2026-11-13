@@ -3,8 +3,9 @@
 // wherever they are (`git worktree add /tmp/try`), as in its own folder. Only the ones its
 // repository lists that name it back: each `.git/worktrees/<name>/gitdir` leads to a folder whose
 // own `.git` file leads back there, `.git/worktrees` and each entry where they're named (no link to
-// another repository's). On a Mac a command in the sandbox can't move or replace those
-// (seatbelt.ts's GIT_GUARDED); on Linux it can, and the agent's own file tools can anywhere: a pair
+// another repository's). A command in the sandbox can't move or replace those (on a Mac,
+// seatbelt.ts's GIT_GUARDED; on Linux, its namespace's KEEP_GIT in fence/landlock.ts, but where
+// commands have none), and the agent's own file tools can anywhere: a pair
 // made up so passes only for a folder an agent in Auto could start a session in anyway
 // (`keptFromSessions`: never your home, a whole personal folder, your secrets, what runs at login or
 // ~/Library), never one of Kuvo Code's, and a change in one is never let through where it's walled

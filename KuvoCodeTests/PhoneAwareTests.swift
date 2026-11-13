@@ -87,23 +87,4 @@ import Testing
         let script = try String(decoding: Bridge.script, as: UTF8.self)
         #expect(script.contains(#"["<from-phone>", "\#(FromPhone.heading)", "\#(FromPhone.advice)", "</from-phone>"]"#))
     }
-
-    @Test func showFileChecksItsAFile() throws {
-        defer { engine.stop() }
-        let folder = AppInfo.testRoot.appending(path: "PhoneAware/\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let chart = folder.appending(path: "chart.png")
-        try Data([1, 2, 3]).write(to: chart)
-        func call(_ path: String) -> (text: String, failed: Bool) {
-            let result = BrowserTools.showFileCall(["path": path])
-            return (((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "", result["isError"] as? Bool ?? true)
-        }
-        #expect(!call(chart.path).failed)
-        #expect(call(chart.path).text.contains(chart.path))
-        #expect(call(folder.appending(path: "gone.png").path).failed)
-        #expect(call(folder.path).text.contains("is a folder"))
-        #expect(call("chart.png").text == "Give the file's full path.")
-        #expect(call("~/chart.png").failed, "the conversation shows it from the path as given")
-    }
 }

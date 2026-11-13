@@ -20,7 +20,7 @@ struct StorageSettings: View {
     /// A smaller budget than older versions take now, waiting for your yes: it clears some.
     @State private var lowering: Double?
     /// Whose: this Mac's box, or a machine's (each keeps its own).
-    @State private var madeBox = BoxClient.mac
+    @State private var madeBox = BoxClient.thisMac
 
     var body: some View {
         ScrollingSettingsForm {
@@ -108,10 +108,12 @@ struct StorageSettings: View {
             }
 
             Section {
-                if !app.machines.list.isEmpty {
+                // (This Mac's box first, attached in place too, then the machines.)
+                let machines = app.machines.list.filter { !$0.isThisMac }
+                if !machines.isEmpty {
                     Picker("Computer", selection: $madeBox) {
-                        Text("This Mac").tag(BoxClient.mac)
-                        ForEach(app.machines.list) { machine in Text(machine.name).tag(machine.id) }
+                        Text("This Mac").tag(BoxClient.thisMac)
+                        ForEach(machines) { machine in Text(machine.name).tag(machine.id) }
                     }
                     .onChange(of: madeBox) { made = nil; madeFailure = nil; Task { await loadMade() } }
                 }

@@ -35,7 +35,7 @@ struct SkillsSettings: View {
     @State private var showsDeleted = false
 
     private var config: EngineConfig { app.config(for: box) }
-    private var routes: BoxSkills { BoxSkills(box: app.box(box.id), library: app.box(BoxClient.mac)) }
+    private var routes: BoxSkills { BoxSkills(box: app.box(box.id), library: app.box(BoxClient.thisMac)) }
 
     /// The skills, narrowed to what's searched for.
     private var shown: [Skill] {

@@ -23,7 +23,7 @@ import { writeSecret } from "../../shared/files"
 import { commandSignIn } from "../signin"
 import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "../toolrelay"
 import { computerServers } from "../servers"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { claudeSubagents, subagentRules, subagentsFor, type Subagents } from "../subagents"
@@ -1099,6 +1099,8 @@ class ClaudeThread implements Thread {
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys: another set of them is told to the same Claude Code.
     const computer = await computerServers(this.session.location.directory)
+    // (Those set right since the relay stood in for them first, so their addresses are new.)
+    const serversNow = await serversKey(this.session.id, computer)
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer)
     const opening = !this.query
     if (opening) {
@@ -1112,13 +1114,13 @@ class ClaudeThread implements Thread {
     }
     // Kuvo Code's own tools, as the engine's models have them, and those servers: told over its
     // pipe, not on its command line (where any process could read their key).
-    if (this.query && (opening || this.servers !== computer.key)) {
+    if (this.query && (opening || this.servers !== serversNow)) {
       const entries: Record<string, unknown> = {}
       // (Its key to them made again, if it started again: the old one went with it.)
       const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
       if (tools) entries[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers, timeout: tools.timeout } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env, timeout: tools.timeout }
       for (const server of servers) entries[server.name] = { type: "http", url: server.url, headers: server.headers, timeout: server.timeout }
-      this.servers = computer.key
+      this.servers = serversNow
       await this.query.setMcpServers(entries as any).catch(() => {})
     }
     if (hooks.signal.aborted) return { outcome: "interrupted" }

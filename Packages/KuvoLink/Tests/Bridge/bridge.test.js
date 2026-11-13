@@ -1372,6 +1372,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "accounts.found": ["GET", "kuvo/accounts/found"],
     "accounts.refresh": ["GET", "kuvo/accounts/refreshable"],
     "agent-tools": ["POST", "kuvo/agent-tools"],
+    "agent-tools.own": ["POST", "kuvo/agent-tools"],
     agents: ["GET", "kuvo/agents/api/session"],
     approval: ["GET", "kuvo/approval"],
     // (A new conversation's mode, the last picked: kuvo/approval's `default`.)
@@ -1402,6 +1403,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     btw: ["GET", "kuvo/agents/api/kuvo/btw"],
     // (What a side question's routes take besides, on the coding agents' bridge.)
     "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"],
+    "claude-code": ["GET", "kuvo/claude-code"],
     config: ["GET", "kuvo/config"],
     "config.apply": ["GET", "kuvo/config/apply"],
     "engine.restart": ["GET", "kuvo/engine/restart"],
@@ -1416,6 +1418,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "git.pull-request": ["POST", "kuvo/git/pull-request"],
     "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"],
     "git.push": ["POST", "kuvo/git/push"],
+    // (Settings › Git kept here, and the prompts written here: a Mac's from before moves in once.)
+    "git.words": ["POST", "kuvo/git/settings/move"],
     goals: ["GET", "kuvo/agents/api/kuvo/goals"],
     groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"],
@@ -1500,7 +1504,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
   for (const [feature, [method, route]] of Object.entries(routes)) assert.ok(await isRoute(method, route), `${feature}: ${method} ${route}`);
   // The Mac's own aren't here: a route this box doesn't have.
-  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/claude-code", "kuvo/usage"]) assert.equal(await status("GET", route), 404, route);
+  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/usage"]) assert.equal(await status("GET", route), 404, route);
   fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
 });
 

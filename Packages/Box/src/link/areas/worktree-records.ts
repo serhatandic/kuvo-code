@@ -1,6 +1,6 @@
 // What this box keeps of the worktrees it makes for sessions (`box/worktrees.json`, PROTOCOL.md
-// "Worktrees"), and the branch prefix a client last gave: read by the worktrees' routes, and by a
-// project's, which names a session in one after its project.
+// "Worktrees"): read by the worktrees' routes, and by a project's, which names a session in one
+// after its project.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -11,16 +11,9 @@ import type { WorktreeRecordShape } from "../../shared/routes/worktrees";
 import { linkedTrees } from "../work/project-trees";
 
 export const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
-// The branch prefix a client last gave (Settings › Git's), for one that doesn't give one.
+// What git-words.ts keeps of Settings › Git besides the box's settings: whether a Mac's settings
+// from before moved here.
 export const BRANCH_PREFIX_FILE = path.join(K, "box", "git.json");
-export const branchPrefix = (): string => {
-  try {
-    const kept = JSON.parse(fs.readFileSync(BRANCH_PREFIX_FILE, "utf8")).branchPrefix;
-    return typeof kept === "string" ? kept : "kuvo/";
-  } catch {
-    return "kuvo/";
-  }
-};
 
 /** A worktree this box keeps, as `box/worktrees.json` has it. */
 export type WorktreeRecord = WorktreeRecordShape;

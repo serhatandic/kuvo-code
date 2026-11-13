@@ -86,6 +86,18 @@ async function readServers(directory: string): Promise<ComputerServers> {
   return { servers, key: servers.map((server) => server.name).sort().join(" ") }
 }
 
+/**
+ * A server that turned down an agent's call (its sign-in or key refused): the engine connects it
+ * again, for `directory` and its own, so it renews your sign-in if it can, or finds that it can't,
+ * and Settings › Integrations says it needs signing in again.
+ */
+export async function reconnectServer(directory: string, name: string) {
+  if (!link?.ready) return
+  const connect = `/api/experimental/mcp/${encodeURIComponent(name)}/connect`
+  await link.request("POST", `${connect}?location%5Bdirectory%5D=${encodeURIComponent(directory)}`, {}, 30_000).catch(() => {})
+  await link.request("POST", connect, {}, 30_000).catch(() => {})
+}
+
 const strings = (value: unknown): Record<string, string> => {
   const found: Record<string, string> = {}
   if (value && typeof value === "object" && !Array.isArray(value)) for (const [name, text] of Object.entries(value)) if (typeof text === "string") found[name] = text
@@ -115,7 +127,8 @@ async function signIn(servers: ComputerServer[], at: (path: string) => string) {
     if (!integration) continue
     let value = accessFor(list, integration)
     if (value && Number(value.expires) > 0 && Number(value.expires) < Date.now() + 60_000) {
-      await link.request("POST", at(`/api/experimental/mcp/${encodeURIComponent(server.name)}/connect`), {}, 30_000).catch(() => {})
+      // (Briefly: an agent may be waiting for it to start.)
+      await link.request("POST", at(`/api/experimental/mcp/${encodeURIComponent(server.name)}/connect`), {}, 10_000).catch(() => {})
       list = await credentials()
       value = accessFor(list, integration)
     }

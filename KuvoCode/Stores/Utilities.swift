@@ -386,7 +386,7 @@ final class Utilities {
 
     /// The box the panel's Work Queue is on: the machine the session you work in runs on, else
     /// this Mac's.
-    var queueBox: String { place ?? BoxClient.mac }
+    var queueBox: String { place ?? BoxClient.thisMac }
 
     func newTerminal(in directory: String?, environment: [String: String]) {
         Analytics.shared.track("panel_opened", ["tool": "terminal"])
@@ -466,8 +466,10 @@ final class Utilities {
     /// A new tab in a machine's browser: it opens a page there once you go somewhere (at
     /// `address` at once, if given).
     func newMachinePage(_ machine: String, address: String? = nil, owner: String? = nil) {
-        Analytics.shared.track("panel_opened", ["tool": "machine_browser"])
-        Analytics.shared.trackOnce("browser_used", key: "you.machine", ["by": "you", "place": "machine"])
+        // (The browser of the box attached in place runs on this Mac: counted as this Mac's.)
+        let place = BoxClient.isMachine(machine) ? "machine" : "mac"
+        Analytics.shared.track("panel_opened", ["tool": place == "machine" ? "machine_browser" : "browser"])
+        Analytics.shared.trackOnce("browser_used", key: "you." + place, ["by": "you", "place": place])
         let tab = Tab(kind: .machinePage(machine, nil), owner: owner ?? panelKey)
         add(tab)
         if let address { open(address, inTab: tab.id) }

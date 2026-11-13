@@ -1,5 +1,5 @@
 // What's there only for released Macs (PROTOCOL.md, "For released Macs") is marked where it is,
-// on every side: the box's link and its agents bridge, the Mac app and OpenCodeKit. Each item the
+// on every side: the box's link and its agents bridge, the Mac app, OpenCodeKit and KuvoClient. Each item the
 // list names has its markers, and each marker names an item on the list, so a version's paths go
 // together when it goes (scripts/compat.sh lists them).
 //
@@ -21,7 +21,7 @@ const listed = [...section.matchAll(/<!-- compat: (0\.7|beta\.1) ([a-z0-9-]+) --
 
 // The code of every side, as written: not what's built from it (a bundle leaves comments out),
 // nor the tests.
-const ROOTS = ["Packages/Box/src", "KuvoCode", "Packages/OpenCodeKit/Sources", "Packages/KuvoLink/Sources", "scripts"];
+const ROOTS = ["Packages/Box/src", "KuvoCode", "Packages/OpenCodeKit/Sources", "Packages/KuvoClient/Sources", "Packages/KuvoLink/Sources", "scripts"];
 const BUILT = new Set(["KuvoCode/Resources/kuvo-agents.js", "scripts/compat.sh"]);
 const CODE = /\.(swift|ts|js|mjs|sh|py)$/;
 function* files(folder) {

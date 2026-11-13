@@ -34,7 +34,7 @@ const names = tools.map((tool) => `mcp__kuvo-browser__${tool.name}`).join("\n")
 const queueWords = QUEUE_INSTRUCTIONS
 
 // The longest the sandbox note gets: a Mac's, where tmux doesn't fit.
-const sandboxNote = [agentsNote("darwin", false), agentsNote("darwin"), agentsNote("linux", false)].sort((a, b) => b.length - a.length)[0]!
+const sandboxNote = [agentsNote("darwin", false), agentsNote("darwin"), agentsNote("linux", false, true)].sort((a, b) => b.length - a.length)[0]!
 
 // The longest a bot is told: one in a project, with a personality and a job, on this Mac or a
 // machine, as each box tells its bots from the words its release brings.

@@ -18,20 +18,6 @@ enum ToolApproval: String, CaseIterable, Codable {
     /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer.
     case fullAccess
 
-    /// This Mac's last pick, for what isn't a conversation's own (a bot's kit, group chats).
-    static let key = "toolApproval"
-
-    /// One kept by name: an older version's Approve All is Auto now.
-    init?(kept: String) {
-        if kept == "approveAll" { self = .auto } else { self.init(rawValue: kept) }
-    }
-
-    /// This Mac's last pick (`key`), Auto where there's none.
-    static var lastPicked: ToolApproval {
-        get { UserDefaults.standard.string(forKey: key).flatMap(ToolApproval.init(kept:)) ?? .auto }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
-    }
-
     // Its words, the same on every client (KuvoClient's ApprovalWords).
     var title: String { ApprovalWords.title(rawValue) }
     var detail: String { ApprovalWords.detail(rawValue) }
@@ -94,19 +80,6 @@ enum ToolApproval: String, CaseIterable, Codable {
     static func asksBeforeCommands(_ rules: [PermissionRule]?) -> Bool {
         (rules ?? []).contains { $0.action == "shell" && $0.resource == "*" && $0.effect == .ask }
     }
-
-    /// Whether a conversation with these rules asks before commands, but nothing has asked you
-    /// about a watch's check before its tool ran: its rules are from before watches asked, or it
-    /// runs with the coding agents (`agents`), whose bridge doesn't check Kuvo Code's tools against
-    /// them. Then the tool mustn't start it (see `WakeUps.call`).
-    static func watchWentUnasked(_ rules: [PermissionRule]?, agents: Bool) -> Bool {
-        guard asksBeforeCommands(rules) else { return false }
-        return agents || !(rules ?? []).contains { $0.action == "kuvo-browser_watch_for_change" && $0.effect == .ask }
-    }
-
-    /// What the agent hears instead: the same watch, as a command, which asks you with the check
-    /// written out.
-    static let watchAsCommand = "This conversation asks before running commands, and a watch runs its check by itself, so the user approves it first: start it with the shell command kuvo-wake watch <every> \"<check>\" \"<what to do when it changes>\" instead, which asks them."
 }
 
 /// A conversation's approval as its box shows it (`GET kuvo/sessions/<id>/approval`): the one
@@ -393,9 +366,6 @@ struct ModelChip<Label: View>: View {
     var offersAuto = true
     /// Opens it when it changes.
     var openRequest = 0
-    /// Drawn as a filled pop-up button, like the pop-up menus in a row beside it, rather than the
-    /// composer's quiet chip.
-    var popUp = false
     /// Drawn with the model in use and its effort.
     @ViewBuilder let label: (Model?, String?) -> Label
     @State private var isOpen = false
@@ -417,7 +387,7 @@ struct ModelChip<Label: View>: View {
         } label: {
             label(current, variant)
         }
-        .modelChipStyle(popUp: popUp)
+        .buttonStyle(.plain)
         .clickablePointer()
         .help(catalog.chipHelp(selection, in: scope, on: catalog.machine.map { app.name(of: .machine($0)) }, said: said))
         .background(ScreenRoomReader(room: anchor))
@@ -457,12 +427,6 @@ struct ModelChip<Label: View>: View {
             }
         }
         #endif
-    }
-}
-
-private extension View {
-    @ViewBuilder func modelChipStyle(popUp: Bool) -> some View {
-        if popUp { buttonStyle(.bordered) } else { buttonStyle(.plain) }
     }
 }
 

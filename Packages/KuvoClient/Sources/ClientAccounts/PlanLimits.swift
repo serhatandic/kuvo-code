@@ -5,22 +5,29 @@ import Foundation
 /// and each of the engine's, with its windows. What both apps show of them is worked out here:
 /// each row's name, the windows still current, the one closest to its limit, and as of when.
 public struct BoxLimits: Decodable, Hashable, Sendable {
+    /// This box's own accounts.
     public var accounts: [LimitsAccount]
     /// The services (`claude`, `codex`, `copilot`…) this box reads the limits of: a client shows
     /// those from here, and the rest from where it had them before.
     public var services: [String]
+    /// Every account across your computers, one row each, as the box worked them out (each with its
+    /// newest reading and the computers it's signed in on, `boxes`), this box's first: what a
+    /// client lists, as it is. Nil from a box from before it said them.
+    public var rows: [LimitsAccount]?
 
-    public init(accounts: [LimitsAccount], services: [String]) {
+    public init(accounts: [LimitsAccount], services: [String], rows: [LimitsAccount]? = nil) {
         self.accounts = accounts
         self.services = services
+        self.rows = rows
     }
 
-    private enum CodingKeys: String, CodingKey { case accounts, services }
+    private enum CodingKeys: String, CodingKey { case accounts, services, rows }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         accounts = try container.decode(Readable<LimitsAccount>.self, forKey: .accounts).items
         services = try container.decodeIfPresent([String].self, forKey: .services) ?? []
+        rows = try? container.decodeIfPresent(Readable<LimitsAccount>.self, forKey: .rows)?.items
     }
 
     /// Reads the route's answer (`{data: …}`) or the event's (`{accounts}`); times are ms.
@@ -63,6 +70,56 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     public var checked: Date?
     public var next: Date?
     public var problem: Problem?
+    /// A box's row (`BoxLimits.rows`): its id, the same on every box, and the computers it's signed
+    /// in on, the answering box's first (`here`).
+    public var rowID: String?
+    public var boxes: [Computer] = []
+    /// Every computer it's on hasn't been heard from for a while: its numbers are as last told,
+    /// never live.
+    public var away = false
+
+    /// A computer an account is signed in on, as a box's row says.
+    public struct Computer: Decodable, Hashable, Sendable {
+        public var key: String
+        public var name: String
+        /// What it's called there (`claude-code`, `openai`…), the coding agent's, and your name for it there.
+        public var provider: String
+        public var agent: String?
+        public var account: String?
+        public var label: String?
+        /// When its maker last answered it there.
+        public var checked: Date?
+        /// The box that answered.
+        public var here: Bool
+        public var away: Bool
+
+        public init(key: String, name: String, provider: String, agent: String? = nil, account: String? = nil, label: String? = nil, checked: Date? = nil, here: Bool = false, away: Bool = false) {
+            self.key = key
+            self.name = name
+            self.provider = provider
+            self.agent = agent
+            self.account = account
+            self.label = label
+            self.checked = checked
+            self.here = here
+            self.away = away
+        }
+
+        private enum CodingKeys: String, CodingKey { case key, name, provider, agent, account, label, checked, here, away }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            key = try container.decodeIfPresent(String.self, forKey: .key) ?? ""
+            name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+            provider = try container.decode(String.self, forKey: .provider)
+            agent = try container.decodeIfPresent(String.self, forKey: .agent)
+            account = try container.decodeIfPresent(String.self, forKey: .account)
+            label = try container.decodeIfPresent(String.self, forKey: .label)
+            checked = try container.decodeIfPresent(Double.self, forKey: .checked).map(Date.init(milliseconds:))
+            here = try container.decodeIfPresent(Bool.self, forKey: .here) ?? false
+            away = try container.decodeIfPresent(Bool.self, forKey: .away) ?? false
+        }
+    }
 
     public struct Balance: Decodable, Hashable, Sendable {
         public var left: Double
@@ -114,7 +171,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         self.problem = problem
     }
 
-    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, identity, plan, windows, balance, checked, next, problem }
+    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, identity, plan, windows, balance, checked, next, problem, id, boxes, away }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -131,6 +188,9 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         checked = try container.decodeIfPresent(Double.self, forKey: .checked).map(Date.init(milliseconds:))
         next = try container.decodeIfPresent(Double.self, forKey: .next).map(Date.init(milliseconds:))
         problem = try? container.decodeIfPresent(Problem.self, forKey: .problem)
+        rowID = try? container.decodeIfPresent(String.self, forKey: .id)
+        boxes = (try? container.decodeIfPresent(Readable<Computer>.self, forKey: .boxes))?.items ?? []
+        away = (try? container.decodeIfPresent(Bool.self, forKey: .away)) ?? false
     }
 
     /// Its row's name: "Claude", "Claude · Work" for one you added, "Copilot" for the engine's.
@@ -173,8 +233,9 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     /// box leaves between reads (10 to 15 minutes), so one read on time never is.
     public static let outdatedAfter: TimeInterval = 30 * 60
 
+    /// Read long ago, or every computer it's on is away (its numbers aren't live, however new).
     public func isOutdated(now: Date) -> Bool {
-        readAt(now: now).map { now.timeIntervalSince($0) > Self.outdatedAfter } ?? false
+        away || (readAt(now: now).map { now.timeIntervalSince($0) > Self.outdatedAfter } ?? false)
     }
 }
 
@@ -271,7 +332,8 @@ extension Date {
 /// What a client lists of a computer's usage, in one order on every client: the Mac panel's own
 /// providers (`kuvo/usage`) in its order, where one says it `covers` a service, that box's rows of
 /// it there (the first with what that provider had besides: spend, its trend); then the box's
-/// other rows (a machine has no panel: all of them). One row per account (`accounts`).
+/// other rows (a machine has no panel: all of them). One row per account, as one box lists them
+/// (`listing`, from its `BoxLimits.rows`); merged here only from boxes from before those.
 public enum UsageListing {
     public enum Item<Panel> {
         case panel(Panel)
@@ -288,9 +350,17 @@ public enum UsageListing {
 
     /// Every box's accounts, one row per account across them (`accounts(_:)`), placed where the
     /// panel (the client's own computer's, or the first Mac's) says each service goes, as the Mac's
-    /// menu bar lists this Mac's and its machines'.
+    /// menu bar lists this Mac's and its machines'. COMPAT(0.7 limits-merge): for boxes from before rows. Goes 3 months after 0.8.0.
     public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, boxes: [Box]) -> [Item<Panel>] {
-        let listed = Self.accounts(boxes)
+        place(Self.accounts(boxes), panel: panel, covers: covers)
+    }
+
+    /// What the boxes a client reached said (`listing`), placed where the panel says each service goes.
+    public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, listing: Listing) -> [Item<Panel>] {
+        place(listing.accounts, panel: panel, covers: covers)
+    }
+
+    private static func place<Panel>(_ listed: [Account], panel: [Panel], covers: (Panel) -> String?) -> [Item<Panel>] {
         var items: [Item<Panel>] = []
         var placed = Set<String>()
         for entry in panel {
@@ -342,14 +412,74 @@ extension UsageListing {
         public var sources: [Source]
 
         public struct Source: Sendable, Hashable {
+            /// Its box's key ("" for the client's own computer, or the box that answered).
             public var box: String
             public var provider: String
+            /// Its computer's name (none for the client's own).
+            public var name: String?
         }
+    }
+
+    /// What one box a client reached said of your accounts.
+    public struct Answer: Sendable {
+        /// Which computer it is to the client ("" for the Mac's own).
+        public var key: String
+        /// Its name; nil for the client's own computer.
+        public var name: String?
+        public var limits: BoxLimits
+
+        public init(key: String, name: String?, limits: BoxLimits) {
+            self.key = key
+            self.name = name
+            self.limits = limits
+        }
+    }
+
+    /// Every account across your computers, one row each, and the box whose list it is.
+    public struct Listing: Sendable {
+        public var accounts: [Account]
+        /// The box (`Answer.key`) whose rows these are, as it listed them: the one a refresh goes
+        /// to (it asks the others for what it hasn't). Nil when they're each box's own, merged here.
+        public var lister: String?
+    }
+
+    /// What a client lists of every computer it reached (`answers`, in its order, its own computer
+    /// first): the first box's rows, as they are (it works them out with your other computers'
+    /// boxes, PROTOCOL.md "Plan limits"), when they have every account each other box it reached
+    /// says is signed in there, from that computer as it hears it now (not away); else (a box from
+    /// before rows, #210, or one the first hasn't heard from lately) each box's own, merged here.
+    /// COMPAT(0.7 limits-merge): the merge for boxes from before rows. Goes 3 months after 0.8.0.
+    public static func listing(_ answers: [Answer]) -> Listing {
+        if let first = answers.first, let rows = first.limits.rows {
+            let byID = Dictionary(rows.compactMap { row in row.rowID.map { ($0, row) } }, uniquingKeysWith: { first, _ in first })
+            let covered = answers.dropFirst().allSatisfy { other in
+                guard let theirs = other.limits.rows else { return false }
+                return theirs.allSatisfy { row in
+                    guard let here = row.boxes.first(where: \.here) else { return true }
+                    return row.rowID.flatMap { byID[$0] }?.boxes.contains { $0.key == here.key && !$0.away } ?? false
+                }
+            }
+            if covered { return Listing(accounts: accounts(rows: rows, here: first.key), lister: first.key) }
+        }
+        return Listing(accounts: accounts(answers.map { Box(key: $0.key, name: $0.name, accounts: $0.limits.accounts) }), lister: nil)
+    }
+
+    /// A box's rows (`BoxLimits.rows`) as they are, each from the computers it says, the box that
+    /// answered (`here`, the client's key for it) taken as the client's own; named as below.
+    public static func accounts(rows: [LimitsAccount], here: String = "") -> [Account] {
+        var listed = rows.map { row in
+            Account(id: row.rowID ?? row.provider, account: row,
+                    sources: row.boxes.map { Account.Source(box: $0.here ? here : $0.key, provider: $0.provider, name: $0.here ? nil : $0.name) })
+        }
+        named(&listed, members: rows.map { row in
+            row.boxes.map { (name: $0.here ? nil : Optional($0.name), account: LimitsAccount(provider: $0.provider, service: row.service, agent: $0.agent, account: $0.account, label: $0.label)) }
+        })
+        return listed
     }
 
     /// One row per account across the boxes, in their order (the client's own computer first): rows
     /// of one service that say they're one account (`identity`) are one, from any box, whatever each
-    /// calls it; a row that doesn't say is its box's own, as before.
+    /// calls it; a row that doesn't say is its box's own, as before. COMPAT(0.7 limits-merge): for boxes from before rows (the box merges them now, `limits-rows.ts`). Goes 3 months after 0.8.0.
     public static func accounts(_ boxes: [Box]) -> [Account] {
         var groups: [(id: String, members: [(box: Box, account: LimitsAccount)])] = []
         var found: [String: Int] = [:]
@@ -366,17 +496,25 @@ extension UsageListing {
         }
         var listed = groups.map { group in
             Account(id: group.id, account: merged(group.members.map(\.account)),
-                    sources: group.members.map { Account.Source(box: $0.box.key, provider: $0.account.provider) })
+                    sources: group.members.map { Account.Source(box: $0.box.key, provider: $0.account.provider, name: $0.box.name) })
         }
+        named(&listed, members: groups.map { group in group.members.map { (name: $0.box.name, account: $0.account) } })
+        return listed
+    }
+
+    /// Each row's name: its account's (`title`), unless two would have one name.
+    /// `members`: each row's accounts as each computer has it, with the computer's name (none for
+    /// the client's own).
+    static func named(_ listed: inout [Account], members: [[(name: String?, account: LimitsAccount)]]) {
         // Two rows of one name (two accounts, or one whose boxes can't say it's the same) are told
         // apart: a row whose sign-in on this computer is the engine's by the service's name
         // ("ChatGPT"); a row not on this computer by its boxes' names; rows still alike (each on
         // this computer) by their other boxes'.
         var names = listed.map(\.account.title)
-        let mine = { (index: Int) in groups[index].members.filter { $0.box.name == nil }.map(\.account) }
+        let mine = { (index: Int) in members[index].filter { $0.name == nil }.map(\.account) }
         let elsewhere = { (index: Int) -> String? in
             var seen = Set<String>()
-            let boxes = groups[index].members.compactMap(\.box.name).filter { seen.insert($0).inserted }
+            let boxes = members[index].compactMap(\.name).filter { seen.insert($0).inserted }
             return boxes.isEmpty ? nil : boxes.joined(separator: ", ")
         }
         func alike() -> Set<String> { Set(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys) }
@@ -395,7 +533,6 @@ extension UsageListing {
             if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
         }
         for index in listed.indices where names[index] != listed[index].account.title { listed[index].account.name = names[index] }
-        return listed
     }
 
     /// One account as its boxes state it, together: named as a coding agent's where one is among
