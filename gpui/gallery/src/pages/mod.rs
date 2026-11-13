@@ -2,7 +2,9 @@
 
 mod buttons;
 mod chat_list;
+mod code_blocks;
 mod icons;
+mod markdown;
 mod text_field;
 mod theme;
 
@@ -23,7 +25,7 @@ impl Demos {
 }
 
 pub(crate) fn is_built(block: Block) -> bool {
-    matches!(block, Block::Theme | Block::Icons | Block::Buttons | Block::TextField | Block::ChatList)
+    matches!(block, Block::Theme | Block::Icons | Block::Buttons | Block::TextField | Block::ChatList | Block::Markdown | Block::CodeBlocks)
 }
 
 pub(crate) fn shot_height(block: Block) -> f32 {
@@ -33,6 +35,8 @@ pub(crate) fn shot_height(block: Block) -> f32 {
         Block::Buttons => 1100.,
         Block::TextField => 900.,
         Block::ChatList => 840.,
+        Block::Markdown => 800.,
+        Block::CodeBlocks => 1130.,
         _ => 900.,
     }
 }
@@ -49,6 +53,8 @@ pub(crate) fn render(
         Block::Buttons => buttons::page(window, cx),
         Block::TextField => text_field::page(&demos.fields, window, cx),
         Block::ChatList => chat_list::page(&demos.chats, window, cx),
+        Block::Markdown => markdown::page(window, cx),
+        Block::CodeBlocks => code_blocks::page(window, cx),
         _ => crate::page(block.title(), "Not built yet.", [], cx),
     }
 }

@@ -172,6 +172,8 @@ pub struct Colors {
     pub selection: Hsla,
     /// The focus ring around a focused field.
     pub focus_ring: Hsla,
+    /// Behind `inline code` in running text.
+    pub inline_code: Hsla,
 
     pub success: Hsla,
     pub warning: Hsla,
@@ -236,6 +238,7 @@ impl Colors {
             accent: hex(0x0A7AFF),
             selection: hexa(0x0A7AFF2E),
             focus_ring: hexa(0x0A7AFF66),
+            inline_code: hex(0xF0F0F0),
 
             success: hex(0x2E9E5B),
             warning: hex(0xC7820E),
@@ -286,6 +289,7 @@ impl Colors {
             accent: hex(0x2E8BFF),
             selection: hexa(0x2E8BFF47),
             focus_ring: hexa(0x2E8BFF73),
+            inline_code: hex(0x2A2A2A),
 
             success: hex(0x4CC27A),
             warning: hex(0xE0A43A),

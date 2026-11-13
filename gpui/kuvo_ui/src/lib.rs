@@ -6,7 +6,9 @@
 pub mod backdrop;
 pub mod button;
 pub mod chat_list;
+pub mod code_block;
 pub mod icon;
+pub mod markdown;
 pub mod menu;
 pub mod row;
 pub mod text_field;

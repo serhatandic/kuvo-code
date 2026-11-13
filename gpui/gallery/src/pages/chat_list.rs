@@ -7,6 +7,7 @@ use gpui::{
 use kuvo_ui::{
     ActiveTheme, Button, IconName, StyledType, TypeSize,
     chat_list::{ChatListState, chat_list},
+    markdown::Markdown,
     theme::{radius, space},
 };
 
@@ -26,13 +27,13 @@ pub struct Conversation {
     stream: Option<Task<()>>,
 }
 
-const REPLY: &str = "I found it. The form clears every field when the server says the email is taken, because the error path calls reset() before showing the message. I moved the reset into the success path only, so a taken email now keeps what was typed and shows the error under the email field. I added a test that signs up twice with the same address and checks the name and password are still there. Both test suites pass.";
+const REPLY: &str = "I found it. The form clears every field when the server says the email is taken, because the error path calls `reset()` before showing the message.\n\n- Moved the reset into the success path only, so a taken email keeps what was typed.\n- The error now shows **under the email field**.\n- Added a test that signs up twice with the same address.\n\nBoth test suites pass.";
 
 pub fn sample() -> Vec<Message> {
     vec![
         Message::User("Users say the sign-up form gets completely wiped if the email is already taken. Can you look?".into()),
         Message::Status("Worked for 12s".into()),
-        Message::Agent("Looking at the sign-up flow now. The form lives in web/src/signup/Form.tsx and posts to /api/accounts; the server answers 409 when the email exists.".into()),
+        Message::Agent("Looking at the sign-up flow now. The form lives in `web/src/signup/Form.tsx` and posts to `/api/accounts`; the server answers 409 when the email exists.".into()),
         Message::User("Keep what they typed, and tell them which field is wrong.".into()),
         Message::Status("Worked for 25s · 2 files changed".into()),
         Message::Agent(REPLY.to_string()),
@@ -82,7 +83,7 @@ impl Conversation {
     }
 }
 
-fn message(message: &Message, cx: &App) -> AnyElement {
+fn message(ix: usize, message: &Message, cx: &App) -> AnyElement {
     let c = &cx.theme().colors;
     let body = match message {
         Message::User(text) => div().flex().justify_end().child(
@@ -96,7 +97,7 @@ fn message(message: &Message, cx: &App) -> AnyElement {
                 .text_color(c.text)
                 .child(text.clone()),
         ),
-        Message::Agent(text) => div().text_ui(TypeSize::Body).text_color(c.text).child(text.clone()),
+        Message::Agent(text) => div().child(Markdown::new(("message", ix), text)),
         Message::Status(text) => div()
             .flex()
             .justify_center()
@@ -120,7 +121,7 @@ impl Render for Conversation {
         let view = cx.entity();
         div().size_full().child(chat_list(&self.list, move |ix, _, cx| {
             let m = view.read(cx).messages[ix].clone();
-            message(&m, cx)
+            message(ix, &m, cx)
         }))
     }
 }
