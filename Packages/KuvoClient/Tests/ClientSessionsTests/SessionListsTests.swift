@@ -85,6 +85,15 @@ struct SessionListsTests {
         #expect(SessionLists.place(of: listing.facts(of: "ses_b")) == .chat)
         listing.forgetArchived("ses_b", false)
         #expect(SessionLists.place(of: listing.facts(of: "ses_b")) == nil)
+        // Archived and brought back at once: back, through its box's line for the archive, until
+        // its line for the bring-back.
+        listing.noteArchived("ses_a", false)
+        listing.noteArchived("ses_a", true)
+        listing.noteArchived("ses_a", false)
+        listing.take(try line(#"{"at":"e.5","sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":7,"archived":true}},"projects":{}}"#))
+        #expect(SessionLists.place(of: listing.facts(of: "ses_a")) == .project("/p"))
+        listing.take(try line(#"{"at":"e.6","sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":8}},"projects":{}}"#))
+        #expect(listing.noted.isEmpty && SessionLists.place(of: listing.facts(of: "ses_a")) == .project("/p"))
         // One its box hasn't listed isn't noted.
         listing.noteArchived("ses_new", true)
         #expect(listing.facts(of: "ses_new") == nil && listing.noted.isEmpty)

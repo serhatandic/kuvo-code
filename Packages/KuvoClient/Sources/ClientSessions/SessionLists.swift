@@ -140,10 +140,12 @@ public enum SessionLists {
 
         /// A session this client just archived (or brought back), shown so at once and until its box
         /// says the same, whatever lines it worked out before come meanwhile. Nothing for one its
-        /// box hasn't listed, or already says so.
+        /// box hasn't listed, or already says so with no change of this client's on its way (one
+        /// archived and brought back at once: its box's line for the first is still to come).
         public mutating func noteArchived(_ id: String, _ archived: Bool) {
             guard let listed = sessions[id] else { return }
-            noted[id] = (listed.archived == true) == archived ? nil : archived
+            if noted[id] == nil, (listed.archived == true) == archived { return }
+            noted[id] = archived
         }
 
         /// The note `noteArchived(id, archived)` made let go of, if it's still that one: the write it

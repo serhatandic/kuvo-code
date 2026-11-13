@@ -373,7 +373,9 @@ import Testing
             sending.finish()
             return HTTPResponse(status: 200, headers: ["Content-Type": "application/x-ndjson"], stream: body)
         }
-        let port = try await server.start()
+        // (Which side couldn't, and on which port, if one can't: "Address already in use" came once.)
+        let port: UInt16
+        do { port = try await server.start() } catch { throw TestFailure("The server couldn't listen on a loopback port: \(error)") }
         defer { server.stop() }
         let client = try await RawClient.connect(port: port)
         defer { client.close() }
@@ -433,7 +435,7 @@ final class RawClient {
         } catch {
             // (One left waiting would go on trying.)
             connection.cancel()
-            throw error
+            throw TestFailure("The client couldn't connect to 127.0.0.1:\(port)\(connection.currentPath?.localEndpoint.map { " from \($0)" } ?? ""): \(error)")
         }
         connection.stateUpdateHandler = nil
         return RawClient(connection: connection)
