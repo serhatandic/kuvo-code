@@ -4034,7 +4034,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   An unavailable server or unreadable sign-in is stated on the row; failed reads retain the last
   result. Refused credentials are remembered by hash in the box-owned
   `usage/antigravity/<account>/refusals.json`, including access, refresh and CSRF refusals, so a restart or
-  temporary refresh failure cannot resend them. Not yet: Ollama's, which ollama.com tells only the Ollama app's own signing key.
+  temporary refresh failure cannot resend them. A good quota answer from either Google host
+  wins over a refusal from the other; a secondary plan lookup cannot invalidate good quotas.
+  Token refresh uses the own agent token's OAuth client metadata (or the defaults verified in
+  ACP 1.3.0); the refusal record is pruned on sign-out. Not yet: Ollama's, which ollama.com tells only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
   accounts are read one a minute (counted before the request goes, through a restart too), and a
