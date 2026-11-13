@@ -185,8 +185,8 @@ export class CursorClient {
   /**
    * Nothing goes to Cursor while it holds reads off or the key was turned away, whoever asks (the
    * plan's optional reads, the history's workers already under way): a `LimitsProblem` instead.
-   * (Kept in memory: after a restart, the plan's saved state, `Limits.held`, keeps the history
-   * from asking, and its next read finds a turned-away key so again, once.)
+   * (Kept in memory only: after a restart, a hold the plan's read met, or a key it found turned
+   * away, holds through its saved state, `Limits.held`; one only the history met is asked again.)
    */
   private refuses(): LimitsProblem | undefined {
     if (this.refused !== undefined && this.refused === fingerprint(this.key())) return new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings › Accounts.", undefined, false)

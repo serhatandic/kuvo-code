@@ -397,18 +397,22 @@ export function readingOf(mapped: CursorMapped, identity: string | undefined): L
 }
 
 /**
- * An optional endpoint's JSON object, or nothing (it never fails the read); a 429 holds every read
- * of the account off (the rest of this one's included) for as long as it says.
+ * An optional endpoint's JSON object, or nothing (it doesn't fail the read). But a 429 holds every
+ * read of the account off for as long as it says, and ends this one as held (a `LimitsProblem`), as
+ * does Cursor being held off or the key turned away meanwhile: what was read last stays whole,
+ * rather than a reading without what the held reads would have said (credits, Grok Bot's week).
  */
 async function optional(client: CursorClient, request: () => Promise<CursorAnswer> | undefined): Promise<Record<string, any> | undefined> {
+  let answer: CursorAnswer | undefined
   try {
-    const answer = await request()
-    if (answer?.status === 429) client.holdFor(answer.headers.get("retry-after"))
-    if (!answer || answer.status < 200 || answer.status >= 300) return undefined
-    return object(answer.body)
-  } catch {
+    answer = await request()
+  } catch (error) {
+    if (error instanceof LimitsProblem) throw error
     return undefined
   }
+  if (answer?.status === 429) throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")) ?? client.heldUntil())
+  if (!answer || answer.status < 200 || answer.status >= 300) return undefined
+  return object(answer.body)
 }
 
 /**

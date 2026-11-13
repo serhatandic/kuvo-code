@@ -17681,16 +17681,19 @@ function readingOf(mapped, identity) {
   return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...extras.length ? { extras } : {}, ...identity ? { identity } : {} };
 }
 async function optional(client, request) {
+  let answer;
   try {
-    const answer = await request();
-    if (answer?.status === 429)
-      client.holdFor(answer.headers.get("retry-after"));
-    if (!answer || answer.status < 200 || answer.status >= 300)
-      return;
-    return object(answer.body);
-  } catch {
+    answer = await request();
+  } catch (error) {
+    if (error instanceof LimitsProblem)
+      throw error;
     return;
   }
+  if (answer?.status === 429)
+    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")) ?? client.heldUntil());
+  if (!answer || answer.status < 200 || answer.status >= 300)
+    return;
+  return object(answer.body);
 }
 async function readCursorPlan(client, now = Date.now) {
   let access = await client.accessToken();
@@ -33652,4 +33655,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 6403341c1102059aa67be0de5ad9198f4d8e67f65ac5b389147f72762224575e
+// Built from Packages/Box/src/agents c5f10fcf68063e5bbff1157d875636c723a5c793ce2dc5cc344895f0ade05d32

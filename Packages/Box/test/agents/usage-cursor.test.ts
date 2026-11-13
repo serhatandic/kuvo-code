@@ -665,17 +665,41 @@ describe("Cursor's account across your computers", () => {
     expect(pages() - before).toBe(1)
   })
 
-  test("a 429 from one of the plan's optional reads holds the rest of them, and the history, off", async () => {
+  test("a 429 from one of the plan's optional reads holds the rest of them, and the history, off; what was read last stays whole", async () => {
     cursor.keys.set("key_work", "auth0|user_abc")
+    const agent = account("key_work")
+    const limits = limitsOf([agent as unknown as Agent])
+    await limits.refresh()
+    const whole = limits.list()[0]!
+    expect(whole.balance).toEqual({ left: 18, unit: "usd" })
+    cursor.asked.length = 0
     cursor.plan = 429
     cursor.retryAfter = "600"
-    const agent = account("key_work")
-    const reading = await agent.limits.read!(now)
-    expect(reading?.windows.length).toBeGreaterThan(0)
+    now += 11 * 60_000
+    await limits.refresh()
+    const held = limits.list()[0]!
+    expect(held.problem).toMatchObject({ kind: "rate-limited" })
+    expect(held.balance).toEqual(whole.balance)
+    expect(held.windows.map((window) => window.id)).toEqual(whole.windows.map((window) => window.id))
     expect(agent.cursor.heldUntil()).toBeDefined()
     const asked = cursor.asked.map((each) => each.path)
     for (const later of ["/api2/aiserver.v1.DashboardService/GetCreditGrantsBalance", "/web/api/auth/stripe", "/api2/aiserver.v1.DashboardService/GetSandUsageStatus"]) expect(asked).not.toContain(later)
     await expect(new CursorHistory(undefined, { deadline: instant, log: () => {} }).read(agent.cursor, now)).rejects.toMatchObject({ kind: "rate-limited" })
+  })
+
+  test("a token turned away midway whose key Cursor then turns away too: no page more is sent, and its plan isn't asked again with it", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    cursor.events = eventsEachDay(1)
+    const agent = account("key_work")
+    cursor.failing = () => {
+      cursor.exchange = 401
+      return 401
+    }
+    await expect(new CursorHistory(undefined, { deadline: instant, concurrency: 2, log: () => {} }).read(agent.cursor, now)).rejects.toThrow("aren't known yet")
+    expect(cursor.eventDays()).toHaveLength(2)
+    const asked = cursor.asked.length
+    await expect(agent.limits.read!(now)).rejects.toMatchObject({ kind: "expired", sent: false })
+    expect(cursor.asked).toHaveLength(asked)
   })
 
   test("a token Cursor turns away midway through the history is exchanged again once, and its page asked again; two reads as the box starts share one exchange", async () => {
