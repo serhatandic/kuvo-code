@@ -9695,7 +9695,7 @@ function newNotice(row, service, window, milestone, at, state) {
 function takeNotices(given) {
   if (!Array.isArray(given))
     return [];
-  return given.slice(-100).filter((n) => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)));
+  return given.slice(-100).filter((n) => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)) && (n.forwarder === undefined || typeof n.forwarder === "string" && n.forwarder.length <= 200));
 }
 function takeStates(given) {
   if (!given || typeof given !== "object" || Array.isArray(given))
@@ -9773,6 +9773,25 @@ class Limits {
   notices() {
     const all = [...this.list(false).flatMap((a) => a.notices ?? []), ...this.peers?.notices() ?? []];
     return [...new Map(all.filter((n) => this.now() - n.at < 24 * 60 * MINUTE).map((n) => [n.id, n])).values()].sort((a, b) => a.at - b.at);
+  }
+  pushableNotices() {
+    const own = this.list(false);
+    return this.notices().filter((n) => {
+      if (n.forwarder)
+        return this.peers?.ownsPush(n.forwarder) ?? n.forwarder === this.ownKey();
+      const identity = n.row.startsWith(`${n.service}#`) ? n.row.slice(n.service.length + 1) : undefined;
+      if (!identity)
+        return own.some((a) => a.notices?.some((each) => each.id === n.id));
+      return own.some((a) => a.service === n.service && a.identity === identity) && (!this.peers || this.peers.ownsPush(this.peers.forwarder(n.service, identity) ?? ""));
+    });
+  }
+  deliverNotices(notices) {
+    const pushes = new Set(this.pushableNotices().map((n) => n.id));
+    for (const push of [false, true]) {
+      const facts = notices.filter((n) => pushes.has(n.id) === push);
+      if (facts.length)
+        emit("kuvo.usage.notices", { notices: facts, push });
+    }
   }
   rows() {
     const own = this.list(false);
@@ -10099,8 +10118,9 @@ class Limits {
     const settings = this.settings?.values();
     const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false };
     const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service);
+    const dormant = (state) => ({ ...state, previous: "untracked", fired: [], under: false, primed: false });
     if (disabled) {
-      entry.noticeState = {};
+      entry.noticeState = Object.fromEntries(Object.entries(entry.noticeState ?? {}).map(([id, state]) => [id, dormant(state)]));
       return;
     }
     const peers = entry.identity ? this.peers?.noticeStates(account.service, entry.identity) ?? [] : [];
@@ -10116,24 +10136,30 @@ class Limits {
     const created = [];
     for (const window of entry.windows.filter((w) => ids.includes(w.id))) {
       if (settings?.layout && !settings.layout.placed.includes(metricID(account.service, window))) {
-        delete entry.noticeState[window.id];
+        if (entry.noticeState[window.id])
+          entry.noticeState[window.id] = dormant(entry.noticeState[window.id]);
         continue;
       }
       const previous = entry.noticeState[window.id] ?? initialState();
       const result = transitions(meter(window, this.now()), (100 - window.used * 100) / 100, window.resetsAt, previous, toggles);
       result.state.fired.push(...result.fire);
       entry.noticeState[window.id] = { ...result.state, read: window.read };
-      for (const milestone of result.fire)
-        created.push(newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]));
+      for (const milestone of result.fire) {
+        const notice = newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]);
+        const forwarder = entry.identity ? this.peers?.forwarder(account.service, entry.identity) ?? this.ownKey() : this.ownKey();
+        if (forwarder)
+          notice.forwarder = forwarder;
+        created.push(notice);
+      }
     }
     const present = new Set(entry.windows.filter((w) => !settings?.layout || settings.layout.placed.includes(metricID(account.service, w))).map((w) => w.id));
     for (const id of Object.keys(entry.noticeState))
       if (!present.has(id))
-        delete entry.noticeState[id];
+        entry.noticeState[id] = dormant(entry.noticeState[id]);
     entry.notices = [...entry.notices ?? [], ...created].filter((n) => this.now() - n.at < 24 * 60 * MINUTE).slice(-100);
     this.save();
     if (created.length)
-      emit("kuvo.usage.notices", { notices: created, push: true });
+      this.deliverNotices(created);
   }
   forgetGone() {
     if (!this.settled())
@@ -10215,7 +10241,7 @@ var json6 = (value, status = 200) => new Response(JSON.stringify(value), { statu
 async function limitsRoutes(limits, method, rest) {
   if (!limits)
     return json6({ message: "Plan limits aren't read on this computer." }, 503);
-  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notices: limits.notices(), ownNotices: limits.list(false).flatMap((a) => a.notices ?? []) } });
+  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notices: limits.notices(), ownNotices: limits.pushableNotices() } });
   if (!rest.length && method === "GET")
     return answer();
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
@@ -34613,6 +34639,22 @@ class LimitsPeers {
     }
     return newest;
   }
+  forwarder(service, identity) {
+    const own = this.directory.own()?.key;
+    if (!own || !this.directory.told || !this.directory.isPeer)
+      return own;
+    const candidates = [own];
+    for (const [key, kept] of this.peers) {
+      if (!this.directory.isPeer(key) || this.now() - kept.heard > PEER_AWAY2)
+        continue;
+      if (kept.accounts.some((a) => a.service === service && a.identity === identity))
+        candidates.push(key);
+    }
+    return candidates.sort()[0];
+  }
+  ownsPush(key) {
+    return this.directory.own()?.key === key;
+  }
   noticeStates(service, identity) {
     if (!this.directory.told || !this.directory.isPeer)
       return [];
@@ -34671,7 +34713,7 @@ class LimitsPeers {
     const notices = accounts.flatMap((a) => a.notices ?? []).filter((n) => !seen.has(n.id));
     this.peers.set(from, { name, heard: now, accounts });
     if (notices.length)
-      emit("kuvo.usage.notices", { notices, push: false });
+      this.limits.deliverNotices(notices);
     this.save();
     this.limits.peersChanged();
     if (given.ask === true || before && now - before.heard > PEER_AWAY2)
@@ -35221,4 +35263,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7a16e3152ff069f2d78e048f7b6f31751a570db556794e2fe51239ff697e5e47
+// Built from Packages/Box/src/agents 01f0af0318eb73d2e7924e93282e30cee9596540cc8f499ad5cab62962034305
