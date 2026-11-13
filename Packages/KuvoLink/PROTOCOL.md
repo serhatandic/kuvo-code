@@ -4381,11 +4381,11 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   ones you made on another), and at the same `v` the `by` that sorts last.
 - **Across your own computers** only: between the boxes of one setup ("Your setup"), whose
   boxes are all yours. The link tells the bridge the setup it follows now (`setup` in `PUT
-  /api/kuvo/peers`, its id; none once it's settled that it follows none: a machine more than one
-  Mac set up, or a setup set aside; `setupUnknown: true` otherwise while it can't say one: none made
-  yet, as a box from before setups updates, or one it can't follow yet, its keys not read as its
-  link starts or made anew, which the bridge takes as neither: it records nothing and shares
-  nothing until the link says), and a box sends and takes
+  /api/kuvo/peers`, its id; `null` once it's settled that it follows none: a machine more than one
+  Mac set up, or a setup set aside; not said while it can't say one: none made yet, as a box from
+  before setups updates, or one it can't follow yet, its keys not read as its link starts or made
+  anew. A link from before this, met for a moment as a box updates, doesn't say it either. The
+  bridge takes not said as neither: it records nothing and shares nothing until the link says), and a box sends and takes
   them only while it follows one, only with its peers (the setup's boxes), and only mail naming the
   same setup. So never to or from a box a peer vouches for, and never through a machine more than
   one Mac set up (it follows no setup, so it neither passes them on nor takes them): until setups

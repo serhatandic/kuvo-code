@@ -248,8 +248,9 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
   told = false
   /** The setup this box follows, as the link last said (none: it follows none). */
   setup?: string
-  /** The link has a setup it can't say yet (its keys not read as it starts). */
-  setupUnknown = false
+  /** Whether the link has said this box follows no setup, settled (`setup: null`): not said, it
+   * can't say yet, or it's a link from before this. */
+  inNoSetup = false
 
   constructor(
     private readonly transport: PeerTransport,
@@ -271,7 +272,7 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
       if (box && typeof box.key === "string" && box.key && !boxes.has(box.key)) this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer")
     }
     this.setup = typeof given.setup === "string" && /^set_[A-Za-z0-9_-]{1,64}$/.test(given.setup) ? given.setup : undefined
-    this.setupUnknown = !this.setup && given.setupUnknown === true
+    this.inNoSetup = given.setup === null
     this.told = true
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))

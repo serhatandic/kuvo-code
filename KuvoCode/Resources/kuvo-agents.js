@@ -30204,7 +30204,7 @@ class SettingsPeers {
     if (this.directory.told) {
       if (this.directory.setup)
         this.settings.inSetup(this.directory.setup);
-      else if (!this.directory.setupUnknown)
+      else if (this.directory.inNoSetup)
         this.settings.inNoSetup();
     }
     const ours = new Set(this.ours());
@@ -33189,7 +33189,7 @@ class LinkDirectory {
   listeners = [];
   told = false;
   setup;
-  setupUnknown = false;
+  inNoSetup = false;
   constructor(transport, clock = realClock) {
     this.transport = transport;
     this.clock = clock;
@@ -33211,7 +33211,7 @@ class LinkDirectory {
         this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer");
     }
     this.setup = typeof given.setup === "string" && /^set_[A-Za-z0-9_-]{1,64}$/.test(given.setup) ? given.setup : undefined;
-    this.setupUnknown = !this.setup && given.setupUnknown === true;
+    this.inNoSetup = given.setup === null;
     this.told = true;
     this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
       id: bot.id,
@@ -35017,4 +35017,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7746f10b0b1834b5458a12c0286673d023697231362628510bab011b2fa737c9
+// Built from Packages/Box/src/agents 0ef24d885090aee62beec9716af526ee084dd186b22c7d520e9e93540d9c3782

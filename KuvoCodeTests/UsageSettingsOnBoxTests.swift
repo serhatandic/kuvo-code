@@ -210,4 +210,41 @@ import UsageKit
         #expect(!defaults.bool(forKey: Self.underTen))
         #expect(defaults.data(forKey: "usage.settingsUnsent").flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }.map { ($0["parts"] as? [String: Any])?.isEmpty ?? true } == true)
     }
+
+    @Test func aValueThisMacSentLongAgoDoesntMakeAnotherComputersNewerOneItsOwn() async throws {
+        let (defaults, folder) = try suite()
+        defer { StubWeb.stop(); try? FileManager.default.removeItem(at: folder) }
+        let box = Box()
+        StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
+        let host = HostSettings(defaults: defaults)
+        let store = UsageSettingsOnBox(host: host, defaults: defaults)
+        store.connected(api: api(), box: BoxClient.mac)
+        try await until { store.answered == 1 }
+        let a = ["underTenPercent": true, "healthyToClose": false, "closeToRunningOut": false]
+
+        // This Mac turns on "under ten percent" (A).
+        defaults.set(true, forKey: Self.underTen)
+        host.flush()
+        try await until { store.answered == 2 }
+        #expect(box.notifications == a)
+        // Another computer changes it (B), and this Mac shows it.
+        box.notifications = ["underTenPercent": false, "healthyToClose": true, "closeToRunningOut": false]
+        box.version = "3/dev-key"
+        store.connected(api: api(), box: BoxClient.mac)
+        try await until { store.answered == 3 }
+        // This Mac is away; the other computer puts A back, newer than all of it.
+        store.stopped()
+        box.notifications = a
+        box.version = "4/dev-key"
+        // A change made here meanwhile (C), from B.
+        defaults.set(true, forKey: "openusage.notifications.closeToRunningOut")
+        host.flush()
+        store.connected(api: api(), box: BoxClient.mac)
+        // C is turned away (the other computer's A is newer), and the box's A shows: not taken for this Mac's own.
+        try await until { store.answered == 5 }
+        #expect(box.puts.count == 2)
+        #expect(box.notifications == a)
+        #expect(defaults.bool(forKey: Self.underTen))
+        #expect(!defaults.bool(forKey: "openusage.notifications.closeToRunningOut"))
+    }
 }

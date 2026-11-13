@@ -209,10 +209,10 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
-    // (The usage panel's settings go only between its boxes: never a shared machine's. None only
-    // once that's settled, a machine Macs share or a setup set aside; else it can't say yet: one
-    // it can't follow yet, its keys not read as the link starts, or none made yet.)
-    ...(setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? {} : { setupUnknown: true as const }),
+    // (The usage panel's settings go only between its boxes: never a shared machine's. `null` only
+    // once that's settled, a machine Macs share or a setup set aside; else not said, as it can't
+    // say yet: one it can't follow yet, its keys not read as the link starts, or none made yet.)
+    ...(setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}),
   };
 }
 

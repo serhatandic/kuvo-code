@@ -108,8 +108,10 @@ class Box {
    * The link says who your computers are (`others`), which boxes only a peer knows (`also`), and the
    * setup this box follows (`setup`: none for a machine two people's Macs share).
    */
-  async meet(others: Box[], also: Box[] = [], setup: string | null = "set_yours", setupUnknown = false) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [], ...(setup ? { setup } : {}), ...(setupUnknown ? { setupUnknown: true } : {}) }))
+  async meet(others: Box[], also: Box[] = [], setup: string | null | false = "set_yours") {
+    // (`null`: settled on none, a machine two people's Macs share; `false`: not said, as a link that
+    // can't say yet, or one from before setups, does.)
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [], ...(setup !== false ? { setup } : {}) }))
   }
 
   async route(method: string, rest: string[] = [], given?: unknown) {
@@ -504,7 +506,7 @@ describe("across your own computers", () => {
     expect((await bob.read()).settings).toEqual({})
   })
 
-  test("a setup's main Mac whose link can't say its setup yet (its keys not read) keeps its settings: nothing's recorded as no setup, nothing goes, and the setup it names next is taken as theirs", async () => {
+  test("a box whose link doesn't say its setup (its keys not read yet, or a link from before setups, met for a moment as the box updates) keeps its settings: nothing's recorded as no setup, nothing goes, and the setup it names next is taken as theirs", async () => {
     const home = mkdtempSync(join(base, "main-mac-"))
     mkdirSync(join(home, "usage"), { recursive: true })
     // As a box from before kept Codex's fallback model, and a Mac's import came in.
@@ -512,7 +514,7 @@ describe("across your own computers", () => {
     const mac = make("mac-key", "MacBook", home)
     await mac.route("POST", ["import"], { notifications: alerts(true) })
     const dev = make("dev-key", "devbox")
-    await mac.meet([dev], [], null, true)
+    await mac.meet([dev], [], false)
     await relay.settled()
     expect(relay.sent.filter((each) => each.mail.kind === "settings")).toEqual([])
     await mac.meet([dev], [], "set_yours")

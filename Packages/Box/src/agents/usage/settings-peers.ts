@@ -41,7 +41,7 @@ export class SettingsPeers {
   constructor(
     private readonly settings: UsageSettings,
     private readonly transport: Pick<LimitsTransport, "followed" | "onFollowed"> & { send(to: string, mail: SettingsMail, durable: boolean): void },
-    private readonly directory: LimitsDirectory & { readonly setup?: string; readonly setupUnknown?: boolean },
+    private readonly directory: LimitsDirectory & { readonly setup?: string; readonly inNoSetup?: boolean },
     private readonly now: () => number = Date.now,
   ) {
     settings.self = () => directory.own()?.key ?? ""
@@ -125,8 +125,9 @@ export class SettingsPeers {
     // In another setup than the one these were shared in: they start over (`UsageSettings.inSetup`).
     if (this.directory.told) {
       if (this.directory.setup) this.settings.inSetup(this.directory.setup)
-      // (One it can't say yet isn't none: nothing's recorded, and nothing goes, until it says.)
-      else if (!this.directory.setupUnknown) this.settings.inNoSetup()
+      // (Only none it has settled on: one it doesn't say, it can't say yet, or it's a link from
+      // before this; nothing's recorded, and nothing goes, until it says.)
+      else if (this.directory.inNoSetup) this.settings.inNoSetup()
     }
     const ours = new Set(this.ours())
     // (A computer gone, or one that's now a box a peer vouches for: forgotten, told again should it come back as yours.)

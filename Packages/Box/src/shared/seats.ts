@@ -47,13 +47,10 @@ export interface SeatPeers {
   also?: { key: string; name: string }[];
   boxes: SeatBox[];
   bots: SeatBot[];
-  /** The setup this box follows now, by its id (PROTOCOL.md, "Your setup"): none while it follows
-   * none (a machine Macs share, a Mac that leads none). The usage panel's settings go only between
-   * boxes of the same setup. */
-  setup?: string;
-  /** This box can't say its setup yet (one it can't follow yet, its keys not read as its link
-   * starts; or none made yet): the bridge waits for it, taking it neither as no setup nor sharing.
-   * None (`setup` and this both absent) only once that's settled: a machine Macs share, or a
-   * setup set aside. */
-  setupUnknown?: true;
+  /** The setup this box follows now, by its id (PROTOCOL.md, "Your setup"); `null` once it's
+   * settled that it follows none (a machine Macs share, a setup set aside); not said while it can't
+   * say yet (its keys not read as its link starts, none made yet) or by a link from before this,
+   * which the bridge takes as neither. The usage panel's settings go only between boxes of the
+   * same setup. */
+  setup?: string | null;
 }
