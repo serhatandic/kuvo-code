@@ -5478,7 +5478,8 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   - `keys uncopy` (the move went back before it cleared the old place) takes the journaled copies
     away, then the journal; the app's own are never touched (one gone meanwhile was taken away on
     purpose, as the box ran in the app's folder again: its copy goes too), and a Keychain that can't
-    say what's there (locked) changes nothing;
+    say what's there (locked) changes nothing; once `state.json` says the move's `done`, the copies
+    are the box's keys and it refuses;
   - `keys clear` (no journal, and no `box/keychain.json`): items under the helper's names left by
     an earlier box, taken away where the app has its own of each; `{"kept": [...]}` says those it
     kept;

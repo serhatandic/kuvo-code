@@ -282,6 +282,18 @@ import Testing
         #expect(try move.journal() == nil)
     }
 
+    @Test func onceTheMoveIsDoneItsCopiesAreNeverTakenAway() throws {
+        defer { cleanUp() }
+        addOriginals()
+        try move.copy(trusting: helperInApp)
+        // Done, the app's own not deleted yet (its keeper hasn't run since): the copies are the box's.
+        try write(box.appending(path: "updates/rehome/state.json"), #"{"state":"done","way":"move"}"#)
+        let refused = try helper(["keys", "uncopy"])
+        #expect(refused.status != 0)
+        #expect(refused.errors.contains("moved already"))
+        #expect(keychain.items("\(Self.helperID).phone-link")?.count == 3)
+    }
+
     @Test func leftoversFromAnEarlierBoxAreClearedWhereTheAppHasItsOwn() throws {
         defer { cleanUp() }
         addOriginals()

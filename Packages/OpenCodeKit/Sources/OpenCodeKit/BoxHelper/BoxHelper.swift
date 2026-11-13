@@ -186,8 +186,9 @@ public final class BoxHelper {
         }
         // (Its `bin` too, where its keeper is: there by the time it's kept, maybe not yet as a move
         // copies its keys.)
-        for folder in [home, home.appending(path: "bin")] {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: folder.path(percentEncoded: false)) else {
+        // (Each where it really is, links followed; its keeper too, which is given what it starts with.)
+        for folder in [home, home.appending(path: "bin"), home.appending(path: "bin/kuvo-start")] {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: place(folder)) else {
                 if folder != home, !keeping { continue }
                 return .failure(Refused(why: "There’s no box at \(home.path(percentEncoded: false))."))
             }
@@ -271,8 +272,7 @@ public final class BoxHelper {
             return error.localizedDescription
         }
         guard let journal else { return nil }
-        let state = object("state.json")
-        let moved = state?["state"] as? String == "done" && state?["way"] as? String == "move"
+        let moved = KeychainMove(keychain: keychain, home: home, app: app, helper: prefix).moveIsDone
         switch journal.state {
         case .settled: return nil
         case .copied, .settling: return moved ? nil : "This Mac’s box’s keys are copied for a move that didn’t finish: Kuvo Code finishes it."

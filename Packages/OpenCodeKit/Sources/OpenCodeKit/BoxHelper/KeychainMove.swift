@@ -107,6 +107,13 @@ public struct KeychainMove: Sendable {
     /// The journal, in the folder the move keeps (`updates/rehome`), made first and never moved.
     public var journalFile: URL { home.appending(path: "updates/rehome/keychain.json") }
 
+    /// Whether the box's move into this home is done (`updates/rehome/state.json`: `done`, `move`).
+    public var moveIsDone: Bool {
+        guard let data = try? Data(contentsOf: home.appending(path: "updates/rehome/state.json")),
+              let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return state["state"] as? String == "done" && state["way"] as? String == "move"
+    }
+
     public func journal() throws -> Journal? {
         guard let data = try? Data(contentsOf: journalFile) else { return nil }
         do {
@@ -177,7 +184,8 @@ public struct KeychainMove: Sendable {
     /// there (locked) changes nothing.
     public func uncopy() throws {
         guard let journal = try journal() else { return }
-        guard journal.state == .copying || journal.state == .copied else {
+        // (The move done, the copies are the box's keys, changed since perhaps: never taken away.)
+        guard journal.state == .copying || journal.state == .copied, !moveIsDone else {
             throw Failure.journal("The box’s keys were moved already: its copies stay.")
         }
         guard !keychain.isLocked else { throw Failure.refused(helper, errSecInteractionNotAllowed) }
