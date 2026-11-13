@@ -296,3 +296,41 @@ test("an Antigravity database that can't be read never holds up forgetting the o
   expect(readdirSync(join(folder, "claude-files"))).toHaveLength(1)
   expect(usage.view("UTC").totals.antigravity?.[0]?.tokens).toBe(1350)
 })
+
+test("a new database written to while it's read counts what was read, is read again next round, and never saves $0", async () => {
+  const own = store({ wal: true })
+  try {
+    insert(own.db, 0)
+    const reads: string[] = []
+    let writing = true, index = 1
+    // (Antigravity writing its next generation while the box reads: the WAL changes under the read.)
+    const history = new AntigravityHistory(undefined, async (path) => {
+      reads.push(path)
+      const events = await readAntigravityDatabase(path)
+      if (writing) insert(own.db, index++)
+      return events
+    }, () => { throw new Error("a database written to while read isn't a failure") })
+    const folder = mkdtempSync(join(base, "changing-"))
+    const agent = { providerID: "antigravity", profile: own.home, instance: { id: "default" } } as unknown as Agent
+    const sources = antigravitySources(folder, () => "machine-one", history)
+    const file = join(folder, "usage.json")
+    const usage = new Usage(() => sources([agent]), { current: () => pricing } as unknown as PricingStore, () => "0123456789abcdef", file, () => Date.parse(fixture.now))
+    await usage.refresh()
+    // What the read saw counts, and is what's saved: not $0.
+    const first = usage.view("UTC").totals.antigravity![0]!
+    expect(first.tokens).toBe(1350)
+    expect(first.cost).toBeGreaterThan(0)
+    expect(readFileSync(file, "utf8")).toContain("antigravity")
+    // (As a restart finds it, before reading anything.)
+    const saved = new Usage(() => sources([agent]), { current: () => pricing } as unknown as PricingStore, () => "0123456789abcdef", file, () => Date.parse(fixture.now))
+    expect(saved.view("UTC").totals.antigravity?.[0]?.tokens).toBe(1350)
+    // Not kept under the stamp from before the read: the next round reads it again, and sees the write.
+    writing = false
+    await usage.refresh()
+    expect(reads).toEqual([realpathSync(own.path), realpathSync(own.path)])
+    expect(usage.view("UTC").totals.antigravity![0]!.tokens).toBe(2700)
+    // Unchanged since: kept, not read again.
+    await usage.refresh()
+    expect(reads).toHaveLength(2)
+  } finally { own.db.close() }
+})

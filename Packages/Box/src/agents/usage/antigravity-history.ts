@@ -249,14 +249,21 @@ export class AntigravityHistory {
         if (stamp.latest < since) { cached.delete(path); continue }
         if (before?.stamp === stamp.stamp) { parts.push(before.events); continue }
         const events = await this.read(path)
-        if (fingerprint(path).stamp !== stamp.stamp) throw new Error("Antigravity database changed during the read")
+        if (fingerprint(path).stamp !== stamp.stamp) {
+          // Written to as it was read (its WAL changes with every write): one read before keeps
+          // that answer. With none, what was read (one transaction's snapshot) counts this round
+          // but isn't kept under the stamp from before the read, so the next round reads it again.
+          if (before) throw new Error("Antigravity database changed during the read")
+          parts.push(events)
+          continue
+        }
         cached.set(path, { stamp: stamp.stamp, events })
         failing.delete(path)
         parts.push(events)
       } catch (error) {
-        // As Swift's scanner: one database that can't be read (changing as it's read, no
-        // gen_metadata, corrupt) is logged and left out, and the others still count. One read
-        // before keeps its last whole answer and old stamp, so it is retried next round.
+        // As Swift's scanner: one database that can't be read (no gen_metadata, corrupt, gone) is
+        // logged and left out, and the others still count. One read before (or changing as it's
+        // read again) keeps its last whole answer and old stamp, so it is retried next round.
         fail(path, error instanceof Error ? error.message : String(error))
         if (before) parts.push(before.events)
       }

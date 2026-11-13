@@ -22143,8 +22143,12 @@ class AntigravityHistory {
           continue;
         }
         const events = await this.read(path);
-        if (fingerprint2(path).stamp !== stamp.stamp)
-          throw new Error("Antigravity database changed during the read");
+        if (fingerprint2(path).stamp !== stamp.stamp) {
+          if (before)
+            throw new Error("Antigravity database changed during the read");
+          parts.push(events);
+          continue;
+        }
         cached.set(path, { stamp: stamp.stamp, events });
         failing.delete(path);
         parts.push(events);
@@ -23642,8 +23646,7 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
     });
   };
 }
-function antigravitySources(folder, computer = ownComputer) {
-  const history = new AntigravityHistory(folder ? join37(folder, "antigravity-files") : undefined);
+function antigravitySources(folder, computer = ownComputer, history = new AntigravityHistory(folder ? join37(folder, "antigravity-files") : undefined)) {
   const last = new Map;
   return (agents) => agents.flatMap((agent) => {
     const parsed = parseProvider(agent.providerID);
@@ -34545,4 +34548,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 4377aae29054cc716671229aad6cf0c3529131aac490ae3e4afe23aad8c65634
+// Built from Packages/Box/src/agents 31b026a6add511ee1923a9caf487a36aba8dbf65e7437861e55caa5d372dfa2d

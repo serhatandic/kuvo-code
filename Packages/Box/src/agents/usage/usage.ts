@@ -1056,8 +1056,7 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
 }
 
 /** Only Kuvo Code's own Antigravity profiles; never an editor's or ~/.gemini. */
-export function antigravitySources(folder?: string, computer = ownComputer): (agents: Agent[]) => UsageSource[] {
-  const history = new AntigravityHistory(folder ? join(folder, "antigravity-files") : undefined)
+export function antigravitySources(folder?: string, computer = ownComputer, history = new AntigravityHistory(folder ? join(folder, "antigravity-files") : undefined)): (agents: Agent[]) => UsageSource[] {
   const last = new Map<string, { events: unknown; pricing: Pricing; since: number; slots: Slots }>()
   return (agents) => agents.flatMap((agent) => {
     const parsed = parseProvider(agent.providerID)
