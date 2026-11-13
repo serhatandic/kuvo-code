@@ -41,7 +41,8 @@ here.
   window that started over since goes.
 
 - **The host's usage history** (`Embedding/HostHistory.swift`): Kuvo Code's boxes read their
-  accounts' logs, price them and add them up across your computers (Claude's, so far); for each
+  accounts' logs, price them and add them up across your computers (Claude's, Grok's, and what
+  the engine's hosted OpenCode models cost, as billed, so far); for each
   provider the host says it covers, its main card's spend tiles, trend and model breakdown take the
   host's days in place of its own scan of the logs here (and Pi's), so nothing is read twice. Its
   other cards, and the providers the host doesn't cover yet, scan as before.

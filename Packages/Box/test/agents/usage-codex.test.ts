@@ -166,7 +166,7 @@ describe("one box", () => {
     const usage = make()
     await usage.refresh()
     const data = await view(usage)
-    expect(data.services).toEqual(["claude", "codex"])
+    expect(data.services).toEqual(["claude", "codex", "grok", "opencode"])
     expect(data.rows).toHaveLength(1)
     const row = data.rows[0]
     expect(row).toMatchObject({ id: "codex#0123456789abcdef", service: "codex", provider: "codex-cli@work", agent: "codex", account: "work", label: "Work" })
@@ -448,5 +448,19 @@ describe("the engine's ChatGPT sign-in", () => {
     const again = await source.slots(pricing, since)
     expect(again).not.toBe(first)
     expect([...again.used.values()].flatMap((models) => [...models.values()]).reduce((sum, use) => sum + use[0], 0)).toBe(115)
+  })
+
+  test("one database that can't be read while another can: not known now (what was read stays), never kept as whole; one that keeps failing doesn't hold up the rest", async () => {
+    database("opencode.db", { signIn: { type: "oauth", access: "a", at: null }, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
+    database("opencode-next.db", { signIn: { type: "oauth", access: "a", at: null }, v1: [["n1", day + HOUR, reply(day + HOUR, 1000, 0)]] })
+    const source = engineCodexSource(data, () => true, () => true)()[0]!
+    const pricing = new PricingStore(undefined, null).current()
+    const tokens = (slots: Awaited<ReturnType<typeof source.slots>>) => [...slots.used.values()].flatMap((models) => [...models.values()]).reduce((sum, use) => sum + use[0], 0)
+    expect(tokens(await source.slots(pricing, since))).toBe(1110)
+    // The next channel's breaks: twice not known (the box keeps 1110), then the other counts alone.
+    writeFileSync(join(data, "opencode-next.db"), "not a database at all, but long enough to look like one".repeat(100))
+    await expect(source.slots(pricing, since)).rejects.toThrow()
+    await expect(source.slots(pricing, since)).rejects.toThrow()
+    expect(tokens(await source.slots(pricing, since))).toBe(110)
   })
 })

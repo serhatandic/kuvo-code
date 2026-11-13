@@ -3960,36 +3960,47 @@ as OpenUsage did), never Pi's or another tool's. And what your
 ChatGPT sign-in in Kuvo Code (the engine's `openai`, Settings › Accounts) used through the engine's
 own models, read (only read) from the engine's databases on that computer (each `opencode*.db` in
 its data folder: on a Mac the app's, on a machine `~/.kuvo-code/data/opencode`), Codex's, the same
-row as a Codex account signed in to the same ChatGPT account; never your own opencode's. It prices them as OpenUsage does (its supplement,
+row as a Codex account signed in to the same ChatGPT account; never your own opencode's. And Grok's, each Grok account's home's `sessions` (an account you added:
+its own home; a machine: Kuvo Code's; a Mac's own sign-in: your `GROK_HOME`, else `~/.grok`, where
+Grok runs with it, its sessions there counted whoever ran them, your Terminal's too; a folder two
+accounts name, the first's), only each session's `updates.jsonl`, never Grok's debug log
+(`logs/unified.jsonl`, which it cuts short). It prices them as OpenUsage does (its supplement,
 LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
 hourly, kept in the bridge's `usage/pricing`, only by a real box's bridge, in a Mac app's folder or
-a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client reaches them as
+a machine's `~/.kuvo-code`, never a test's): estimates, not your bill, but where the maker said
+what it cost (Claude Code's `costUSD`, Grok's own costs). And what the engine's own hosted models
+cost (OpenCode Go, `opencode-go`, and OpenCode Zen, `opencode`), as OpenCode billed it, read (only
+read) from the engine's databases on that computer (each `opencode*.db` in its data folder: on a
+Mac the app's, on a machine `~/.kuvo-code/data/opencode`), never your own opencode's: a box that
+doesn't know its engine's folder doesn't state it (`services` without `opencode`). A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
 - `GET kuvo/agents/api/kuvo/usage?zone=<IANA time zone>` → `{data: {zone, services, scanned?, rows:
   [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
-  `zone` says which. `services`: what this box states the usage of (`claude`, `codex`): a client
-  shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `zone` says which. `services`: what this box states the usage of (`claude`, `codex`,
+  `grok`, `opencode`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
   `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
   (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
   `choices`, the models it may be, in order.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
-    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, days}`, `boxes` as limits'
-    rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
+    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, estimated?, days}`:
+    `estimated: false` where its dollars are what its maker billed (OpenCode's hosted models'), not
+    an estimate; `boxes` as limits' rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
     vouched?, same?}`): `vouched`, a box a peer vouches for (another Mac beside a machine you
     share), not one of your computers, and the row `vouched` when all of them are; `same`, a box
     that reads a folder another of them already does (two boxes on one computer), not added again.
     Its `days` are the **sum** of every box's own (each box reads only its own logs), each folder
-    once. A conversation moved to another
+    once. OpenCode's: a row for Go (the same row as its plan limits') and one for Zen, each only
+    while it has use in the window. A conversation moved to another
     computer (`kuvo/moves`) is copied there, and the one it left keeps its copy for a while: its
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
     peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
-    in no total), each folder once: what the Mac's Claude and Codex cards show. `partial`: a service whose
+    in no total), each folder once: what the Mac's Claude, Codex, Grok and OpenCode cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).
   - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?, fallback?}`, newest first, for
@@ -4030,9 +4041,30 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
     `session_message` (opencode 2, a compaction too, from when the sign-in was made on), a message
     copied between two databases once (by its ID). Priced as Codex's. Whether the sign-in is OAuth
     is asked of SQLite: its tokens never leave the database. A database that can't be read now
-    (and none that could) leaves what was read before as it was, never none (its box's `scanned`
-    as of when it last was); one in WAL mode whose
-    `-wal` and `-shm` are gone (its engine stopped) is read as it is.
+    leaves what was read before as it was (its box's `scanned` as of when it last was), and such a
+    read is never kept as whole, until that database has failed three reads in a row (one that's
+    always broken doesn't hold up the rest); one in WAL mode whose `-wal` and `-shm` are gone (its
+    engine stopped) is read as it is.
+  - Grok's (OpenUsage's rules): a transcript line holding `turn_completed` that parses, a
+    `turn_completed` session update (under `params.update`, else `update`) with `usage.modelUsage`
+    and a time (`_meta.agentTimestampMs`, under `params`, else the line's own; else the line's
+    `timestamp`, seconds or ISO 8601). Each model in it with input tokens is its own entry: cached
+    reads and cache writes come out of the input (never more than it), reasoning is in the output
+    already, counts past 10^12 held there. Its cost is Grok's own where it says one
+    (`costUsdTicks`, 10^-10 dollars, the model's, or the turn's when it ran one model), else its
+    tokens at its model's rates. An event (`_meta.eventId`) copied into another session's
+    transcript counts once per model.
+  - OpenCode's hosted models (OpenUsage's `OpenCodeUsageScanner`): each assistant message, and each
+    completed compaction, of `opencode-go` or `opencode` with a numeric cost, from `message`
+    (opencode 1) and `session_message` (opencode 2), on the day it was made; its tokens the total it
+    says, else its buckets added up; its cost as written, never priced again (a negative one left
+    out); a message in both tables, or in two channels' databases, once (by its ID, the first by
+    path). A database without either table says nothing. One that can't be read now gives the rows
+    it gave last, in this bridge's run; one with none of its rows known (as the bridge starts), or
+    every one failing, leaves what this box had as it was (not known now), until it has failed three
+    reads in a row (one that's always broken doesn't hold up the rest). While one fails, they're
+    read every round. One in WAL mode whose `-wal` and `-shm` are gone is read as it is. A model you reach with a key
+    of your own is its provider's, never counted here.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
   own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
@@ -4047,8 +4079,10 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail
   below, only when what was used changed. A log is read on from where
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
-  is kept in the bridge's folder (`usage/claude-files` and `usage/codex-files`, a file a log, with
-  a Codex log's running total and model so far, rebuilt from the logs when it's lost), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
+  is kept in the bridge's folder (`usage/claude-files`, `usage/codex-files` and `usage/grok-files`,
+  a file a log, with a Codex log's running total and model so far, rebuilt from the logs when it's
+  lost; the engine's databases are read again whole, when one or its write-ahead log changed, or
+  one failed last time), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
   answers at once, and every zone's days come out whole (India's midnight is on the half hour).
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
@@ -4065,9 +4099,10 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
-  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}}` (`fallback`, a model whose
-  rates estimated that slot's use of one with no price; not in `digest`, which a box from before
-  it works out without it): `places`, the folders its logs are in, each 16 hex
+  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}, estimated?: false}` (`fallback`, a model whose
+  rates estimated that slot's use of one with no price; `estimated`, as a row's; neither in
+  `digest`, which a box from before works out without them): `places`, the folders its logs are
+  in (for the engine's hosted models, its data folder with the provider), each 16 hex
   characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
   its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight

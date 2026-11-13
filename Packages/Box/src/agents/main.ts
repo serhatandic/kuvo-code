@@ -60,7 +60,7 @@ import { notesBeside } from "./notes"
 import { agentAccounts, Limits } from "./limits"
 import { LimitsPeers } from "./limits-peers"
 import { PricingStore } from "./usage/pricing"
-import { claudeSources, codexSources, engineCodexSource, Usage, UsageSettings } from "./usage/usage"
+import { claudeSources, codexSources, engineCodexSource, engineHostedSources, grokSources, Usage, USAGE_SERVICES, UsageSettings } from "./usage/usage"
 import { UsagePeers } from "./usage/usage-peers"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
@@ -309,10 +309,14 @@ const engineCodexUsage = engineCodexSource(
   () => (engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined),
   () => usage.has("openai"),
 )
-const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...engineCodexUsage()], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
+const grokUsage = grokSources(usageFolder)
+const engineHostedUsage = engineHostedSources(engineData)
+const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage()], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
 usage.settings = usageSettings
 // The engine's sign-ins known (a box's first ChatGPT use shows at once, not a round later).
 engineAccounts.onAnswered = () => void usage.tick()
+// (OpenCode's hosted spend only where this box knows its engine's folder: else a client reads it as before.)
+if (!engineData) usage.services = USAGE_SERVICES.filter((service) => service !== "opencode")
 peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.

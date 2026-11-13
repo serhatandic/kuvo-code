@@ -1,0 +1,160 @@
+{
+ "databases": {
+  "opencode.db": "opencode-hosted.sql",
+  "opencode-next.db": "opencode-hosted-next.sql"
+ },
+ "since": "2026-10-13T00:00:00Z",
+ "now": "2026-11-12T14:00:00Z",
+ "days": [
+  {
+   "date": "2026-11-12",
+   "tokens": 4100,
+   "cost": 0.40625,
+   "models": [
+    {
+     "model": "",
+     "tokens": 100,
+     "cost": 0.03125
+    },
+    {
+     "model": "big-pickle",
+     "tokens": 1000,
+     "cost": 0
+    },
+    {
+     "model": "gpt-5.5",
+     "tokens": 3000,
+     "cost": 0.375
+    }
+   ]
+  },
+  {
+   "date": "2026-11-11",
+   "tokens": 2350,
+   "cost": 0.6875,
+   "models": [
+    {
+     "model": "glm-5.2",
+     "tokens": 100,
+     "cost": 0.5
+    },
+    {
+     "model": "gpt-5.5",
+     "tokens": 1500,
+     "cost": 0.125
+    },
+    {
+     "model": "kimi-k3",
+     "tokens": 750,
+     "cost": 0.0625
+    }
+   ]
+  },
+  {
+   "date": "2026-11-10",
+   "tokens": 5200,
+   "cost": 2.25,
+   "models": [
+    {
+     "model": "claude-sonnet-5",
+     "tokens": 200,
+     "cost": 2
+    },
+    {
+     "model": "glm-5.2",
+     "tokens": 5000,
+     "cost": 0.25
+    }
+   ]
+  }
+ ],
+ "unknown": {},
+ "providers": {
+  "opencode-go": [
+   {
+    "date": "2026-11-12",
+    "tokens": 100,
+    "cost": 0.03125,
+    "models": [
+     {
+      "model": "",
+      "tokens": 100,
+      "cost": 0.03125
+     }
+    ]
+   },
+   {
+    "date": "2026-11-11",
+    "tokens": 850,
+    "cost": 0.5625,
+    "models": [
+     {
+      "model": "glm-5.2",
+      "tokens": 100,
+      "cost": 0.5
+     },
+     {
+      "model": "kimi-k3",
+      "tokens": 750,
+      "cost": 0.0625
+     }
+    ]
+   },
+   {
+    "date": "2026-11-10",
+    "tokens": 5000,
+    "cost": 0.25,
+    "models": [
+     {
+      "model": "glm-5.2",
+      "tokens": 5000,
+      "cost": 0.25
+     }
+    ]
+   }
+  ],
+  "opencode": [
+   {
+    "date": "2026-11-12",
+    "tokens": 4000,
+    "cost": 0.375,
+    "models": [
+     {
+      "model": "big-pickle",
+      "tokens": 1000,
+      "cost": 0
+     },
+     {
+      "model": "gpt-5.5",
+      "tokens": 3000,
+      "cost": 0.375
+     }
+    ]
+   },
+   {
+    "date": "2026-11-11",
+    "tokens": 1500,
+    "cost": 0.125,
+    "models": [
+     {
+      "model": "gpt-5.5",
+      "tokens": 1500,
+      "cost": 0.125
+     }
+    ]
+   },
+   {
+    "date": "2026-11-10",
+    "tokens": 200,
+    "cost": 2,
+    "models": [
+     {
+      "model": "claude-sonnet-5",
+      "tokens": 200,
+      "cost": 2
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -18,7 +18,8 @@ import type { Clock } from "../../src/agents/groups/peer"
 import { claudeLine, dedupClaude } from "../../src/agents/usage/claude-log"
 import { claudeSlots, daysIn } from "../../src/agents/usage/history"
 import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFrom, type PricingFetch } from "../../src/agents/usage/pricing"
-import { claudeSources, codexSources, thisComputer, Usage, usageRoutes, UsageSettings, uuidOf } from "../../src/agents/usage/usage"
+import { claudeSources, codexSources, engineHostedSources, thisComputer, Usage, usageRoutes, UsageSettings, uuidOf, type UsageSource } from "../../src/agents/usage/usage"
+import { Database } from "bun:sqlite"
 import { isRealBridgeFolder } from "../../src/shared/account"
 import { digestOf, UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
 
@@ -131,7 +132,7 @@ describe("one box", () => {
 
     const istanbul = await route(usage, "Europe/Istanbul")
     expect(istanbul.zone).toBe("Europe/Istanbul")
-    expect(istanbul.services).toEqual(["claude", "codex"])
+    expect(istanbul.services).toEqual(["claude", "codex", "grok", "opencode"])
     expect(istanbul.rows).toHaveLength(1)
     const row = istanbul.rows[0]
     expect(row).toMatchObject({ id: "claude#0123456789abcdef", service: "claude", provider: "claude-code@work", agent: "claude", account: "work", label: "Work", identity: "0123456789abcdef", scanned: at })
@@ -348,13 +349,15 @@ class PeerBox {
     most?: number,
     /** The computer it's on (`thisComputer`): this one's, unless a test stands in another. */
     computer?: string,
+    /** Its other sources (the engine's hosted models'). */
+    extra: () => UsageSource[] = () => [],
   ) {
     this.agents = agents as unknown as Agent[]
     this.post = new Post(() => relay.posted++)
     this.directory = new LinkDirectory(this.post, still)
     const sources = claudeSources(join(home, "usage"), computer === undefined ? undefined : () => computer)
     const codex = codexSources(join(home, "usage"), () => this.fallback, computer === undefined ? undefined : () => computer)
-    this.usage = new Usage(() => [...sources(this.agents), ...codex(this.agents)], new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
+    this.usage = new Usage(() => [...sources(this.agents), ...codex(this.agents), ...extra()], new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
     this.usage.settings = this.settings
     this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now, most)
     this.parts = { post: this.post, directory: this.directory, usage: this.peers }
@@ -581,6 +584,39 @@ describe("across your computers", () => {
     expect(two.usage.view("UTC").rows[0]!.days[0]).toEqual(one.usage.view("UTC").rows[0]!.days[0]!)
     one.stop()
     two.stop()
+  })
+
+  test("what the engine's hosted models cost on a machine shows on your Mac as billed, not estimated, in OpenCode's total", async () => {
+    const macHome = mkdtempSync(join(base, "mac-"))
+    const devHome = mkdtempSync(join(base, "devbox-"))
+    const engine = join(devHome, "data", "opencode")
+    mkdirSync(engine, { recursive: true })
+    const db = new Database(join(engine, "opencode.db"))
+    db.exec("CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+    db.exec(`INSERT INTO message VALUES ('m1','s',${Date.parse("2026-11-12T10:00:00Z")},0,'{"role":"assistant","providerID":"opencode-go","modelID":"glm-5.2","cost":0.5,"tokens":{"total":900}}')`)
+    db.close()
+    const mac = new PeerBox("mac-key", "MacBook", relay, macHome, [], () => undefined, now)
+    const dev = new PeerBox("dev-key", "devbox", relay, devHome, [], (provider) => (provider === "opencode-go" ? "eeeeeeeeeeeeeeee" : undefined), now, undefined, undefined, engineHostedSources(engine))
+    await mac.meet([dev])
+    await dev.meet([mac])
+    await mac.usage.refresh()
+    await dev.usage.refresh()
+    await relay.settled()
+    const view = mac.usage.view("UTC")
+    expect(view.rows.map((row) => [row.id, row.estimated, row.days[0]!.cost, row.boxes.map((box) => box.name)])).toEqual([["opencode#eeeeeeeeeeeeeeee", false, 0.5, ["devbox"]]])
+    expect(view.totals.opencode!.map((day) => [day.date, day.tokens, day.cost])).toEqual([["2026-11-12", 900, 0.5]])
+    // (Whether it's billed isn't in the digest: a box from before, which doesn't keep it, gets the same one.)
+    const told = relay.sent.find((each) => each.from === "dev-key" && each.mail.accounts?.length)!.mail
+    expect(told.accounts![0]!.estimated).toBe(false)
+    expect(digestOf(told.accounts!.map(({ estimated: _, ...account }) => account))).toBe(told.digest)
+    const sent = relay.sent.length
+    at += 11 * MINUTE
+    await dev.usage.refresh()
+    await mac.usage.refresh()
+    await relay.settled()
+    expect(relay.sent.slice(sent).every((each) => each.mail.accounts === undefined && each.mail.ask === undefined)).toBe(true)
+    mac.stop()
+    dev.stop()
   })
 
   test("two boxes on one computer reading one folder count it once; a reply written again for each of its parts is kept once", async () => {

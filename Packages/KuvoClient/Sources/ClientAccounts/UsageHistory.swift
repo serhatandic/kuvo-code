@@ -111,9 +111,12 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
         public var scanned: Double?
         /// Every computer it's used on is away: its numbers are as of then.
         public var away: Bool
+        /// Its dollars are an estimate (priced from the logs); false where its maker billed them
+        /// (OpenCode's hosted models).
+        public var estimated: Bool
         public var days: [Day]
 
-        private enum CodingKeys: String, CodingKey { case id, service, provider, label, scanned, away, days }
+        private enum CodingKeys: String, CodingKey { case id, service, provider, label, scanned, away, estimated, days }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -123,6 +126,7 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
             label = try? container.decodeIfPresent(String.self, forKey: .label)
             scanned = try? container.decodeIfPresent(Double.self, forKey: .scanned)
             away = (try? container.decodeIfPresent(Bool.self, forKey: .away)) ?? false
+            estimated = (try? container.decodeIfPresent(Bool.self, forKey: .estimated)) ?? true
             days = (try? container.decode(Readable<Day>.self, forKey: .days).items) ?? []
         }
     }

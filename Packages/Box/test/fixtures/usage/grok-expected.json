@@ -1,0 +1,66 @@
+{
+ "files": [
+  "grok/sessions/2026-11-10-session-a/updates.jsonl",
+  "grok/sessions/2026-11-12-session-b/updates.jsonl"
+ ],
+ "since": "2026-10-13T00:00:00Z",
+ "now": "2026-11-12T14:00:00Z",
+ "days": [
+  {
+   "date": "2026-11-12",
+   "tokens": 1000000003330,
+   "cost": 0.0034502,
+   "models": [
+    {
+     "model": "grok-5",
+     "tokens": 3330,
+     "cost": 0.0034502
+    },
+    {
+     "model": "grok-code-fast-2",
+     "tokens": 1000000000000,
+     "cost": 0
+    }
+   ]
+  },
+  {
+   "date": "2026-11-11",
+   "tokens": 5000,
+   "cost": 0.018,
+   "models": [
+    {
+     "model": "grok-5",
+     "tokens": 5000,
+     "cost": 0.018
+    }
+   ]
+  },
+  {
+   "date": "2026-11-10",
+   "tokens": 5950,
+   "cost": 0.017975,
+   "models": [
+    {
+     "model": "grok-5",
+     "tokens": 3400,
+     "cost": 0.017
+    },
+    {
+     "model": "grok-5-mini",
+     "tokens": 2000,
+     "cost": 0.0008
+    },
+    {
+     "model": "grok-code-fast-2",
+     "tokens": 550,
+     "cost": 0.000175
+    }
+   ]
+  }
+ ],
+ "unknown": {
+  "2026-11-11": [
+   "mystery-model-x"
+  ]
+ }
+}
