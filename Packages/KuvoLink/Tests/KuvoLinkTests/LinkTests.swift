@@ -293,6 +293,16 @@ private final class GatedConnection: RelayTransport, @unchecked Sendable {
         release()
         base.close()
     }
+
+    /// Gone with what it held still in its buffers (a connection that dropped on LTE): none of it
+    /// reaches the relay.
+    func lose() {
+        lock.withLock {
+            queue = []
+            held = false
+        }
+        base.close()
+    }
 }
 
 /// A value shared between a test and what it sets up.
@@ -432,6 +442,50 @@ private func listen(_ client: LinkClient, to host: PairedHost) async throws -> L
     _ = try await parts.next()
     _ = try await parts.next()
     return parts
+}
+
+/// A phone paired with a host whose relay connection is then gone (as the app comes back from the
+/// background), with no new one to be had until `offline` is false; `tries` counts its connects.
+private func offlinePhone(seen: Locked<[String]> = Locked([])) async throws -> (LinkClient, PairedHost, ManualClock, Locked<Bool>, Count) {
+    let relay = MemoryRelay()
+    let clock = ManualClock()
+    // (What it was sent, in the order it came: each POST's body.)
+    let host = TestHost(relay: relay) { request, phone in
+        if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+        return echo(request, phone)
+    }
+    let offline = Locked(false)
+    let tries = Count()
+    let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+        tries.add()
+        if offline.value { throw LinkError.relayUnavailable }
+        return relay.connect(secret)
+    }
+    await client.setClockForTesting(clock.link)
+    let paired = try await client.pair(host.link)
+    offline.value = true
+    client.relayMayBeGone()
+    return (client, paired, clock, offline, tries)
+}
+
+/// A message safe to send again, its id its body.
+private func safeToRepeat(_ id: String) -> LinkRequest {
+    LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": id], body: Data(id.utf8))
+}
+
+/// Whether `sending` waits to go again (a wait due within `within`) rather than failing at once,
+/// as a link that doesn't send anything again does.
+private func waitsToGoAgain<Value: Sendable>(_ sending: Task<Value, Error>, _ clock: ManualClock, within: Duration) async -> Bool {
+    await firstAnswer { answer in
+        Task {
+            await clock.sleepers(1, dueWithin: within)
+            answer(true)
+        }
+        Task {
+            _ = try? await sending.value
+            answer(false)
+        }
+    }
 }
 
 /// Answers with the request's method, path, headers and body, echoed.
@@ -970,6 +1024,288 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         await clock.advance(by: Link.checkTimeout, waking: 2)
         answer.open()
         #expect(try await asking.value.status == 200)
+    }
+
+    /// A message with a picture whose relay connection drops while it's going out (LTE lost, or
+    /// the phone's keepalive giving up): it's sent again, whole and under the same key, on a new
+    /// connection, and its answer comes back rather than "The connection closed" (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageWhoseLinkDropsWhileItGoesIsSentAgain() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let seen = Locked<[LinkRequest]>([])
+        let host = TestHost(relay: relay) { request, phone in
+            if request.method == "POST" { seen.value.append(request) }
+            return echo(request, phone)
+        }
+        let secret = RelaySecret()
+        let first = Locked<GatedConnection?>(nil)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: secret, name: "Test iPhone", app: "0.0.1") { _, secret in
+            let connection = GatedConnection(relay.connect(secret))
+            if first.value == nil { first.value = connection }
+            return connection
+        }
+        await client.setClockForTesting(clock.link)
+        let paired = try await client.pair(host.link)
+        first.value?.hold()
+        let picture = randomBytes(300_000)
+        let message = LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": "msg_1"], body: picture)
+        let sending = Task { try await collect(client.send(message, to: paired)) }
+        // (Gone out, its answer waited for.)
+        await clock.sleepers(1, dueWithin: Link.answerWithin)
+        first.value?.lose()
+        let answered = try await sending.value
+        #expect(answered.status == 200 && answered.body == picture)
+        #expect(seen.value.map(\.body) == [picture])
+        #expect(seen.value.first?.headers["idempotency-key"] == "msg_1")
+        #expect(relay.connections(of: secret.address) == 2)
+    }
+
+    /// The same without the key (a request that isn't safe to send twice): it fails as before.
+    @Test(.timeLimit(.minutes(1))) func aRequestThatIsntSafeToSendAgainFailsWhenItsLinkDrops() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let host = TestHost(relay: relay, handle: echo)
+        let first = Locked<GatedConnection?>(nil)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+            let connection = GatedConnection(relay.connect(secret))
+            if first.value == nil { first.value = connection }
+            return connection
+        }
+        await client.setClockForTesting(clock.link)
+        let paired = try await client.pair(host.link)
+        first.value?.hold()
+        let sending = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/session/ses_1/command", body: randomBytes(1000)), to: paired)) }
+        await clock.sleepers(1, dueWithin: Link.answerWithin)
+        first.value?.lose()
+        await #expect(throws: LinkError.closed) { try await sending.value }
+    }
+
+    /// Offline for a while (a tunnel, a lift): a message safe to send again waits, and goes once
+    /// the relay can be reached again.
+    @Test(.timeLimit(.minutes(1))) func aMessageGoesOnceTheLinkIsBack() async throws {
+        let (client, paired, clock, offline, _) = try await offlinePhone()
+        let sending = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": "msg_2"], body: Data("hello".utf8)), to: paired)) }
+        // Tried at once, and again after a wait (the pairing's own timer is due later than both
+        // waits); back before the try after that.
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        await clock.advance(by: Link.repeatWait(try: 2))
+        await clock.sleepers(1, dueWithin: Link.repeatWait(try: 3))
+        offline.value = false
+        await clock.advance(by: Link.repeatWait(try: 3))
+        let answered = try await sending.value
+        #expect(answered.status == 200 && answered.body == Data("hello".utf8))
+    }
+
+    /// Back while it waits for its next try: it goes as soon as anything connects again, without
+    /// waiting out its time, ahead of what's sent after.
+    @Test(.timeLimit(.minutes(1))) func aMessageWaitingToGoAgainGoesAsSoonAsTheLinkIsBack() async throws {
+        let (client, paired, clock, offline, _) = try await offlinePhone()
+        let sending = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": "msg_4"], body: Data("first".utf8)), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        offline.value = false
+        // Something else asked now connects again; time doesn't move.
+        let next = try await collect(client.send(LinkRequest(path: "api/info"), to: paired))
+        #expect(next.status == 200)
+        let answered = try await sending.value
+        #expect(answered.body == Data("first".utf8))
+    }
+
+    /// Stopped while it waits to go again (Stop pressed, the message taken back): it never goes,
+    /// even once the link's back (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageStoppedWhileItWaitsToGoAgainNeverGoes() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_stopped"), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        sending.cancel()
+        _ = try? await sending.value
+        offline.value = false
+        // The link back, and another sent after it: that one goes, and it alone.
+        let after = try await collect(client.send(safeToRepeat("msg_after"), to: paired))
+        #expect(after.body == Data("msg_after".utf8))
+        #expect(seen.value == ["msg_after"])
+    }
+
+    /// Stop takes back a message waiting to go again that never reached its computer: it ends,
+    /// cancelled, and never goes, even once the link's back (#144).
+    @Test(.timeLimit(.minutes(1))) func stopTakesBackAMessageThatNeverReachedItsComputer() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_never"), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        #expect(await client.takeBack(["msg_never", "msg_elsewhere"], from: paired) == ["msg_never"])
+        await #expect(throws: CancellationError.self) { try await sending.value }
+        offline.value = false
+        let after = try await collect(client.send(safeToRepeat("msg_after"), to: paired))
+        #expect(after.status == 200)
+        #expect(seen.value == ["msg_after"])
+    }
+
+    /// One whose link dropped as or after it went may be on its computer already: Stop doesn't
+    /// take it back (its words would be in the composer and in the conversation); it goes again,
+    /// to be taken once (#144).
+    @Test(.timeLimit(.minutes(1))) func stopLeavesAMessageThatMayHaveReachedItsComputer() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let seen = Locked<[String]>([])
+        let host = TestHost(relay: relay) { request, phone in
+            if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+            return echo(request, phone)
+        }
+        let offline = Locked(false)
+        let first = Locked<GatedConnection?>(nil)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+            if offline.value { throw LinkError.relayUnavailable }
+            let connection = GatedConnection(relay.connect(secret))
+            if first.value == nil { first.value = connection }
+            return connection
+        }
+        await client.setClockForTesting(clock.link)
+        let paired = try await client.pair(host.link)
+        first.value?.hold()
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_went"), to: paired)) }
+        // (Gone out, its answer waited for; then the link's lost, and stays away a moment.)
+        await clock.sleepers(1, dueWithin: Link.answerWithin)
+        offline.value = true
+        first.value?.lose()
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        #expect(await client.takeBack(["msg_went"], from: paired).isEmpty)
+        offline.value = false
+        await clock.advance(by: Link.repeatWait(try: 2))
+        let answered = try await sending.value
+        #expect(answered.status == 200 && answered.body == Data("msg_went".utf8))
+        #expect(seen.value == ["msg_went"])
+    }
+
+    /// Its computer gone from the relay after a message went (its link started again, its Wi-Fi
+    /// blinked): it may have the message, so it goes again once the computer's back, rather than
+    /// failing with "asleep or offline" while it's still connecting (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageThatWentWaitsForItsComputerToComeBack() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let seen = Locked<[String]>([])
+        // (The first never answers: it's gone before it can.)
+        let host = TestHost(relay: relay) { request, _ in
+            if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+            return AsyncThrowingStream { _ in }
+        }
+        let client = await phone(on: relay, clock: clock)
+        let paired = try await client.pair(host.link)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_back"), to: paired)) }
+        await clock.sleepers(1, dueWithin: Link.answerWithin)
+        try #require(seen.value == ["msg_back"])
+        host.connection.close()
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed with its computer still connecting")
+        host.startedAgain(on: relay, handle: echo)
+        await clock.advance(by: Link.repeatWait(try: 2))
+        let answered = try await sending.value
+        #expect(answered.status == 200 && answered.body == Data("msg_back".utf8))
+    }
+
+    /// Taken back by Stop while it's still connecting: it ends cancelled, whatever the connection
+    /// it waited for says (its computer isn't there), and never reaches it (#144).
+    @Test(.timeLimit(.minutes(1))) func stopTakesBackAMessageStillConnecting() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let seen = Locked<[String]>([])
+        let host = TestHost(relay: relay) { request, phone in
+            if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+            return echo(request, phone)
+        }
+        // A relay connection that's slow to come: held until the test lets it.
+        let (entered, enter) = AsyncStream.makeStream(of: Void.self)
+        let (released, release) = AsyncStream.makeStream(of: Void.self)
+        let slow = Locked(false)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+            if slow.value {
+                enter.yield()
+                for await _ in released { break }
+            }
+            return relay.connect(secret)
+        }
+        await client.setClockForTesting(clock.link)
+        let paired = try await client.pair(host.link)
+        slow.value = true
+        client.relayMayBeGone()
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_connecting"), to: paired)) }
+        for await _ in entered { break }
+        #expect(await client.takeBack(["msg_connecting"], from: paired) == ["msg_connecting"])
+        #expect(await client.takeBack(["msg_connecting"], from: paired).isEmpty, "taken back once")
+        host.connection.close()
+        release.yield()
+        await #expect(throws: CancellationError.self) { try await sending.value }
+        #expect(seen.value.isEmpty)
+    }
+
+    /// Its time up while it waited (the app suspended, its timer late): it fails as it would have,
+    /// rather than going minutes after it was sent, though the link's back by then (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageWhoseTimeRanOutWhileItWaitedDoesntGoLate() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_late"), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        offline.value = false
+        await clock.advance(by: Link.repeatFor + .seconds(600))
+        await #expect(throws: LinkError.relayUnavailable) { try await sending.value }
+        #expect(seen.value.isEmpty)
+    }
+
+    /// Several waiting to go again, and one sent once the link's back: the host has them in the
+    /// order they were sent, however each try went (#144).
+    @Test(.timeLimit(.minutes(1))) func messagesWaitingToGoAgainArriveInTheOrderTheyWereSent() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let first = Task { try await collect(client.send(safeToRepeat("msg_a"), to: paired)) }
+        try #require(await waitsToGoAgain(first, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        let second = Task { try await collect(client.send(safeToRepeat("msg_b"), to: paired)) }
+        // (Behind the first, which was tried again as it joined, and waits again: its earlier
+        // wait, and this one.)
+        await clock.sleepers(2, dueWithin: Link.repeatWait(try: 4))
+        offline.value = false
+        let third = try await collect(client.send(safeToRepeat("msg_c"), to: paired))
+        #expect(third.status == 200)
+        #expect(try await first.value.body == Data("msg_a".utf8))
+        #expect(try await second.value.body == Data("msg_b".utf8))
+        #expect(seen.value == ["msg_a", "msg_b", "msg_c"])
+    }
+
+    /// Offline for longer than it's sent again for: it fails as it did at first, and goes back to
+    /// whoever sent it.
+    @Test(.timeLimit(.minutes(1))) func aMessageGivesUpWhenTheLinkStaysAway() async throws {
+        let (client, paired, clock, _, _) = try await offlinePhone()
+        let sending = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": "msg_3"], body: Data("hello".utf8)), to: paired)) }
+        // Its next try waits; by then it's been away the whole time.
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        await clock.advance(by: Link.repeatFor, waking: 0)
+        await #expect(throws: LinkError.relayUnavailable) { try await sending.value }
+    }
+
+    /// Let go of (the phone forgets its computers, the share sheet is done) while a message waits
+    /// to go again: it ends then, and nothing connects for it later.
+    @Test(.timeLimit(.minutes(1))) func aMessageWaitingToGoAgainEndsWithTheLink() async throws {
+        let (client, paired, clock, offline, tries) = try await offlinePhone()
+        let sending = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": "msg_5"], body: Data("hello".utf8)), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        await client.disconnect()
+        await #expect(throws: LinkError.closed) { try await sending.value }
+        offline.value = false
+        let triedBefore = tries.value
+        await clock.advance(by: Link.repeatFor, waking: 0)
+        #expect(tries.value == triedBefore)
+    }
+
+    /// A computer that isn't on the relay (asleep, offline) is said so at once, as before: a
+    /// message isn't shown as going for minutes while nothing can take it.
+    @Test(.timeLimit(.minutes(1))) func aMessageToAComputerThatIsntThereFailsAtOnce() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let host = TestHost(relay: relay, handle: echo)
+        let client = await phone(on: relay, clock: clock)
+        let paired = try await client.pair(host.link)
+        host.connection.close()
+        await #expect(throws: LinkError.hostOffline) {
+            try await collect(client.send(LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": "msg_6"], body: Data("hello".utf8)), to: paired))
+        }
     }
 
     @Test func bodiesLongerThanOneMessageArriveWhole() async throws {
