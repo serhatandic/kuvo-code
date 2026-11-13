@@ -30,6 +30,7 @@ import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } 
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { GLANCE_ROUTE, glanceRoute } from "../areas/glance";
+import { LIST_ROUTE, listRoute } from "../lists/sessions";
 import { SESSION_MODELS_ROUTE, sessionModelsRoute } from "../areas/session-models";
 import { MODELS_OFFERED_ROUTE, modelsOfferedRoute } from "../areas/models-offered";
 import { READ_ALL_ROUTE, readAllRoute } from "../areas/read-all";
@@ -121,6 +122,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   // A session at a glance: its row's and card's (PROTOCOL.md, "A session at a glance").
   { when: route => route.match(GLANCE_ROUTE), answer: glanceRoute },
+  { when: route => route.match(LIST_ROUTE), answer: listRoute },
   // What a session's model button shows, and whether its model can run (PROTOCOL.md, "A session's model").
   { when: route => route === SESSION_MODELS_ROUTE, answer: sessionModelsRoute },
   // The models a session can use here, and the one a new session starts on (PROTOCOL.md, "The models offered").

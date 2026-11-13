@@ -25,6 +25,7 @@ import { queueWatcher, scanQueues, writtenByYou, type ScanFound } from "./queue"
 import { adoptConversation } from "../areas/approval";
 import { giveFolders } from "../areas/projects";
 import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
+import { keepList, listPlaceHeard, noteListEvent } from "../lists/sessions";
 import { forgetModelLists, noteModelsEvent } from "../work/model-rule";
 import { pullCatcher } from "../glance/pulls";
 import type { Target } from "../../shared/records";
@@ -259,6 +260,9 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
   // "since" (glance/asked.ts).
   const stopAsks = followAsks();
   signal?.addEventListener("abort", stopAsks, { once: true });
+  // Every client's session lists, kept as the events come (lists/sessions.ts).
+  const stopList = keepList();
+  signal?.addEventListener("abort", stopList, { once: true });
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine", attachmentsLooked });
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true, attachmentsLooked });
 }
@@ -347,6 +351,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       attempt = 0;
       // When what it asks came: what it asked meanwhile went by unheard (glance/asked.ts).
       forgetAsksOn(work || String(source.port));
+      // Its sessions read whole for the lists: what changed meanwhile went by unheard.
+      if (work) listPlaceHeard(work, source).catch(() => {});
       // What was answered while its events couldn't be heard (it restarted, the stream dropped).
       if (notices && hold) settleHeld(source, hold).catch(() => {});
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
@@ -410,6 +416,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         }
         learn(source, LEARN_NOW.has(event.type));
         noteAskEvent(event, work || String(source.port));
+        if (work) noteListEvent(work, source, event).catch(() => {});
         catchPull(event);
         // Your settings changed by hand meanwhile: the model your subagents use follows them.
         if (learns && (event.type === "session.execution.started" || event.type === "config.updated")) followSettingsFile();

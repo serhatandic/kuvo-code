@@ -3290,6 +3290,9 @@
             "literal": "sessions.glance"
            },
            {
+            "literal": "sessions.list"
+           },
+           {
             "literal": "sessions.models"
            },
            {
@@ -3716,6 +3719,9 @@
            },
            {
             "literal": "sessions.glance"
+           },
+           {
+            "literal": "sessions.list"
            },
            {
             "literal": "sessions.models"
@@ -8827,6 +8833,148 @@
      }
     },
     "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/list",
+   "answers": {
+    "200": {
+     "object": {
+      "at": "string",
+      "full?": "bool",
+      "sessions": {
+       "map": {
+        "object": {
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "project"
+           },
+           {
+            "literal": "chat"
+           },
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "seat"
+           },
+           {
+            "literal": "hidden"
+           },
+           {
+            "literal": "subagent"
+           }
+          ]
+         },
+         "project?": "string",
+         "directory": "string",
+         "title?": "string",
+         "created": "number",
+         "updated": "number",
+         "parent?": "string",
+         "pinned?": "bool",
+         "archived?": "bool",
+         "running?": "bool",
+         "asked?": "number",
+         "away?": "bool"
+        }
+       }
+      },
+      "gone?": {
+       "list": "string"
+      },
+      "projects": {
+       "map": {
+        "object": {
+         "name?": "string",
+         "updated?": "number"
+        }
+       }
+      }
+     }
+    },
+    "405": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/list/events",
+   "answers": {
+    "200": {
+     "object": {
+      "at": "string",
+      "full?": "bool",
+      "sessions": {
+       "map": {
+        "object": {
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "project"
+           },
+           {
+            "literal": "chat"
+           },
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "seat"
+           },
+           {
+            "literal": "hidden"
+           },
+           {
+            "literal": "subagent"
+           }
+          ]
+         },
+         "project?": "string",
+         "directory": "string",
+         "title?": "string",
+         "created": "number",
+         "updated": "number",
+         "parent?": "string",
+         "pinned?": "bool",
+         "archived?": "bool",
+         "running?": "bool",
+         "asked?": "number",
+         "away?": "bool"
+        }
+       }
+      },
+      "gone?": {
+       "list": "string"
+      },
+      "projects": {
+       "map": {
+        "object": {
+         "name?": "string",
+         "updated?": "number"
+        }
+       }
+      }
+     }
+    },
+    "405": {
      "object": {
       "message": "string"
      }
