@@ -23,6 +23,12 @@ import { limitRows, type LimitRow } from "./limits-rows"
 /** The services whose limits a box states, by the name clients know them by (their marks and colors). */
 export type LimitsService = "claude" | "codex" | "grok" | "cursor" | "antigravity" | "copilot" | "openrouter" | "zai" | "ollama" | "opencode"
 
+/**
+ * Services only boxes read, never an app (Antigravity's, since #631 D2): a box covers them whether
+ * or not one is signed in now, so a client's own card of one draws only what boxes state.
+ */
+export const BOX_ONLY_SERVICES: LimitsService[] = ["antigravity"]
+
 /** One window of a plan's limit, as its maker says it. */
 export interface LimitWindow {
   /** Its maker's own name for it: `five_hour`, `seven_day`, `seven_day_sonnet`, Codex's `primary`… */
@@ -367,7 +373,7 @@ export class Limits {
     return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])]
   }
 
-  /** Services read here though none may be signed in now (the engine's). */
+  /** Services read here though none may be signed in now (the engine's, and `BOX_ONLY_SERVICES`). */
   alsoServices: LimitsService[] = []
 
   /**
