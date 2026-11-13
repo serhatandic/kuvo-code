@@ -25,9 +25,9 @@ export interface ResetMail {
   /** Spend one of this row's resets (`id`: the asking box's own for it; asked again, the same). */
   ask?: { id: string; row: string; by?: string }
   /** How the ask `id` went. */
-  answer?: { id: string; outcome: ResetOutcome; until?: number }
-  /** Agents may (or may not) use this row's resets without asking: kept with its account there. */
-  always?: { row: string; on: boolean }
+  answer?: { id: string; outcome: ResetOutcome; until?: number; already?: true }
+  /** Agents may (or may not) use this row's resets without asking, as decided at `at` (the sender's clock): kept with its account there unless a later decision is. */
+  always?: { row: string; on: boolean; at?: number }
 }
 
 export const isResetMail = (value: any): value is ResetMail => value !== null && typeof value === "object" && value.kind === "reset"
@@ -86,11 +86,23 @@ interface Spend {
 interface Saved {
   spends: Spend[]
   /**
-   * Accounts here whose resets agents may use without asking: by provider, the account (its row,
-   * `<service>#<identity>`) it was allowed for. Signed in to another account since, it isn't.
+   * Whether agents may use an account's resets without asking, by account (its row,
+   * `<service>#<identity>`): the latest decision, and when (ms), here or on another of your
+   * computers. A decision older than the one kept never takes its place.
    */
-  always?: Record<string, string>
+  allowed?: Record<string, { on: boolean; at: number }>
+  /** The account each slot here (by provider) was last seen signed in to. */
+  seen?: Record<string, string>
 }
+
+/** How a spend went here or there: `already`, its maker said this same request was done before; `message`, said in place of the outcome's own words. */
+type Result = { outcome: ResetOutcome; until?: number; already?: true; message?: string }
+
+/** A new confirmation joins a row's open spend this long after it was asked; later, that one is settled first and the new one goes as its own. */
+const JOIN_FOR = 10 * 60_000
+
+/** Said of a spend still open that couldn't be asked again from here just now. */
+const STILL_OPEN = "It can't be asked of its maker from here right now. An earlier try may have gone through: asking again later won't use another."
 
 /** Outcomes that leave a spend open: it may have gone, so asked again, it's the same request. */
 const OPEN: ReadonlySet<ResetOutcome> = new Set(["unknown", "unconfirmed"])
@@ -124,10 +136,11 @@ export interface ResetDone {
 export class LimitResets {
   private confirms = new Map<string, { row: string; at: number; via?: string; provider?: string }>()
   private spends: Spend[] = []
-  private always = new Map<string, string>()
+  private allowed = new Map<string, { on: boolean; at: number }>()
+  private seen = new Map<string, string>()
   private waiting = new Map<string, (answer: NonNullable<ResetMail["answer"]>) => void>()
   /** Spends under way here, by id: asked again meanwhile, the same one is waited for. */
-  private running = new Map<string, Promise<{ outcome: ResetOutcome; until?: number }>>()
+  private running = new Map<string, Promise<Result>>()
 
   constructor(
     private readonly limits: Limits,
@@ -147,14 +160,32 @@ export class LimitResets {
    * the account it was allowed for. Signed in to another since, it's forgotten.
    */
   agentsMay(provider: string): boolean {
-    const allowed = this.always.get(provider)
-    if (!allowed) return false
-    const now = this.limits.accountRow(provider)
-    if (now === undefined) return false
-    if (now === allowed) return true
-    this.always.delete(provider)
+    const live = this.limits.liveRow(provider)
+    if (live === undefined) return false
+    this.saw(provider, live)
+    return this.allowed.get(live)?.on === true
+  }
+
+  /**
+   * The account this slot's sign-in is now: signed in to another since it was last seen, what was
+   * allowed for the one before isn't any more (coming back, agents ask again).
+   */
+  private saw(provider: string, live: string) {
+    const before = this.seen.get(provider)
+    if (before === live) return
+    this.seen.set(provider, live)
+    if (before && this.allowed.get(before)?.on) this.allowed.set(before, { on: false, at: this.now() })
     this.save()
-    return false
+  }
+
+  /** A decision for an account, kept unless a later one is (of two at once, the last told); whether it was taken. */
+  private decide(rowID: string, on: boolean, at: number): boolean {
+    const kept = this.allowed.get(rowID)
+    if (kept && kept.at > at) return false
+    this.allowed.set(rowID, { on, at })
+    this.save()
+    this.limits.ownChanged()
+    return true
   }
 
   /**
@@ -169,18 +200,16 @@ export class LimitResets {
     if (!rowID) return { status: 404, message: "No account of yours by that name has resets." }
     if (!rowID.includes("#")) return { status: 409, message: "This account doesn't say who it is yet, so Always Allow can't be kept for it." }
     const row = this.limits.rows().find((each) => each.id === rowID)
-    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.accountRow(ownProvider) === rowID
+    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.liveRow(ownProvider) === rowID
     // Every other computer of yours with the account's sign-in keeps it too (told as mail that's
     // kept until it's there): it's the account's.
     const others = tell ? (row?.boxes ?? []).filter((box) => !box.here && box.key && this.directory?.isPeer?.(box.key) === true) : []
     if (!ownCan && !others.length) return { status: 404, message: "No computer of yours has this account's sign-in." }
-    if (ownCan) {
-      if (on) this.always.set(ownProvider!, rowID)
-      else this.always.delete(ownProvider!)
-      this.save()
-      this.limits.ownChanged()
-    } else if (!on && ownProvider) this.always.delete(ownProvider)
-    for (const box of others) this.transport?.send(box.key, { kind: "reset", at: this.now(), always: { row: rowID, on } }, true)
+    // Kept here as decided now (an older decision told later doesn't undo it), and told.
+    const at = this.now()
+    if (ownCan) this.saw(ownProvider!, rowID)
+    this.decide(rowID, on, at)
+    for (const box of others) this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true)
     return null
   }
 
@@ -228,7 +257,7 @@ export class LimitResets {
    */
   async spend(rowID: string, confirm: string, by?: string): Promise<{ done: ResetDone } | { refused: ResetRefusal }> {
     const kept = this.spends.find((spend) => (spend.id === confirm || spend.also?.includes(confirm)) && spend.row === rowID)
-    let result: { outcome: ResetOutcome; until?: number }
+    let result: Result
     if (kept?.state === "done") {
       result = { outcome: kept.outcome!, ...(kept.until ? { until: kept.until } : {}) }
     } else if (kept) {
@@ -243,10 +272,20 @@ export class LimitResets {
       // Retry, a second confirmation from another app): this is that same spend, its request, its
       // id there, so a reset it used isn't used again.
       const open = this.open(rowID, asked.via)
-      if (open) {
-        open.also = [...new Set([...(open.also ?? []), confirm])].slice(-20)
+      const rerun = (spend: Spend) => (spend.via ? this.passed(spend) : this.here(spend.id, rowID, spend.provider ?? asked.provider, spend.by ?? by))
+      const join = (spend: Spend) => {
+        spend.also = [...new Set([...(spend.also ?? []), confirm])].slice(-20)
         this.save()
-        result = open.via ? await this.passed(open) : await this.here(open.id, rowID, open.provider ?? asked.provider, open.by ?? by)
+      }
+      let settledFirst: Result | undefined
+      if (open && this.now() - open.at < JOIN_FOR) {
+        join(open)
+        result = await rerun(open)
+      } else if (open && ((settledFirst = await rerun(open)), OPEN.has(settledFirst.outcome) || (settledFirst.outcome === "reset" && !settledFirst.already))) {
+        // An older one, settled first from what its maker says: still not known, or used only now
+        // (as it was asked then): that's this one. Done before, or refused: this one goes as its own.
+        join(open)
+        result = settledFirst
       } else if (asked.via) {
         const spend: Spend = { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...(by ? { by } : {}) }
         this.keep(spend)
@@ -255,7 +294,8 @@ export class LimitResets {
         result = await this.here(confirm, rowID, asked.provider, by)
       }
     }
-    return { done: { ...result, ...(words(result.outcome) ? { message: words(result.outcome) } : {}), row: this.limits.rows().find((each) => each.id === rowID) } }
+    const { already: _, message, ...told } = result
+    return { done: { ...told, ...((message ?? words(result.outcome)) ? { message: message ?? words(result.outcome) } : {}), row: this.limits.rows().find((each) => each.id === rowID) } }
   }
 
   /** This row's spend still open (passed to `via`, or here), from the last day. */
@@ -271,9 +311,11 @@ export class LimitResets {
       this.waiting.get(mail.answer.id)?.(mail.answer)
       return
     }
-    if (mail.always && typeof mail.always.row === "string" && typeof mail.always.on === "boolean") {
-      const account = this.limits.accountOf(mail.always.row)
-      if (account?.limits.reset) this.setAlways({ provider: account.provider }, mail.always.on, false)
+    if (mail.always && typeof mail.always.row === "string" && mail.always.row.includes("#") && typeof mail.always.on === "boolean") {
+      // Kept as decided then, whether or not this box knows the account yet (an "off" for one it
+      // learns of later holds then), unless a later decision is.
+      const at = typeof mail.always.at === "number" ? mail.always.at : typeof mail.at === "number" ? mail.at : 0
+      this.decide(mail.always.row, mail.always.on, at)
       return
     }
     const ask = mail.ask
@@ -288,7 +330,7 @@ export class LimitResets {
       this.save()
     }
     void this.here(known?.id ?? open?.id ?? id, ask.row, open?.provider, by).then((result) => {
-      this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, ...result } }, false)
+      this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: result.outcome, ...(result.until ? { until: result.until } : {}), ...(result.already ? { already: true as const } : {}) } }, false)
     })
   }
 
@@ -298,10 +340,10 @@ export class LimitResets {
   }
 
   /** Asks passed to a peer and waiting for its answer, by id: asked again meanwhile, the same wait. */
-  private passing = new Map<string, Promise<{ outcome: ResetOutcome; until?: number }>>()
+  private passing = new Map<string, Promise<Result>>()
 
   /** One passed to the peer with the sign-in: asked (again) there, under the same id. */
-  private passed(spend: Spend): Promise<{ outcome: ResetOutcome; until?: number }> {
+  private passed(spend: Spend): Promise<Result> {
     const waiting = this.passing.get(spend.id)
     if (waiting) return waiting
     const run = this.pass(spend).finally(() => this.passing.delete(spend.id))
@@ -309,7 +351,7 @@ export class LimitResets {
     return run
   }
 
-  private async pass(spend: Spend): Promise<{ outcome: ResetOutcome; until?: number }> {
+  private async pass(spend: Spend): Promise<Result> {
     // (Not sent: nothing spent this time; asked again, it's asked there under the same id.)
     if (!this.reaches(spend.via!)) return { outcome: "failed" }
     const answer = await new Promise<NonNullable<ResetMail["answer"]> | null>((resolve) => {
@@ -332,11 +374,11 @@ export class LimitResets {
       if (typeof answer.until === "number") spend.until = answer.until
       this.save()
     }
-    return { outcome, ...(typeof answer.until === "number" ? { until: answer.until } : {}) }
+    return { outcome, ...(typeof answer.until === "number" ? { until: answer.until } : {}), ...(answer.already === true ? { already: true as const } : {}) }
   }
 
   /** One spent with a sign-in here: once (asked again while it runs, the same run). */
-  private here(id: string, rowID: string, provider: string | undefined, by: string | undefined): Promise<{ outcome: ResetOutcome; until?: number }> {
+  private here(id: string, rowID: string, provider: string | undefined, by: string | undefined): Promise<Result> {
     const running = this.running.get(id)
     if (running) return running
     const run = this.spendHere(id, rowID, provider, by).finally(() => this.running.delete(id))
@@ -344,19 +386,34 @@ export class LimitResets {
     return run
   }
 
-  private async spendHere(id: string, rowID: string, provider: string | undefined, by: string | undefined): Promise<{ outcome: ResetOutcome; until?: number }> {
+  private async spendHere(id: string, rowID: string, provider: string | undefined, by: string | undefined): Promise<Result> {
     let spend = this.spends.find((each) => each.id === id)
-    if (spend?.state === "done") return { outcome: spend.outcome!, ...(spend.until ? { until: spend.until } : {}) }
+    // (Done before: as it went, and said to be the same request's, not a reset used now.)
+    if (spend?.state === "done") return { outcome: spend.outcome!, ...(spend.until ? { until: spend.until } : {}), ...(spend.outcome === "reset" ? { already: true as const } : {}) }
+    // Refused here before anything goes: one already open stays open (an earlier try may have
+    // gone), and says so; a new one is only refused.
+    const refused = (outcome: ResetOutcome): Result => (spend ? { outcome, message: STILL_OPEN } : { outcome })
     const account = provider ? this.limits.account(provider) : this.limits.accountOf(rowID)
-    if (!account?.limits.reset) return this.settle(spend, id, rowID, "no-reset")
-    if (this.limits.held(account.provider)) return this.settle(spend, id, rowID, "not-now")
+    if (!account?.limits.reset) return refused("no-reset")
+    if (this.limits.held(account.provider)) return refused("not-now")
+    // The account signed in there now, right before it's spent from (not as last read): another
+    // account signed in since never pays for this one's reset, and Always Allow for it goes.
+    if (rowID.includes("#")) {
+      const live = this.limits.liveRow(account.provider)
+      if (live === undefined) return refused("not-now")
+      if (live !== rowID) {
+        this.saw(account.provider, live)
+        if (this.allowed.get(rowID)?.on) this.decide(rowID, false, this.now())
+        return refused("no-reset")
+      }
+    }
     if (!spend) {
       spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...(by ? { by } : {}) }
       // Kept before anything goes to its maker.
       this.keep(spend)
     }
     const kept = spend
-    let result: { outcome: ResetOutcome; until?: number }
+    let result: Result
     try {
       result = await account.limits.reset({ request: kept.request, ...(kept.target ? { target: kept.target } : {}), keep: (target) => {
         kept.target = target
@@ -381,15 +438,6 @@ export class LimitResets {
     return result
   }
 
-  /** One that went no further than this box: settled, as `outcome`. */
-  private settle(spend: Spend | undefined, id: string, row: string, outcome: ResetOutcome): { outcome: ResetOutcome } {
-    if (spend) {
-      spend.state = "done"
-      spend.outcome = outcome
-      this.save()
-    }
-    return { outcome }
-  }
 
   private keep(spend: Spend) {
     this.spends.push(spend)
@@ -401,10 +449,8 @@ export class LimitResets {
     try {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as Saved
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string")
-      // (By account only: one kept by slot, before, isn't taken.)
-      if (saved.always && typeof saved.always === "object" && !Array.isArray(saved.always)) {
-        for (const [provider, row] of Object.entries(saved.always)) if (typeof row === "string" && row.includes("#")) this.always.set(provider, row)
-      }
+      for (const [row, decided] of Object.entries(saved.allowed ?? {})) if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number") this.allowed.set(row, { on: decided.on, at: decided.at })
+      for (const [provider, row] of Object.entries(saved.seen ?? {})) if (typeof row === "string") this.seen.set(provider, row)
     } catch {}
   }
 
@@ -414,7 +460,7 @@ export class LimitResets {
     const at = this.now()
     this.spends = this.spends.filter((spend) => spend.state === "sending" || at - spend.at < KEEP_FOR).slice(-KEEP)
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(this.file + ".new", JSON.stringify({ spends: this.spends, always: Object.fromEntries(this.always) } satisfies Saved), { mode: 0o600 })
+    writeFileSync(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen) } satisfies Saved), { mode: 0o600 })
     renameSync(this.file + ".new", this.file)
   }
 }

@@ -4106,7 +4106,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
       states this (`id` `resets`).
     A read of them that fails keeps what was read (a failed read never states none, nor a zero).
     A box a peer only vouches for is told an account's limits and its `resets` count, never what
-    it spends or has to spend (`spent`, `capped`, `left`) nor `agents`/`agentsReset`.
+    it spends or has to spend (`spent`, `capped`, `left`, `balance`) nor `agents`/`agentsReset`.
     A client leaves out a kind it doesn't know, and one whose `resetsAt` has passed (not known
     now, as a window); a box keeps from a peer's mail the kinds it knows, checked, and passes a
     kind it doesn't know on as told, only its plain fields, 1 KB at most. Absent when there's none.
@@ -4274,9 +4274,15 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     before the request. Asked again after a crash, a lost answer or a failure, it goes as the same
     request with the same grant or credit, and its maker answers that it's done (`already_used`,
     `already_redeemed`) rather than spending another. `unknown` and `unconfirmed` leave it open (it
-    may have gone); every other outcome settles it. While one of a row's spends is open (a day at
-    most), a new confirmation for that row is that same spend: its request here, or its id on the
-    peer it was passed to, and two confirmations at once share one request. A client sends the same
+    may have gone); every other outcome settles it, but a refusal here before anything goes (its
+    maker holding requests off, its sign-in unreadable for a moment, another account signed in)
+    leaves an open spend open, and says so. Within 10 minutes of a row's open spend, a new
+    confirmation for that row is that same spend (its request here, or its id on the peer it was
+    passed to), and two confirmations at once share one request; later (a day at most), the open
+    one is asked again first, as itself, and the new one is that one only if it was used just now
+    or still can't be told, else it goes as its own. Right before a request goes, the account
+    signed in there now (its sign-in's own identity, not as last read) must be the row's: if
+    another is, nothing is spent (`no-reset`) and Always Allow for the row is turned off. A client sends the same
     `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
     longer knows it) asks anew.
   - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
@@ -4288,11 +4294,14 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     reset's mail only from your own computers; its link drops it from a box a peer vouches for.
   - **Always Allow**: `PUT kuvo/agents/api/kuvo/limits/reset/always {provider | row, always}`:
     agents may (or may not) use an account's resets without asking. It's the account's, by who it
-    is (its row `<service>#<identity>`; 409 for one that doesn't say who it is yet): kept in the
-    journal on every computer of yours with its sign-in, here (`provider`, as Settings › Accounts
-    names it here, or the `row`) and on the others among its row's `boxes`, told as `{"seat":
-    {"kind": "reset", at, always: {row, on}}}` mail that's kept until it's there. A sign-in in the
-    same place signed in to another account since isn't allowed, and its keeping goes. Stated as
+    is (its row `<service>#<identity>`; 409 for one that doesn't say who it is yet): each decision
+    stamped with when it was made and kept in the journal (`allowed`, by row, whether or not the box
+    knows the account yet) on every computer of yours with its sign-in, here (`provider`, as
+    Settings › Accounts names it here, or the `row`) and on the others among its row's `boxes`,
+    told as `{"seat": {"kind": "reset", at, always: {row, on, at}}}` mail that's kept until it's
+    there; a decision older than the one kept is ignored (of two at once, the last told holds). A
+    slot signed in to another account since turns its earlier account's off, so coming back asks
+    again. Stated as
     `agents: true` on its `resets`, and as `agentsReset: true` on the account in this box's own
     `accounts` whether or not it has resets now (so a client can turn it off). Answering a card
     Always while the computer with the sign-in is away keeps it all the same; no reset is used then.

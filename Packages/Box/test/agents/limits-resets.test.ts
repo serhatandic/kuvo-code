@@ -19,7 +19,7 @@ import { codexResetEndpoints } from "../../src/agents/codex-resets"
 import { EngineAccounts, engineEndpoints } from "../../src/agents/engine-limits"
 import { LinkDirectory, PeerPost, peerRoutes, type PeerParts } from "../../src/agents/groups/post"
 import type { Clock } from "../../src/agents/groups/peer"
-import { agentAccounts, Limits, limitsRoutes, type LimitedAccount } from "../../src/agents/limits"
+import { agentAccounts, identityOf, Limits, limitsRoutes, type LimitedAccount } from "../../src/agents/limits"
 import { LimitsPeers } from "../../src/agents/limits-peers"
 import { LimitResets } from "../../src/agents/limits-resets"
 
@@ -74,6 +74,8 @@ class Makers {
   failAfterSpending = false
   /** The next claim: spent, and answered `reset_unconfirmed`. */
   unconfirmedOnce = false
+  /** ChatGPT holding reads of the plan off (a 429 for an hour). */
+  holdUsage = false
   /** Credits it refuses outright (expired since they were listed): a 400. */
   refuses = new Set<string>()
   fiveHour = 92
@@ -110,6 +112,7 @@ class Makers {
         return Response.json({ result: "reset" })
       }
       if (url.pathname === "/wham/usage") {
+        if (this.holdUsage) return new Response("{}", { status: 429, headers: { "retry-after": "3600" } })
         return Response.json({
           plan_type: "plus",
           rate_limit: { primary_window: { used_percent: this.fiveHour, limit_window_seconds: 18_000, reset_after_seconds: 3600 } },
@@ -529,7 +532,7 @@ describe("a Mac's Claude token and your other computers", () => {
       expect(resets()!.agents).toBe(true)
       expect((await post(mac.limits, { row: id })).body.data.always).toBe(true)
       // Kept through hetzner's restart, in its journal.
-      expect(JSON.parse(readFileSync(join(linuxFolder, "limits-resets.json"), "utf8")).always).toEqual({ "claude-code": id })
+      expect(JSON.parse(readFileSync(join(linuxFolder, "limits-resets.json"), "utf8")).allowed[id]).toEqual({ on: true, at: time })
 
       // Turned off where the account is (Settings › Accounts on hetzner's page).
       await limitsRoutes(hetzner.limits, "PUT", ["reset", "always"], async () => ({ provider: "claude-code", always: false }))
@@ -674,7 +677,11 @@ describe("the second review's cases", () => {
 
   test("a box a peer only vouches for hears an account's limits but not its spend or Always Allow, and can't ask for a reset", async () => {
     const relay = new Map<string, Box>()
-    const hetzner = await linuxBox("key-hetzner", "hetzner", relay)
+    const hetznerFolder = mkdtempSync(join(base, "hetzner-v-"))
+    const claudeLinux = linuxClaude(hetznerFolder)
+    // (An account with credits left, as OpenRouter's is.)
+    const credits: LimitedAccount = { provider: "openrouter", service: "openrouter", limits: { every: 600_000, identity: () => "key:sk-or-test", read: async () => ({ windows: [], balance: { left: 7.7, limit: 50, unit: "usd" as const } }) } }
+    const hetzner = new Box("key-hetzner", "hetzner", () => [...agentAccounts([claudeLinux]), credits], hetznerFolder, relay)
     const macFolder = mkdtempSync(join(base, "mac-v-"))
     const claudeMac = macClaude(macFolder)
     const mac = new Box("key-mac", "MacBook Pro", () => agentAccounts([claudeMac]), macFolder, relay)
@@ -696,6 +703,10 @@ describe("the second review's cases", () => {
       expect(theirs()!.agentsReset).toBeUndefined()
       // Your own Mac hears all of it.
       expect(ours()!.extras?.map((extra) => extra.kind)).toEqual(["capped", "resets"])
+      // Nor what an account has left to spend.
+      await until(() => !!other.limits.rows().find((row) => row.service === "openrouter") && !!mac.limits.rows().find((row) => row.service === "openrouter"))
+      expect(other.limits.rows().find((row) => row.service === "openrouter")!.balance).toBeUndefined()
+      expect(mac.limits.rows().find((row) => row.service === "openrouter")!.balance).toEqual({ left: 7.7, limit: 50, unit: "usd" })
       // And its ask is never taken.
       await peerRoutes(hetzner.parts, "POST", ["mail"], async () => ({ from: "key-other", mail: { kind: "reset", at: time, ask: { id: "v1", row: id } } }))
       expect(makers.claims).toEqual([])
@@ -704,5 +715,109 @@ describe("the second review's cases", () => {
       mac.stop()
       other.stop()
     }
+  })
+})
+
+describe("the third review's cases", () => {
+  async function linuxBox(key: string, name: string, relay: Map<string, Box>) {
+    const folder = mkdtempSync(join(base, `${name}-`))
+    const claude = linuxClaude(folder)
+    return new Box(key, name, () => agentAccounts([claude]), folder, relay)
+  }
+
+  test("Always Allow, and another account signed in between the offer and the spend: nothing is spent from it, and the allowance goes", async () => {
+    let account = "acct-1"
+    const engine = new EngineAccounts(async () => [{ integrationID: "openai", active: true, value: { type: "oauth", access: chatGPTToken(account), refresh: `refresh-${account}`, expires: time + DAY, metadata: { accountID: account } } }])
+    const limits = new Limits(() => engine.accounts(), undefined, now, () => engine.refresh(), () => engine.answered)
+    const resets = new LimitResets(limits, join(mkdtempSync(join(base, "between-")), "limits-resets.json"), now)
+    await limits.tick()
+    const id = limits.rows()[0]!.id
+    await limitsRoutes(limits, "PUT", ["reset", "always"], async () => ({ provider: "openai", always: true }))
+    const offer = await post(limits, { row: id })
+    expect(offer.body.data.always).toBe(true)
+    // Signed in to another account in Settings › Accounts, before the box reads it again.
+    account = "acct-2"
+    await engine.refresh()
+    const done = await post(limits, { row: id, confirm: offer.body.data.confirm })
+    expect(done.body.data.outcome).toBe("no-reset")
+    expect(makers.consumes).toEqual([])
+    expect(resets.agentsMay("openai")).toBe(false)
+  })
+
+  test("Always Allow on, then off, while the computer with the sign-in is away: the older on, told last, doesn't undo the off", async () => {
+    const relay = new Map<string, Box>()
+    const box = await linuxBox("key-l", "hetzner", relay)
+    try {
+      await box.meet([])
+      await box.limits.tick()
+      const id = box.limits.rows()[0]!.id
+      // (As the Mac's link would deliver them: a peer it knows.)
+      const tell = (on: boolean, at: number) => box.resets.take("key-mac", { kind: "reset", at, always: { row: id, on, at } })
+      ;(box.directory as any).isPeer = (key: string) => key === "key-mac"
+      tell(true, time - 2_000)
+      tell(false, time - 1_000)
+      // The "on" sent again, last.
+      tell(true, time - 2_000)
+      expect(box.resets.agentsMay("claude-code")).toBe(false)
+      // And one turned off here after a queued "on" was decided elsewhere.
+      tell(true, time + 1_000)
+      expect(box.resets.agentsMay("claude-code")).toBe(true)
+      time += 5_000
+      await limitsRoutes(box.limits, "PUT", ["reset", "always"], async () => ({ provider: "claude-code", always: false }))
+      tell(true, time - 3_000)
+      expect(box.resets.agentsMay("claude-code")).toBe(false)
+    } finally {
+      box.stop()
+    }
+  })
+
+  test("an off for an account this box doesn't know yet is kept: once it does, the account isn't allowed, and an older on doesn't change that", async () => {
+    const folder = mkdtempSync(join(base, "later-"))
+    const later = linuxClaude(folder)
+    let signedIn = false
+    const limits = new Limits(() => (signedIn ? agentAccounts([later]) : []), join(folder, "limits.json"), now)
+    const resets = new LimitResets(limits, join(folder, "limits-resets.json"), now)
+    const id = `claude#${identityOf(`anthropic:${ACCOUNT}|${ORG}`)}`
+    resets.take("key-mac", { kind: "reset", at: time, always: { row: id, on: false, at: time } })
+    expect(JSON.parse(readFileSync(join(folder, "limits-resets.json"), "utf8")).allowed[id]).toEqual({ on: false, at: time })
+    resets.take("key-mac", { kind: "reset", at: time - 1, always: { row: id, on: true, at: time - 1 } })
+    signedIn = true
+    await limits.tick()
+    expect(limits.rows()[0]!.id).toBe(id)
+    expect(resets.agentsMay("claude-code")).toBe(false)
+  })
+
+  test("a reset still open, asked again while its maker holds requests off: refused for now, and still open, never 'nothing was used'", async () => {
+    const folder = mkdtempSync(join(base, "held-"))
+    const { limits } = await chatGPTBox(folder)
+    const [row] = limits.rows()
+    makers.failAfterSpending = true
+    const offer = await post(limits, { row: row!.id })
+    expect((await post(limits, { row: row!.id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("unknown")
+    // ChatGPT holds reads off now.
+    makers.holdUsage = true
+    time += 11 * 60_000
+    await limits.tick()
+    const again = await post(limits, { row: row!.id, confirm: offer.body.data.confirm })
+    expect(again.body.data.outcome).toBe("not-now")
+    expect(again.body.data.message).toContain("An earlier try may have gone through")
+    expect(JSON.parse(readFileSync(join(folder, "limits-resets.json"), "utf8")).spends[0].state).toBe("sending")
+    expect(makers.consumes).toHaveLength(1)
+  })
+
+  test("a new reset asked well after one that never heard back: that one is settled first from what its maker says, and this one is its own", async () => {
+    const { limits } = await chatGPTBox(mkdtempSync(join(base, "later-new-")))
+    const [row] = limits.rows()
+    makers.failAfterSpending = true
+    const first = await post(limits, { row: row!.id })
+    expect((await post(limits, { row: row!.id, confirm: first.body.data.confirm })).body.data.outcome).toBe("unknown")
+    // A quarter of an hour on, the user wants another.
+    time += 15 * 60_000
+    const second = await post(limits, { row: row!.id })
+    expect((await post(limits, { row: row!.id, confirm: second.body.data.confirm })).body.data.outcome).toBe("reset")
+    // The first asked again as itself (ChatGPT: done before), then the new one, its own request.
+    expect(makers.consumes.map((each) => each.request)).toEqual([makers.consumes[0]!.request, makers.consumes[0]!.request, makers.consumes[2]!.request])
+    expect(makers.consumes[2]!.request).not.toBe(makers.consumes[0]!.request)
+    expect(makers.spends).toBe(2)
   })
 })

@@ -266,11 +266,12 @@ export class LimitsPeers {
 
 /**
  * What a box a peer only vouches for is told of your accounts: their limits, but not what you spend
- * or have to spend beyond them (`spent`, `capped`, `left`), nor whether agents may use their resets.
+ * or have to spend beyond them (`spent`, `capped`, `left`, credits left), nor whether agents may
+ * use their resets.
  */
 function forVouched(accounts: AccountLimits[]): AccountLimits[] {
   return accounts.map((account) => {
-    const { agentsReset: _, ...told } = account
+    const { agentsReset: _, balance: ___, ...told } = account
     const extras = (account.extras ?? []).filter((extra) => extra.kind === "resets" || extra.kind === "unreadable").map(({ agents: __, ...extra }) => extra)
     delete told.extras
     return extras.length ? { ...told, extras } : told

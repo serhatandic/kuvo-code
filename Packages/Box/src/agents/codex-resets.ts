@@ -79,7 +79,7 @@ export async function readCodexResets(signIn: ChatGPTSignIn, now = Date.now()): 
  * Spends one reset credit: the one `attempt` already chose (asked again), else the soonest to
  * expire, chosen from the list read now and kept in the journal before it's spent.
  */
-export async function spendCodexReset(signIn: ChatGPTSignIn | undefined, attempt: ResetAttempt, now = Date.now()): Promise<{ outcome: ResetOutcome }> {
+export async function spendCodexReset(signIn: ChatGPTSignIn | undefined, attempt: ResetAttempt, now = Date.now()): Promise<{ outcome: ResetOutcome; already?: true }> {
   if (!signIn) return { outcome: "no-reset" }
   let credit = attempt.target
   // (Nothing is spent before the credit is chosen and kept: a failure until then is only that.)
@@ -109,7 +109,8 @@ export async function spendCodexReset(signIn: ChatGPTSignIn | undefined, attempt
     // for its sign-in or for now, or failing: whether an earlier try went through isn't said.
     if (!response.ok) return { outcome: response.status >= 500 || [401, 403, 429].includes(response.status) ? "unknown" : "failed" }
     const code = ((await response.json().catch(() => undefined)) as any)?.code
-    if (code === "reset" || code === "already_redeemed") return { outcome: "reset" }
+    if (code === "reset") return { outcome: "reset" }
+    if (code === "already_redeemed") return { outcome: "reset", already: true }
     if (code === "nothing_to_reset") return { outcome: "nothing-to-reset" }
     if (code === "no_credit") return { outcome: "no-reset" }
     return { outcome: "unknown" }

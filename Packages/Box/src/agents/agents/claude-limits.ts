@@ -325,7 +325,7 @@ export async function claudeOrganization(configHome: string | undefined, signIn:
  * with the request id the box's journal keeps: asked again, Anthropic answers `already_used`).
  * `grant`: the one to spend, as last read (`claimableGrant`).
  */
-export async function claimClaudeGrant(signIn: ClaudeSignIn | undefined, version: string | undefined, organization: string | undefined, grant: string | undefined, attempt: ResetAttempt): Promise<{ outcome: ResetOutcome; until?: number }> {
+export async function claimClaudeGrant(signIn: ClaudeSignIn | undefined, version: string | undefined, organization: string | undefined, grant: string | undefined, attempt: ResetAttempt): Promise<{ outcome: ResetOutcome; until?: number; already?: true }> {
   const target = attempt.target ?? grant
   if (!signIn || !target) return { outcome: "no-reset" }
   if (!organization || !/^[a-z0-9_-]{1,40}$/.test(target) || !/^[A-Za-z0-9_-]{1,64}$/.test(attempt.request)) return { outcome: "failed" }
@@ -346,8 +346,9 @@ export async function claimClaudeGrant(signIn: ClaudeSignIn | undefined, version
     const code = body?.result === "unavailable" ? body?.reason : body?.result
     switch (code) {
       case "reset":
-      case "already_used":
         return { outcome: "reset" }
+      case "already_used":
+        return { outcome: "reset", already: true }
       case "not_limited":
         return { outcome: "nothing-to-reset" }
       case "ineligible":

@@ -9528,6 +9528,8 @@ import { randomBytes as randomBytes5 } from "crypto";
 import { mkdirSync as mkdirSync10, readFileSync as readFileSync15, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "fs";
 import { dirname as dirname10 } from "path";
 var isResetMail = (value) => value !== null && typeof value === "object" && value.kind === "reset";
+var JOIN_FOR = 10 * 60000;
+var STILL_OPEN = "It can't be asked of its maker from here right now. An earlier try may have gone through: asking again later won't use another.";
 var OPEN = new Set(["unknown", "unconfirmed"]);
 var MINUTE = 60000;
 var CONFIRM_FOR = 10 * MINUTE;
@@ -9545,7 +9547,8 @@ class LimitResets {
   peerWait;
   confirms = new Map;
   spends = [];
-  always = new Map;
+  allowed = new Map;
+  seen = new Map;
   waiting = new Map;
   running = new Map;
   constructor(limits, file, now = Date.now, transport, directory, peerWait = PEER_WAIT) {
@@ -9559,17 +9562,29 @@ class LimitResets {
     limits.resets = this;
   }
   agentsMay(provider) {
-    const allowed = this.always.get(provider);
-    if (!allowed)
+    const live = this.limits.liveRow(provider);
+    if (live === undefined)
       return false;
-    const now = this.limits.accountRow(provider);
-    if (now === undefined)
-      return false;
-    if (now === allowed)
-      return true;
-    this.always.delete(provider);
+    this.saw(provider, live);
+    return this.allowed.get(live)?.on === true;
+  }
+  saw(provider, live) {
+    const before = this.seen.get(provider);
+    if (before === live)
+      return;
+    this.seen.set(provider, live);
+    if (before && this.allowed.get(before)?.on)
+      this.allowed.set(before, { on: false, at: this.now() });
     this.save();
-    return false;
+  }
+  decide(rowID, on, at) {
+    const kept = this.allowed.get(rowID);
+    if (kept && kept.at > at)
+      return false;
+    this.allowed.set(rowID, { on, at });
+    this.save();
+    this.limits.ownChanged();
+    return true;
   }
   setAlways(given, on, tell = true) {
     const ownProvider = given.provider ?? (given.row ? this.limits.accountOf(given.row)?.provider : undefined);
@@ -9579,21 +9594,16 @@ class LimitResets {
     if (!rowID.includes("#"))
       return { status: 409, message: "This account doesn't say who it is yet, so Always Allow can't be kept for it." };
     const row = this.limits.rows().find((each) => each.id === rowID);
-    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.accountRow(ownProvider) === rowID;
+    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.liveRow(ownProvider) === rowID;
     const others = tell ? (row?.boxes ?? []).filter((box) => !box.here && box.key && this.directory?.isPeer?.(box.key) === true) : [];
     if (!ownCan && !others.length)
       return { status: 404, message: "No computer of yours has this account's sign-in." };
-    if (ownCan) {
-      if (on)
-        this.always.set(ownProvider, rowID);
-      else
-        this.always.delete(ownProvider);
-      this.save();
-      this.limits.ownChanged();
-    } else if (!on && ownProvider)
-      this.always.delete(ownProvider);
+    const at = this.now();
+    if (ownCan)
+      this.saw(ownProvider, rowID);
+    this.decide(rowID, on, at);
     for (const box of others)
-      this.transport?.send(box.key, { kind: "reset", at: this.now(), always: { row: rowID, on } }, true);
+      this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true);
     return null;
   }
   ask(rowID) {
@@ -9652,10 +9662,18 @@ class LimitResets {
         return { refused: { status: 404, message: "That confirmation has expired: ask again." } };
       this.confirms.delete(confirm);
       const open = this.open(rowID, asked.via);
-      if (open) {
-        open.also = [...new Set([...open.also ?? [], confirm])].slice(-20);
+      const rerun = (spend) => spend.via ? this.passed(spend) : this.here(spend.id, rowID, spend.provider ?? asked.provider, spend.by ?? by);
+      const join = (spend) => {
+        spend.also = [...new Set([...spend.also ?? [], confirm])].slice(-20);
         this.save();
-        result = open.via ? await this.passed(open) : await this.here(open.id, rowID, open.provider ?? asked.provider, open.by ?? by);
+      };
+      let settledFirst;
+      if (open && this.now() - open.at < JOIN_FOR) {
+        join(open);
+        result = await rerun(open);
+      } else if (open && (settledFirst = await rerun(open), OPEN.has(settledFirst.outcome) || settledFirst.outcome === "reset" && !settledFirst.already)) {
+        join(open);
+        result = settledFirst;
       } else if (asked.via) {
         const spend = { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...by ? { by } : {} };
         this.keep(spend);
@@ -9664,7 +9682,8 @@ class LimitResets {
         result = await this.here(confirm, rowID, asked.provider, by);
       }
     }
-    return { done: { ...result, ...words2(result.outcome) ? { message: words2(result.outcome) } : {}, row: this.limits.rows().find((each) => each.id === rowID) } };
+    const { already: _, message, ...told } = result;
+    return { done: { ...told, ...message ?? words2(result.outcome) ? { message: message ?? words2(result.outcome) } : {}, row: this.limits.rows().find((each) => each.id === rowID) } };
   }
   open(rowID, via) {
     return this.spends.findLast((each) => each.row === rowID && each.state === "sending" && (via ? each.via === via : !each.via) && this.now() - each.at < UNSETTLED_FOR);
@@ -9678,10 +9697,9 @@ class LimitResets {
       this.waiting.get(mail.answer.id)?.(mail.answer);
       return;
     }
-    if (mail.always && typeof mail.always.row === "string" && typeof mail.always.on === "boolean") {
-      const account = this.limits.accountOf(mail.always.row);
-      if (account?.limits.reset)
-        this.setAlways({ provider: account.provider }, mail.always.on, false);
+    if (mail.always && typeof mail.always.row === "string" && mail.always.row.includes("#") && typeof mail.always.on === "boolean") {
+      const at = typeof mail.always.at === "number" ? mail.always.at : typeof mail.at === "number" ? mail.at : 0;
+      this.decide(mail.always.row, mail.always.on, at);
       return;
     }
     const ask = mail.ask;
@@ -9696,7 +9714,7 @@ class LimitResets {
       this.save();
     }
     this.here(known?.id ?? open?.id ?? id, ask.row, open?.provider, by).then((result) => {
-      this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, ...result } }, false);
+      this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: result.outcome, ...result.until ? { until: result.until } : {}, ...result.already ? { already: true } : {} } }, false);
     });
   }
   reaches(key) {
@@ -9734,7 +9752,7 @@ class LimitResets {
         spend.until = answer.until;
       this.save();
     }
-    return { outcome, ...typeof answer.until === "number" ? { until: answer.until } : {} };
+    return { outcome, ...typeof answer.until === "number" ? { until: answer.until } : {}, ...answer.already === true ? { already: true } : {} };
   }
   here(id, rowID, provider, by) {
     const running = this.running.get(id);
@@ -9747,12 +9765,24 @@ class LimitResets {
   async spendHere(id, rowID, provider, by) {
     let spend = this.spends.find((each) => each.id === id);
     if (spend?.state === "done")
-      return { outcome: spend.outcome, ...spend.until ? { until: spend.until } : {} };
+      return { outcome: spend.outcome, ...spend.until ? { until: spend.until } : {}, ...spend.outcome === "reset" ? { already: true } : {} };
+    const refused = (outcome) => spend ? { outcome, message: STILL_OPEN } : { outcome };
     const account = provider ? this.limits.account(provider) : this.limits.accountOf(rowID);
     if (!account?.limits.reset)
-      return this.settle(spend, id, rowID, "no-reset");
+      return refused("no-reset");
     if (this.limits.held(account.provider))
-      return this.settle(spend, id, rowID, "not-now");
+      return refused("not-now");
+    if (rowID.includes("#")) {
+      const live = this.limits.liveRow(account.provider);
+      if (live === undefined)
+        return refused("not-now");
+      if (live !== rowID) {
+        this.saw(account.provider, live);
+        if (this.allowed.get(rowID)?.on)
+          this.decide(rowID, false, this.now());
+        return refused("no-reset");
+      }
+    }
     if (!spend) {
       spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...by ? { by } : {} };
       this.keep(spend);
@@ -9781,14 +9811,6 @@ class LimitResets {
     }
     return result;
   }
-  settle(spend, id, row, outcome) {
-    if (spend) {
-      spend.state = "done";
-      spend.outcome = outcome;
-      this.save();
-    }
-    return { outcome };
-  }
   keep(spend) {
     this.spends.push(spend);
     this.save();
@@ -9799,11 +9821,12 @@ class LimitResets {
     try {
       const saved = JSON.parse(readFileSync15(this.file, "utf8"));
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string");
-      if (saved.always && typeof saved.always === "object" && !Array.isArray(saved.always)) {
-        for (const [provider, row] of Object.entries(saved.always))
-          if (typeof row === "string" && row.includes("#"))
-            this.always.set(provider, row);
-      }
+      for (const [row, decided] of Object.entries(saved.allowed ?? {}))
+        if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number")
+          this.allowed.set(row, { on: decided.on, at: decided.at });
+      for (const [provider, row] of Object.entries(saved.seen ?? {}))
+        if (typeof row === "string")
+          this.seen.set(provider, row);
     } catch {}
   }
   save() {
@@ -9812,7 +9835,7 @@ class LimitResets {
     const at = this.now();
     this.spends = this.spends.filter((spend) => spend.state === "sending" || at - spend.at < KEEP_FOR).slice(-KEEP);
     mkdirSync10(dirname10(this.file), { recursive: true });
-    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, always: Object.fromEntries(this.always) }), { mode: 384 });
+    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen) }), { mode: 384 });
     renameSync8(this.file + ".new", this.file);
   }
 }
@@ -10095,6 +10118,15 @@ class Limits {
     const account = this.account(provider);
     const identity = this.entries.get(provider)?.identity;
     return account && identity ? `${account.service}#${identity}` : undefined;
+  }
+  liveRow(provider) {
+    const account = this.account(provider);
+    if (!account)
+      return;
+    if (!account.limits.identity)
+      return this.accountRow(provider);
+    const raw = account.limits.identity();
+    return raw ? `${account.service}#${identityOf(raw)}` : undefined;
   }
   forced = new Set;
   readAgain(provider) {
@@ -13907,8 +13939,9 @@ async function claimClaudeGrant(signIn, version, organization, grant, attempt) {
     const code = body?.result === "unavailable" ? body?.reason : body?.result;
     switch (code) {
       case "reset":
-      case "already_used":
         return { outcome: "reset" };
+      case "already_used":
+        return { outcome: "reset", already: true };
       case "not_limited":
         return { outcome: "nothing-to-reset" };
       case "ineligible":
@@ -16432,8 +16465,10 @@ async function spendCodexReset(signIn, attempt, now = Date.now()) {
     const code = (await response.json().catch(() => {
       return;
     }))?.code;
-    if (code === "reset" || code === "already_redeemed")
+    if (code === "reset")
       return { outcome: "reset" };
+    if (code === "already_redeemed")
+      return { outcome: "reset", already: true };
     if (code === "nothing_to_reset")
       return { outcome: "nothing-to-reset" };
     if (code === "no_credit")
@@ -35391,7 +35426,7 @@ class LimitsPeers {
 }
 function forVouched(accounts) {
   return accounts.map((account) => {
-    const { agentsReset: _, ...told } = account;
+    const { agentsReset: _, balance: ___, ...told } = account;
     const extras = (account.extras ?? []).filter((extra) => extra.kind === "resets" || extra.kind === "unreadable").map(({ agents: __, ...extra }) => extra);
     delete told.extras;
     return extras.length ? { ...told, extras } : told;
@@ -35858,4 +35893,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 34cdf11e505320c73494d793049ce820d0d86eedff4bd987b2fd164997302400
+// Built from Packages/Box/src/agents 9a2710e217b24fa7cecc2817e9c68de80bb74769ff1967ecc603c4bfce1ae761

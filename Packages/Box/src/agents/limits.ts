@@ -213,10 +213,10 @@ export interface LimitsSource {
   /**
    * Spends one of the account's resets (its `resets` extra), with its own sign-in: its maker's
    * answer, as a `ResetOutcome` (`unknown` where the request may have gone and no answer said how
-   * it went). Never throws. `limits.ts`' journal (`limits-resets.ts`) keeps the
+   * it went; `already`, its maker said this same request was done before). Never throws. `limits.ts`' journal (`limits-resets.ts`) keeps the
    * attempt before it's called, so a retry is the same request.
    */
-  reset?(attempt: ResetAttempt, now: number): Promise<{ outcome: ResetOutcome; until?: number }>
+  reset?(attempt: ResetAttempt, now: number): Promise<{ outcome: ResetOutcome; until?: number; already?: true }>
   /** A reset was spent (or may have been): what's kept of its resets is read again, now. */
   afterReset?(): void
 }
@@ -449,6 +449,18 @@ export class Limits {
     const account = this.account(provider)
     const identity = this.entries.get(provider)?.identity
     return account && identity ? `${account.service}#${identity}` : undefined
+  }
+
+  /**
+   * The account signed in to this slot right now, by who its sign-in says it is (not as last
+   * read): what a reset would be spent from. As last read for one whose sign-in doesn't say.
+   */
+  liveRow(provider: string): string | undefined {
+    const account = this.account(provider)
+    if (!account) return undefined
+    if (!account.limits.identity) return this.accountRow(provider)
+    const raw = account.limits.identity()
+    return raw ? `${account.service}#${identityOf(raw)}` : undefined
   }
 
   /** Accounts to read here at their next round whoever else read them lately (a reset was spent here). */
