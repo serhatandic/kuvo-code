@@ -13,7 +13,9 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct SessionLifecycleTests {
     let engine = StubEngine(port: 47987)
     let workspace = Workspace()
-    let project = "/tmp/kuvo-tests-lifecycle/web"
+    /// (A folder of the test's own: the box makes and moves sessions only into one that's there.)
+    let projects = AppInfo.testRoot.appending(path: "Lifecycle-\(UUID().uuidString.prefix(8))")
+    var project: String { projects.appending(path: "web").path }
 
     init() {
         workspace.api = engine.api
@@ -30,9 +32,8 @@ import Testing
 
     /// This Mac's box, its engine the stand-in: what makes and moves sessions, as the app asks it.
     private func box() async throws -> TestBox {
-        // (A folder there, as the box makes and moves sessions only into one.)
-        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
         let box = try await TestBox(engine: engine.url)
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
         let url = engine.url
         workspace.boxes = { $0 == BoxClient.mac ? box.client(engine: url) : nil }
         return box
@@ -144,7 +145,7 @@ import Testing
     /// in its conversation as it comes, and it has its row.
     @Test func aNewSessionShowsItsFirstTurn() async throws {
         let box = try await box()
-        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(atPath: "/tmp/kuvo-tests-lifecycle") }
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(at: projects) }
         try await start([])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
@@ -184,7 +185,7 @@ import Testing
     /// same one its turn goes to, not one of its own that stays empty.
     @Test func aSessionOpenedAsItsMadeShowsItsTurn() async throws {
         let box = try await box()
-        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(atPath: "/tmp/kuvo-tests-lifecycle") }
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(at: projects) }
         try await start([StubEngine.session("ses_open", title: "Open", directory: project)])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
@@ -247,7 +248,7 @@ import Testing
     /// project's, with the conversation it had.
     @Test func aChatMovedIntoAProject() async throws {
         let box = try await box()
-        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(atPath: "/tmp/kuvo-tests-lifecycle") }
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(at: projects) }
         try await start([StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
         engine.on("GET", "/api/session/ses_chat", json: ["data": StubEngine.session("ses_chat", title: "Question", directory: project)])
         try await workspace.move("ses_chat", toProject: project)

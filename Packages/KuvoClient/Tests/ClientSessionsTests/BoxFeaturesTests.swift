@@ -6,7 +6,7 @@ import Testing
 /// kept, one read shared by whoever asks meanwhile, and an answer that can't tell taken as nothing,
 /// old or new, asked again the next time, as the update gate takes it.
 @MainActor
-struct BoxFeaturesTests {
+@Suite(.timeLimit(.minutes(1))) struct BoxFeaturesTests {
     /// A box's `kuvo/info`, as the test has it answer: each answer in turn, the last one again.
     @MainActor final class Box {
         var answers: [Result<(status: Int, body: Data), any Error>]
@@ -19,8 +19,9 @@ struct BoxFeaturesTests {
 
         func answer() async throws -> (status: Int, body: Data) {
             asked += 1
-            if holds { await withCheckedContinuation { held.append($0) } }
+            // (Each ask's answer is the one in turn as it's asked, whenever it's let answer.)
             let next = answers.count > 1 ? answers.removeFirst() : answers[0]
+            if holds { await withCheckedContinuation { held.append($0) } }
             return try next.get()
         }
 
@@ -148,6 +149,32 @@ struct BoxFeaturesTests {
         #expect(box.asked == 1)
         features.take(.cantTell, for: "m")
         #expect(features.knows("usage.settings", on: "m") == true)
+    }
+
+    // Asked again, or forgotten, while a read is under way: what that read brings isn't kept over
+    // what's newer.
+    @Test func aReadOvertakenIsntKept() async {
+        let box = Box(Self.info([]), Self.info(["usage.settings"]))
+        box.holds = true
+        let features = Self.reader(box)
+        let older = Task { await features.features(of: "m") }
+        await Self.untilHeld(box)
+        let newer = Task { await features.readAgain("m") }
+        await Self.untilHeld(box, 2)
+        box.letAnswer()
+        _ = await older.value
+        #expect(await newer.value == .has(["usage.settings"]))
+        #expect(features.knows("usage.settings", on: "m") == true)
+
+        let gone = Box(Self.info(["usage.settings"]))
+        gone.holds = true
+        let forgetting = Self.reader(gone)
+        let reading = Task { await forgetting.features(of: "m") }
+        await Self.untilHeld(gone)
+        forgetting.forget("m")
+        gone.letAnswer()
+        #expect(await reading.value == ["usage.settings"])
+        #expect(forgetting.knows("usage.settings", on: "m") == nil, "forgotten meanwhile: read again next time")
     }
 
     @Test func aBoxForgottenIsReadAgain() async {

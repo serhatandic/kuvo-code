@@ -420,7 +420,11 @@ extension AppModel {
             // It signed in again, or a sign-in ran out and was renewed there: here too.
             if event.type == "credential.updated" { self?.nudgeSignIns(engine) }
         }
-        engine.onReconnect = { [weak self] in _ = await self?.workspace.refresh(engine) }
+        engine.onReconnect = { [weak self] in
+            // (Its box may have been updated meanwhile: what it has is read again.)
+            self?.boxFeatures.forget(machine)
+            _ = await self?.workspace.refresh(engine)
+        }
         // Its coding agents, beside its engine: their sessions as its engine's, their accounts,
         // models and Custom Auto lists (its own) in its catalog.
         engine.agents.onEvent = { [weak self, weak engine] event in

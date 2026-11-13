@@ -84,6 +84,7 @@ final class UsageSettingsOnBox {
         self.api = api
         // (Asked again each time: a box updated in place under the same id may keep them now.)
         kept = nil
+        features.forget(box)
         self.box = box
         then { await $0.read() }
     }

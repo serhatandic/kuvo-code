@@ -121,6 +121,7 @@ public final class BoxFeatures {
     private func keep(_ said: Said, for box: String) {
         guard case .has(let features) = said else { return }
         if known[box] != features { known[box] = features }
+        // (The gate letting a box go may have it forgotten here at once, and read again next.)
         onSaid(box, features)
     }
 }

@@ -2435,8 +2435,10 @@ final class SessionModel {
     /// box gives them (where they've changed), now it's opened, before you write to it.
     func syncFolders() async {
         struct Given: Decodable { var session: String }
+        // (Held for its update: given on its next run or opening once it's up to date.)
+        guard let box = box(), !BoxGates.isHeld(box.box) else { return }
         do {
-            _ = try await box()?.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
+            _ = try await box.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
         } catch is CancellationError {
         } catch {
             fail(error)

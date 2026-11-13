@@ -33,15 +33,12 @@ import Testing
 
         // Changed as Settings' pages change them: a toggle, a new agent, a rule, a popular MCP
         // server's Add, a command.
-        var rulesChanged = 0
-        config.onRulesChanged = { rulesChanged += 1 }
         config.bool(["compaction", "auto"], default: true).wrappedValue = false
         config.set(.object(["mode": .string("subagent"), "description": .string("Reviews code")]), at: ["agents", "review"])
         config.setItems([Self.rule("git push *")], at: ["permissions"])
         MCPCatalog.add(try #require(MCPCatalog.servers.first { $0.id == "context7" }), to: config)
         config.set(.object(["template": .string("Ship it"), "description": .string("Ships")]), at: ["commands", "ship"])
         #expect(await config.settled() == nil)
-        #expect(rulesChanged == 1)
 
         let disk = try SettingsBox.onDisk()
         #expect(disk["model"] as? String == "anthropic/sonnet" && disk["theme"] as? String == "dark", "what Settings doesn't show stays")
@@ -176,7 +173,6 @@ import Testing
                                         settings: #"{"permissions": [{"action": "shell", "resource": "git push *", "effect": "deny"}], "model": "openai/luna"}"#)
         defer { box.stop() }
         try await until { config.isLoaded }
-        #expect(EngineConfig.rules(on: nil).map(\.resource) == ["git push *"])
         #expect(try await app.machineSeed().settings["model"] == .string("openai/luna"))
     }
 

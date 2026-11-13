@@ -661,7 +661,7 @@ final class Workspace {
         guard session(id) != nil else { return }
         // Its box moves it and gives it the project's folders (PROTOCOL.md, "Projects"); it says
         // why where it can't (a coding agent's, one moving to another computer).
-        guard let box = boxes?(Self.box(of: directory)) else { throw CancellationError() }
+        guard let box = boxes?(Self.box(of: directory)) else { throw Self.unreachable }
         _ = try await box.value(SessionMove.Moved.self, "POST", SessionMove.route(id), body: SessionMove.Asked(directory: Self.onBox(directory)))
         await reload(id)
         Analytics.shared.track("chat_moved")
@@ -1298,7 +1298,7 @@ final class Workspace {
         // approval and Autopilot, all there. (Told before the folder's added, as one that can't be
         // told adds nothing.)
         let boxID = Self.box(of: directory)
-        guard let box = boxes?(boxID) else { throw CancellationError() }
+        guard let box = boxes?(boxID) else { throw Self.unreachable }
         let directory = addFolder(directory)
         let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
         let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
@@ -1321,6 +1321,9 @@ final class Workspace {
         trackCreated(session, model: model, agent: agent, approval: session.metadata?["kuvo"]?["applied"]?.string ?? "default", worktree: worktree)
         return session
     }
+
+    /// What a start or a move says when its computer's box can't be reached.
+    private static var unreachable: BoxRefusal { BoxRefusal(status: 503, message: "Its computer can’t be reached now. Try again once it’s connected.") }
 
     private func trackCreated(_ session: Session, model: ModelRef?, agent: String?, approval: String, worktree: Bool) {
         let used = model ?? session.model
@@ -2397,7 +2400,7 @@ final class Workspace {
             sharedForms[request] = nil
             Notifier.shared.clear(request: request)
         }
-        // (Old-box path: what Auto's reviewer was checking here, kept for a box before `sandbox.reviews.settled`.)
+        // (What was heard asked here that its box hasn't listed yet.)
         heardUnlisted = heardUnlisted.filter { !isMac($0.value.sessionID) }
         running = running.filter { !isMac($0) }
         dropShellJobs(where: isMac)
@@ -2419,7 +2422,7 @@ final class Workspace {
             asking[request] = nil
             Notifier.shared.clear(request: request)
         }
-        // (Old-box path: what Auto's reviewer was checking there.)
+        // (What was heard asked there that its box hasn't listed yet.)
         heardUnlisted = heardUnlisted.filter { !isMacs($0.value.sessionID) }
         running = running.filter { !isMacs($0) }
         dropShellJobs(where: isMacs)
@@ -2770,7 +2773,7 @@ final class Workspace {
                 asking[request] = nil
                 Notifier.shared.clear(request: request)
             }
-            // (Old-box path: what Auto's reviewer was checking there.)
+            // (What was heard asked there that its box hasn't listed yet.)
             heardUnlisted = heardUnlisted.filter { !gone.contains($0.value.sessionID) && sessionMachines[$0.value.sessionID] != machine }
             sessionMachines = sessionMachines.filter { $0.value != machine }
         }
@@ -3030,7 +3033,7 @@ final class Workspace {
             if machine != nil { Attachments.forget(session: id) }
             models[id] = nil
             asking = asking.filter { $0.value != id }
-            // (Old-box path: what Auto's reviewer was checking in it.)
+            // (What was heard asked in it that its box hasn't listed yet.)
             heardUnlisted = heardUnlisted.filter { $0.value.sessionID != id && root(of: $0.value.sessionID) != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).
             if running.contains(id) { running.remove(id) }
