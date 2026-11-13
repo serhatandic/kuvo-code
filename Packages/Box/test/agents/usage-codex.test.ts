@@ -166,7 +166,7 @@ describe("one box", () => {
     const usage = make()
     await usage.refresh()
     const data = await view(usage)
-    expect(data.services).toEqual(["claude", "codex", "grok", "opencode", "cursor"])
+    expect(data.services).toEqual(["claude", "codex", "grok", "opencode", "cursor", "antigravity"])
     expect(data.rows).toHaveLength(1)
     const row = data.rows[0]
     expect(row).toMatchObject({ id: "codex#0123456789abcdef", service: "codex", provider: "codex-cli@work", agent: "codex", account: "work", label: "Work" })

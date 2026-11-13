@@ -223,9 +223,9 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
         keychain: KeychainAccessing,
         files: TextFileAccessing,
         http: RoutingHTTPClient
-    ) -> AntigravityProvider {
+    ) -> LegacyAntigravityProvider {
         let fixedNow = now
-        return AntigravityProvider(
+        return LegacyAntigravityProvider(
             authStore: AntigravityAuthStore(keychain: keychain, files: files, now: { fixedNow }),
             usageClient: AntigravityUsageClient(lsHTTP: http, http: http),
             discovery: LanguageServerDiscovery(processRunner: CredentialEmptyProcessRunner()),

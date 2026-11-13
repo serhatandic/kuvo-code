@@ -141,7 +141,7 @@ final class BoxPlanLimits {
         let rows = listed.map { listed in
             Self.row(listed, own: listed.sources.contains { $0.box.isEmpty && own.contains($0.provider) }, now: now)
         }
-        HostLimits.shared.update(rows: rows, covered: services)
+        HostLimits.shared.update(rows: rows, covered: services.union(["antigravity"]))
     }
 
     /// The login whose numbers the panel's own card of its service takes, as the panel reads that
