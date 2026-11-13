@@ -415,6 +415,8 @@ enum BrowserTools {
     /// The vault's tools (`vault_items`, `vault_ask`, `vault_run`): this Mac's box lists them and
     /// carries them out (KuvoLink's PROTOCOL.md, "Vault").
     nonisolated static func isVault(_ name: String) -> Bool { name.hasPrefix("vault_") }
+    /// The browser's own tools (`browser_navigate`…), which only the app answers.
+    nonisolated static func isBrowser(_ name: String) -> Bool { name.hasPrefix("browser_") }
     static var vaultDefinitions: () async -> [[String: Any]] = { [] }
     static var vault: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
     /// What the vault fills on a page for a conversation (`kuvo/vault/fill`): its status and answer,
