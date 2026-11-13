@@ -410,6 +410,9 @@ final class MacBoxRunner {
         environment["KUVO_AGENTS_FILE"] = AgentMail.boxDirectoryFile.path
         // Its record of what agents made, in the box's own folder, as a machine's is in `~/.kuvo-code`.
         environment["KUVO_ARTIFACTS"] = BoxProcess.home.appending(path: "artifacts").path
+        // Where this Mac's engine keeps its database, which the box reads (only reads) for what your
+        // ChatGPT sign-in used through the engine's models, as a machine's box reads its engine's.
+        environment["KUVO_ENGINE_DB_FOLDER"] = AppModel.engineFolders.dataDirectory.path
         // What the app writes in your Library, which a session in your home folder walks over: never
         // what an agent made (the support folder, which holds the box's, it knows already).
         let library = URL.libraryDirectory, own = [

@@ -97,6 +97,25 @@ final class CodexProvider: ProviderRuntime {
     }
 
     func refresh() async -> ProviderSnapshot {
+        let read = await refreshLimits()
+        // The host states Codex's spend itself (`HostHistory`, fork addition), every computer's: it
+        // shows while this Mac can't read Codex's limits at all (signed in only on a machine, a
+        // lapsed sign-in here), with why as the card's notice. A read that failed for now (offline,
+        // a 429, a 5xx) stays a failure, so the last limits stay on screen and it's tried again later.
+        guard provider.id == ProviderAccountID.family(of: provider.id),
+              HostHistory.shared.scan(for: provider.id) != nil,
+              !read.lines.isEmpty, read.lines.allSatisfy(\.isError),
+              let category = read.errorCategory, Self.cantReadHere.contains(category)
+        else { return read }
+        let message: String
+        if case .badge(_, let text, _, _) = read.lines[0] { message = text } else { message = "Couldn't read Codex's limits." }
+        return await snapshot(mapped: CodexMappedUsage(plan: nil, lines: []), limitsProblem: message)
+    }
+
+    /// Failures that say this Mac has no sign-in it can read Codex's limits with, not a passing one.
+    static let cantReadHere: Set<ErrorCategory> = [.notLoggedIn, .authExpired, .authInvalid, .notAvailable]
+
+    private func refreshLimits() async -> ProviderSnapshot {
         if let host = authStore.hostCandidate() { return await refreshHost(host) }
         if authStore.expectedIdentity != nil { return await refreshAccount() }
         let fileCandidates = authStore.loadAuthCandidates()
@@ -210,19 +229,36 @@ final class CodexProvider: ProviderRuntime {
         return await snapshot(mapped: mapped)
     }
 
-    func snapshot(mapped initial: CodexMappedUsage) async -> ProviderSnapshot {
+    /// `limitsProblem`: why this Mac's limits read didn't come (only the spend is shown then).
+    func snapshot(mapped initial: CodexMappedUsage, limitsProblem: String? = nil) async -> ProviderSnapshot {
         var mapped = initial
         // pi logs name a provider family, not an account card.
         let piCardID = ProviderAccountID.family(of: provider.id)
-        let history = await localHistory.value(wait: localHistoryWait) {
-            [pricing, fallbackModel, historyScope, authStore, logUsageScanner, piUsageScanner,
-             openCodeUsageScanner, now] in
-            let claims = await Self.historyClaims(scope: historyScope, authStore: authStore,
-                                                  logUsageScanner: logUsageScanner)
-            return await Self.scanLocalHistory(
-                claims: claims, claimsPiUsage: historyScope.claimsPiUsage, piCardID: piCardID, pricing: pricing, fallbackModel: fallbackModel, logUsageScanner: logUsageScanner,
-                piUsageScanner: piUsageScanner, openCodeUsageScanner: openCodeUsageScanner, now: now
-            )
+        let history: CodexLocalHistory?
+        if let hosted = HostHistory.shared.scan(for: provider.id) {
+            // The host's boxes state Codex's history themselves (`HostHistory`, fork addition): every
+            // Codex account Kuvo Code runs and its ChatGPT sign-in, on every computer of yours, priced
+            // there (its fallback model too); nothing is read here then. Not answered yet: pending.
+            history = hosted.map { scan in
+                var note = "From your Codex usage history (estimated)"
+                if let asOf = HostHistory.shared.asOfNote(for: provider.id) { note += ", \(asOf)" }
+                return CodexLocalHistory(sourceNote: note, usageHistory: ProviderUsageHistory(
+                    series: scan.series, modelUsage: scan.modelUsage,
+                    unknownModelsByDay: scan.unknownModelsByDay,
+                    fallbackPricingModelsByDay: scan.fallbackPricingModelsByDay
+                ))
+            }
+        } else {
+            history = await localHistory.value(wait: localHistoryWait) {
+                [pricing, fallbackModel, historyScope, authStore, logUsageScanner, piUsageScanner,
+                 openCodeUsageScanner, now] in
+                let claims = await Self.historyClaims(scope: historyScope, authStore: authStore,
+                                                      logUsageScanner: logUsageScanner)
+                return await Self.scanLocalHistory(
+                    claims: claims, claimsPiUsage: historyScope.claimsPiUsage, piCardID: piCardID, pricing: pricing, fallbackModel: fallbackModel, logUsageScanner: logUsageScanner,
+                    piUsageScanner: piUsageScanner, openCodeUsageScanner: openCodeUsageScanner, now: now
+                )
+            }
         }
         if let history, let usage = history.usageHistory {
             // A retained scan may be collected on a later day; project Today/Yesterday at collection.
@@ -237,8 +273,8 @@ final class CodexProvider: ProviderRuntime {
                 fallbackPricingModelsByDay: usage.fallbackPricingModelsByDay
             )
         }
-        let warning = history == nil ? "Local token history is still updating." : nil
-        if warning != nil {
+        let warning = limitsProblem ?? (history == nil ? "Local token history is still updating." : nil)
+        if history == nil {
             AppLog.warn(LogTag.plugin("codex"), "local history scan deferred; publishing live quota")
         }
         // Pending history is not evidence of no usage. The store may restore last-good spend rows.

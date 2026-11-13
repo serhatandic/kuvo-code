@@ -1,0 +1,23 @@
+{
+ "updated_at": "2026-11-01T00:00:00Z",
+ "pricing": {
+  "gpt-5.6-luna": {
+   "input_per_million": 0.2,
+   "output_per_million": 0.9,
+   "cache_read_per_million": 0.02
+  }
+ },
+ "fast_multipliers": {},
+ "alias_rules": [
+  {
+   "pattern": "^gpt-5\\.5-turbo$",
+   "canonical": "gpt-5.5-fast"
+  }
+ ],
+ "fallback_models": {
+  "codex": [
+   "gpt-5.5",
+   "gpt-nope"
+  ]
+ }
+}

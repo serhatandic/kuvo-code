@@ -3,7 +3,9 @@
 // What each file held is kept in the bridge's folder, a file a log, so a restart doesn't read every
 // log again (it can be thrown away: it's rebuilt from the logs). Files changed before the window
 // aren't read, and an item that's the same as one before it in its file (Claude Code writes a
-// reply's usage once for each part of it) is kept once.
+// reply's usage once for each part of it) is kept once. A log whose lines mean something only after
+// the ones before (Codex's running totals) keeps what they said so far with it (`state`), so it's
+// read on from there.
 
 import { createHash } from "node:crypto"
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
@@ -17,7 +19,7 @@ export interface FoundFile {
   mtime: number
 }
 
-interface Record<T> {
+interface Record<T, S> {
   size: number
   mtime: number
   /** Where the last whole line read ended. */
@@ -26,6 +28,8 @@ interface Record<T> {
   head: string
   headLength: number
   items: T[]
+  /** What its lines so far say of the next (`JSONLFiles`' `state`). */
+  state?: S
 }
 
 /** How much of a file is read at a time, and the longest line read (longer ones are skipped). */
@@ -63,8 +67,8 @@ export async function jsonlFiles(folder: string): Promise<FoundFile[]> {
   return found.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
 }
 
-export class JSONLFiles<T> {
-  private records = new Map<string, Record<T>>()
+export class JSONLFiles<T, S = undefined> {
+  private records = new Map<string, Record<T, S>>()
   /** Files whose record changed since it was last kept, and those forgotten. */
   private changed = new Set<string>()
   private forgotten = new Set<string>()
@@ -75,8 +79,8 @@ export class JSONLFiles<T> {
   version = 0
 
   constructor(
-    /** A line's items (none for a line that isn't one), given its bytes. */
-    private readonly parse: (line: Buffer) => T[],
+    /** A line's items (none for a line that isn't one), given its bytes, and its log's `state` so far (which it carries on). */
+    private readonly parse: (line: Buffer, state: S) => T[],
     /** When an item happened (ms): one before the window is let go. */
     private readonly at: (item: T) => number,
     /** The folder what was read is kept in, a file a log (none in a test that doesn't), and its format's version. */
@@ -84,6 +88,8 @@ export class JSONLFiles<T> {
     private readonly format = 1,
     /** What an item is but for when it happened: one the same as an earlier one in its file is left out (none: always kept). */
     private readonly same?: (item: T) => string | undefined,
+    /** A log's state: as it starts, and as it was kept (undefined: not one, the log is read again whole). */
+    private readonly state?: { initial: () => S; from: (kept: unknown) => S | undefined },
   ) {}
 
   /** What was kept, read as the first round starts (not as the bridge does). */
@@ -99,7 +105,8 @@ export class JSONLFiles<T> {
         try {
           const saved = JSON.parse(await readFile(join(this.folder, name), "utf8"))
           const record = saved?.record
-          if (saved?.version === this.format && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number") this.records.set(saved.path, record)
+          const state = this.state && record ? this.state.from(record.state) : undefined
+          if (saved?.version === this.format && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number" && (!this.state || state !== undefined)) this.records.set(saved.path, { ...record, state })
           else rmSync(join(this.folder, name), { force: true })
         } catch {}
       }
@@ -180,17 +187,20 @@ export class JSONLFiles<T> {
       return
     }
     try {
-      let record: Record<T>
-      const appended = before && file.size > before.size && (await headOf(handle, before.headLength)) === before.head
-      if (appended) record = { ...before, items: before.items.filter((item) => this.at(item) >= since) }
+      let record: Record<T, S>
+      const grew = before && file.size > before.size && (await headOf(handle, before.headLength)) === before.head
+      // (Its state a copy, so one read cut short leaves the record it had as it was; none to go on from: read again whole.)
+      const state = grew && this.state ? this.state.from(JSON.parse(JSON.stringify(before!.state ?? null))) : undefined
+      const appended = grew && (!this.state || state !== undefined)
+      if (appended) record = { ...before!, items: before!.items.filter((item) => this.at(item) >= since), ...(this.state ? { state } : {}) }
       else {
         const headLength = Math.min(HEAD, file.size)
-        record = { size: 0, mtime: 0, offset: 0, head: await headOf(handle, headLength), headLength, items: [] }
+        record = { size: 0, mtime: 0, offset: 0, head: await headOf(handle, headLength), headLength, items: [], ...(this.state ? { state: this.state.initial() } : {}) }
       }
       // (What's in the file already, to leave out what's the same again.)
       const had = this.same ? new Set(record.items.map(this.same).filter((key) => key !== undefined)) : undefined
       record.offset = await this.readLines(handle, record.offset, file.size, (line) => {
-        for (const item of this.parse(line)) {
+        for (const item of this.parse(line, record.state as S)) {
           if (this.at(item) < since) continue
           const key = had ? this.same!(item) : undefined
           if (had && key !== undefined) {
