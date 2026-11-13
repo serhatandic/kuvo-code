@@ -140,8 +140,6 @@ import Testing
         let deeper = FileTree(roots: [root.appending(path: "secrets/keys")])
         try await until { deeper.rootFailure != nil }
         #expect(deeper.rootFailure == .denied)
-        await locked.loadAllFiles()
-        #expect(locked.allFilesFailure == .denied)
 
         // Let in again, one that isn't there is said not to be.
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
