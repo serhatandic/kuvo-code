@@ -24,20 +24,40 @@ import Testing
         link.bots = app.bots
         link.workspace = app.workspace
         engine.list([])
-        engine.on("PATCH", "/api/session/*", json: ["data": [:]])
         engine.on("PUT", "/api/experimental/session/*", json: [:])
         engine.on("POST", "/api/session/*", json: [:])
-        engine.on("DELETE", "/api/session/*", json: [:])
-        var made: [String: [String: Any]] = [:]
+        // The sessions it made, as the engine keeps them: the box reads one just before it marks it.
+        let made = Guarded([String: [String: Any]]())
         engine.on("POST", "/api/session") { request in
-            let session = StubEngine.session("ses_bot\(made.count + 1)", title: request.body["title"] as? String ?? "",
-                                             directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")
-            made[session["id"] as! String] = session
+            let session = made.withLock { made in
+                var session = StubEngine.session("ses_bot\(made.count + 1)", title: request.body["title"] as? String ?? "",
+                                                 directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")
+                for key in ["metadata", "permissions"] { session[key] = request.body[key] }
+                made[session["id"] as! String] = session
+                return session
+            }
             return StubWeb.json(["data": session])
         }
-        // One it made, as the box reads it just before marking it.
         engine.on("GET", "/api/session/*") { request in
-            made[String(request.path.split(separator: "/").last ?? "")].map { StubWeb.json(["data": $0]) } ?? StubWeb.json(["message": "Not found."], status: 404)
+            let parts = request.path.split(separator: "/").map(String.init)
+            guard parts.count == 3 else { return StubWeb.json(["message": "Not found."], status: 404) }
+            if parts[2] == "active" { return StubWeb.json(["data": [String: Any]()]) }
+            return made.withLock { $0[parts[2]] }.map { StubWeb.json(["data": $0]) } ?? StubWeb.json(["message": "No such session."], status: 404)
+        }
+        // What's changed, kept (each field given in place of its own); one deleted, gone.
+        engine.on("PATCH", "/api/session/*") { request in
+            let id = String(request.path.split(separator: "/").last ?? "")
+            let changed = made.withLock { made -> [String: Any] in
+                guard var session = made[id] else { return [:] }
+                for (key, value) in request.body { session[key] = value }
+                made[id] = session
+                return session
+            }
+            return StubWeb.json(["data": changed])
+        }
+        engine.on("DELETE", "/api/session/*") { request in
+            _ = made.withLock { $0.removeValue(forKey: String(request.path.split(separator: "/").last ?? "")) }
+            return StubWeb.json([:])
         }
     }
 

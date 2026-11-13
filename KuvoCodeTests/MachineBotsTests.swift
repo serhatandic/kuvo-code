@@ -17,8 +17,8 @@ import Testing
     }
 
     /// A machine's kit names it as this Mac does (what its bots are told they run on) and carries
-    /// your time zone, never words of this Mac's: a box tells its bots its own. Nor rules: a new
-    /// bot's its box makes from its own default and Settings › Permissions.
+    /// your time zone, never words of this Mac's: a box tells its bots its own. Nor rules: its box
+    /// makes a new bot's from its own default and Settings › Permissions.
     @Test func aMachinesKitCarriesWhatsItsOwnAndNoWords() throws {
         let kit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(app.bots.kit(for: "box"))) as? [String: Any] ?? [:]
         #expect(kit["machine"] as? String == "box")
