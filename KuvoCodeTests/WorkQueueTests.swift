@@ -94,8 +94,8 @@ import Textual
         return item
     }
 
-    /// An item as its box lists it in `owner`'s queue: whose it is, and counts in place of its notes,
-    /// files and links.
+    /// An item as its box lists it in `owner`'s queue: whose it is, and how many notes, files and
+    /// links it has.
     private static func listed(_ number: Int, _ title: String, order: Double, in owner: String) throws -> WorkItem {
         let listed = item(number, title, order: order).merging(["owner": owner, "inProgress": false, "noteCount": 0, "fileCount": 0, "linkCount": 0]) { $1 }
         return try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: listed))

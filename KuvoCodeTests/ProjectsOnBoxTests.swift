@@ -391,9 +391,8 @@ import Testing
     /// newest, which would reshuffle the project's list. Those get them as they next open or run.
     @Test func changedFoldersReachTheSessionInATabThroughItsBoxAndNoneAtRest() async throws {
         defer { done() }
-        engine.list([StubEngine.session("ses_open", directory: shop), StubEngine.session("ses_rest", directory: shop)])
+        list([StubEngine.session("ses_open", directory: shop), StubEngine.session("ses_rest", directory: shop)])
         for id in ["ses_open", "ses_rest"] {
-            engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, directory: shop)])
             engine.on("PUT", "/api/experimental/session/\(id)/instructions/entries/*", json: [:])
         }
         let workspace = workspace()

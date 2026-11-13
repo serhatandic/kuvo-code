@@ -98,6 +98,8 @@ import Testing
     /// quota or a rate limit), though its words say 403 or forbidden: the failure says what the
     /// provider said, without telling you to sign in again. Refusals for want of one still do.
     @Test func aRefusalThatIsntAboutSigningInIsntSaidToBe() {
+        // (The suite's engine answers for 127.0.0.1 until stopped, the next suite's servers too.)
+        defer { engine.stop() }
         #expect(!Catalog.isSignInRefusal(type: "provider.content-filter", message: "403 Forbidden: your input was flagged by moderation"))
         #expect(!Catalog.isSignInRefusal(type: "provider.quota", message: "Forbidden: monthly quota exceeded"))
         #expect(!Catalog.isSignInRefusal(type: "provider.rate-limit", message: "403 rate limited"))

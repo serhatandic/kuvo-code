@@ -65,6 +65,8 @@ import Testing
     }
 
     @Test func aMachinesBoxWithoutItIsntOfferedRefreshModels() async throws {
+        // (StubWeb answers for 127.0.0.1 until stopped, the next suite's servers too.)
+        defer { StubWeb.stop() }
         /// A machine's box from before Refresh Models: a route it doesn't have.
         struct OlderBox: BoxTransport {
             func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
