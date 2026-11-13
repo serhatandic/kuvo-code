@@ -1,0 +1,151 @@
+{
+  "now": "2026-11-12T12:00:00Z",
+  "cases": [
+    {
+      "name": "embedded-time-and-system-input",
+      "hex": "0a299a011067656d696e692d332e362d666c617368220a086410e80718c80128324a08220608c0d4d6d706",
+      "expected": {
+        "inputTokens": 1100,
+        "outputTokens": 200,
+        "cacheReadTokens": 50,
+        "timestampSeconds": 1794484800,
+        "modelID": "gemini-3.6-flash"
+      }
+    },
+    {
+      "name": "step-fallback",
+      "hex": "0a1d9a011067656d696e692d332e362d666c617368220808001032180a2800",
+      "stepHex": "0a0608c0b1d1d706",
+      "expected": {
+        "inputTokens": 50,
+        "outputTokens": 10,
+        "cacheReadTokens": 0,
+        "timestampSeconds": 1794398400,
+        "modelID": "gemini-3.6-flash"
+      }
+    },
+    {
+      "name": "placeholder-prefers-label",
+      "hex": "0a3e9a011267656d696e692d70726f2d64656661756c7422080800106418142800aa01122067656d696e692d332e362d666c617368204a08220608c0d4d6d706",
+      "expected": {
+        "inputTokens": 100,
+        "outputTokens": 20,
+        "cacheReadTokens": 0,
+        "timestampSeconds": 1794484800,
+        "modelID": "gemini-pro-default",
+        "label": "gemini-3.6-flash"
+      }
+    },
+    {
+      "name": "tiered-id",
+      "hex": "0a2f9a011767656d696e692d332e362d666c6173682d7469657265642209080010c801182828004a08220608c0d4d6d706",
+      "expected": {
+        "inputTokens": 200,
+        "outputTokens": 40,
+        "cacheReadTokens": 0,
+        "timestampSeconds": 1794484800,
+        "modelID": "gemini-3.6-flash-tiered"
+      }
+    },
+    {
+      "name": "unknown-id",
+      "hex": "0a1e9a01076d79737465727922080800100a180128004a08220608c0d4d6d706",
+      "expected": {
+        "inputTokens": 10,
+        "outputTokens": 1,
+        "cacheReadTokens": 0,
+        "timestampSeconds": 1794484800,
+        "modelID": "mystery"
+      }
+    },
+    {
+      "name": "unnamed-generation",
+      "hex": "0a1422080800100a180128004a08220608c0d4d6d706",
+      "expected": {
+        "inputTokens": 10,
+        "outputTokens": 1,
+        "cacheReadTokens": 0,
+        "timestampSeconds": 1794484800
+      }
+    },
+    {
+      "name": "labelled-system-only",
+      "hex": "0a2722080819100018002800aa011067656d696e692d332e362d666c6173684a08220608c0d4d6d706",
+      "expected": {
+        "inputTokens": 25,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "timestampSeconds": 1794484800,
+        "label": "gemini-3.6-flash"
+      }
+    },
+    {
+      "name": "bookkeeping",
+      "hex": "0a14220808641000180028004a08220608c0d4d6d706",
+      "expected": null
+    },
+    {
+      "name": "zero-usage",
+      "hex": "0a279a011067656d696e692d332e362d666c617368220808001000180028004a08220608c0d4d6d706",
+      "expected": null
+    },
+    {
+      "name": "no-time",
+      "hex": "0a1f9a011067656d696e692d332e362d666c617368220a086410e80718c8012832",
+      "expected": null
+    },
+    {
+      "name": "overflow-input",
+      "hex": "0a319a011067656d696e692d332e362d666c6173682212086410ffffffffffffffffff0118c80128324a08220608c0d4d6d706",
+      "expected": null
+    },
+    {
+      "name": "overflow-system-sum",
+      "hex": "0a309a011067656d696e692d332e362d666c6173682211080110ffffffffffffffff7f18c80128324a08220608c0d4d6d706",
+      "expected": null
+    },
+    {
+      "name": "truncated-varint",
+      "hex": "80",
+      "expected": null
+    },
+    {
+      "name": "truncated-length",
+      "hex": "0aff",
+      "expected": null
+    },
+    {
+      "name": "invalid-field-number",
+      "hex": "00",
+      "expected": null
+    },
+    {
+      "name": "invalid-utf8-model",
+      "hex": "0a129a0101ff220210014a08220608c0d4d6d706",
+      "expected": {
+        "inputTokens": 1,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "timestampSeconds": 1794484800
+      }
+    }
+  ],
+  "days": [
+    {
+      "date": "2026-11-12",
+      "tokens": 1735,
+      "cost": 0.0024775,
+      "model": "gemini-3.6-flash",
+      "unknown": [
+        "Unknown Antigravity Model",
+        "mystery"
+      ]
+    },
+    {
+      "date": "2026-11-11",
+      "tokens": 60,
+      "cost": 9e-05,
+      "model": "gemini-3.6-flash"
+    }
+  ]
+}
