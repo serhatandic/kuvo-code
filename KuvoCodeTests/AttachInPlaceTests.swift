@@ -237,6 +237,74 @@ import Testing
         #expect(asked("GET kuvo/projects") >= 1, "let go: asked again")
     }
 
+    /// Each look a test lets go of, one at a time (the update gate's looks at the box here).
+    private actor Looks {
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+        private var allowed = 0
+        func pass() async {
+            if allowed > 0 { allowed -= 1; return }
+            await withCheckedContinuation { waiting.append($0) }
+        }
+        func allow() {
+            if waiting.isEmpty { allowed += 1 } else { waiting.removeFirst().resume() }
+        }
+    }
+
+    /// The box here taking the app's release as it stands (#679): blocked, it says why in its words;
+    /// its offer gone (refused while its night's update ran, say) and nothing under way, the release
+    /// is offered again; taking it failed, it says so; and once it has all this app needs, it's let
+    /// go. It never stays "Updating…" when it isn't.
+    @Test func theBoxHeresUpdateIsFollowedAsItStands() async throws {
+        var app: AppModel?
+        let release = FileManager.default.temporaryDirectory.appending(path: "box-release-\(UUID().uuidString)")
+        let (boxRelease, lookAgain, now) = (MachineEngine.boxRelease, MachineEngine.updateLookAgain, MachineEngine.now)
+        let looks = Looks()
+        defer {
+            cleanUp(app)
+            MachineEngine.boxRelease = boxRelease
+            MachineEngine.updateLookAgain = lookAgain
+            MachineEngine.now = now
+            try? FileManager.default.removeItem(at: release)
+        }
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        MachineEngine.boxRelease = { release }
+        MachineEngine.updateLookAgain = { await looks.pass() }
+        MachineEngine.now = { 1_000 }
+        connectsReady()
+        let chats = home.appending(path: "box-chats").path(percentEncoded: false)
+        let older: [String: Any] = ["kind": "machine", "chats": chats, "features": BoxGate.required.filter { $0 != "typed" } + ["box.update"]]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["offered": "0.9.0"]])
+        }
+        let model = try #require(app)
+        let id = SSHConnection.thisMac
+        try await until { model.machines.gates.state(of: id) == .updating(detail: BoxGate.Words.thisMacTaking) }
+        #expect(asked("POST kuvo/box/update") == 1)
+
+        // Blocked: why, in its words.
+        let blocked = "It doesn’t update itself while a Mac with Kuvo Code 0.7 connected in the last 30 days."
+        try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["blocked": blocked]])
+        await looks.allow()
+        try await until { model.machines.gates.state(of: id) == .failed(BoxGate.Words.couldntUpdate("this Mac", why: blocked)) }
+
+        // Its offer gone, nothing under way: offered again, and updating.
+        try boxHereAnswers(["kuvo/info": older, "kuvo/update": [String: Any]()])
+        await looks.allow()
+        try await until { asked("POST kuvo/box/update") == 2 }
+        try await until { model.machines.gates.state(of: id) == .updating(detail: BoxGate.Words.thisMacTaking) }
+
+        // Taking it failed since: said so.
+        try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["last": ["at": 2_000, "result": "failed", "message": "Its new engine didn’t start."]]])
+        await looks.allow()
+        try await until { model.machines.gates.state(of: id) == .failed(BoxGate.Words.couldntUpdate("this Mac", why: "Its new engine didn’t start.")) }
+
+        // Taken: let go.
+        try boxHereAnswers(["kuvo/info": ["kind": "machine", "chats": chats, "features": BoxGate.required + ["box.update"]]])
+        await looks.allow()
+        try await until { model.machines.gates.state(of: id) == nil }
+    }
+
     @Test func aStoppedBoxIsStartedInPlace() async throws {
         var app: AppModel?
         defer { cleanUp(app) }
