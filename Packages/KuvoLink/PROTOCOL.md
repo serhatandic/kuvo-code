@@ -3812,7 +3812,8 @@ hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A clien
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
   dollars]], unknown?: [[slot, model]]}}`: `places`, the folders its logs are in, each 16 hex
-  characters of a hash of its computer's name and the folder's real path (never the path); `slot`, quarter hours since 1970 (UTC), `model`, an index into
+  characters of a hash of its computer (its machine ID: `/etc/machine-id` or D-Bus's on Linux, the
+  hardware UUID on a Mac, else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight
   35 days back, or past what it cut): the receiver keeps none older. Told as the receiver keeps it
   (`label` 100 characters, `provider` and model names 200), so the digests agree. As many as fit in
@@ -3820,8 +3821,9 @@ hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A clien
   true`: their oldest days are short). Never a log, a message, a path or a sign-in. `refresh: true`: read yours now and tell (each box asks at most once a minute, and
   reads for each at most once a minute). The receiver keeps the last from each
   (`usage/peers.json`), through a restart; a box not heard from for 25 minutes is away (its rows
-  `away` when every box of theirs is), what it said kept; a computer you removed goes, with what
-  it said.
+  `away` when every box of theirs is), what it said kept, and whether it was one a peer vouches
+  for, which holds after a restart until the link says again; a computer you removed goes, with
+  what it said.
 
 ### The Work Queue
 

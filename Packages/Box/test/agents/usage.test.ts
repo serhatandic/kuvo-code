@@ -17,7 +17,7 @@ import type { Clock } from "../../src/agents/groups/peer"
 import { claudeLine, dedupClaude } from "../../src/agents/usage/claude-log"
 import { claudeSlots, daysIn } from "../../src/agents/usage/history"
 import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFrom, type PricingFetch } from "../../src/agents/usage/pricing"
-import { claudeSources, Usage, usageRoutes } from "../../src/agents/usage/usage"
+import { claudeSources, thisComputer, Usage, usageRoutes } from "../../src/agents/usage/usage"
 import { UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-usage-test-"))
@@ -325,11 +325,13 @@ class PeerBox {
     identity: (provider: string) => string | undefined,
     now: () => number,
     most?: number,
+    /** The computer it's on (`thisComputer`): this one's, unless a test stands in another. */
+    computer?: string,
   ) {
     this.agents = agents as unknown as Agent[]
     this.post = new Post(() => relay.posted++)
     this.directory = new LinkDirectory(this.post, still)
-    const sources = claudeSources(join(home, "usage"))
+    const sources = claudeSources(join(home, "usage"), computer === undefined ? undefined : () => computer)
     this.usage = new Usage(() => sources(this.agents), new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
     this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now, most)
     this.parts = { post: this.post, directory: this.directory, usage: this.peers }
@@ -518,6 +520,33 @@ describe("across your computers", () => {
     second.stop()
   })
 
+  test("two computers with one name reading the same path (two Raspberry Pis' /home/pi) are two computers: both count", async () => {
+    // (One folder stands for both computers' `/home/pi/.claude`: the same path on each.)
+    const shared = mkdtempSync(join(base, "pi-"))
+    const folder = join(shared, "claude")
+    mkdirSync(join(folder, "projects", "p"), { recursive: true })
+    writeFileSync(join(folder, "projects", "p", "log.jsonl"), reply("2026-11-12T09:00:00Z", "p1", "claude-opus-4-5", 100, 0))
+    const named = (id: string) => thisComputer("linux", (path) => (path === "/etc/machine-id" ? id + "\n" : ""), () => undefined, () => "raspberrypi")
+    expect(named("0123456789abcdef0123456789abcdef")).not.toBe(named("fedcba9876543210fedcba9876543210"))
+    expect(thisComputer("linux", () => "", () => undefined, () => "raspberrypi")).toBe("host:raspberrypi")
+    const oneHome = mkdtempSync(join(base, "pi-one-"))
+    const twoHome = mkdtempSync(join(base, "pi-two-"))
+    const one = new PeerBox("one-key", "raspberrypi", relay, oneHome, [new TestClaude(oneHome, { id: "default", home: folder })], () => "eeeeeeeeeeeeeeee", now, undefined, named("0123456789abcdef0123456789abcdef"))
+    const two = new PeerBox("two-key", "raspberrypi", relay, twoHome, [new TestClaude(twoHome, { id: "default", home: folder })], () => "eeeeeeeeeeeeeeee", now, undefined, named("fedcba9876543210fedcba9876543210"))
+    await one.meet([two])
+    await two.meet([one])
+    await one.usage.refresh()
+    await two.usage.refresh()
+    await relay.settled()
+    for (const box of [one, two]) {
+      const view = box.usage.view("UTC")
+      expect(view.rows.map((row) => [row.id, row.days[0]!.tokens, row.boxes.map((each) => each.same ?? false)])).toEqual([["claude#eeeeeeeeeeeeeeee", 200, [false, false]]])
+      expect(view.totals.claude!.map((day) => day.tokens)).toEqual([200])
+    }
+    one.stop()
+    two.stop()
+  })
+
   test("a box a peer vouches for (another Mac beside a shared machine) shares usage too; a refresh asks the others to read now; a restart keeps what peers said", async () => {
     const aHome = mkdtempSync(join(base, "a-"))
     const bHome = mkdtempSync(join(base, "b-"))
@@ -553,12 +582,50 @@ describe("across your computers", () => {
       ["b-key", false, true],
     ])
 
-    // The Air restarts: the Pro's usage is there before it tells again.
+    // The Air restarts: the Pro's usage is there before it tells again, and out of the Air's totals
+    // before the link has said who its computers are.
     a.stop()
     const again = new PeerBox("a-key", "Air", new Relay(), aHome, [account(aHome, "default", reply("2026-11-12T09:00:00Z", "a1", "claude-opus-4-5", 20, 0))], () => undefined, now)
+    await again.usage.refresh()
+    // (Its own row has no key of its own yet: the link names it too.)
+    expect(again.usage.view("UTC").rows.map((row) => [row.id, row.vouched ?? false])).toEqual([["/claude-code", false], ["b-key/claude-code", true]])
+    expect(again.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([20])
     await again.meet([], [b])
     expect(again.usage.view("UTC").rows.map((row) => row.id)).toEqual(["a-key/claude-code", "b-key/claude-code"])
+    expect(again.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([20])
     again.stop()
     b.stop()
+  })
+
+  test("just after a restart, before the link says who your computers are, another computer's spend stays in your totals; a box that becomes one a peer vouches for leaves them", async () => {
+    const macHome = mkdtempSync(join(base, "mac-"))
+    const devHome = mkdtempSync(join(base, "devbox-"))
+    const macAgent = () => account(macHome, "default", reply("2026-11-12T09:00:00Z", "m1", "claude-opus-4-5", 100, 0))
+    const mac = new PeerBox("mac-key", "MacBook", relay, macHome, [macAgent()], () => undefined, now)
+    const dev = new PeerBox("dev-key", "devbox", relay, devHome, [account(devHome, "default", reply("2026-11-12T10:00:00Z", "d1", "claude-opus-4-5", 300, 0))], () => undefined, now)
+    await mac.meet([dev])
+    await dev.meet([mac])
+    await mac.usage.refresh()
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(mac.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([400])
+    mac.stop()
+
+    const again = new PeerBox("mac-key", "MacBook", new Relay(), macHome, [macAgent()], () => undefined, now)
+    await again.usage.refresh()
+    expect(again.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([400])
+    await again.meet([dev])
+    expect(again.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([400])
+
+    // The link says the devbox is now only a box a peer vouches for: its spend leaves your totals, and clients hear.
+    const events: unknown[] = []
+    const listening = subscribe((event) => event.type === "kuvo.usage.updated" && events.push(event))
+    await peerRoutes(again.parts, "PUT", [], async () => ({ self: { key: "mac-key", name: "MacBook" }, boxes: [], also: [{ key: "dev-key", name: "devbox" }], bots: [] }))
+    listening()
+    expect(again.usage.view("UTC").rows.map((row) => [row.id, row.vouched ?? false])).toEqual([["mac-key/claude-code", false], ["dev-key/claude-code", true]])
+    expect(again.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([100])
+    expect(events).toHaveLength(1)
+    again.stop()
+    dev.stop()
   })
 })

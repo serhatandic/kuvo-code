@@ -18486,6 +18486,7 @@ async function branchRoutes(places, method, parts, body) {
 }
 
 // Packages/Box/src/agents/usage/usage.ts
+import { execFileSync as execFileSync2 } from "child_process";
 import { createHash as createHash11 } from "crypto";
 import { mkdirSync as mkdirSync20, readFileSync as readFileSync27, realpathSync as realpathSync7, renameSync as renameSync16, writeFileSync as writeFileSync21 } from "fs";
 import { homedir as homedir5, hostname } from "os";
@@ -20259,14 +20260,40 @@ async function usageRoutes(usage, method, rest, params) {
   }
   return json8({ message: "Not available for this agent." }, 404);
 }
-function placeOf(host, folder) {
+function placeOf(computer, folder) {
   let real = folder;
   try {
     real = realpathSync7(folder);
   } catch {}
-  return createHash11("sha256").update(`kuvo-code usage place v1
-`).update(host).update(`
+  return createHash11("sha256").update(`kuvo-code usage place v2
+`).update(computer).update(`
 `).update(real).digest("hex").slice(0, 16);
+}
+function thisComputer(platform = process.platform, read = (path) => readFileSync27(path, "utf8"), macUUID = ioregUUID, name = hostname) {
+  if (platform === "darwin") {
+    const uuid = macUUID();
+    if (uuid)
+      return "mac:" + uuid;
+  } else {
+    for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+      try {
+        const id = read(path).trim();
+        if (/^[0-9a-fA-F]{16,}$/.test(id))
+          return "machine-id:" + id.toLowerCase();
+      } catch {}
+    }
+  }
+  return "host:" + name();
+}
+var computer;
+var ownComputer = () => computer ??= thisComputer();
+function ioregUUID() {
+  try {
+    const said = execFileSync2("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    return /"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{16,})"/.exec(said)?.[1];
+  } catch {
+    return;
+  }
 }
 function claudeRoots(agent, env = process.env, home = homedir5()) {
   const roots = [...agent.conversationRoots?.() ?? []];
@@ -20278,7 +20305,7 @@ function claudeRoots(agent, env = process.env, home = homedir5()) {
   }
   return [...new Set(roots)];
 }
-function claudeSources(folder, host = hostname()) {
+function claudeSources(folder, computer = ownComputer) {
   const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join31(folder, "claude-files") : undefined, 1, (entry) => entry[1] === null ? undefined : JSON.stringify(entry.slice(1)));
   const last = new Map;
   return (agents) => agents.flatMap((agent) => {
@@ -20291,7 +20318,7 @@ function claudeSources(folder, host = hostname()) {
       service: "claude",
       agent: { kind: "claude", account: parsed.id },
       ...agent.instance.label ? { label: agent.instance.label } : {},
-      places: () => roots().map((root) => placeOf(host, root)),
+      places: () => roots().map((root) => placeOf(computer(), root)),
       slots: async (pricing, since) => {
         const found = new Map;
         for (const root of roots())
@@ -26113,8 +26140,13 @@ class UsagePeers {
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
     for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.directory.isPeer ? !this.directory.isPeer(key) : false, accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) });
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.vouched(key), accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) });
     return usageRows(boxes);
+  }
+  vouched(key) {
+    if (!this.directory.isPeer)
+      return false;
+    return this.directory.told ? !this.directory.isPeer(key) : this.peers.get(key)?.vouched === true;
   }
   tell(changed = false) {
     if (!this.transport.followed || !this.directory.told)
@@ -26168,7 +26200,8 @@ class UsagePeers {
       if (since !== undefined)
         accounts = accounts.map((account) => withOlder(account, before?.accounts.find((kept) => kept.provider === account.provider), since));
       whole = !!digest && digestOf2(accounts.map(toldOf2)) === digest;
-      this.peers.set(from, { name, heard: now, ...digest ? { digest } : {}, accounts });
+      const vouched = this.vouched(from);
+      this.peers.set(from, { name, heard: now, ...digest ? { digest } : {}, ...vouched ? { vouched } : {}, accounts });
       this.save();
       this.usage.peersChanged();
     } else if (before) {
@@ -26245,7 +26278,18 @@ class UsagePeers {
       for (const key of [...map.keys()])
         if (!here.has(key))
           map.delete(key);
-    if (gone) {
+    let moved = false;
+    for (const [key, kept] of this.peers) {
+      const vouched = this.vouched(key);
+      if (kept.vouched === true === vouched)
+        continue;
+      if (vouched)
+        kept.vouched = true;
+      else
+        delete kept.vouched;
+      moved = true;
+    }
+    if (gone || moved) {
       this.save();
       this.usage.peersChanged();
     }
@@ -26260,7 +26304,7 @@ class UsagePeers {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
         const digest = text4(kept.digest, 64);
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...digest ? { digest } : {}, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...digest ? { digest } : {}, ...kept.vouched === true ? { vouched: true } : {}, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
       }
     } catch {}
   }
@@ -31036,4 +31080,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 103fdc08a9b9e37af19d2887ebad76d8cf3ca60e5e3417a011c0c559d4c420c7
+// Built from Packages/Box/src/agents 9f5e2df74f9faa6acda73b5a4dc26039626ee2954be780b190fe298e49276583

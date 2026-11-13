@@ -7,6 +7,7 @@
 //
 // Nothing here reads a sign-in: an account is named as its plan limits name it (`Limits.identity`).
 
+import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
 import { homedir, hostname } from "node:os"
@@ -61,7 +62,7 @@ export interface OwnUsage {
   /** A peer's: its slots are all there from this one (quarter hours since 1970) on, none before. */
   whole?: number
   /**
-   * The folders its logs are in, each as a hash of its computer's name and the folder's real path
+   * The folders its logs are in, each as a hash of its computer and the folder's real path
    * (`placeOf`): two boxes on one computer reading one folder are counted once.
    */
   places?: string[]
@@ -409,15 +410,49 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
 }
 
 /**
- * Where a folder of logs is, as boxes tell each other: a hash of this computer's name and the
- * folder's real path, so two boxes on one computer reading the same folder count it once.
+ * Where a folder of logs is, as boxes tell each other: a hash of this computer (`thisComputer`) and
+ * the folder's real path, so two boxes on one computer reading the same folder count it once, and
+ * two computers with the same name and the same path (two Raspberry Pis' `/home/pi/.claude`) don't.
  */
-export function placeOf(host: string, folder: string): string {
+export function placeOf(computer: string, folder: string): string {
   let real = folder
   try {
     real = realpathSync(folder)
   } catch {}
-  return createHash("sha256").update("kuvo-code usage place v1\n").update(host).update("\n").update(real).digest("hex").slice(0, 16)
+  return createHash("sha256").update("kuvo-code usage place v2\n").update(computer).update("\n").update(real).digest("hex").slice(0, 16)
+}
+
+/**
+ * This computer, the same for every box on it and different from any other's: its machine ID (on
+ * Linux `/etc/machine-id`, or D-Bus's; on a Mac its hardware UUID), else its name. It's only hashed
+ * (`placeOf`), never told. Not the box's link key: two boxes on one Mac have two.
+ */
+export function thisComputer(platform: string = process.platform, read = (path: string) => readFileSync(path, "utf8"), macUUID = ioregUUID, name = hostname): string {
+  if (platform === "darwin") {
+    const uuid = macUUID()
+    if (uuid) return "mac:" + uuid
+  } else {
+    for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+      try {
+        const id = read(path).trim()
+        if (/^[0-9a-fA-F]{16,}$/.test(id)) return "machine-id:" + id.toLowerCase()
+      } catch {}
+    }
+  }
+  return "host:" + name()
+}
+
+let computer: string | undefined
+/** `thisComputer()`, worked out once. */
+export const ownComputer = () => (computer ??= thisComputer())
+
+function ioregUUID(): string | undefined {
+  try {
+    const said = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] })
+    return /"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{16,})"/.exec(said)?.[1]
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -442,9 +477,10 @@ export function claudeRoots(agent: Agent, env: NodeJS.ProcessEnv = process.env, 
 /**
  * The Claude Code accounts whose usage is read here, from the folders each runs Claude Code with
  * (`claudeRoots`). `folder`: where what was read of the logs is kept (`claude-files`, a file a log).
- * A round that read nothing new, with the same prices, works nothing out again.
+ * A round that read nothing new, with the same prices, works nothing out again. `computer`: this
+ * computer, for where its folders are (`placeOf`).
  */
-export function claudeSources(folder?: string, host = hostname()): (agents: Agent[]) => UsageSource[] {
+export function claudeSources(folder?: string, computer = ownComputer): (agents: Agent[]) => UsageSource[] {
   const files = new JSONLFiles<KeptClaudeEntry>(
     (line) => claudeLine(line).map(keptClaude),
     (entry) => entry[0],
@@ -464,7 +500,7 @@ export function claudeSources(folder?: string, host = hostname()): (agents: Agen
         service: "claude",
         agent: { kind: "claude", account: parsed.id },
         ...(agent.instance.label ? { label: agent.instance.label } : {}),
-        places: () => roots().map((root) => placeOf(host, root)),
+        places: () => roots().map((root) => placeOf(computer(), root)),
         slots: async (pricing, since) => {
           const found = new Map<string, Awaited<ReturnType<typeof jsonlFiles>>[number]>()
           for (const root of roots()) for (const file of await jsonlFiles(root)) found.set(file.path, file)

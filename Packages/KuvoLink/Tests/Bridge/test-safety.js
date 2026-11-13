@@ -413,18 +413,18 @@ if (process.env.PATH) process.env.PATH = withoutAgents(process.env.PATH);
 // And the bridge a test starts looks for them only on that PATH (agents/proc.ts).
 process.env.KUVO_TEST_PATH_ONLY = "1";
 // Nor does a bridge a test starts fetch models' prices from the web (its usage history prices with
-// what it ships).
+// what it ships), however it's started.
 process.env.KUVO_TEST_PRICE_FEEDS = "off";
 
 /**
  * The environment a test hands what it starts, as this run's own is: its PATH without the agents'
- * programs, the bridge told to look only there, and a runtime given none of a home the run's (Bun
- * and node take the account's own then). Checked, then given. (Left as it is for a live test you
- * asked for.)
+ * programs, the bridge told to look only there and to fetch no prices, and a runtime given none of a
+ * home the run's (Bun and node take the account's own then). Checked, then given. (Left as it is for
+ * a live test you asked for.)
  */
 function childEnv(program, env) {
   if (realAgentsAllowed || !env) return env;
-  const made = { ...env, KUVO_TEST_PATH_ONLY: "1" };
+  const made = { ...env, KUVO_TEST_PATH_ONLY: "1", KUVO_TEST_PRICE_FEEDS: "off" };
   if (typeof env.PATH === "string") made.PATH = withoutAgents(env.PATH);
   if (!env.HOME && runtimeOf(program, programAt(program, env), env)) made.HOME = process.env.HOME;
   return made;

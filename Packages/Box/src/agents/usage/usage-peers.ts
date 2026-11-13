@@ -49,6 +49,8 @@ interface Kept {
   heard: number
   /** What it told, hashed (`UsageMail.digest`). */
   digest?: string
+  /** A box a peer vouches for, not one of yours, as the link last said (kept, for a start before it says again). */
+  vouched?: boolean
   accounts: OwnUsage[]
 }
 
@@ -105,8 +107,17 @@ export class UsagePeers {
     const self = this.directory.own()
     const boxes: UsageBox[] = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }]
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))
-    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.directory.isPeer ? !this.directory.isPeer(key) : false, accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) })
+    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.vouched(key), accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) })
     return usageRows(boxes)
+  }
+
+  /**
+   * Whether a box is one a peer vouches for (another Mac beside a machine you share), not one of
+   * your computers: as the link says, or until it has since this started, as it last said.
+   */
+  private vouched(key: string): boolean {
+    if (!this.directory.isPeer) return false
+    return this.directory.told ? !this.directory.isPeer(key) : this.peers.get(key)?.vouched === true
   }
 
   /**
@@ -161,7 +172,8 @@ export class UsagePeers {
       const since = typeof mail.from === "number" && Number.isInteger(mail.from) && mail.from > 0 ? mail.from * SLOT : undefined
       if (since !== undefined) accounts = accounts.map((account) => withOlder(account, before?.accounts.find((kept) => kept.provider === account.provider), since))
       whole = !!digest && digestOf(accounts.map(toldOf)) === digest
-      this.peers.set(from, { name, heard: now, ...(digest ? { digest } : {}), accounts })
+      const vouched = this.vouched(from)
+      this.peers.set(from, { name, heard: now, ...(digest ? { digest } : {}), ...(vouched ? { vouched } : {}), accounts })
       this.save()
       this.usage.peersChanged()
     } else if (before) {
@@ -249,7 +261,16 @@ export class UsagePeers {
       gone = true
     }
     for (const map of [this.told, this.answered, this.askedBack, this.readFor]) for (const key of [...map.keys()]) if (!here.has(key)) map.delete(key)
-    if (gone) {
+    // (Which are your computers and which a peer vouches for may have changed: the totals with it.)
+    let moved = false
+    for (const [key, kept] of this.peers) {
+      const vouched = this.vouched(key)
+      if ((kept.vouched === true) === vouched) continue
+      if (vouched) kept.vouched = true
+      else delete kept.vouched
+      moved = true
+    }
+    if (gone || moved) {
       this.save()
       this.usage.peersChanged()
     }
@@ -259,11 +280,11 @@ export class UsagePeers {
   private load() {
     if (!this.file) return
     try {
-      const saved = JSON.parse(readFileSync(this.file, "utf8")) as { peers?: Record<string, { name?: unknown; heard?: unknown; digest?: unknown; accounts?: unknown }> }
+      const saved = JSON.parse(readFileSync(this.file, "utf8")) as { peers?: Record<string, { name?: unknown; heard?: unknown; digest?: unknown; vouched?: unknown; accounts?: unknown }> }
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts)) continue
         const digest = text(kept.digest, 64)
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...(digest ? { digest } : {}), accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) })
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...(digest ? { digest } : {}), ...(kept.vouched === true ? { vouched: true } : {}), accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) })
       }
     } catch {}
   }
