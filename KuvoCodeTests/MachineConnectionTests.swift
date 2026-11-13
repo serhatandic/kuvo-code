@@ -308,7 +308,7 @@ import Testing
         let answer = WakesThere()
         SSHConnection.fedStandIn = { [ssh] address, script, input in
             // (Its session list, read as the sidebar follows it: not one of the wake-ups' reads.)
-            let asked = input.flatMap { try? Data(contentsOf: $0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            let asked = (input.flatMap { try? Data(contentsOf: $0) }.map { String(decoding: $0, as: UTF8.self) } ?? "").replacingOccurrences(of: "\\/", with: "/")
             if script.contains(" box route"), asked.contains("kuvo/sessions/list") { return "{\"status\":503,\"body\":\"{}\"}" }
             ssh.note(script, to: address)
             if script.contains(" box route") { return answer.routed }

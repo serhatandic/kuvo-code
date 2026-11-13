@@ -321,6 +321,8 @@ struct MainView: View {
             tabs.dropClosed()
             tabs.startIfEmpty()
         }
+        // And once this Mac's box has said where its sessions go, which may come after.
+        .onChange(of: workspace.isListed(BoxClient.thisMac)) { tabs.startIfEmpty() }
         .onAppear {
             // The sidebar as the window left it, from the start, not sliding there.
             var restoring = Transaction()
