@@ -2450,11 +2450,13 @@ var FEATURES = [
   "bots.keys",
   "bots.make",
   "box.app",
+  "box.app.host",
   "box.appKeys",
   "box.helper",
   "box.ownHome",
   "box.rehome",
   "box.serve",
+  "box.serve.mac",
   "box.uninstall",
   "box.update",
   "branch",
@@ -5590,6 +5592,9 @@ function kuvoPorts() {
   } catch {}
   try {
     add(Number(new URL(JSON.parse(fs20.readFileSync(path21.join(RUN, "app.json"), "utf8")).tools.url).port));
+  } catch {}
+  try {
+    add(Number(new URL(JSON.parse(fs20.readFileSync(path21.join(RUN, "app.json"), "utf8")).host.url).port));
   } catch {}
   add(ownPort);
   return [...ports].sort((a, b) => a - b);
@@ -9541,6 +9546,17 @@ function appHost() {
   } catch {}
   return LAUNCH_HOST && { ...LAUNCH_HOST, said: "launch" };
 }
+function openAppHost() {
+  if (!OWN_HOME_MAC)
+    return appHost();
+  try {
+    const host = JSON.parse(fs39.readFileSync(path39.join(RUN, "app.json"), "utf8"))?.host;
+    if (typeof host?.url === "string" && host.url && typeof host?.password === "string" && host.password) {
+      return { url: host.url.replace(/\/+$/, ""), password: host.password, said: `app ${host.url} ${host.password}` };
+    }
+  } catch {}
+  return null;
+}
 function helloProof(password, nonce, url) {
   const reached = new URL(url);
   return crypto15.createHmac("sha256", password).update(`kuvo-host-hello\x00${nonce}\x00${reached.hostname}:${reached.port || 80}`).digest("hex");
@@ -9570,6 +9586,8 @@ async function proveHost(host, signal) {
   const expected = Buffer.from(helloProof(host.password, nonce, host.url));
   if (!proof || proof.length !== expected.length || !crypto15.timingSafeEqual(proof, expected))
     throw new KeysUnavailable(NOT_ANSWERING);
+  if (host.said.startsWith("app "))
+    return;
   provenBy = host.said;
 }
 async function proveVaultHost(host) {
@@ -9627,8 +9645,7 @@ async function askHost(host, call, body, missing = false) {
       signal: AbortSignal.timeout(["keys/get", "keys/set", "link/identity", "vault/get", "vault/set"].includes(call) ? 120000 : 15000)
     });
   } catch {
-    provenBy = null;
-    vaultProvenBy = null;
+    forgetHostProof();
     throw new KeysUnavailable(NOT_ANSWERING);
   }
   if (missing && response.status === 404) {
@@ -9646,7 +9663,7 @@ async function askHost(host, call, body, missing = false) {
   return answer ?? {};
 }
 async function siteSignIns() {
-  const host = appHost();
+  const host = openAppHost();
   if (!host)
     return null;
   try {
@@ -40024,7 +40041,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "be58469dc06f";
+var BRIDGE_VERSION = "9156d7e75bf0";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -42609,7 +42626,7 @@ import path137 from "node:path";
 
 // Packages/Box/src/link/mac/app-route.ts
 async function appAnswer(request, phone, signal) {
-  const host = appHost();
+  const host = openAppHost();
   if (!host)
     return null;
   let response;
@@ -50211,11 +50228,26 @@ function toolsOf(given) {
     return null;
   return { url: url.toString(), token: given.token };
 }
+function hostOf3(given) {
+  if (!isObject(given) || typeof given.url !== "string" || typeof given.password !== "string")
+    return null;
+  if (given.password.length < 16 || given.password.length > 512)
+    return null;
+  let url;
+  try {
+    url = new URL(given.url);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port || url.pathname !== "/" || url.search || url.username || url.password)
+    return null;
+  return { url: `http://127.0.0.1:${url.port}`, password: given.password };
+}
 function readApp() {
   const said = readJSON2(APP_FILE());
   if (!isObject(said))
     return null;
-  return { bundle: bundleOf2(said.bundle), tools: toolsOf(said.tools), at: typeof said.at === "number" ? said.at : 0 };
+  return { bundle: bundleOf2(said.bundle), tools: toolsOf(said.tools), host: hostOf3(said.host), at: typeof said.at === "number" ? said.at : 0 };
 }
 var isOpen = () => readApp()?.tools != null;
 function readFailed() {
@@ -50235,7 +50267,8 @@ function updating2(now = Date.now()) {
 }
 function registerApp(given, now = Date.now()) {
   const before = readApp();
-  const record = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, at: now };
+  const host = given.tools === null ? null : given.host ?? null;
+  const record = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, host, at: now };
   writePrivate(APP_FILE(), JSON.stringify(record));
   if (record.tools) {
     fs155.rmSync(FAILED_FILE(), { force: true });
@@ -50247,7 +50280,7 @@ function forgetTools(token, now = Date.now()) {
   const app = readApp();
   if (!app?.tools || app.tools.token !== token)
     return;
-  const record = { ...app, tools: null, at: now };
+  const record = { ...app, tools: null, host: null, at: now };
   if (readApp()?.tools?.token === token)
     writePrivate(APP_FILE(), JSON.stringify(record));
 }
@@ -50421,7 +50454,12 @@ async function* appRoute({ request, json }) {
   const bundle = given.bundle === undefined ? undefined : bundleOf2(given.bundle);
   if (given.bundle !== undefined && !bundle)
     return yield* json(400, { message: "Its bundle is a whole path to the app (…/Kuvo Code.app)." });
-  registerApp({ tools, bundle });
+  if (given.host !== undefined && given.host !== null && !request.fromApp)
+    return yield* json(403, { message: "Only Kuvo Code itself says where its own host answers." });
+  const host = given.host === undefined ? undefined : given.host === null ? null : hostOf3(given.host);
+  if (given.host !== undefined && given.host !== null && !host)
+    return yield* json(400, { message: "Its host answers on this Mac (http://127.0.0.1:<port>), with a password." });
+  registerApp({ tools, bundle, host });
   return yield* json(200, appStatus());
 }
 async function* appOpenRoute({ request, json, signal }) {
@@ -50705,12 +50743,13 @@ function keeperRuns() {
   }
 }
 var APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
+var APP_CLOSED = "Kuvo Code isn't open on this Mac.";
 async function* toApp(request, phone, signal) {
   const response = await appAnswer(request, phone, signal);
   if (response)
     return yield* passedOn(response, signal);
   yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
+  yield { body: Buffer.from(JSON.stringify({ message: OWN_HOME_MAC && !openAppHost() ? APP_CLOSED : APP_NOT_ANSWERING })) };
 }
 function macFront(handle = engineHandler(readEngineFile, { name: os20.hostname() }), timing) {
   return async function* (request, phone, signal) {
@@ -50833,8 +50872,10 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os21.
     const quiet = () => clearInterval(alive);
     response.once("close", quiet);
     try {
-      const fromApp = request.headers["x-kuvo-from"] === "app";
-      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp }, {}, abort.signal)) {
+      const from = request.headers["x-kuvo-from"];
+      const fromApp = from === "app";
+      const fromMac = from === "mac";
+      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp, fromMac }, {}, abort.signal)) {
         if (abort.signal.aborted)
           break;
         if (part.head && !headed) {

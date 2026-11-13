@@ -3077,6 +3077,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.app.host"
+           },
+           {
             "literal": "box.appKeys"
            },
            {
@@ -3090,6 +3093,9 @@
            },
            {
             "literal": "box.serve"
+           },
+           {
+            "literal": "box.serve.mac"
            },
            {
             "literal": "box.uninstall"
@@ -3557,6 +3563,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.app.host"
+           },
+           {
             "literal": "box.appKeys"
            },
            {
@@ -3570,6 +3579,9 @@
            },
            {
             "literal": "box.serve"
+           },
+           {
+            "literal": "box.serve.mac"
            },
            {
             "literal": "box.uninstall"

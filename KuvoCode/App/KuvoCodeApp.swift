@@ -189,8 +189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.boxGroups.flush()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
-        // This Mac's box: the keeper's goes on; the app's own goes with it.
+        // This Mac's box: the keeper's goes on; the app's own goes with it. This Mac's own box in a
+        // home of its own goes on too, told the app quit.
         model.stopBox()
+        if model.attachedIsOwnBox { AppModel.tellOwnBoxQuitting(updating: false) }
         model.stopMachines()
         Analytics.shared.flushBeforeQuit()
     }

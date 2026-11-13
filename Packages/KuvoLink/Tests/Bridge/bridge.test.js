@@ -1540,6 +1540,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.make": ["GET", "kuvo/bots/templates"],
     // (This Mac's app, registered with a Mac's box in a home of its own: a machine says it has none.)
     "box.app": ["GET", "kuvo/box/app"],
+    // (Where the app's own host answers, said as it registers there: the same route.)
+    "box.app.host": ["GET", "kuvo/box/app"],
     // (What this Mac's app asks of a Mac's box's keys: a GET is the wrong method, here as there.)
     "box.appKeys": ["GET", "kuvo/box/proof"],
     // (A command, `kuvo-link.js helper`, not a route: kuvo/info names it.)
@@ -1550,6 +1552,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "box.rehome": ["GET", "kuvo/box/rehome"],
     // (Its server kept for clients while one wants it.)
     "box.serve": ["GET", "kuvo/box/serve"],
+    // (Kuvo Code on its computer reaching that server as `box route` does: the same route.)
+    "box.serve.mac": ["GET", "kuvo/box/serve"],
     // (A command, `kuvo-link.js uninstall`, not a route: kuvo/info names it.)
     "box.uninstall": ["GET", "kuvo/info"],
     // (A release from a folder here, which only Kuvo Code offers: a GET is the wrong method.)

@@ -153,7 +153,9 @@ final class PhoneLink {
 
     /// This Mac's keys are its box's (it moved into a home of its own, `OwnBoxHome.hasMoved`): the app
     /// reads none of them, and has no identity of its own; what's signed with them, its box signs
-    /// (`kuvo/box/proof`). Set by AppModel; a test's own.
+    /// (`kuvo/box/proof`). And while the app is attached in place to any box (#689): they're that
+    /// box's, or (a machine's set up here, which keeps its own link) none of the app's to read or make
+    /// there. Set by AppModel; a test's own.
     @ObservationIgnored var keysOnBox: () -> Bool = { OwnBoxHome.hasMoved }
     /// This Mac's public link key, as its box says it once it has moved (`here`). Set by AppModel.
     @ObservationIgnored var boxKey: () -> String? = { nil }
@@ -196,6 +198,12 @@ final class PhoneLink {
         _ = identity
         return !unreadable
     }
+
+    /// Whether this Mac's link has its keys, for what its box does with them (setting your machines
+    /// up, the peers document it signs): the app's own (`hasIdentity`), or, while they're its box's
+    /// (moved into a home of its own), that box's, as it says its key (`boxKey`). None while the app
+    /// is attached to a machine's box, which keeps its own link.
+    private var linkHasKeys: Bool { keysOnBox() ? boxKey() != nil : hasIdentity }
 
     /// The key this Mac signs its documents with (PROTOCOL.md, "Documents"), from the Keychain beside
     /// the others, made the first time.
@@ -378,9 +386,17 @@ final class PhoneLink {
         var missed = 0
         while !Task.isCancelled {
             if let client = box() { await handOver(client) }
-            if let client = box(),
-               (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200,
-               await tellPeers(client), await sendRemovals(client) {
+            // Held by the update gate (#679: an older box, taking the release the app carries): its
+            // words, at once, rather than that it isn't answering.
+            var held: String?
+            let client = box()
+            var told: (status: Int, body: Data)?
+            if let client { told = try? await client.send("PUT", "kuvo/link/config", body: linkConfig) }
+            if let told, told.status == 503 {
+                let refusal = BoxRefusal(status: told.status, data: told.body)
+                if refusal.reason == BoxGates.reason { held = refusal.message }
+            }
+            if let client, told?.status == 200, await tellPeers(client), await sendRemovals(client) {
                 missed = 0
                 // Told: your machines are set up with what it keeps (one that couldn't be before).
                 syncMachines()
@@ -400,8 +416,12 @@ final class PhoneLink {
             guard !Task.isCancelled else { return }
             // Starting, or starting again: still coming for a few tries, then said.
             missed += 1
-            status = missed < Self.graceTries ? (relayWanted ? .connecting : .off)
-                : .failed("Kuvo Code’s background service on this Mac, which holds the link to your phones and machines, isn’t answering. It’s being started again.")
+            if let held {
+                status = .failed(held)
+            } else {
+                status = missed < Self.graceTries ? (relayWanted ? .connecting : .off)
+                    : .failed("Kuvo Code’s background service on this Mac, which holds the link to your phones and machines, isn’t answering. It’s being started again.")
+            }
             try? await Task.sleep(for: .seconds(2))
         }
     }
@@ -609,7 +629,7 @@ final class PhoneLink {
             setupFailed[engine.machine.id] = asked ? why : nil
             return
         }
-        guard hasIdentity else {
+        guard linkHasKeys else {
             setupFailed[engine.machine.id] = nil
             return
         }
@@ -756,7 +776,7 @@ final class PhoneLink {
     /// What `peersChanged` tells the box; none while there's no link to your machines (nothing's
     /// made for it then).
     private func peersBody(removed: [String] = []) -> Data? {
-        guard relayWanted, hasIdentity else { return nil }
+        guard relayWanted, linkHasKeys else { return nil }
         struct Peer: Encodable { var key: String; var sign: String; var address: String; var name: String; var id: String }
         // COMPAT(beta.1 mac-moves): `moved`, none: the boxes that move conversations say where they went. Goes when 0.8.0 ships.
         struct Moved: Encodable { var session: String; var key: String }

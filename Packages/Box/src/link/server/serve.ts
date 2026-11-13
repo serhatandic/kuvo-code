@@ -62,9 +62,13 @@ export function serveBox(password: string, handle: LinkHandler = engineHandler(r
     const quiet = () => clearInterval(alive);
     response.once("close", quiet);
     try {
-      // The app's own (the Mac's link says which aren't a phone's), not a phone using this box.
-      const fromApp = request.headers["x-kuvo-from"] === "app";
-      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp }, {}, abort.signal) as AsyncIterable<AnyPiece>) {
+      // The app's own (the Mac's link says which aren't a phone's), not a phone using this box; or
+      // Kuvo Code on this computer reaching a box that isn't its own (`mac`, a machine's attached
+      // in place: `box.serve.mac`), taken as `box route` takes it, streams and all.
+      const from = request.headers["x-kuvo-from"];
+      const fromApp = from === "app";
+      const fromMac = from === "mac";
+      for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp, fromMac }, {}, abort.signal) as AsyncIterable<AnyPiece>) {
         if (abort.signal.aborted) break;
         if (part.head && !headed) {
           quiet();

@@ -271,7 +271,7 @@ let ownPort: number | null = null;
 export function fenceOwnPort(port: number) {
   ownPort = port;
 }
-function kuvoPorts(): number[] {
+export function kuvoPorts(): number[] {
   const ports = new Set<number>();
   const add = (value: unknown) => { if (Number.isInteger(value) && (value as number) > 0) ports.add(value as number); };
   for (const file of [ENGINE_FILE, BRIDGE_FILE]) {
@@ -286,8 +286,10 @@ function kuvoPorts(): number[] {
   try { add(JSON.parse(fs.readFileSync(path.join(RUN, "tools.json"), "utf8")).port); } catch {}
   // The box's own server for clients, wherever it runs from (its record, `run/serve.json`).
   try { add(JSON.parse(fs.readFileSync(path.join(RUN, "serve.json"), "utf8")).port); } catch {}
-  // This Mac's app's tools, as it registered with a Mac's box in a home of its own (run/app.json).
+  // This Mac's app's tools, as it registered with a Mac's box in a home of its own (run/app.json),
+  // and its own host interface there (`host`, which answers a phone's ask of the Mac's own routes).
   try { add(Number(new URL(JSON.parse(fs.readFileSync(path.join(RUN, "app.json"), "utf8")).tools.url).port)); } catch {}
+  try { add(Number(new URL(JSON.parse(fs.readFileSync(path.join(RUN, "app.json"), "utf8")).host.url).port)); } catch {}
   add(ownPort);
   return [...ports].sort((a, b) => a - b);
 }

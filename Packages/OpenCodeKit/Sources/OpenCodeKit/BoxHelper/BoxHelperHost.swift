@@ -247,7 +247,8 @@ public final class BoxHelperHost {
             toFinderTrash(path)
             return .json([:])
         case "/sites/signed-in", "/link/route":
-            // What only the open app answers: it reaches the box itself (piece 6b), not through here.
+            // What only the open app answers: the box asks the app's own host for it, as the app
+            // registered it (`kuvo/box/app`'s `host`, #333 piece 6b), never through here.
             return Self.said(503, "Kuvo Code isn’t open on this Mac.")
         default:
             return HTTPResponse(status: 404)
