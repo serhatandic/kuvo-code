@@ -35359,6 +35359,8 @@ function readList(file = LIST_FILE) {
 function commit(listed, now = Date.now(), file = LIST_FILE, owner) {
   return locked(file + ".lock", () => {
     const list = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
+    if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link"))
+      return list;
     const next = list.seq + 1;
     let changed = false;
     let noted = list.owner !== owner;
@@ -35433,6 +35435,8 @@ function answerFrom(list, since) {
   const gone = Object.entries(list.gone).filter(([, entry]) => entry.seq > from.seq).map(([id]) => id).sort();
   return { at: cursorOf(list), sessions, ...gone.length ? { gone } : {}, projects: list.projects, ...pending };
 }
+var LIST_FILES = new Set(["projects.json", "worktrees.json"]);
+var BOT_FILES = new Set(["bot.json", "session"]);
 function keepList() {
   keeping2 = true;
   latest2 = null;
@@ -35441,12 +35445,24 @@ function keepList() {
   const followers = [projectFollowers, botFollowers, moveFollowers, askFollowers2];
   for (const each of followers)
     each.add(again);
+  const box = watchFolders([BOX], (...told) => {
+    if (typeof told[1] !== "string" || LIST_FILES.has(told[1]))
+      again();
+  }, { recursive: false, missed: again });
+  const moves = watchFolders([MOVES], again, { recursive: false });
+  const bots = watchFolders([BOTS], (...told) => {
+    const name = typeof told[1] === "string" ? told[1].split(path122.sep) : null;
+    if (!name || name.length === 1 || name.length === 2 && BOT_FILES.has(name[1]))
+      again();
+  }, { missed: again });
   const whole = setInterval(() => {
     for (const [name, place] of placeTargets)
       readPlace(name, place).catch(() => {});
   }, READ_EVERY);
   whole.unref?.();
   return () => {
+    for (const watch of [box, moves, bots])
+      watch.close();
     for (const each of followers)
       each.delete(again);
     clearInterval(whole);
@@ -39674,7 +39690,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1b16f5b4b011";
+var BRIDGE_VERSION = "9ce8c5134ef0";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
