@@ -156,14 +156,17 @@ public struct WorkSource: Hashable, Sendable, Decodable {
 
 /// Where an outside source's item stands there, as the box last read it: `open`, `draft`,
 /// `completed`, `not_planned`, `merged` or `closed` (a pull request closed unmerged); a newer box
-/// may say more.
+/// may say more. `gone`: found missing there since (deleted, or no longer visible to the box's
+/// sign-in), `state` what it was before.
 public struct WorkSeen: Hashable, Sendable, Decodable {
     public var state: String
     public var at: Double
+    public var gone: Bool?
 
-    public init(state: String, at: Double) {
+    public init(state: String, at: Double, gone: Bool? = nil) {
         self.state = state
         self.at = at
+        self.gone = gone
     }
 }
 
@@ -215,6 +218,9 @@ public struct WorkItem: Hashable, Sendable, Decodable, Identifiable {
     public var struck: Bool?
     /// Where it's made Done ("github"), as the box says: never by a move here.
     public var closesOn: String?
+    /// What's shown in place of its category while its source makes it Done ("Merged on GitHub"),
+    /// as the box says.
+    public var doneAs: String?
     public var computer: WorkComputer?
     public var handing: WorkHanding?
     public var created: WorkStamp
@@ -263,8 +269,11 @@ public struct WorkItemDetail: Hashable, Sendable, Decodable {
     public var files: [File]
     public var links: [Link]
     public var handed: [Handed]
+    /// One on another of your computers that the box asked couldn't read whole there now: as that
+    /// computer last told it, without what only it keeps (its description, notes, activity, files).
+    public var told: Bool
 
-    private enum Keys: String, CodingKey { case body, notes, events, files, links, handed }
+    private enum Keys: String, CodingKey { case body, notes, events, files, links, handed, told }
 
     // (An event this client can't read leaves out only itself, never the item.)
     private struct Lossy<Value: Decodable>: Decodable {
@@ -281,6 +290,8 @@ public struct WorkItemDetail: Hashable, Sendable, Decodable {
         files = try container.decodeIfPresent([File].self, forKey: .files) ?? []
         links = try container.decodeIfPresent([Link].self, forKey: .links) ?? []
         handed = try container.decodeIfPresent([Handed].self, forKey: .handed) ?? []
+        // (A box from before `told` answered one on another computer only as it last told it.)
+        told = try container.decodeIfPresent(Bool.self, forKey: .told) ?? (item.computer != nil)
     }
 }
 
@@ -664,12 +675,15 @@ public extension WorkItem {
     var spokenName: String { source.map { "\($0.spokenKind) \($0.shownName)" } ?? number.map { "Work item \($0)" } ?? "New work item" }
     /// Its title struck through: closed without being done there (not planned, or unmerged).
     var isStruck: Bool { struck == true }
+    /// Gone from its source (deleted there, or no longer visible): its mark drawn dimmed.
+    var isGone: Bool { seen?.gone == true }
 }
 
 public extension WorkRef {
     var brand: String? { source?.brand }
     var spokenName: String { source.map { "\($0.spokenKind) \($0.shownName)" } ?? number.map { "Work item \($0)" } ?? "New work item" }
     var isStruck: Bool { struck == true }
+    var isGone: Bool { seen?.gone == true }
 }
 
 public extension WorkQueue {

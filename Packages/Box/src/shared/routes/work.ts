@@ -79,8 +79,10 @@ export const WORK_ASKS = object({ asks: list(WORK_ASK) });
 /** How your answer went: what was done, in the words its asker reads, and whether it failed. */
 export const WORK_ASK_ANSWERED = object({ answer: words("allow", "always", "deny"), text: string, isError: bool });
 
-/** Where new projects go here (null until you pick a folder), and a folder to offer without one. */
-export const WORK_SETTINGS = object({ projectsFolder: nullable(string), "suggested?": string });
+/** Where new projects go here (null until you pick a folder), and a folder to offer without one; on a
+ * Mac's box that keeps its Mac awake itself (one in a home of its own), whether it does while agents
+ * work, and whether it is now. */
+export const WORK_SETTINGS = object({ projectsFolder: nullable(string), "suggested?": string, "keepsAwake?": bool, "awakeNow?": bool });
 
 /** A model, or an account's models, that can't answer now (`GET kuvo/work/unanswering`), as the
  * box holds them back from its bots: the provider, the model (left out for all of the account's,

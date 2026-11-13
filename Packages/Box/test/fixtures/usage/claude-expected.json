@@ -1,0 +1,75 @@
+{
+ "files": [
+  "claude/projects/-work-alpha/s1.jsonl",
+  "claude/projects/-work-alpha/s1/subagents/agent-1.jsonl",
+  "claude/projects/-work-beta/b1.jsonl"
+ ],
+ "since": "2026-11-01T00:00:00Z",
+ "now": "2026-11-12T12:00:00Z",
+ "days": [
+  {
+   "date": "2026-11-11",
+   "tokens": 262400,
+   "cost": 0.6021,
+   "models": [
+    {
+     "model": "claude-haiku-5-1",
+     "tokens": 2000,
+     "cost": 0.01
+    },
+    {
+     "model": "claude-opus-5",
+     "tokens": 256000,
+     "cost": 0.37
+    },
+    {
+     "model": "claude-opus-5-fast",
+     "tokens": 200,
+     "cost": 0.018
+    },
+    {
+     "model": "claude-opus-5-thinking",
+     "tokens": 200,
+     "cost": 0.003
+    },
+    {
+     "model": "claude-sonnet-5",
+     "tokens": 2000,
+     "cost": 0.198
+    },
+    {
+     "model": "kimi-k9",
+     "tokens": 2000,
+     "cost": 0.0031
+    }
+   ]
+  },
+  {
+   "date": "2026-11-10",
+   "tokens": 35690,
+   "cost": 1.47969,
+   "models": [
+    {
+     "model": "Unattributed",
+     "tokens": 10,
+     "cost": 0.5
+    },
+    {
+     "model": "claude-opus-5",
+     "tokens": 34770,
+     "cost": 0.8896
+    },
+    {
+     "model": "claude-sonnet-5",
+     "tokens": 910,
+     "cost": 0.09009
+    }
+   ]
+  }
+ ],
+ "unknown": {
+  "2026-11-10": [
+   "mystery-model-9"
+  ]
+ }
+}

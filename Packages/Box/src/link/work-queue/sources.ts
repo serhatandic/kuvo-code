@@ -47,3 +47,8 @@ export const sourceKeyOf = (source: { kind: string; ref: string }): string => {
   const at = issueAt(source.ref);
   return at ? sourceKey(at) : `${source.kind}:${source.ref}`.toLowerCase();
 };
+
+/** Whether two items' sources are the same one: by its name, or by GitHub's id for it (the same
+ * issue after a rename or a transfer). */
+export const sameSource = (a: { kind: string; ref: string; id?: string }, b: { kind: string; ref: string; id?: string }): boolean =>
+  sourceKeyOf(a) === sourceKeyOf(b) || (a.id !== undefined && a.id === b.id);

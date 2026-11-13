@@ -4,13 +4,13 @@
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { removeAtEnd } from "./at-end.js";
+import { runningAs } from "./running-as.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-groups-"));
 process.env.KUVO_HOME = home;
@@ -54,12 +54,6 @@ const send = (response, status, value) => {
   response.end(JSON.stringify(value));
 };
 
-function bridgeProcess(t) {
-  const named = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "kuvo-agents"], { stdio: "ignore" });
-  t.after(() => named.kill());
-  return named;
-}
-
 test("a machine's group chats are the bridge's answers, as it gives them, to every route a client has", async t => {
   let release;
   const bridge = await fakeBridge((request, response) => {
@@ -75,8 +69,8 @@ test("a machine's group chats are the bridge's answers, as it gives them, to eve
     send(response, 200, { groups: [{ id: "grp_box0000001" }] });
   });
   t.after(bridge.close);
-  const named = bridgeProcess(t);
-  const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "box" }, () => ({ pid: named.pid, port: bridge.port, password: "agents" }));
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "box" }, () => ({ pid: agents, port: bridge.port, password: "agents" }));
 
   const list = await ask(handle, "GET", "kuvo/groups");
   assert.deepEqual([list.status, list.json], [200, { groups: [{ id: "grp_box0000001" }] }]);
@@ -108,8 +102,8 @@ test("a machine's group chats are the bridge's answers, as it gives them, to eve
 test("a bridge there but not answering now is asked again, not taken as having no group chats", async t => {
   const bridge = await fakeBridge((request, response) => send(response, 500, {}));
   t.after(bridge.close);
-  const named = bridgeProcess(t);
-  const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "box" }, () => ({ pid: named.pid, port: bridge.port, password: "agents" }));
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "box" }, () => ({ pid: agents, port: bridge.port, password: "agents" }));
   for (const route of ["kuvo/groups", "kuvo/groups/events", "kuvo/groups/grp_box0000001/events"]) {
     const answer = await ask(handle, "GET", route);
     assert.equal(answer.status, 503, route);
@@ -130,11 +124,11 @@ test("a message to a group chat waits for the list only when it names someone it
   t.after(async () => { engine.closeAllConnections(); engine.close(); await link.ownRefreshed(); });
   const bridge = await fakeBridge((request, response) => send(response, 200, { message: { id: "gm_1" } }));
   t.after(bridge.close);
-  const named = bridgeProcess(t);
+  const agents = await runningAs("kuvo-agents", t);
   link.writeLink({ key: link.newKey().toString("base64url"), secret: "c2VjcmV0", relay: "ws://127.0.0.1:9", id: "box", phones: [] });
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   fs.writeFileSync(path.join(home, "run", "agents.json"), JSON.stringify({ machine: "box", agents: [{ session: "ses_mira", name: "Mira", kind: "bot", machine: "box" }] }));
-  const handle = link.engineHandler(() => ({ port: engine.address().port, password: "engine" }), { name: "box" }, () => ({ pid: named.pid, port: bridge.port, password: "agents" }));
+  const handle = link.engineHandler(() => ({ port: engine.address().port, password: "engine" }), { name: "box" }, () => ({ pid: agents, port: bridge.port, password: "agents" }));
   // "&" that isn't a name, a name listed, and one inside a word: passed on at once.
   for (const text of ["Tom & Jerry", "Ask &Mira", "salt&pepper", "cafe\u0301&Mira"]) {
     assert.equal((await ask(handle, "POST", "kuvo/groups/grp_box0000001", { body: JSON.stringify({ text }) })).status, 200, text);

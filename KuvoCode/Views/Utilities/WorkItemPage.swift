@@ -34,7 +34,8 @@ struct WorkItemPage: View {
         store.detail(box: opened.box, id: opened.id, number: opened.number, source: opened.source)
     }
 
-    /// The box the item is kept on: the panel's, or the computer it says it's on.
+    /// The box its files are read from: the computer it says it's on, where this Mac reaches it
+    /// (a file of any size), else the panel's, which brings one of a few MB from there.
     private var keptOn: String {
         (view.items.first(where: opened.matches) ?? detail?.item).flatMap { store.box(of: $0, in: opened.box) } ?? opened.box
     }
@@ -155,7 +156,7 @@ struct WorkItemPage: View {
 
     private func itemName(_ item: WorkItem) -> some View {
         HStack(spacing: 4) {
-            if let brand = item.brand { BrandMarkView(brand, size: 13) }
+            if let brand = item.brand { BrandMarkView(brand, size: 13).opacity(item.isGone ? WorkItemChip.goneOpacity : 1) }
             Text(item.name)
                 .font(.system(size: 13, weight: .semibold).monospacedDigit())
         }

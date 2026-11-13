@@ -17,14 +17,12 @@ import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
 import { fromPhone, modelInput } from "../server/forward";
 import { namedIn, namingHere } from "../server/naming";
+import { answering, BUSY, collected, forgetSent, SENDING_PATIENCE, sentKey, sentOnce } from "../server/sent-once";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
 export const QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add))?|queue\/([^/]+)(?:\/(now))?))$/;
 
-// What a queue change says when the engine here runs but is too busy to answer in time (504,
-// `busy`): it isn't down, and the change can be asked again in a moment.
-export const BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
 
 // `kuvo/sessions/queues/events`: every queue that's paused or holds something, a line now and one
 // each time that changes. `GET kuvo/sessions/<id>/queue`: one session's. `POST …/stop`: what waits
@@ -57,6 +55,8 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
     const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => null);
     const dropped = dropWaiting(session, decodeURIComponent(item), place ? await inboxFor(place.target, session) : []);
     if (!dropped) return yield* json(404, { message: "That message isn't waiting any more." });
+    // Put back with Undo under the same id, it's added again.
+    forgetSent(session, decodeURIComponent(item));
     // What it was, whole, for Undo to add back as it was, where it was (`queue/add` with `kept`,
     // and `before`, what came after it).
     const { from, text: words } = dropped.shown;
@@ -85,7 +85,14 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
       const items = isObject(given) && Array.isArray(given.items) ? given.items.filter((id): id is string => typeof id === "string") : [];
       return yield* json(200, shownQueue(await holdQueue(place.target, session, undefined, items)));
     }
-    if (step === "add") return yield* add(context, place.target, session);
+    if (step === "add") {
+      // Sent again under its id (the phone's link dropped before the answer came, #144): added once,
+      // every send answered as the one that went (`sentOnce`).
+      const once = sentKey("queue", session, request.body);
+      const target = place.target;
+      if (!once) return yield* add(context, target, session);
+      return yield* answering(await sentOnce(once, () => collected(add(context, target, session))));
+    }
     // (You set it going: if it was stopped, what comes of it is news again.)
     forgetStopped(session);
     if (step === "resume") return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
@@ -124,6 +131,6 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
   if (await keepWaitingBefore(target, session, message, { from, words }, before)) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   // (A busy engine takes the message late, and has it then: waited for, not given up on at the
   // usual half minute and said to have failed, #443.)
-  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message, 120_000);
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message, SENDING_PATIENCE.ms);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }

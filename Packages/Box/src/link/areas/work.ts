@@ -22,7 +22,8 @@ import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
 import { startOfDay } from "../work/clock";
-import { setProjectsFolder, workSettings } from "../work/settings";
+import { folderGiven, KEEPS_AWAKE_REFUSED, setKeepsAwake, setProjectsFolder, workSettings } from "../work/settings";
+import { awakeForWork, keepsMacAwakeItself } from "../work/awake";
 import { unansweringList, unansweringNow } from "../work/unanswering";
 import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
 import { call } from "../engine/client";
@@ -139,13 +140,28 @@ export async function* workAsksRoute(context: RouteContext, match: RegExpMatchAr
     return yield* json(200, unansweringList(held, Array.isArray(listed) ? listed : null));
   }
   if (route === "kuvo/work/settings") {
-    if (method === "GET") return yield* json(200, workSettings());
+    // (Keep This Mac Awake only where the box keeps its Mac awake itself: the process that does,
+    // `serve`, holds or lets go by its next look, ten seconds at most.)
+    const awake = () => keepsMacAwakeItself() ? { now: awakeForWork() } : undefined;
+    if (method === "GET") return yield* json(200, workSettings(undefined, awake()));
     if (method !== "PATCH") return yield* json(405, {});
     const given = parsed(request.body);
-    if (!isObject(given) || !("projectsFolder" in given)) return yield* json(400, { message: "Send {projectsFolder}: a full path, or null." });
-    const set = setProjectsFolder(given.projectsFolder);
-    if ("refused" in set) return yield* json(400, { message: set.refused });
-    return yield* json(200, workSettings());
+    const keepsAwake = keepsMacAwakeItself() && isObject(given) && "keepsAwake" in given;
+    if (!isObject(given) || (!("projectsFolder" in given) && !keepsAwake)) {
+      return yield* json(400, { message: keepsMacAwakeItself() ? "Send {projectsFolder}: a full path, or null; or {keepsAwake}: true or false." : "Send {projectsFolder}: a full path, or null." });
+    }
+    // Both checked before either is kept.
+    if (keepsAwake && typeof given.keepsAwake !== "boolean") return yield* json(400, { message: KEEPS_AWAKE_REFUSED });
+    if ("projectsFolder" in given && given.projectsFolder !== null) {
+      const checked = folderGiven(given.projectsFolder);
+      if ("refused" in checked) return yield* json(400, { message: checked.refused });
+    }
+    if (keepsAwake) setKeepsAwake(given.keepsAwake);
+    if ("projectsFolder" in given) {
+      const set = setProjectsFolder(given.projectsFolder);
+      if ("refused" in set) return yield* json(400, { message: set.refused });
+    }
+    return yield* json(200, workSettings(undefined, awake()));
   }
   if (route === "kuvo/work/asks" || match[1] === "events") {
     if (method !== "GET") return yield* json(405, {});

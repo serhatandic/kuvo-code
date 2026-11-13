@@ -306,7 +306,7 @@ public struct LimitsWindow: Decodable, Hashable, Sendable, Identifiable {
 }
 
 /// A list's items this copy can read: one it can't is left out, not all of them.
-private struct Readable<Item: Decodable>: Decodable {
+struct Readable<Item: Decodable>: Decodable {
     var items: [Item] = []
 
     init(from decoder: Decoder) throws {

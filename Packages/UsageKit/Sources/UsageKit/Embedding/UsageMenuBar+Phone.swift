@@ -56,6 +56,7 @@ extension UsageMenuBar {
     public func refreshAll() -> Bool {
         guard let container else { return false }
         Task { await container.dataStore.refreshAll(force: true) }
+        HostHistory.shared.refresh?()
         return true
     }
 

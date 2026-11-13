@@ -2,7 +2,7 @@ import "./safety"
 // What test/safety.ts promises on Bun's runner, which a box's tests run on: test-safety.test.js holds
 // Node's. Decoys stand for the real folders, as `mktemp` in another process, so they aren't a test's own.
 import { afterAll, expect, test } from "bun:test"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import fs, { copyFileSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
@@ -182,4 +182,16 @@ test("every box test file loads test/safety.ts before anything else", () => {
     return first !== `import "${safety.startsWith(".") ? safety : `./${safety}`}"`
   })
   expect(missing).toEqual([])
+})
+
+// A bridge a box test starts with an environment it made (test/hang.test.ts runs the bridge's
+// main.ts so) prices usage with what it ships, never with the feeds on the web: either way of
+// starting it.
+test("what a box test starts, with an environment of its own, is told to fetch no prices", () => {
+  const script = "process.stdout.write(String(process.env.KUVO_TEST_PRICE_FEEDS))"
+  // (On the engine, Bun is the engine's program told to be Bun.)
+  const env = { PATH: "/usr/bin:/bin", ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) }
+  expect(spawnSync(process.execPath, ["-e", script], { encoding: "utf8", env }).stdout).toBe("off")
+  expect(Bun.spawnSync([process.execPath, "-e", script], { env }).stdout.toString()).toBe("off")
+  expect(process.env.KUVO_TEST_PRICE_FEEDS).toBe("off")
 })

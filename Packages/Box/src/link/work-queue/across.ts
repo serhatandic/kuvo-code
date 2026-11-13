@@ -17,13 +17,16 @@ import { awaySince, readReach } from "../peers/reach";
 import { readLink } from "../state";
 import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
+import { actForPeer } from "./acts";
+import { takeAct, takeActed } from "./forward";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
 import { sharedMachine } from "../setup/settle";
 import { noteSetupNow } from "../setup/lead";
 import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
-import { doneOnGitHub, SEEN_FILE, seenOf, withSeen } from "./github";
-import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
+import { doneByRead, SEEN_FILE, seenOf, withSeen } from "./github";
+import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, patchTold, readTold, TOLD, toldItemOf, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
+import { locked, writePrivate } from "../files";
 import { factsOf, linkedTo, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
 import { rowsOf } from "../work/elsewhere";
 import type { PeerPlaces } from "../engine/client";
@@ -84,17 +87,23 @@ export async function tellingNow(targets: Target[], link: LinkState | null, sign
   const facts = await factsOf(targets, signal);
   const all = allItems().filter(item => OWNER.test(item.owner) && !item.removed);
   // (An issue closed on GitHub is Done here too: among the latest Done, not the open ones.)
-  const isDone = (item: Item) => item.category === "done" || Boolean(item.source && doneOnGitHub(seenOf(item.source)?.value?.state));
-  const done = all.filter(isDone).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
+  const isDone = (item: Item) => item.category === "done" || Boolean(item.source && doneByRead(seenOf(item.source)));
+  // (When it was Done: an issue Done on GitHub, when it was closed there or, gone, since when, as
+  // clients show it; it has no Done time of its own here.)
+  const doneTime = (item: Item) => {
+    const read = item.source ? seenOf(item.source) : undefined;
+    return read?.value && doneByRead(read) ? read.value.closedAt ?? read.at : item.doneAt ?? 0;
+  };
+  const done = all.filter(isDone).sort((a, b) => doneTime(b) - doneTime(a)).slice(0, MOST_TOLD_DONE);
   const items = [...all.filter(item => !isDone(item)).sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
   const { owners, titles } = await ownersOf("all", items, facts, targets, cache);
   const told = items.map(item => toldItem(item, facts.working, titles));
   const custom = categories().filter(each => !each.builtIn).map(({ id, name }) => ({ id, name }));
   const content = { items: told, owners, categories: custom, ...numberingNow(link) };
-  // (When GitHub was last asked of an issue is told too, so the others don't ask it again meanwhile:
-  // by the two minutes, so it goes again no more often than that for it.)
-  const byTwo = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: Math.floor(item.seen.checked / 120_000) } } : item)) };
-  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(byTwo)).digest("base64url").slice(0, 22);
+  // (When GitHub was last asked of an issue goes with it, so the others don't ask again meanwhile,
+  // but isn't a change: what's told goes again only once something else changes.)
+  const unchecked = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: undefined } } : item)) };
+  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(unchecked)).digest("base64url").slice(0, 22);
   return { id, payload: { told: { id, at: Date.now(), ...content } } };
 }
 
@@ -209,6 +218,7 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
   // (What came late, older than what's kept, isn't had: had, it would never go again.)
   const before = readTold(sender.key);
   if (!keepTold(sender.key, told)) return;
+  forgetDeletedThere(new Set(told.items.map(item => item.id)));
   reply({ had: told.id });
   // How it numbers changed (it's shared now, or numbers from another): this box's setup looked at now.
   if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key || before?.primary?.since !== told.primary?.since) noteSetupNow(Date.now(), { soon: 0 });
@@ -229,8 +239,9 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
 }
 
 /** The Work Queue's mail from another computer (`{workQueue: …}`): a part of one too big for one
- * mail, what it tells of its queue and that it has this box's, numbers' asks and blocks, and items
- * handed between them. */
+ * mail, what it tells of its queue and that it has this box's, numbers' asks and blocks, items
+ * handed between them, and what a client did to an item one keeps, handed on by the box it asked
+ * (`forward.ts`), and its answer. */
 export async function takeWorkQueueMail(sender: MailSender, given: unknown, host: Pick<LinkHost, "send"> | null | undefined, places: () => PeerPlaces): Promise<void> {
   if (!isObject(given)) return;
   const whole = isObject(given.part) ? takePart(sender, given.part) : given;
@@ -249,6 +260,8 @@ export async function takeWorkQueueMail(sender: MailSender, given: unknown, host
   }
   if (isObject(whole.handed)) handedBack(sender, whole.handed);
   if (isObject(whole.hand)) await handArrived(sender, whole.hand, reply, places).catch(() => {});
+  if (isObject(whole.acted)) takeActed(sender, whole.acted);
+  if (isObject(whole.act)) await takeAct(sender, whole.act, reply, act => actForPeer(act, places().targets)).catch(() => {});
 }
 
 
@@ -304,15 +317,85 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
 }
 
 /** The item another computer told of that `ref` names (by id, number or source), or null: of two,
- * the newer word. */
-export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(), { asTold = false }: { asTold?: boolean } = {}): ItemElsewhere | null {
+ * the newer word. With `deleted`, one you deleted there through this box that none tells of now, as
+ * that box answered (`removed`): for bringing it back there (Undo) and reading it, only. */
+export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(), { asTold = false, deleted = false }: { asTold?: boolean; deleted?: boolean } = {}): ItemElsewhere | null {
   let found: { item: ItemElsewhere; at: number } | null = null;
-  for (const peer of peersOf(link)) {
+  const peers = peersOf(link);
+  const computerOf = (peer: Peer): Computer => ({ key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) });
+  for (const peer of peers) {
     const told = readTold(peer.key);
     const item = told?.items.find(each => refNames(ref, each));
-    if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...(asTold ? item : asAway(item, awaySince(peer.key))), computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } }, at: told!.at };
+    if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...(asTold ? item : asAway(item, awaySince(peer.key))), computer: computerOf(peer) }, at: told!.at };
+  }
+  if (!found && deleted) {
+    for (const [, each] of Object.entries(readDeletedThere())) {
+      const peer = peers.find(one => one.key === each.key);
+      const item = toldItemOf(each.item);
+      if (peer && item && refNames(ref, item)) return { ...item, removed: { at: each.at, by: { user: true } }, computer: computerOf(peer) };
+    }
   }
   return found ? (asTold ? found.item : withSeen(found.item)) : null;
+}
+
+// Items you deleted on another computer through this box (`run/work-queue/deleted-there.json`, by
+// id: the computer's key, when, and the item as its box answered), for Undo: a day, 200 at most,
+// and only until that computer, or this box, has it again.
+const DELETED_THERE = path.join(WORK_QUEUE, "deleted-there.json");
+const DELETED_LOCK = path.join(WORK_QUEUE, ".deleted-there.lock");
+const DELETED_FOR = 86_400_000;
+type DeletedThere = Record<string, { key: string; at: number; item: unknown }>;
+
+function readDeletedThere(now = Date.now()): DeletedThere {
+  try {
+    const kept: unknown = JSON.parse(fs.readFileSync(DELETED_THERE, "utf8"));
+    if (!isObject(kept)) return {};
+    const here = new Set(allItems().map(item => item.id));
+    return Object.fromEntries(Object.entries(kept).filter(([id, each]) => isObject(each) && typeof each.key === "string" && typeof each.at === "number" && now - each.at < DELETED_FOR && !here.has(id))) as DeletedThere;
+  } catch {
+    return {};
+  }
+}
+
+// The latest 200 kept, or the file gone when none are.
+function keepDeletedThere(entries: [string, DeletedThere[string]][]): void {
+  if (!entries.length) return void fs.rmSync(DELETED_THERE, { force: true });
+  writePrivate(DELETED_THERE, JSON.stringify(Object.fromEntries(entries.sort(([, a], [, b]) => b.at - a.at).slice(0, 200))));
+}
+
+// What's kept of items deleted there, gone for those a computer tells of again (brought back).
+// (Its ids looked at first, as they're written: most tellings name none of them.)
+function forgetDeletedThere(told: Set<string>): void {
+  let ids: string[];
+  try {
+    const kept: unknown = JSON.parse(fs.readFileSync(DELETED_THERE, "utf8"));
+    ids = isObject(kept) ? Object.keys(kept) : [];
+  } catch {
+    return;
+  }
+  if (!ids.some(id => told.has(id))) return;
+  try {
+    locked(DELETED_LOCK, () => keepDeletedThere(Object.entries(readDeletedThere()).filter(([id]) => !told.has(id))));
+  } catch {}
+}
+
+/** A change you made through this box to an item the computer `key` keeps, as its box answered
+ * (`item`): what this box has of it now, so its views show it at once, not when that computer next
+ * tells (one deleted is gone from them, and kept for bringing back there). */
+export function changedThere(key: string, action: "delete" | "move" | "restore", item: Record<string, unknown>, now = Date.now()): void {
+  const id = typeof item.id === "string" ? item.id : null;
+  if (!id) return;
+  patchTold(key, id, item, action === "delete");
+  if (action !== "delete" && !fs.existsSync(DELETED_THERE)) return;
+  try {
+    locked(DELETED_LOCK, () => {
+      const kept = readDeletedThere(now);
+      if (action === "delete") kept[id] = { key, at: now, item };
+      else delete kept[id];
+      keepDeletedThere(Object.entries(kept));
+    });
+  } catch {}
+  for (const tell of queueFollowers) tell();
 }
 
 // An item told by a computer that isn't answering (`away`, since when): as it told it, but with
