@@ -9701,8 +9701,11 @@ function takeStates(given) {
 }
 function metricID(service, window) {
   const id = window.id;
+  if (service === "codex" && /spark/i.test(window.model ?? id))
+    return `codex.${id.endsWith("secondary") ? "sparkWeekly" : "spark"}`;
   const aliases = {
     claude: { five_hour: "session", seven_day: "weekly", seven_day_sonnet: "sonnet", seven_day_fable: "fable", seven_day_opus: "opus" },
+    antigravity: { "gemini-5h": "geminiPro", "gemini-weekly": "geminiWeekly", "argon-weekly": "argonWeekly", "3p-5h": "claude", "3p-weekly": "claudeWeekly" },
     codex: { primary: "session", secondary: "weekly" },
     opencode: { rolling: "session" },
     copilot: { premium_interactions: "premium" },
@@ -10035,6 +10038,8 @@ class Limits {
       return;
     if (entry.heardAs !== undefined && entry.heardAs !== now) {
       entry.windows = [];
+      entry.notices = undefined;
+      entry.noticeState = undefined;
       entry.plan = undefined;
       entry.balance = undefined;
       entry.extras = undefined;
@@ -10093,10 +10098,14 @@ class Limits {
       return;
     }
     const peer = entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined;
-    if (peer?.checked && peer.checked > Math.max(...Object.values(entry.noticeState ?? {}).map((s) => s.read ?? 0), 0)) {
-      entry.noticeState = takeStates(peer.noticeState);
-    }
     entry.noticeState ??= {};
+    const siblings = entry.identity ? [...this.entries.values()].filter((e) => e !== entry && e.identity === entry.identity) : [];
+    const candidates = [peer?.noticeState, ...siblings.map((e) => e.noticeState)];
+    for (const candidate of candidates)
+      for (const [id, state] of Object.entries(takeStates(candidate))) {
+        if ((state.read ?? 0) > (entry.noticeState[id]?.read ?? -1))
+          entry.noticeState[id] = structuredClone(state);
+      }
     const row = entry.identity ? `${account.service}#${entry.identity}` : `${this.ownKey()}/${account.provider}`;
     const created = [];
     for (const window of entry.windows.filter((w) => ids.includes(w.id))) {
@@ -10107,7 +10116,7 @@ class Limits {
       const previous = entry.noticeState[window.id] ?? initialState();
       const result = transitions(meter(window, this.now()), 1 - window.used, window.resetsAt, previous, toggles);
       result.state.fired.push(...result.fire);
-      entry.noticeState[window.id] = Object.assign(result.state, { read: window.read });
+      entry.noticeState[window.id] = { ...result.state, read: window.read };
       for (const milestone of result.fire)
         created.push(newNotice(row, account.service, window, milestone, this.now()));
     }
@@ -35195,4 +35204,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 665cdf26e24bae1271581df64cad8a704efb38483aa111a8615ad4c5fd8004d1
+// Built from Packages/Box/src/agents 2d56120135451af6f6421ea43869767ba181ca9bff901f2f8e964faf6c05cf05
