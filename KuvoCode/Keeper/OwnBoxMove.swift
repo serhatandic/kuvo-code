@@ -207,7 +207,8 @@ final class OwnBoxMove {
             return underWayOnDisk || movedOnDisk || OwnBoxHome.kind(in: folder) == "mac" ? .wait : .startOld
         }
         let state = said.answer["state"] as? String
-        if underWayOnDisk || state == "moving" || state == "clearing" { return await resume() }
+        // (A journal there, read or not, is a move under way: the box says `moving` or `clearing`.)
+        if state == "moving" || state == "clearing" { return await resume() }
         if state == "done", said.answer["way"] as? String == "move" { return await finish(owed: said.answer["owed"] as? [String] ?? []) }
         // (A new Mac's box made there, with nothing moved: its helper starts it, never this keeper.)
         // (Switched off in Login Items, its helper stays off.)
