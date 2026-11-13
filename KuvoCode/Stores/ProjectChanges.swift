@@ -464,55 +464,6 @@ nonisolated enum Git {
         file.isBinary = parsed.isBinary
         file.isTooBig = parsed.isTooBig
     }
-
-    // MARK: Over SSH, for a machine's older box
-
-    // COMPAT(beta.1 git-older-box): a machine's git over SSH, for what its box from before `kuvo/git/branches`, `kuvo/git/switch`, `kuvo/git/status` and `kuvo/folders/tree` doesn't answer. This Mac's own git is never run: its folders are always its box's. Goes when 0.8.0 ships.
-
-    /// Runs git for something that changes the repository; nil when it worked, else what git
-    /// said. It never waits for a password: with nothing to answer, it fails instead. As long as
-    /// it takes, and what a hook leaves running doesn't hold it up.
-    static func report(_ arguments: [String], in directory: String, environment: [String: String]) -> String? {
-        var environment = environment.isEmpty ? ProcessInfo.processInfo.environment : environment
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        let result: ChildProcess.Result
-        do { result = try run(git: arguments, in: directory, environment: environment, errors: .withOutput, limit: nil) } catch { return error.localizedDescription }
-        guard !result.succeeded else { return nil }
-        let text = result.outputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "git \(arguments.first ?? "") failed." : text
-    }
-
-    /// A machine's own git in `directory` (one of its folders, as this Mac names it) over SSH,
-    /// waited for off the main thread: its credentials, not this Mac's; only git's own settings go
-    /// along. Never this Mac's: a folder of its own throws.
-    private static func run(git arguments: [String], in directory: String, environment: [String: String],
-                            errors: ChildProcess.Errors, limit: Duration?) throws -> ChildProcess.Result {
-        guard let remote = RemoteFolder.parse(directory) else { throw GitFailure(message: "This Mac’s git runs on its box.") }
-        // Only git's settings that mean the same there: a command, key or config file named
-        // here (GIT_SSH_COMMAND, GIT_CONFIG_GLOBAL…) is a path on this Mac.
-        let portable = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS"]
-        let settings = environment.filter { portable.contains($0.key) }.map { "\($0.key)=\(SSHConnection.quoted($0.value))" }.sorted()
-        let command = (["exec", "env"] + settings + ["git"] + arguments.map(SSHConnection.quoted)).joined(separator: " ")
-        let started = SSHConnection(destination: remote.machine).invocation(running: "cd \(SSHConnection.quoted(remote.path)) && \(command)")
-        return try ChildProcess.runBlocking(started.executable, started.arguments, environment: started.environment, directory: started.directory,
-                                            errors: errors, limit: limit)
-    }
-
-    /// Runs git and returns its output, or nil when it fails.
-    static func run(_ arguments: [String], in directory: String) -> String? {
-        data(arguments, in: directory).map { String(decoding: $0, as: UTF8.self) }
-    }
-
-    /// Runs git and returns its raw output, or nil when it fails. Reading takes a while in a big
-    /// repository, but never ten minutes: one still going then is stuck (on a lock, a full disk, a
-    /// machine's hung filesystem), and stopped.
-    static func data(_ arguments: [String], in directory: String) -> Data? {
-        var environment = ProcessInfo.processInfo.environment
-        environment["GIT_OPTIONAL_LOCKS"] = "0"  // Reading only: don't hold the index lock.
-        guard let result = try? run(git: arguments, in: directory, environment: environment, errors: .discard, limit: .seconds(600)),
-              result.succeeded else { return nil }
-        return result.output
-    }
 }
 
 // MARK: - Parsing

@@ -191,6 +191,8 @@ final class MachineEngine {
     @ObservationIgnored var onIdentity: (String) -> Void = { _ in }
     /// Another of its addresses answered: the app keeps it, to try first next time.
     @ObservationIgnored var onReached: (String) -> Void = { _ in }
+    /// The update gate this app holds boxes at (`BoxGates`, #679): set by the app.
+    @ObservationIgnored var gates: BoxGates?
 
     /// Of its addresses, the one that answers as this computer, the one in use (or that answered
     /// last) first: its connections go there from now on. One that answers as another computer (a
@@ -306,6 +308,8 @@ final class MachineEngine {
         case starting
         /// Up: its sessions being read.
         case reading
+        /// Its box, older than this app needs, being brought up to date (`BoxGates`, #679).
+        case updating
 
         /// As `kuvo/machines` names it.
         var name: String {
@@ -315,6 +319,7 @@ final class MachineEngine {
             case .copying: "copying"
             case .starting: "starting"
             case .reading: "reading"
+            case .updating: "updating"
             }
         }
 
@@ -327,6 +332,7 @@ final class MachineEngine {
             case .checking: "Checking \(name)"
             case .copying: "Copying the engine to \(name)"
             case .starting: "Starting the engine on \(name)"
+            case .updating: "Updating Kuvo Code on \(name)"
             default: words
             }
         }
@@ -535,6 +541,13 @@ final class MachineEngine {
                 state = .failed("Couldn’t reach \(machine.name).")
                 return nil
             }
+            do {
+                try await bringUpToDate(asItIs: machine.isThisMac, check: { if !self.isCurrent(attempt) { throw Superseded() } })
+            } catch {
+                guard isCurrent(attempt) else { return nil }
+                failed(error)
+                return nil
+            }
             self.api = api
             catalog.api = api
             startWanted = false
@@ -686,6 +699,15 @@ final class MachineEngine {
                     if let agents = launch.agents { marks["kuvo-agents.js"] = "// kuvo-agents \(agents.hash)" }
                     try? await BoxVersion.mark(on: connection, marks: marks)
                 }
+                // The update gate (#679): what's there now has everything this app needs, or it
+                // isn't used at all (nothing falls back to an older box's way).
+                do {
+                    try await bringUpToDate(asItIs: asItIs, check: check)
+                } catch {
+                    server.disconnect()
+                    attached = nil
+                    throw error
+                }
                 return server
             }
             // Cut off as its last step ran (marking the box): it isn't connected.
@@ -787,6 +809,9 @@ final class MachineEngine {
     func retire() {
         isRetired = true
         endConnection()
+        updateFollow?.cancel()
+        updateFollow = nil
+        gates?.letGo(machine.id)
     }
 
     private struct Superseded: Error {}
@@ -861,6 +886,171 @@ final class MachineEngine {
         var errorDescription: String? { "This machine has a newer Kuvo Code than this Mac, and its engine didn't start. Update Kuvo Code on this Mac to start it from here." }
     }
 
+    // MARK: The update gate (#679)
+
+    /// Why a machine couldn't be brought up to date, in words that say what to do: its connection
+    /// fails with them, and it isn't used.
+    struct CouldntUpdate: LocalizedError {
+        var errorDescription: String?
+    }
+
+    /// The release this app carries for its computer's box (`Contents/Resources/box-release`,
+    /// PROTOCOL.md "Updates"): nil in a copy built without one (a developer's). A test's own.
+    nonisolated(unsafe) static var boxRelease: () -> URL? = { Bundle.main.url(forResource: "box-release", withExtension: nil) }
+    /// How long it waits between looks while this Mac's box takes the release (a test's none).
+    nonisolated(unsafe) static var updateLookAgain: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(10)) }
+
+    /// The box there, as its connection leaves it: used once it has everything this app needs
+    /// (`BoxGate`), else brought up to date first (`BoxGates`). Over SSH its connection has put this
+    /// app's files there already (`asItIs` false), so it does at once. This Mac's own box attached
+    /// in place is offered the release the app carries (`kuvo/box/update {from}`): its connection
+    /// goes on, its engine used (a session there waiting on you can be answered, which the box waits
+    /// for before it updates), its box's routes held, "Updating…", and looked at again until it's
+    /// taken (`followUpdate`). Anything else older than this app needs fails, saying why: nothing
+    /// falls back to an older box's way. A box that couldn't say what it has (not answering just
+    /// then) is used as before; what reads it later tells.
+    private func bringUpToDate(asItIs: Bool, check: () throws -> Void) async throws {
+        guard let box = catalog.box else { return }
+        guard let features = await features(of: box) else {
+            // This Mac's box attached in place that couldn't say just now: held, and asked again,
+            // never let through unasked (a machine is: what reads it later tells).
+            if machine.isThisMac {
+                gates?.updating(machine.id, detail: nil)
+                followUpdate(of: box, release: Self.boxRelease(), offered: Self.now())
+            }
+            return
+        }
+        try check()
+        if BoxGate.isCurrent(features) {
+            gates?.letGo(machine.id)
+            return
+        }
+        let name = machine.isThisMac ? "this Mac" : machine.name
+        func fail(_ why: String?, setUpElsewhere: Bool = true) -> CouldntUpdate {
+            let words = BoxGate.Words.couldntUpdate(name, why: why, setUpElsewhere: setUpElsewhere)
+            gates?.failed(machine.id, words)
+            return CouldntUpdate(errorDescription: words)
+        }
+        gates?.updating(machine.id, detail: machine.isThisMac ? BoxGate.Words.thisMacTaking : nil)
+        step = .updating
+        // Its files are this app's, yet it answers as older: they didn't take (or a newer Kuvo Code
+        // set it up, one without what this one needs, which this Mac leaves as it is).
+        guard machine.isThisMac else {
+            throw asItIs ? fail("It has another Kuvo Code that this Mac doesn’t update over") : fail("Its files didn’t take this Mac’s version", setUpElsewhere: false)
+        }
+        guard features.contains("box.update") else { throw fail("It’s from before Kuvo Code could update it from this Mac") }
+        guard let release = Self.boxRelease() else { throw fail("This copy of Kuvo Code doesn’t carry a release to update it with") }
+        if case .refused(let why) = await offer(release, to: box) { throw fail(why) }
+        try check()
+        // Taken at its first quiet moment: looked at again until it's there, while this connection goes on.
+        followUpdate(of: box, release: release, offered: Self.now())
+    }
+
+    /// How an offer of the app's release went (`kuvo/box/update {from}`): taken in (or already
+    /// there, or being taken), or refused, in the box's words.
+    enum Offered: Equatable { case taken, refused(String) }
+
+    /// Offers `release` to `box`; one refused while it updates already (its night's update, say)
+    /// counts as taken: it's offered again once that's done, if it's still needed.
+    private func offer(_ release: URL, to box: BoxClient) async -> Offered {
+        struct Offer: Encodable { let from: String }
+        guard let body = try? JSONEncoder().encode(Offer(from: release.path(percentEncoded: false))),
+              let (status, data) = try? await box.send("POST", "kuvo/box/update", body: body) else { return .taken }
+        if (200..<300).contains(status) { return .taken }
+        if let now = await updateStatus(of: box), now.offered != nil || now.updating != nil { return .taken }
+        return .refused(BoxRefusal(status: status, data: data).message)
+    }
+
+    /// What `kuvo/update` says of the box's own update (PROTOCOL.md "Updates"): the step under way,
+    /// why it can't update, the release offered that waits, and how the last one went.
+    struct UpdateStatus: Decodable {
+        /// How taking the release offered from a folder there last failed: its own outcome, apart
+        /// from the night's update.
+        struct OfferFailed: Decodable { var version: String?; var at: Double?; var takenBack: Bool?; var message: String? }
+        var updating: String?
+        var blocked: String?
+        var offered: String?
+        var offerFailed: OfferFailed?
+    }
+
+    private func updateStatus(of box: BoxClient) async -> UpdateStatus? {
+        try? await box.value(UpdateStatus.self, "GET", "kuvo/update")
+    }
+
+    /// Now, in ms since 1970, as the box notes its updates (a test's own).
+    nonisolated(unsafe) static var now: () -> Double = { Date.now.timeIntervalSince1970 * 1000 }
+
+    /// Following this Mac's box attached in place as it takes the release offered it: let go once
+    /// it says it has all this app needs; ended with the connection. Each look also reads how its
+    /// update stands: one it can't take (it's blocked, its engine is stopped on purpose, or taking
+    /// the release offered failed since: `offerFailed`, never the night's) says why, in its words;
+    /// an offer that's gone with no failure of its own (refused while its night's update ran) is
+    /// made again. Said, it's still looked at, and goes back to updating once it can.
+    @ObservationIgnored private var updateFollow: Task<Void, Never>?
+
+    private func followUpdate(of box: BoxClient, release: URL?, offered: Double) {
+        updateFollow?.cancel()
+        let id = machine.id
+        updateFollow = Task { [weak self] in
+            var offeredAt = offered
+            while !Task.isCancelled {
+                do { try await Self.updateLookAgain() } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                let info = await self.info(of: box)
+                if let features = info?.features, BoxGate.isCurrent(features) {
+                    self.gates?.letGo(id)
+                    return
+                }
+                // (Not answering just now: asked again.)
+                guard let info else { continue }
+                let status = await self.updateStatus(of: box)
+                let why: String? = if !info.features.contains("box.update") {
+                    "It’s from before Kuvo Code could update it from this Mac"
+                } else if release == nil {
+                    "This copy of Kuvo Code doesn’t carry a release to update it with"
+                } else if info.stopped {
+                    "Its engine is stopped: start it to update it"
+                } else if let blocked = status?.blocked {
+                    blocked
+                } else if let failed = status?.offerFailed, (failed.at ?? 0) >= offeredAt {
+                    // Taking the release offered failed since it was offered (taken back, or before
+                    // anything changed, when it stays and is tried again): its words.
+                    failed.message ?? "Taking the update failed"
+                } else {
+                    nil
+                }
+                if let why {
+                    self.gates?.failed(id, BoxGate.Words.couldntUpdate("this Mac", why: why))
+                    continue
+                }
+                guard let status else { continue }
+                // Its offer gone, and nothing under way: offered again.
+                if status.offered == nil, status.updating == nil, let release {
+                    offeredAt = Self.now()
+                    if case .refused(let why) = await self.offer(release, to: box) {
+                        self.gates?.failed(id, BoxGate.Words.couldntUpdate("this Mac", why: why))
+                        continue
+                    }
+                }
+                self.gates?.updating(id, detail: BoxGate.Words.thisMacTaking)
+            }
+        }
+    }
+
+    /// What `box` says it is (`kuvo/info`): its features (none for one from before it said: 404,
+    /// 405, or no `features`), and whether its engine is stopped on purpose; nil when it couldn't
+    /// say just now.
+    private func info(of box: BoxClient) async -> (features: [String], stopped: Bool)? {
+        struct Info: Decodable { var features: [String]?; var stopped: Bool? }
+        guard let (status, data) = try? await box.send("GET", "kuvo/info") else { return nil }
+        if status == 404 || status == 405 { return ([], false) }
+        guard (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
+        return (info.features ?? [], info.stopped == true)
+    }
+
+    /// What `box` says it has (`kuvo/info`'s `features`); nil when it couldn't say just now.
+    private func features(of box: BoxClient) async -> [String]? { await info(of: box)?.features }
+
     private func launchEngine(_ launch: Launch, replace: Int? = nil, starting: Bool = false) async throws -> RemoteServer.Engine {
         try await RemoteServer.launch(on: machine.connection, environment: launch.environment.merging(launch.boxEnvironment) { $1 }, notes: ["settings": launch.fingerprint, "mac": Self.macID, "macName": Self.noteName, "box": BoxVersion.mine],
                                       withAgents: launch.agents != nil, replace: replace, start: starting)
@@ -901,6 +1091,10 @@ final class MachineEngine {
     func disconnect() {
         isStopping = true
         endConnection()
+        updateFollow?.cancel()
+        updateFollow = nil
+        // Not connected, it isn't held either: connecting again checks it anew.
+        gates?.letGo(machine.id)
         downCheck?.cancel()
         downCheck = nil
         connections += 1
@@ -1096,6 +1290,8 @@ final class MachineEngine {
         case RemoteEngineError.unsupportedPlatform, RemoteEngineError.needsDeveloperTools, RemoteEngineError.needsNewerMacOS,
              RemoteEngineError.thisMac:
             true
+        // Brought up to date it wasn't (#679): trying again on its own changes nothing.
+        case is MachineEngine.CouldntUpdate: true
         default: false
         }
     }
@@ -1409,6 +1605,7 @@ final class Machines {
         let engine = MachineEngine(machine: machine)
         engine.onIdentity = { [weak self] identity in self?.note(identity, of: machine.id) }
         engine.onReached = { [weak self] address in self?.noteReached(address, of: machine.id) }
+        engine.gates = gates
         return engine
     }
 
@@ -1416,6 +1613,9 @@ final class Machines {
 
     /// A machine folded into another, being the same computer at another address: its name, and
     /// the other's. The app moves what it kept under the first (its projects, its bots).
+    /// The boxes held for their update (#679), this Mac's own and its machines': one for the app.
+    let gates = BoxGates()
+
     @ObservationIgnored var onFolded: (_ address: String, _ machine: String) -> Void = { _, _ in }
     /// The last machine folded into another, to say so in Settings › Machines.
     private(set) var folded: (address: String, machine: String)?
@@ -1867,26 +2067,5 @@ nonisolated extension RemoteShell {
         let quoted = SSHConnection.quoted(path)
         guard let data = run("if [ -e \(quoted) ] || [ -L \(quoted) ]; then echo yes; else echo no; fi", on: machine) else { return nil }
         return String(decoding: data, as: UTF8.self).hasPrefix("yes")
-    }
-
-    /// The files under a folder on a machine, relative to it, skipping the usual heavy folders, or
-    /// why they couldn't be read.
-    static func files(in url: URL, skipping skip: Set<String>, limit: Int) -> Result<[String], FolderFailure> {
-        guard let (machine, path) = RemoteFolder.parse(url) else { return .failure(.missing) }
-        let script = FolderFailure.checking(path, then: fileListing(skipping: skip, limit: limit))
-        return FolderFailure.checked(run(script, on: machine), machine: machine).map { files($0, limit: limit) }
-    }
-
-    /// Finds the files under the current folder, each ended by a NUL, no more than `limit` of them
-    /// can come of it (roomy for long paths): macOS's `head` has no `-z` to count them by.
-    static func fileListing(skipping skip: Set<String>, limit: Int) -> String {
-        let pruned = skip.sorted().map { "-name \(SSHConnection.quoted($0))" }.joined(separator: " -o ")
-        return "find . \\( \(pruned) \\) -prune -o -type f -print0 | head -c \(limit * 300)"
-    }
-
-    /// What `fileListing` printed, up to `limit`, without a last path that was cut short.
-    static func files(_ data: Data, limit: Int) -> [String] {
-        let whole = data.last == 0 ? data : data[..<(data.lastIndex(of: 0).map { $0 + 1 } ?? data.startIndex)]
-        return String(decoding: whole, as: UTF8.self).split(separator: "\0").prefix(limit).map(relative)
     }
 }

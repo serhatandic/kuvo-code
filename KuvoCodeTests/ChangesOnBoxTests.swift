@@ -95,19 +95,6 @@ import Testing
         #expect(!availability.isStarting(now: started + BoxAvailability.startsWithin + .seconds(1)))
     }
 
-    /// Merge into… while an older background service runs on after an update (until the work under
-    /// way ends): says so in plain words, rather than asking to connect to this Mac.
-    @Test func mergeIntoWhileAnOlderBackgroundServiceRunsOnSaysItsFinishingAnUpdate() async throws {
-        let older = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
-            AsyncThrowingStream { $0.yield(.head(status: 404, headers: [:])); $0.yield(.body(Data("{}".utf8))); $0.finish() }
-        })
-        let tree = Workspace.Worktree(project: repo.path, root: repo.path + "-tree", branch: "kuvo/feature", base: "main")
-        let outcome = await tree.mergeBack(at: GitPlace(client: older, path: tree.root, machine: nil), author: [:])
-        #expect(outcome == .failed("Kuvo Code on this Mac is finishing an update. Merge into… works again once the work that’s running now ends; try again then."))
-        let machine = await tree.mergeBack(at: GitPlace(client: older, path: tree.root, machine: "build-box"), author: [:])
-        #expect(machine == .failed("build-box needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac."))
-    }
-
     /// Commit is what you asked for: its hooks run, and one that says no stops it, in its words.
     @Test func commitRunsTheRepositorysHooks() async throws {
         let hook = repo.url.appending(path: ".git/hooks/pre-commit")

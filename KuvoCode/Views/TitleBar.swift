@@ -463,7 +463,6 @@ struct ProjectIdentity: View {
     var directory: String?
     /// A session's own worktree keeps its branch.
     var isWorktree = false
-    var environment: [String: String] = [:]
     let showsSidebar: PaneSwitch
     /// After switching branches.
     var switched: () -> Void = {}
@@ -480,7 +479,7 @@ struct ProjectIdentity: View {
                             .font(.system(size: 13, weight: .semibold))
                         if let branch {
                             if let directory, !isWorktree {
-                                BranchSwitcher(branch: branch, directory: directory, environment: environment, switched: switched)
+                                BranchSwitcher(branch: branch, directory: directory, switched: switched)
                                     // Another folder's is a menu of its own: a look still under way for this one lands nowhere.
                                     .id(directory)
                             } else {
@@ -540,7 +539,6 @@ private struct BranchLabel: View {
 private struct BranchSwitcher: View {
     let branch: String
     let directory: String
-    let environment: [String: String]
     let switched: () -> Void
     @State private var branches: [String] = []
     /// A new branch's name being typed, where the branch shows.
@@ -608,9 +606,9 @@ private struct BranchSwitcher: View {
 
     private func run(_ branch: String, created: Bool) {
         guard !branch.isEmpty else { return }
-        let place = GitPlace.of(directory), environment = environment
+        let place = GitPlace.of(directory)
         Task {
-            failure = await Git.switching(to: branch, creating: created, at: place, environment: environment)
+            failure = await Git.switching(to: branch, creating: created, at: place)
             if failure == nil { Analytics.shared.track("branch_switched", ["created": created]) }
             switched()
         }

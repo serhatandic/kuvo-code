@@ -807,15 +807,6 @@ private struct PullRequestForm: View {
             title = found.title
             description = found.body
             isFocused = true
-        } catch let refusal as BoxRefusal where refusal.isOlderBox {
-            // COMPAT(beta.1 git-older-box): a box from before it made pull requests itself: a machine's needs a newer one; this Mac's runs on after an update (or, attached in place, needs a newer one). Goes when 0.8.0 ships.
-            if RemoteFolder.isRemote(directory) {
-                failure = "\(place) needs a newer Kuvo Code to create pull requests. It updates by itself overnight, or connect to it from this Mac."
-            } else {
-                failure = box.client.box == BoxClient.mac
-                    ? "Kuvo Code on this Mac is finishing an update. Create Pull Request works again once the work that’s running now ends; try again then."
-                    : "Kuvo Code’s background service on this Mac needs a newer version to create pull requests. It updates by itself overnight."
-            }
         } catch {
             failure = error.localizedDescription
         }

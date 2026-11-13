@@ -99,12 +99,6 @@ import Testing
             "tab\there.txt": false, "to-fixtures": true, "broken": false,
         ])
 
-        let files = try RemoteShell.files(in: root, skipping: ["node_modules"], limit: 100).get()
-        #expect(Set(files) == ["README.md", "secrets/key.pem", "with a space.txt", "tab\there.txt"])
-        #expect(try RemoteShell.files(in: root, skipping: ["node_modules"], limit: 2).get().count == 2)
-        // Cut short by what the machine sends: the name it cut isn't taken for a file.
-        #expect(RemoteShell.files(Data("./a\0./b/c\0./d/e".utf8), limit: 100) == ["a", "b/c"])
-        #expect(RemoteShell.files(Data("./a-long-name".utf8), limit: 100) == [])
     }
 
     /// A machine's folder that couldn't be read (asleep, or not let in) is read again with the rest
@@ -146,8 +140,6 @@ import Testing
         let deeper = FileTree(roots: [root.appending(path: "secrets/keys")])
         try await until { deeper.rootFailure != nil }
         #expect(deeper.rootFailure == .denied)
-        await locked.loadAllFiles()
-        #expect(locked.allFilesFailure == .denied)
 
         // Let in again, one that isn't there is said not to be.
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)

@@ -73,8 +73,10 @@ struct BoxClient: Sendable {
         BoxClient(box: id, transport: MachineBoxTransport(connection: SSHConnection(destination: id)))
     }
 
-    /// What the box answered.
+    /// What the box answered. A box older than this app needs answers here instead, held for its
+    /// update (`BoxGates`): never asked anything but what tells or brings about its update.
     func send(_ method: String, _ path: String, body: Data? = nil, headers: [String: String] = [:]) async throws -> (status: Int, body: Data) {
+        if let held = BoxGates.refusal(for: box, path: path) { return (held.status, held.json) }
         var status = 502
         var answer = Data()
         let request = LinkRequest(method: method, path: path, headers: headers.merging(body == nil ? [:] : ["content-type": "application/json"]) { $1 }, body: body ?? Data())
@@ -109,6 +111,8 @@ struct BoxClient: Sendable {
     /// once and ends.
     func follow(_ path: String) -> AsyncThrowingStream<Data, Error> {
         let transport = transport
+        // Held for its update: refused here, as `send` is.
+        if let held = BoxGates.refusal(for: box, path: path) { return AsyncThrowingStream { $0.finish(throwing: held) } }
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -153,13 +157,17 @@ struct BoxRefusal: LocalizedError {
     var isOlderBox = false
     var errorDescription: String? { message }
 
+    /// As a box says it: `{"message", "reason"?}`.
+    var json: Data {
+        (try? JSONSerialization.data(withJSONObject: ["message": message].merging(reason.map { ["reason": $0] } ?? [:]) { $1 })) ?? Data()
+    }
+
     /// Whether a box answered as one from before the route asked: `404` with nothing said, as every
-    /// box answers a route of its own it hasn't; or a released one's `403` in plain words.
+    /// box answers a route of its own it hasn't. (A box from before what the update gate needs is
+    /// never asked: `BoxGates`.)
     nonisolated static func olderBox(status: Int, data: Data) -> Bool {
         let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        if status == 404 && said?["message"] == nil { return true }
-        // COMPAT(beta.1 git-older-box): a box of 0.7 or 0.8.0-beta.1 refuses a route it hasn't with `403 "That isn't available over the link."`, words but no JSON (a path refused as not what it seems has no words). Goes when 0.8.0 ships.
-        return status == 403 && said == nil && !data.isEmpty
+        return status == 404 && said?["message"] == nil
     }
 
     init(status: Int, message: String, problem: String? = nil, reason: String? = nil) {

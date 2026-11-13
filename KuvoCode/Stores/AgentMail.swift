@@ -159,15 +159,9 @@ final class AgentMail {
         }
         let said = try? JSONDecoder().decode(Said.self, from: answer.body)
         guard answer.status == 200, let text = said?.text else {
-            // An older box, still running a session's work after an update (the keeper makes way
-            // once it's over), doesn't answer Kuvo Code's own tools yet: this app's own box script
-            // answers them meanwhile (`OwnToolsOnce`), or, where it can't run, the agent's told why.
-            // (Not while this app is attached to a box in another folder, whose folders it isn't.)
-            if [400, 404].contains(answer.status), Self.ownTools.contains(name), app?.attached == nil, await !boxAnswersOwnTools(client) {
-                let said = await OwnToolsOnce.call(name, body: data, environment: app?.shellEnvironment ?? ProcessInfo.processInfo.environment) ?? (Self.updating, true)
-                if !said.isError { track(name, arguments, caller: caller) }
-                return said
-            }
+            // This Mac's box held for its update (#679), an older app's keeper running it until the
+            // work under way ends: a tool it hasn't, said so the agent can carry on without it.
+            if [400, 404].contains(answer.status), BoxGates.isHeld(client.box) { return (Self.updating, true) }
             return (said?.message ?? "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let failed = said?.isError ?? false
@@ -177,19 +171,9 @@ final class AgentMail {
         return (text, failed)
     }
 
-    // COMPAT(beta.1 agent-tools-own): hands Kuvo Code's own tools to `OwnToolsOnce` while an older box after an update answers them 400. Goes when 0.8.0 ships.
-    /// The tools every box answers since it says `agent-tools.own` (PROTOCOL.md, "Agents' tools").
-    static let ownTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]
-    /// What an agent hears from one of them while an older box runs on after an update and this
-    /// app's own box script can't answer it either (no engine to run it yet).
+    /// What an agent hears of a tool this Mac's box can't answer while an older app's keeper still
+    /// runs it, after an update.
     static let updating = "Kuvo Code on this Mac is finishing an update, and its background service can't do this until the work that's running ends. Try again later; if you work on your own, say what's left in your reply."
-
-    /// Whether this Mac's box says it answers them.
-    private func boxAnswersOwnTools(_ client: BoxClient) async -> Bool {
-        struct Info: Decodable { var features: [String]? }
-        guard let info = try? await client.value(Info.self, "GET", "kuvo/info") else { return true }
-        return info.features?.contains("agent-tools.own") == true
-    }
 
     private func track(_ name: String, _ arguments: [String: Any], caller: String?) {
         let waits = (arguments["wait"] as? NSNumber)?.boolValue ?? false

@@ -322,6 +322,46 @@ struct SidebarView: View {
 
     private func boxName(_ box: SidebarBox) -> String { app.name(of: box) }
 
+    /// The update gate's state of `box` (#679): updating, with what it waits for; or why it
+    /// couldn't be, with Try Again for a machine (connecting again brings it up to date). The
+    /// Projects can't be saved row's look, two lines, as its words say what to do.
+    @ViewBuilder private func gateRow(_ gate: BoxGates.State, on box: SidebarBox) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            switch gate {
+            case .updating: Spinner(size: 11).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }.accessibilityHidden(true)
+            case .failed: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange).accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                switch gate {
+                case .updating(let detail):
+                    Text(BoxGate.Words.updating)
+                        .sidebarFont(13, weight: .medium)
+                    Text(detail ?? "Kuvo Code on \(boxName(box)) is being updated. Its sessions show here once it is.")
+                        .sidebarFont(12)
+                        .foregroundStyle(.secondary)
+                case .failed(let words):
+                    Text("Couldn’t Update Kuvo Code")
+                        .sidebarFont(13, weight: .medium)
+                    Text(words)
+                        .sidebarFont(12)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    // Connecting again brings it up to date (one connected already, too).
+                    if let engine = box.machine.flatMap({ app.machines.engine($0) }) {
+                        Button("Try Again") { app.reconnectNow(engine) }
+                            .buttonStyle(.link)
+                            .sidebarFont(12, weight: .medium)
+                            .padding(.top, 2)
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
+    }
+
     /// One box's page: what's on that computer.
     @ViewBuilder private func page(_ box: SidebarBox) -> some View {
         if boxes.count > 1 { BoxHeading(box: box) }
@@ -346,6 +386,11 @@ struct SidebarView: View {
             .help("New Project… (⇧⌘N)")
             .accessibilityLabel("New Project")
         }
+        // Its box older than this app needs, held for its update (#679): said where its sessions
+        // would be, until they're there (folded or not: nothing of it shows meanwhile).
+        if let gate = app.machines.gates.state(of: box.machine ?? BoxClient.thisMac) {
+            gateRow(gate, on: box)
+        }
         if !isFolded("projects") {
             // This Mac's box keeps its projects: stopped, nothing here can be saved until it's back.
             if box.machine == nil, let failure = app.box.failure {
@@ -362,19 +407,6 @@ struct SidebarView: View {
                 }
                 .help("What keeps your projects on this Mac stopped. \(failure)")
                 .accessibilityLabel("Projects can’t be saved. Try Again")
-            }
-            // A box from before it listed its sessions: what to do, where they'd be.
-            if workspace.outdatedLists.contains(box.machine ?? BoxClient.thisMac) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Sessions Need a Newer Kuvo Code")
-                        .sidebarFont(13, weight: .medium)
-                    Text("Update Kuvo Code on \(boxName(box)) to list its sessions here.")
-                        .sidebarFont(12)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .accessibilityElement(children: .combine)
             }
             // (Once its box has said what its sessions are: until then there may be some.)
             if workspace.isLoaded && workspace.isListed(box.machine ?? BoxClient.thisMac) && projects.isEmpty {

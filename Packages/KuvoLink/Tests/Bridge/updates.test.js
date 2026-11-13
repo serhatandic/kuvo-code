@@ -575,6 +575,13 @@ test("an offered release that fails before anything changes (its engine's downlo
   assert.equal(outcome.result, "failed");
   assert.equal(read(engineFile).version, "1.0.0", "its engine never stopped");
   assert.equal(link.offeredVersion(), "0.10.0", "still offered");
+  // kuvo/update says how the offered release went, in its own words, apart from the night's
+  // (Kuvo Code here goes by it, #679).
+  const said = link.updateStatus();
+  assert.equal(said.offered, "0.10.0");
+  assert.equal(said.offerFailed.version, "0.10.0");
+  assert.equal(said.offerFailed.takenBack, false);
+  assert.equal(said.offerFailed.message, outcome.message);
   assert.equal(await take(), null, "not again at once");
   assert.deepEqual(offer(folder), { status: 202, version: "0.10.0" }, "offered again meanwhile: it's there already");
   // Failing again an hour on (as one whose own checks fail would, every time), it rests a day.

@@ -1,5 +1,6 @@
 import AppKit
 import ClientNews
+import ClientSessions
 import KuvoVoice
 import OpenCodeKit
 import os
@@ -349,6 +350,14 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
+        // The update gate (#679): a box found older than this app needs is held; let go, it's read again.
+        workspace.onOlderBox = { [weak self] box, features in
+            guard let self else { return }
+            machines.gates.foundOlder(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
+        }
+        workspace.onCurrentBox = { [weak self] box, features in self?.machines.gates.foundCurrent(box, features: features) }
+        workspace.isHeld = { [weak self] box in self?.machines.gates.state(of: box) != nil }
+        machines.gates.onLetGo = { [weak self] box in self?.workspace.boxUpdated(box) }
         BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
@@ -772,6 +781,10 @@ final class AppModel {
     /// is under way (a running session is never stopped for an update): until then the app follows
     /// it, and Settings › General and the menu bar's card say the update waits.
     private(set) var keeperMakesWay = false
+    /// This Mac's own box looked at while the update gate holds it (`followOwnBoxGate`).
+    @ObservationIgnored private var ownBoxGateFollow: Task<Void, Never>?
+    /// Another version's keeper runs this Mac's box now (`KeeperFollower.runsOtherVersion`).
+    @ObservationIgnored private var keeperRunsOtherVersion = false
     /// This Mac's box moving into its home of its own (#333): why it holds on, where it went wrong
     /// part way, "" while it just moves; nil otherwise. The window says so while it starts.
     private(set) var boxMoving: String?
@@ -900,6 +913,48 @@ final class AppModel {
         }
     }
 
+    /// This Mac's own box, as the update gate holds it (#679): while an older app's keeper still runs
+    /// it (making way for this app's once the work under way ends), it's held, and asked what it has
+    /// every ten seconds: let go once it has all this app needs (the keeper of this version runs it,
+    /// or the older one turns out to have it). One that can't be asked just then is asked again.
+    func followOwnBoxGate(again: Bool = false) {
+        // Looked at again at once (its box answering somewhere new), from the start.
+        if again {
+            ownBoxGateFollow?.cancel()
+            ownBoxGateFollow = nil
+        }
+        guard ownBoxGateFollow == nil, keeperRunsOtherVersion || machines.gates.state(of: BoxClient.mac) != nil else { return }
+        ownBoxGateFollow = Task { [weak self] in
+            while !Task.isCancelled, let self {
+                if await self.ownBoxIsCurrent() == true {
+                    self.machines.gates.letGo(BoxClient.mac)
+                    break
+                }
+                // (Cut short meanwhile, a newer look in its place.)
+                guard !Task.isCancelled else { return }
+                if self.machines.gates.state(of: BoxClient.mac) == nil {
+                    self.machines.gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
+                }
+                do { try await Self.ownBoxLookAgain() } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            self?.ownBoxGateFollow = nil
+        }
+    }
+
+    /// How long it waits between looks at this Mac's own box while it's held (a test's own).
+    nonisolated(unsafe) static var ownBoxLookAgain: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(10)) }
+
+    /// Whether this Mac's own box has all this app needs, as it says (`kuvo/info`; a 404 or 405:
+    /// from before it said); nil when it couldn't be asked.
+    private func ownBoxIsCurrent() async -> Bool? {
+        struct Info: Decodable { var features: [String]? }
+        guard let (status, data) = try? await box(BoxClient.mac).send("GET", "kuvo/info") else { return nil }
+        if status == 404 || status == 405 { return false }
+        guard (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
+        return BoxGate.isCurrent(info.features ?? [])
+    }
+
     /// The box here answered, without a chats folder: it's from before chats had one there.
     struct ChatsNeedNewerBox: LocalizedError {
         var errorDescription: String? { "This Mac’s box needs a newer Kuvo Code to start chats there. It updates by itself overnight." }
@@ -931,6 +986,19 @@ final class AppModel {
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
             follower.onGone = { [weak self] in self?.keeperGone() }
             follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
+            // Another version's keeper runs this Mac's box (an older app's, after an update): held
+            // at once, whatever it answered when asked to make way, until it's asked what it has
+            // (nothing reaches it on a path it may not have meanwhile); looked at again as soon as
+            // its box answers somewhere new.
+            follower.onOtherVersion = { [weak self] other in
+                guard let self else { return }
+                keeperRunsOtherVersion = other
+                if other, machines.gates.state(of: BoxClient.mac) == nil {
+                    machines.gates.updating(BoxClient.mac, detail: BoxGate.Words.thisMacFinishing)
+                }
+                followOwnBoxGate(again: true)
+            }
+            follower.onServe = { [weak self] in self?.followOwnBoxGate(again: true) }
             follower.onMoving = { [weak self] moving in self?.boxMoving = moving }
             host.tellsBox = false
             // Answering again at a new address (its listener failed by itself): the keeper is told.
@@ -973,6 +1041,9 @@ final class AppModel {
         keeperBox.stop()
         self.keeperBox = nil
         keeperMakesWay = false
+        // The app runs this Mac's box itself now, of this version: looked at, and let go.
+        keeperRunsOtherVersion = false
+        followOwnBoxGate(again: true)
         // The app keeps this Mac awake itself now, while it runs the box.
         Awake.shared.keeper = nil
         box.unfollow()
@@ -1026,6 +1097,9 @@ final class AppModel {
     private func boxEngineChanged(_ state: MacBoxRunner.Engine) {
         switch state {
         case .ready(let endpoint):
+            // (A newer keeper's box, say, in place of one an older app's keeper ran: looked at at
+            // once, not after the look under way waits its ten seconds.)
+            followOwnBoxGate(again: true)
             // Up again, somewhere new: connected anew (a start under way, waiting for it, takes it).
             if engine == .ready, api?.client.endpoint == endpoint { return }
             guard starting == nil else { return }

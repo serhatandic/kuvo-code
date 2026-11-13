@@ -82,8 +82,7 @@ nonisolated enum ProjectFiles {
     /// nothing (a folder its repository ignores), a walk that skips the usual heavy folders;
     /// `dated`, with when each last changed.
     private static func listFiles(in root: URL, at place: GitPlace, dated: Bool) async -> Result<FolderTree, FolderFailure> {
-        // Written as every box writes a path (`EngineRoutes.canonical`: "site (copy)", "@scope"), so
-        // a box from before the route says it hasn't it, rather than that the path isn't one.
+        // Written as every box writes a path (`EngineRoutes.canonical`: "site (copy)", "@scope").
         let written = "kuvo/folders/tree?path=" + Workspace.queryValue(place.path) + (dated ? "&dated=1" : "")
         // (One no box takes, a backslash or a control character in its name: never asked.)
         guard let asked = EngineRoutes.canonical(written) else { return .failure(.unsendable) }
@@ -97,17 +96,9 @@ nonisolated enum ProjectFiles {
             guard let tree = try? JSONDecoder().decode(FolderTree.self, from: data) else { return .failure(FolderFailure(reason: "Its list of files couldn’t be read", said: false)) }
             return .success(tree)
         }
-        if Git.lacksRoute(status, data) {
-            // COMPAT(beta.1 git-older-box): this Mac's older box says the list waits for it (running on after an update) or needs a newer version (one attached in place); a machine's box from before `kuvo/folders/tree` lists them with its git or a walk over SSH, as before. Goes when 0.8.0 ships.
-            guard place.machine != nil else { return .failure(place.client.box == BoxClient.mac ? .updating : .olderService) }
-            if let listed = Git.run(["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: RemoteFolder.folder(of: root)), !listed.isEmpty {
-                var seen = Set<String>()
-                return .success(FolderTree(files: listed.split(separator: "\0").map(String.init).filter { seen.insert($0).inserted }.prefix(20_000).map { $0 }))
-            }
-            return RemoteShell.files(in: root, skipping: [".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"], limit: 20_000).map { FolderTree(files: $0) }
-        }
         let refusal = BoxRefusal(status: status, data: data)
-        // This Mac's box starting (with the app, or again after an update), or not up.
+        // This Mac's box starting (with the app, or again after an update), not up, or held for
+        // its update (#679, its words).
         if status == 503 { return .failure(refusal.reason == "starting" ? .starting : FolderFailure(reason: refusal.message, said: false)) }
         // What the computer said ("Permission denied").
         return .failure(FolderFailure(reason: refusal.reason ?? refusal.message))
@@ -136,12 +127,8 @@ nonisolated struct FolderFailure: Error, Hashable, Sendable {
     /// This Mac's box starting (with the app, or again after an update): a list keeps loading, and
     /// reads again.
     static let starting = FolderFailure(reason: "Kuvo Code’s background service on this Mac is starting", said: false)
-    /// This Mac's box from before the list, running on after an update until the work under way ends.
-    static let updating = FolderFailure(reason: "Kuvo Code on this Mac is finishing an update. Try again once the work that’s running now ends", said: false)
     /// A folder with a backslash or a control character in its name, which a path to its box can't carry.
     static let unsendable = FolderFailure(reason: "Kuvo Code can’t list the files of a folder with a backslash or a control character in its name", said: false)
-    /// The box this Mac is attached to in place, from before the list.
-    static let olderService = FolderFailure(reason: "Kuvo Code’s background service on this Mac needs a newer version to list these files. It updates by itself overnight", said: false)
 
     /// One of this Mac's folders, by what reading it threw.
     init(_ error: Error) {
