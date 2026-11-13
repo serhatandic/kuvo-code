@@ -74,7 +74,7 @@ public enum Typed {
     /// `kuvo/sessions/<id>/autopilot` answers). In the order a client applies it: what the box did,
     /// then what the client does, then what goes back. The composer's files go with `send` or
     /// `command` (they stay otherwise).
-    public struct Answer<Autopilot: Decodable & Sendable>: Decodable, Sendable {
+    public struct Answer<Autopilot: Decodable>: Decodable {
         /// The keyword it ran ("plan"), for what a client counts.
         public var keyword: String?
         public var goal: Goal?

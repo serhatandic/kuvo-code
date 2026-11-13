@@ -1303,11 +1303,8 @@ final class SessionModel {
         if let handoff = answer.handoff { bridge?.startedHandoff(handoff) }
         if let review = answer.review { bridge?.took(review) }
         if answer.showGoal == true { hidesGoal = false }
-        switch answer.plan {
-        case .toggle?: togglePlan()
-        case .on?: selectAgent("plan")
-        case nil: break
-        }
+        if answer.plan == .toggle { togglePlan() }
+        if answer.plan == .on { selectAgent("plan") }
         if answer.toggleAutopilot == true { setAutopilot(!isAutopilot) }
         if answer.compact == true { compact() }
         if let command = answer.shell { runShell(command, written: written) }
