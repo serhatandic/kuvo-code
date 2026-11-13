@@ -25,21 +25,27 @@ same.
   - **Updated over SSH**: the box version is older, so the files go in. The new link answers at
     once, so this only shows the step.
   - **Attached in place** (this Mac's box, set up by another Mac): the app offers it the release
-    it carries, `POST kuvo/box/update {from: Contents/Resources/box-release}` (#333 piece 7). It
-    then reads `kuvo/info` again every 10 s while the connection is wanted. The box takes the
-    release at its next quiet moment.
+    it carries, `POST kuvo/box/update {from: Contents/Resources/box-release}` (#333 piece 7). The
+    connection then goes on, so its engine stays usable: a session waiting on you can be answered,
+    and the box needs that quiet moment to take the release. Its box routes are held, and the app
+    reads `kuvo/info` again every 10 s until it's current.
   - **Newer by version but missing a name** (a dev build): it can't be updated from here, so the
     connection fails.
 - **Mac, its own box** (`mac`). Most of the time it is the app's own, of this version. While an
   older app's keeper still runs it (`keeperMakesWay`, which lasts until the work under way ends),
-  the app reads its `kuvo/info`. If that's missing a name, `BoxClient` refuses every route to
-  `mac` except `kuvo/info` and `kuvo/update`. The refusal is local, a 503 with the gate's words,
-  until the new keeper's box answers.
+  the box is held at once. The app reads its `kuvo/info` every 10 s and lets it go once it has
+  every name. Meanwhile `BoxClient` refuses every route to `mac`, locally, with a 503 in the gate's
+  words. Two exceptions: the update routes, and `kuvo/agent-tools`, so the agents at work there
+  keep their tools. A tool the old box lacks is told to the agent as "finishing an update".
 - **The guard**: `BoxClient.send` asks `BoxGates` (one store, behind a lock) whether a box is held.
   A machine is only held while it's connecting, which the connect step covers. The guard is what
   holds this Mac's box.
-- **Phone**: `ComputerSettings.features`, read at each connect, feeds `BoxGate`. A computer that's
-  held gets no request on the link except `kuvo/info`, and HostView shows the gate's state.
+- **Phone**: every `kuvo/info` read (and a 404 or 405 answer) feeds `LinkStore.noteGate`, and it's
+  read at each connect. A held computer gets no request except the allowed routes. HostView and its
+  row say **Waiting for an Update**: the phone can't update a computer, so it doesn't say
+  "Updating…".
+- **Let go**: when a `kuvo/info` read says the box has every name, including the session-list
+  checks. **Try Again** on a machine reconnects it, which updates it.
 
 ## States and wording (both apps, from `BoxGate.Words` in KuvoClient)
 
@@ -52,8 +58,8 @@ in here, so there is one way of saying it.
 | Updating (Mac, machine) | status row / waiting view | "Updating Kuvo Code…" / "Updating Kuvo Code on X…" |
 | Updating (Mac, this Mac's box) | sidebar slot | "Updating…" + "Kuvo Code on this Mac finishes updating once the work running now ends." |
 | Can't update (Mac) | existing failed state + Try Again | "Couldn't connect to X" + "Kuvo Code on X couldn't be updated: …. Try again, or update it from the Mac that set it up." (reason given) |
-| Waiting (phone, a Mac) | HostView slot, HostRow | "Updating…" + "Update Kuvo Code on X to use it from this phone. Until then, nothing changes there." |
-| Waiting (phone, machine) | same | "Updating…" + "X updates when a Mac with Kuvo Code connects to it, or by itself overnight." |
+| Waiting (phone, a Mac) | HostView slot, HostRow ("Waiting for update") | "Waiting for an Update" + "Kuvo Code on X is older than this iPhone's. Update it there, or let it finish an update under way. Nothing changes there meanwhile." |
+| Waiting (phone, machine) | same | "Waiting for an Update" + "Kuvo Code on X is older than this iPhone's. It updates when a Mac with Kuvo Code connects to it, or by itself overnight. Nothing changes there meanwhile." |
 
 The phone can't update a box (no SSH, and the box takes releases only from Kuvo Code on its own
 computer), so it waits and says who updates it. It asks `kuvo/info` again each time it connects.
