@@ -1330,8 +1330,9 @@ box decides it from what its engine and coding agents list, so every client show
   models, or only its usual ones (`provisional: true` on the bridge's `api/model`, Claude Code's
   until it says which your account has), or one missing from a list its account doesn't say is
   whole; and a model of a provider the engine doesn't know at all. A client draws such a one by
-  what the box offers ("The models offered"), with no refusal of its own: the Mac's chip by whether
-  it's offered, the phone's as it is.
+  what the box offers ("The models offered"), with no refusal of its own: its chip names it while
+  the box says it runs or can't say yet (`runs` nil), and says "Choose a Model" once the box says it
+  doesn't.
 - What the engine and the bridge list is read once for every session asked about, and used again
   for ten seconds, or until the box hears either say accounts, models, settings or Custom Auto's
   lists changed (`integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
@@ -1362,16 +1363,16 @@ the same, and a new conversation, a new bot and a lead's session started from an
 start on a model by the same rule.
 
 - `GET kuvo/models/offered[?provider=<id>&model=<id>&variant=<effort>]` → `{"models":
-  [{providerID, id, name, retiring?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
+  [{providerID, id, name, retiring?, hidden?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
   "starting"?: {providerID, id, variant?} | null}`. `405` for anything but `GET`; `503` with
   neither the engine nor the coding agents' bridge running.
 - `models`: every model that runs there now (`runs` in "A session's model"): the engine's, its
   featured providers first (OpenAI, GitHub Copilot, Anthropic, Google, xAI, OpenRouter, OpenCode
   Zen, DeepSeek, Mistral, Groq) and the rest by id, each provider's newest first; then the coding
-  agents', as the bridge lists them (not one an agent keeps out of its picker, as Codex's hidden
-  ones, though they run); then your Custom Auto lists with models in them (`providerID: "auto"`).
-  `retiring`: its provider is retiring it, which a picker leaves out, though a conversation on it
-  carries on. A client may draw them in this order, or its own.
+  agents', as the bridge lists them; then your Custom Auto lists with models in them (`providerID:
+  "auto"`). `retiring`: its provider is retiring it; `hidden`: its agent keeps it out of its picker
+  (Codex's hidden ones). A picker leaves either out, though a conversation on one carries on, and a
+  new one named runs. Clients draw them in this order.
 - `known`: whether the engine's models, and the coding agents' with Custom Auto's lists, could be
   said. One that couldn't (not answering, an engine that hasn't loaded yet, or the bridge not
   running: starting, or started again) has none in `models`, rather than none at all: a client
@@ -1386,7 +1387,7 @@ start on a model by the same rule.
   runs on, your first), its effort kept; one that can't be said about yet but whose provider or
   account is there (a coding agent's models still being listed, its bridge not running) as it is;
   else the engine's default while it runs and isn't retiring; else the first of `models` that isn't
-  retiring and isn't a Custom Auto list. `null`: nothing runs there. Left out while the engine
+  retiring or hidden and isn't a Custom Auto list. `null`: nothing runs there. Left out while the engine
   can't say, or didn't say its default (and the one named is the engine's, or no longer there): a
   client starts on the one named, as it is.
 - A lead on another computer starting a session there (`start_session` from "Peers") starts on it
@@ -1396,10 +1397,15 @@ start on a model by the same rule.
   Custom Auto lists, as "A session's model" says), and for another model named; after an ask that
   failed, or an answer with a side not known, again in a moment, waiting longer each time. Until it
   has answered, a client offers none of a side not said yet, and a new conversation is on the model
-  named, as it is. Clients draw it from ClientSessions' `OfferedModels`. The Mac starts a new
-  conversation on `starting`; the phone starts one with no model of its own, on the engine's
-  default. A box without `models.offered` leaves the Mac deciding from its accounts and models as
-  it did before.
+  named, as it is. Clients draw it from ClientSessions' `OfferedModels`, and start a new conversation
+  on `starting` (the Mac for the model picked last there; the phone, which keeps none, for none
+  named: the default, else the first that runs). A box without `models.offered` leaves the Mac
+  deciding from its accounts and models as it did before; the phone, which never meets one in a
+  release, says to update Kuvo Code there rather than offer nothing.
+- An engine provider counts as ready when the engine lists it so (`api/provider`), as it does for a
+  key of its own in its settings or environment (`OPENAI_API_KEY` where it runs): its models are
+  offered though Accounts shows no sign-in, as they run. Without one, a provider whose plan goes
+  through a coding agent (OpenAI, xAI) still needs its key ("A session's model").
 
 ### Work
 

@@ -427,6 +427,22 @@ test("New Bot here offers, and starts a bot on, a model this box can use: not th
   assert.deepEqual(await offeredWith({ id: "sonnet", providerID: "anthropic" }, ["opencode", "anthropic"], pickle), { id: "sonnet", providerID: "anthropic" });
 });
 
+test("New Bot here starts on the model a new conversation here would, by the box's one rule: with none named and a default being retired, the first that runs in the picker's order, not the engine's", async () => {
+  // The engine lists Flint (OpenCode Zen) first; Anthropic, featured before OpenCode Zen, comes first in the picker.
+  const flint = { id: "flint", providerID: "opencode", name: "Flint", enabled: true };
+  const sonnet = { id: "sonnet", providerID: "anthropic", name: "Sonnet", enabled: true };
+  const retiring = { id: "opus-old", providerID: "anthropic", name: "Opus Old", enabled: true, status: "deprecated" };
+  write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, startingModel: null }));
+  const engine = await makingEngine(["opencode", "anthropic"], {}, () => {}, { models: [flint, sonnet, retiring], defaultModel: retiring });
+  try {
+    const handle = link.engineHandler(() => ({ port: engine.port, password: "p" }), { name: "my-server" }, () => null);
+    const offered = await ask(handle, "GET", "kuvo/bots/templates");
+    assert.deepEqual(offered.json.startingModel["my-server"], { id: "sonnet", providerID: "anthropic" });
+  } finally {
+    engine.close();
+  }
+});
+
 test("with the Mac closed, a bot is made here as New Bot makes it: its folder, conversation and instructions, and it writes first", async () => {
   write(path.join(bots, "kit.json"), JSON.stringify(kit));
   const engine = await makingEngine();

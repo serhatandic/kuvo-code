@@ -1012,5 +1012,17 @@ test("a lead whose model has no account here, where the default can't run either
   const call = startCall({}, { model: { providerID: "q", id: "elsewhere" } });
   await take(call);
   assert.deepEqual(eng.seen.made.at(-1).model, { providerID: "p", id: "m1" });
-  assert.match(answerOf(call).note.words, /It runs on p\/m1 there: yours \(q\/elsewhere\) has no account on that computer, nor does its default model\./);
+  assert.match(answerOf(call).note.words, /It runs on p\/m1 there: yours \(q\/elsewhere\) has no account on that computer, nor can its default model run\./);
+});
+
+test("a lead whose model is being retired on this computer starts on the default, and is told why", async () => {
+  confirmFullAccess();
+  eng = await engine({ ses_user: { title: "The user's own" } }, engineLists({
+    "/api/model": [{ id: "m1", providerID: "p", name: "Model One" }, { id: "old", providerID: "p", name: "Old One", status: "deprecated" }],
+  }));
+  write(path.join(run, "engine.json"), eng.target);
+  const call = startCall({}, { model: { providerID: "p", id: "old" } });
+  await take(call);
+  assert.equal(eng.seen.made.at(-1).model, undefined);
+  assert.match(answerOf(call).note.words, /It runs on the default model there: yours \(p\/old\) is being retired on that computer\./);
 });

@@ -367,7 +367,11 @@ final class Catalog {
     /// of): it would only fail. Not before the models are known.
     func isUnavailable(_ ref: ModelRef?) -> Bool {
         guard let ref else { return false }
-        return isKnown(ref) && offeredModel(ref) == nil
+        guard boxDecides else { return isKnown(ref) && offeredModel(ref) == nil }
+        // As its box says, by the id it lists it by (one this Mac doesn't list, Codex's hidden ones,
+        // too); a Custom Auto list deleted is your first, as it runs.
+        let listed = ref.providerID == OutsideAgents.autoProvider ? ModelRef(id: auto.list(ref.id)?.id ?? ref.id, providerID: ref.providerID) : model(ref)?.ref ?? ref
+        return offeredSaid?.runs(listed, isAgent: OutsideAgents.runsInBridge) == false
     }
 
     /// A model whose account you signed out of (its provider has a sign-in, and isn't signed in):
@@ -454,6 +458,15 @@ final class Catalog {
     /// With a box that decides (`models.offered`), by what it offers alone: the model while it runs
     /// there, else "Choose a Model" (a conversation's own chip names it as its box says, `said:`).
     func chipModel(_ ref: ModelRef?) -> Model? {
+        if boxDecides, let ref {
+            guard !isUnavailable(ref) else { return nil }
+            if let model = model(ref) ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)] { return model }
+            var placeholder = Self.autoTemplate
+            placeholder.id = ref.id
+            placeholder.providerID = ref.providerID
+            placeholder.name = offeredSaid?.name(of: ref) ?? (ref.providerID == OutsideAgents.autoProvider ? "Custom Auto" : ref.id)
+            return placeholder
+        }
         if !boxDecides, needsSignIn(ref) || goesToItsAgent(ref), let ref {
             if let model = model(ref) ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)] { return model }
             var placeholder = Self.autoTemplate

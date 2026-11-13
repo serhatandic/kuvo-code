@@ -14,15 +14,19 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
         public var name: String
         /// Its provider is retiring it: a picker leaves it out, though a conversation on it carries on.
         public var retiring: Bool
+        /// Its coding agent keeps it out of its picker (Codex's hidden ones): a picker leaves it out,
+        /// though a conversation on it, or a new one, runs.
+        public var hidden: Bool
 
-        public init(providerID: String, id: String, name: String, retiring: Bool = false) {
+        public init(providerID: String, id: String, name: String, retiring: Bool = false, hidden: Bool = false) {
             self.providerID = providerID
             self.id = id
             self.name = name
             self.retiring = retiring
+            self.hidden = hidden
         }
 
-        private enum CodingKeys: String, CodingKey { case providerID, id, name, retiring }
+        private enum CodingKeys: String, CodingKey { case providerID, id, name, retiring, hidden }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -30,6 +34,7 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
             id = try container.decode(String.self, forKey: .id)
             name = try container.decodeIfPresent(String.self, forKey: .name) ?? id
             retiring = try container.decodeIfPresent(Bool.self, forKey: .retiring) ?? false
+            hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
         }
     }
 
@@ -117,9 +122,15 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
         return listing.contains(ref.providerID) ? nil : false
     }
 
-    /// Whether a picker offers `ref`: one that runs, and that its provider isn't retiring.
+    /// Whether a picker offers `ref`: one that runs, that its provider isn't retiring, and that its
+    /// agent doesn't keep out of its picker.
     public func offers(_ ref: ModelRef) -> Bool {
-        index[Self.key(ref.providerID, ref.id)].map { !models[$0].retiring } ?? false
+        index[Self.key(ref.providerID, ref.id)].map { !models[$0].retiring && !models[$0].hidden } ?? false
+    }
+
+    /// `ref`'s name, as its provider or agent lists it; nil for one it doesn't say runs.
+    public func name(of ref: ModelRef) -> String? {
+        index[Self.key(ref.providerID, ref.id)].map { models[$0].name }
     }
 
     /// `ref`'s place in the box's order (its featured providers first, each provider's newest

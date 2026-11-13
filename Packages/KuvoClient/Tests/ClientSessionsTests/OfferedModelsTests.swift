@@ -53,6 +53,16 @@ struct OfferedModelsTests {
         #expect(said.place(ModelRef(id: "claude-sonnet-5", providerID: "anthropic")) == 1)
     }
 
+    /// One Codex keeps out of its picker runs (a conversation on it, or one picked before it was
+    /// hidden), and a picker leaves it out, as one being retired.
+    @Test func aHiddenModelRunsButIsntOffered() throws {
+        let said = try offered(#"{"models":[{"providerID":"codex-cli","id":"gpt-5.1-codex-mini","name":"GPT-5.1 Codex Mini","hidden":true}],"known":{"engine":true,"agents":true}}"#)
+        let mini = ModelRef(id: "gpt-5.1-codex-mini", providerID: "codex-cli")
+        #expect(said.runs(mini, isAgent: { $0.hasPrefix("codex") }) == true)
+        #expect(!said.offers(mini))
+        #expect(said.name(of: mini) == "GPT-5.1 Codex Mini")
+    }
+
     /// The model wanted goes as its parts, each read back whole by the box (a "+" in an id, a "/").
     @Test func theWantedModelGoesWhole() throws {
         #expect(OfferedModels.path() == "kuvo/models/offered")

@@ -28,7 +28,7 @@ export async function* modelsOfferedRoute(context: RouteContext): AsyncGenerator
   const starting = startingModel([wantedIn(request.path)], lists);
   const listing = stillListing(lists);
   return yield* json(200, {
-    models: offeredHere(lists).map(model => ({ providerID: model.providerID, id: model.id, name: model.name, ...(model.retiring ? { retiring: true } : {}) })),
+    models: offeredHere(lists).map(model => ({ providerID: model.providerID, id: model.id, name: model.name, ...(model.retiring ? { retiring: true } : {}), ...(model.hidden ? { hidden: true } : {}) })),
     // (The bridge not running is one that can't say yet: it's starting, or started again.)
     known: { engine: lists.engine !== null, agents: lists.bridge !== null },
     ...(listing.length ? { listing } : {}),

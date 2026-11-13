@@ -261,13 +261,13 @@ export function listedOf(ref: Ref, lists: Lists): Listed | undefined {
 }
 
 /** A model that runs here, as a picker offers it. */
-export interface Offered { providerID: string; id: string; name: string; retiring: boolean; agents: boolean; free: boolean }
+export interface Offered { providerID: string; id: string; name: string; retiring: boolean; hidden: boolean; agents: boolean; free: boolean }
 
 /** Every model that runs here now, as a picker offers it: the engine's, newest first in its
- * featured providers' order and the others' by id; then the coding agents' (not one an agent keeps
- * out of its picker), as the bridge lists them; then your Custom Auto lists with models in them.
- * One its provider is retiring is among them (`retiring`): a conversation on it carries on, though
- * a picker leaves it out. Nothing of a place that can't say. */
+ * featured providers' order and the others' by id; then the coding agents', as the bridge lists
+ * them; then your Custom Auto lists with models in them. One its provider is retiring
+ * (`retiring`), or its agent keeps out of its picker (`hidden`, Codex's), is among them: a
+ * conversation on it carries on, though a picker leaves it out. Nothing of a place that can't say. */
 export function offeredHere(lists: Lists): Offered[] {
   const order = (providerID: string) => {
     const at = FEATURED.indexOf(providerID);
@@ -276,11 +276,12 @@ export function offeredHere(lists: Lists): Offered[] {
   const engine = (lists.engine?.models ?? [])
     .filter(model => onEngine(model, lists.engine)?.runs === true)
     .sort((a, b) => order(a.providerID) - order(b.providerID) || (a.providerID < b.providerID ? -1 : a.providerID > b.providerID ? 1 : 0) || b.released - a.released);
-  const agents = (lists.bridge?.models ?? []).filter(model => !model.hidden && withAgents(model, lists.bridge)?.runs === true);
+  // (Those an agent keeps out of its picker too, `hidden`: a conversation, or a new one, on one runs.)
+  const agents = (lists.bridge?.models ?? []).filter(model => withAgents(model, lists.bridge)?.runs === true);
   const auto = (lists.bridge?.auto ?? []).filter(list => list.entries > 0);
   return [
-    ...[...engine, ...agents].map(model => ({ providerID: model.providerID, id: model.id, name: model.name, retiring: model.retiring, agents: onAgents(model), free: model.free })),
-    ...auto.map(list => ({ providerID: "auto", id: list.id, name: list.name, retiring: false, agents: true, free: false })),
+    ...[...engine, ...agents].map(model => ({ providerID: model.providerID, id: model.id, name: model.name, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
+    ...auto.map(list => ({ providerID: "auto", id: list.id, name: list.name, retiring: false, hidden: false, agents: true, free: false })),
   ];
 }
 
@@ -342,6 +343,6 @@ export function startingModel(wanted: (Ref | null | undefined)[], lists: Lists):
   // (A default it didn't say isn't none: nor can the first be taken for it.)
   if (fallback === undefined) return undefined;
   if (fallback && stateOf(fallback, lists)?.runs && !listedOf(fallback, lists)?.retiring) return { model: fallback, why: "default" };
-  const first = offeredHere(lists).find(model => !model.retiring && model.providerID !== "auto");
+  const first = offeredHere(lists).find(model => !model.retiring && !model.hidden && model.providerID !== "auto");
   return first ? { model: { providerID: first.providerID, id: first.id }, why: "first" } : null;
 }

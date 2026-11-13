@@ -16232,11 +16232,11 @@ function offeredHere(lists) {
     return at < 0 ? FEATURED.length : at;
   };
   const engine = (lists.engine?.models ?? []).filter((model) => onEngine(model, lists.engine)?.runs === true).sort((a, b) => order(a.providerID) - order(b.providerID) || (a.providerID < b.providerID ? -1 : a.providerID > b.providerID ? 1 : 0) || b.released - a.released);
-  const agents = (lists.bridge?.models ?? []).filter((model) => !model.hidden && withAgents(model, lists.bridge)?.runs === true);
+  const agents = (lists.bridge?.models ?? []).filter((model) => withAgents(model, lists.bridge)?.runs === true);
   const auto = (lists.bridge?.auto ?? []).filter((list) => list.entries > 0);
   return [
-    ...[...engine, ...agents].map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, retiring: model.retiring, agents: onAgents(model), free: model.free })),
-    ...auto.map((list) => ({ providerID: "auto", id: list.id, name: list.name, retiring: false, agents: true, free: false }))
+    ...[...engine, ...agents].map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
+    ...auto.map((list) => ({ providerID: "auto", id: list.id, name: list.name, retiring: false, hidden: false, agents: true, free: false }))
   ];
 }
 function stillListing(lists) {
@@ -16285,7 +16285,7 @@ function startingModel(wanted, lists) {
     return;
   if (fallback && stateOf(fallback, lists)?.runs && !listedOf(fallback, lists)?.retiring)
     return { model: fallback, why: "default" };
-  const first = offeredHere(lists).find((model) => !model.retiring && model.providerID !== "auto");
+  const first = offeredHere(lists).find((model) => !model.retiring && !model.hidden && model.providerID !== "auto");
   return first ? { model: { providerID: first.providerID, id: first.id }, why: "first" } : null;
 }
 
@@ -18937,7 +18937,10 @@ async function startSession(given, by, place) {
     if (starting) {
       const chosen = starting.model;
       if (starting.why !== "wanted" && model) {
-        modelNote = starting.why === "default" ? `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.` : `It runs on ${chosen.providerID}/${chosen.id} there: yours (${model.providerID}/${model.id}) has no account on that computer, nor does its default model.`;
+        const said = stateOf(model, lists);
+        const why = said?.runs ? "is being retired on that computer" : said?.missing === "gone" ? "is no longer among its provider's models on that computer" : said?.missing ? "can't run on that computer now (its account there needs a sign-in, a key or its agent installed)" : "has no account on that computer";
+        const yours = `yours (${model.providerID}/${model.id}) ${why}`;
+        modelNote = starting.why === "default" ? `It runs on the default model there: ${yours}.` : `It runs on ${chosen.providerID}/${chosen.id} there: ${yours}, nor can its default model run.`;
       }
       if (starting.why !== "wanted")
         model = starting.why === "default" ? null : chosen;
@@ -40722,7 +40725,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a6b53752ed78";
+var BRIDGE_VERSION = "d68e784daa17";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41306,7 +41309,7 @@ async function* modelsOfferedRoute(context) {
   const starting = startingModel([wantedIn(request.path)], lists);
   const listing = stillListing(lists);
   return yield* json(200, {
-    models: offeredHere(lists).map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, ...model.retiring ? { retiring: true } : {} })),
+    models: offeredHere(lists).map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, ...model.retiring ? { retiring: true } : {}, ...model.hidden ? { hidden: true } : {} })),
     known: { engine: lists.engine !== null, agents: lists.bridge !== null },
     ...listing.length ? { listing } : {},
     ...starting !== undefined ? { starting: starting?.model ?? null } : {}

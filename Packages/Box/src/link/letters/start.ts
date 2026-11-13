@@ -29,7 +29,7 @@ import { noteWorkChanged } from "../work/changes";
 import { noteOversight } from "../work/oversight";
 import { botLimits, limitsFrom, pastLimit } from "../work/limits";
 import { describeModels, modelNamed, pickModel, usableModels } from "../work/models";
-import { listedOf, listsHere, onAgents, startingModel } from "../work/model-rule";
+import { listedOf, listsHere, onAgents, startingModel, stateOf } from "../work/model-rule";
 import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
 import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { holdsBack } from "../bots/tell";
@@ -451,9 +451,15 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     if (starting) {
       const chosen = starting.model;
       if (starting.why !== "wanted" && model) {
-        modelNote = starting.why === "default"
-          ? `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.`
-          : `It runs on ${chosen.providerID}/${chosen.id} there: yours (${model.providerID}/${model.id}) has no account on that computer, nor does its default model.`;
+        // Why yours can't: retiring there, gone from its provider's list, its account there needing
+        // something, or no account for it there at all.
+        const said = stateOf(model, lists);
+        const why = said?.runs ? "is being retired on that computer"
+          : said?.missing === "gone" ? "is no longer among its provider's models on that computer"
+          : said?.missing ? "can't run on that computer now (its account there needs a sign-in, a key or its agent installed)"
+          : "has no account on that computer";
+        const yours = `yours (${model.providerID}/${model.id}) ${why}`;
+        modelNote = starting.why === "default" ? `It runs on the default model there: ${yours}.` : `It runs on ${chosen.providerID}/${chosen.id} there: ${yours}, nor can its default model run.`;
       }
       // Its own as it names it (Claude Code's `default` stays that); on the default, a session
       // with none of its own, as one started there is.

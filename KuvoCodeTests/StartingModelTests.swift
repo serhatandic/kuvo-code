@@ -288,6 +288,31 @@ import Testing
         #expect(!catalog.needsAccount(sonnet, said: nil))
     }
 
+    /// The model picked last is one Codex has since kept out of its picker: its box says a new
+    /// conversation starts on it, and the chip names it (by the name its box gives) with Send on,
+    /// though it isn't offered in the picker and this Mac's own lists don't have it.
+    @Test func aModelCodexHidesRunsWhereItsBoxSaysSo() async throws {
+        defer { StubWeb.stop() }
+        let mini = ModelRef(id: "gpt-5.1-codex-mini", providerID: "codex-cli")
+        let offered = #"{"models":[{"providerID":"openai","id":"luna","name":"Luna"},{"providerID":"codex-cli","id":"gpt-5.1-codex-mini","name":"GPT-5.1 Codex Mini","hidden":true}],"known":{"engine":true,"agents":true},"starting":{"providerID":"codex-cli","id":"gpt-5.1-codex-mini"}}"#
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
+                continuation.finish()
+            }
+        })
+        try await engine(accounts: [Self.account("openai", signedIn: true)], models: [Self.model("openai", "luna")], defaultModel: Self.model("openai", "luna"))
+        _ = catalog.startingModel(mini)
+        try await until { catalog.offeredSaid != nil }
+        #expect(catalog.startingModel(mini) == mini)
+        #expect(!catalog.isUnavailable(mini))
+        #expect(catalog.chipModel(mini, in: .all, said: nil)?.name == "GPT-5.1 Codex Mini")
+        #expect(ComposerSend(ready: true, text: "Fix the build", hasModel: catalog.chipModel(mini, in: .all, said: nil) != nil) == .send)
+        #expect(!catalog.offered.contains { $0.id == mini.id }, "not in the picker")
+    }
+
     /// Its box's first answer fails (a machine's connection drops a moment): it's asked again, and
     /// the picker fills, rather than staying empty until an account or model changes.
     @Test func aFailedAskIsAskedAgain() async throws {
