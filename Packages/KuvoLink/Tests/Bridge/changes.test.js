@@ -854,4 +854,7 @@ test("a folder whose .git names a bare repository beside it (gitdir: ./.bare) is
   assert.equal(code, 200);
   assert.deepEqual(json, { repository: true, root: null, current: "main", branches: ["main"] });
   assert.deepEqual((await route("POST", "kuvo/git/status", { directory: folder })).json, { repository: true, root: null, uncommitted: false });
+  const switched = await route("POST", "kuvo/git/switch", { directory: folder, branch: "main" });
+  assert.equal(switched.status, 422);
+  assert.equal(switched.json.message, "This folder has no checkout of its own to switch. Switch branches in one of its worktrees.");
 });

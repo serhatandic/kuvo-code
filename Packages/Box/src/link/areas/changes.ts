@@ -411,8 +411,10 @@ export async function branchesIn(directory: string): Promise<GitBranches | null>
  * changes not committed coming along, as `git switch` does in your terminal (its hooks run). null
  * when it went, else what git said. */
 export async function switchBranch(directory: string, branch: string, create: boolean): Promise<string | null> {
-  const root = await rootOf(directory);
-  if (!root) return "Not a git repository.";
+  const found = await repositoryOf(directory);
+  if (!found) return "Not a git repository.";
+  const { root } = found;
+  if (!root) return "This folder has no checkout of its own to switch. Switch branches in one of its worktrees.";
   return refusal(root)(["switch", ...(create ? ["-c"] : []), branch]);
 }
 

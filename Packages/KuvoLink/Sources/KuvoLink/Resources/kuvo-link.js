@@ -7306,7 +7306,7 @@ async function gitLater(folder, args) {
     execFile4("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
   });
 }
-async function gitNamesLater(folder, args, limit) {
+async function gitNamesLater(folder, args, limit, signal) {
   const own = await ownArgsLater(args, folder);
   if (!own)
     return null;
@@ -7314,7 +7314,7 @@ async function gitNamesLater(folder, args, limit) {
     const names = new Set;
     let rest = "";
     let enough = false;
-    const child = spawn4("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout: 600000 });
+    const child = spawn4("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout: 600000, ...signal ? { signal } : {} });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (piece) => {
       if (enough)
@@ -7332,7 +7332,7 @@ async function gitNamesLater(folder, args, limit) {
       }
     });
     child.on("error", () => resolve(null));
-    child.on("close", (code) => resolve(enough || code === 0 ? [...names] : null));
+    child.on("close", (code) => resolve(enough || code === 0 || code === null && names.size ? [...names] : null));
   });
 }
 function sizeLater(folder) {
@@ -35050,9 +35050,12 @@ async function branchesIn(directory) {
 `).map(branch).filter((name) => !!name) };
 }
 async function switchBranch(directory, branch, create) {
-  const root = await rootOf3(directory);
-  if (!root)
+  const found = await repositoryOf3(directory);
+  if (!found)
     return "Not a git repository.";
+  const { root } = found;
+  if (!root)
+    return "This folder has no checkout of its own to switch. Switch branches in one of its worktrees.";
   return refusal(root)(["switch", ...create ? ["-c"] : [], branch]);
 }
 async function statusIn(directory) {
@@ -40655,7 +40658,7 @@ function askedFolder(query, home) {
 }
 var TREE_LIMIT = 20000;
 var HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"]);
-async function listTree(requestPath, limit = TREE_LIMIT) {
+async function listTree(requestPath, limit = TREE_LIMIT, signal) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
   const at = query.get("path")?.trim() ? askedFolder(query, home) : null;
@@ -40666,7 +40669,7 @@ async function listTree(requestPath, limit = TREE_LIMIT) {
   } catch (error) {
     return refusal2(at, error);
   }
-  const named = await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit) ?? [];
+  const named = await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit, signal) ?? [];
   const dated = query.get("dated") === "1";
   if (named.length)
     return { status: 200, value: await withDates({ path: at, files: named, git: true }, dated) };
@@ -40751,10 +40754,10 @@ function makeFolder(body) {
   return { status: 200, value: { path: at } };
 }
 async function* folderTreeRoute(context) {
-  const { request, json } = context;
+  const { request, json, signal } = context;
   if (request.method.toUpperCase() !== "GET")
     return yield* json(405, {});
-  const { status, value } = await listTree(request.path);
+  const { status, value } = await listTree(request.path, TREE_LIMIT, signal);
   return yield* json(status, value);
 }
 async function* foldersRoute(context) {
@@ -40876,7 +40879,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "581dc496a077";
+var BRIDGE_VERSION = "6ac64c8b77bb";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

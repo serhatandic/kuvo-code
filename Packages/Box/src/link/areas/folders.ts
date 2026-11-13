@@ -69,7 +69,7 @@ const HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build",
  * when each last changed (`modified`, milliseconds since 1970, in the same order; null where it
  * can't be read), for a list that puts the newest first. Refused as `kuvo/folders` refuses a
  * folder it can't read. */
-export async function listTree(requestPath: string, limit = TREE_LIMIT): Promise<JSONAnswer<FolderTree | FolderRefused | { message: string }>> {
+export async function listTree(requestPath: string, limit = TREE_LIMIT, signal?: AbortSignal): Promise<JSONAnswer<FolderTree | FolderRefused | { message: string }>> {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
   // (Named, never the home folder by default: a walk of all of it is never what's meant.)
@@ -82,7 +82,7 @@ export async function listTree(requestPath: string, limit = TREE_LIMIT): Promise
   }
   // Names as they are (git quotes ones with accents, CJK or emoji otherwise), once each (a file in
   // conflict is listed for each side).
-  const named = (await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit)) ?? [];
+  const named = (await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit, signal)) ?? [];
   const dated = query.get("dated") === "1";
   if (named.length) return { status: 200, value: await withDates({ path: at, files: named, git: true }, dated) };
   // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them.
@@ -173,9 +173,9 @@ export function makeFolder(body: Body<"path">): JSONAnswer<{ path: string } | { 
 
 // Every file under a folder (PROTOCOL.md, `kuvo/folders/tree`).
 export async function* folderTreeRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
-  const { request, json } = context;
+  const { request, json, signal } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
-  const { status, value } = await listTree(request.path);
+  const { status, value } = await listTree(request.path, TREE_LIMIT, signal);
   return yield* json(status, value);
 }
 

@@ -3189,8 +3189,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     repository to `branch`, or with `"create": true` to a new branch of that name from where it is,
     the changes not committed coming along, as `git switch [-c]` does in your terminal (its hooks
     run, with your environment as a commit's) → `200 {}`, or `422 {"message"}` with git's words (a
-    change in the way, no such branch, a name git won't take). `400 {"message"}` for no name, one
-    starting with `-`, or one with a line break, saying which.
+    change in the way, no such branch, a name git won't take, or a folder with no checkout of its
+    own). `400 {"message"}` for no name, one starting with `-`, or one with a line break, saying
+    which.
   - `POST kuvo/git/status {"directory"}` (`git.status`, #660): whether anything in the repository
     isn't committed, as removing a worktree would delete it (what a client's Delete says goes with
     one) → `{"repository": false}`, or `{"repository": true, root, uncommitted}`: a change, a new
@@ -3288,7 +3289,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   folders, for a project's file filter, "@" and a palette → `{"path", "files", "git"}`, `files`
   by their paths in the folder, 20,000 at most. In a repository, git's list (`git` true): tracked
   files and new ones, without what it ignores, each once, names as they are, the first 20,000 git
-  gives in one with more (read as git writes them, for ten minutes at most); otherwise, and where
+  gives in one with more (read as git writes them; after ten minutes, those it gave by then); otherwise, and where
   git lists none there (a folder its repository ignores), a walk that skips `.git`,
   `node_modules`, `build`, `DerivedData`, `.build`, `Pods`, `dist` and `.next`, follows no links,
   and on a Mac leaves out the home folder's Desktop, Documents, Downloads, Library, Movies, Music
@@ -6965,8 +6966,8 @@ can go three months after 0.8.0 ships.
 - Boxes from before #660 have no `kuvo/git/branches`, `kuvo/git/switch`, `kuvo/git/status` or
   `kuvo/folders/tree`: 404 with nothing said, or, from 0.7 and 0.8.0-beta.1 (which have no
   `kuvo/git/…` at all), `403` in plain words ("That isn't available over the link."), which the
-  newer app takes the same way for every git route (Merge into… and Create Pull Request say such a
-  machine needs a newer Kuvo Code). A path is sent as a box writes it (`EngineRoutes.canonical`),
+  newer app takes the same way for these four, Merge into… and Create Pull Request's confirmation
+  (which say such a machine needs a newer Kuvo Code); Changes' other routes say what the box said. A path is sent as a box writes it (`EngineRoutes.canonical`),
   so such a box never refuses it as one that isn't what it seems. For a machine's, the newer app runs the machine's
   git (and, outside a repository, `find`) over SSH, as before. For its keeper's box on this Mac,
   running on after an update until the work under way ends, it runs no git of its own: the title

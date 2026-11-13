@@ -118,6 +118,8 @@ import Testing
         (404, "{}", "attached", FolderFailure.olderService),
         (403, "That isn't available over the link.", BoxClient.mac, FolderFailure.updating),
         (403, "That isn't available over the link.", "attached", FolderFailure.olderService),
+        // A path refused as not what it seems says nothing: never taken for an older box.
+        (403, "", BoxClient.mac, FolderFailure(reason: "It said no (403).")),
         (403, #"{"message":"It can't be read here.","reason":"Permission denied"}"#, BoxClient.mac, FolderFailure.denied),
     ])
     func whyTheListIsntThere(status: Int, body: String, box id: String, failure: FolderFailure) async throws {
@@ -160,6 +162,21 @@ import Testing
         let path = try #require(sent.paths.first)
         #expect(EngineRoutes.canonical(path) == path, "written as a box writes it")
         #expect(await paths([folder]) == ["index.html"])
+    }
+
+    /// A folder with a backslash in its name, which no path to a box carries: said so, never asked.
+    @Test func aFolderNoPathCarriesIsNeverAsked() async throws {
+        let folder = AppInfo.testRoot.appending(path: "Folders/\(UUID().uuidString)/a\\b")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+        let sent = Sent()
+        let recording = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            sent.add(request.path)
+            return AsyncThrowingStream { $0.finish() }
+        })
+        let listing = await ProjectFiles.listing([folder]) { _ in recording }
+        #expect(listing.failure == .unsendable)
+        #expect(sent.paths.isEmpty)
     }
 
     nonisolated private final class Sent: @unchecked Sendable {

@@ -156,8 +156,8 @@ struct BoxRefusal: LocalizedError {
     nonisolated static func olderBox(status: Int, data: Data) -> Bool {
         let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         if status == 404 && said?["message"] == nil { return true }
-        // COMPAT(beta.1 git-older-box): a box of 0.7 or 0.8.0-beta.1 refuses a route it hasn't with `403 "That isn't available over the link."`, no JSON. Goes when 0.8.0 ships.
-        return status == 403 && said == nil
+        // COMPAT(beta.1 git-older-box): a box of 0.7 or 0.8.0-beta.1 refuses a route it hasn't with `403 "That isn't available over the link."`, words but no JSON (a path refused as not what it seems has no words). Goes when 0.8.0 ships.
+        return status == 403 && said == nil && !data.isEmpty
     }
 
     init(status: Int, message: String, problem: String? = nil, reason: String? = nil) {

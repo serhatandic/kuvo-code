@@ -598,9 +598,12 @@ private struct BranchSwitcher: View {
         }
     }
 
-    /// The repository's branches, from the box the folder is on.
+    /// The repository's branches, from the box the folder is on; kept only while it's still the
+    /// folder shown (a look from a hover may finish after another session's).
     private func load() async {
-        branches = await Git.branches(at: GitPlace.of(directory))?.branches ?? []
+        let asked = directory
+        let listed = await Git.branches(at: GitPlace.of(asked))?.branches ?? []
+        if directory == asked { branches = listed }
     }
 
     private func run(_ branch: String, created: Bool) {

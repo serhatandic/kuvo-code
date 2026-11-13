@@ -85,7 +85,8 @@ nonisolated enum ProjectFiles {
         // Written as every box writes a path (`EngineRoutes.canonical`: "site (copy)", "@scope"), so
         // a box from before the route says it hasn't it, rather than that the path isn't one.
         let written = "kuvo/folders/tree?path=" + Workspace.queryValue(place.path) + (dated ? "&dated=1" : "")
-        let asked = EngineRoutes.canonical(written) ?? written
+        // (One no box takes, a backslash or a control character in its name: never asked.)
+        guard let asked = EngineRoutes.canonical(written) else { return .failure(.unsendable) }
         let status: Int, data: Data
         do {
             (status, data) = try await place.client.send("GET", asked)
@@ -137,6 +138,8 @@ nonisolated struct FolderFailure: Error, Hashable, Sendable {
     static let starting = FolderFailure(reason: "Kuvo Code’s background service on this Mac is starting", said: false)
     /// This Mac's box from before the list, running on after an update until the work under way ends.
     static let updating = FolderFailure(reason: "Kuvo Code on this Mac is finishing an update. Try again once the work that’s running now ends", said: false)
+    /// A folder with a backslash or a control character in its name, which a path to its box can't carry.
+    static let unsendable = FolderFailure(reason: "Kuvo Code can’t list the files of a folder with a backslash or a control character in its name", said: false)
     /// The box this Mac is attached to in place, from before the list.
     static let olderService = FolderFailure(reason: "Kuvo Code’s background service on this Mac needs a newer version to list these files. It updates by itself overnight", said: false)
 
