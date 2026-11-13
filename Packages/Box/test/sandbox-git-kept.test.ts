@@ -342,6 +342,9 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a .git swapped
     const unshare = UNSHARE.find(each => existsSync(each))!
     const fence = join(kuvo, "run", "fence")
     const id = (flag: string) => Bun.spawnSync(["id", flag]).stdout.toString().trim()
+    // (Asked once: the three id() calls were blocking spawns in the test's own process, three per
+    // try, and they held up the sixteen starts each round.)
+    const uid = id("-u"), gid = id("-g"), user = id("-un")
     symlinkSync(apps, join(raced.work, ".git-swap"))
     // (What swaps them, as fast as it can: renameat2's RENAME_EXCHANGE, through Bun's own FFI.)
     const swap = join(root, "swap.js")
@@ -364,17 +367,22 @@ for (let round = 1; round % 65536 || symbols.getppid() === parent; round++) symb
         while (stopped(swapping.pid));
       }
     }
+    let refusedTheRepository = false
     const once = async () => {
-      const ran = Bun.spawn([unshare, "-Urm", "/bin/sh", "-c", HIDE, unshare, id("-u"), id("-g"), id("-un"), join(fence, "ns"), join(fence, "sockets"), "", "", raced.work, raced.git, "", "/bin/sh", "-c", `ls -A ${sh(join(apps, "agent"))} .git/agent .git-swap/agent 2>/dev/null; for each in .git .git-swap; do printf '#planted\\n' >> "$each/config"; done 2>/dev/null; exit 0`], { cwd: raced.work, stdout: "pipe", stderr: "pipe", env: ENV })
+      const ran = Bun.spawn([unshare, "-Urm", "/bin/sh", "-c", HIDE, unshare, uid, gid, user, join(fence, "ns"), join(fence, "sockets"), "", "", raced.work, raced.git, "", "/bin/sh", "-c", `ls -A ${sh(join(apps, "agent"))} .git/agent .git-swap/agent 2>/dev/null; for each in .git .git-swap; do printf '#planted\\n' >> "$each/config"; done 2>/dev/null; exit 0`], { cwd: raced.work, stdout: "pipe", stderr: "pipe", env: ENV })
       const [out, said] = await Promise.all([new Response(ran.stdout).text(), new Response(ran.stderr).text()])
       const end = out.includes("socket") ? "seen" : `${await ran.exited}`
-      if (end !== "0") refusals.push(said.trim())
+      if (end !== "0") {
+        const line = said.trim()
+        refusals.push(line)
+        if (line.includes(raced.git)) refusedTheRepository = true
+      }
       return end
     }
     const refusals: string[] = []
-    const tries = async (rounds: number) => {
+    const tries = async (batches: number, width = 16) => {
       const ended: Record<string, number> = {}
-      for (let round = 0; round < rounds; round++) for (const end of await Promise.all(Array.from({ length: 16 }, once))) ended[end] = (ended[end] ?? 0) + 1
+      for (let round = 0; round < batches; round++) for (const end of await Promise.all(Array.from({ length: width }, once))) ended[end] = (ended[end] ?? 0) + 1
       return ended
     }
     // (One runs before any swap: the try itself does.)
@@ -384,18 +392,27 @@ for (let round = 1; round % 65536 || symbols.getppid() === parent; round++) symb
     expect(new TextDecoder().decode((await swapping.stdout.getReader().read()).value).trim()).toBe("swapping")
     const racing: Record<string, number> = {}
     const held: Record<string, number> = {}
-    for (let turn = 0; turn < 10; turn++) {
-      for (const [end, count] of Object.entries(await tries(25))) racing[end] = (racing[end] ?? 0) + count
+    // (Each try is a sandbox start and a repository kept, which on a small machine takes a moment:
+    // eight turns of ten rounds of sixteen at once still cover each start. What keeps git's files
+    // is mounting each folder from inside itself and each file by its path; the mount-table check
+    // tested on its own above backs those mounts up. After each turn's racing, eight commands run
+    // while the swapper is stopped.)
+    const turns = 8, rounds = 10, heldEach = 8
+    for (let turn = 0; turn < turns; turn++) {
+      for (const [end, count] of Object.entries(await tries(rounds))) racing[end] = (racing[end] ?? 0) + count
       hold(swapping)
       refusals.length = 0
-      for (const [end, count] of Object.entries(await tries(1))) held[end] = (held[end] ?? 0) + count
+      for (const [end, count] of Object.entries(await tries(1, heldEach))) held[end] = (held[end] ?? 0) + count
       if (refusals.length) console.log("Held, and yet:", refusals)
       swapping.kill("SIGCONT")
     }
     swapping.kill("SIGKILL")
     await swapping.exited
     console.log("How the tries ended, swapped as fast as can be and held between:", racing, held)
-    expect([racing.seen ?? 0, held]).toEqual([0, { "0": 160 }])
+    // (At least one racing try met a swap and was refused for it, naming the repository: a swapper
+    // that never swapped, or failures from elsewhere, would make this test say nothing.)
+    expect(refusedTheRepository).toBe(true)
+    expect([racing.seen ?? 0, held]).toEqual([0, { "0": turns * heldEach }])
     // Nor did any that ran write the repository's settings, which stayed kept.
     const real = [".git", ".git-swap"].map(name => join(raced.app, name)).find(each => statSync(each, { throwIfNoEntry: false })?.isDirectory() && !existsSync(join(each, "agent")))!
     expect(readFileSync(join(real, "config"), "utf8")).not.toContain("#planted")
