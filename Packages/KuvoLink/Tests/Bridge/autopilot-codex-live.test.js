@@ -14,7 +14,7 @@
 // of the Codex lane to use, such as gpt-6-luna) are set, Bun and Codex are there, and the lane lists
 // that model. Run with
 // `KUVO_TEST_CODEX_AUTH=~/.codex/auth.json KUVO_TEST_CODEX_MODEL=<id> node --test Packages/KuvoLink/Tests/Bridge/autopilot-codex-live.test.js`.
-import "./test-safety.js";
+import { allowRealAgents, REAL_PATH } from "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -28,7 +28,8 @@ import { NO_BUN, testBun } from "./bun-for-tests.js";
 const authFile = process.env.KUVO_TEST_CODEX_AUTH;
 const modelID = process.env.KUVO_TEST_CODEX_MODEL;
 const bun = testBun();
-const codex = process.env.KUVO_TEST_CODEX || spawnSync("sh", ["-c", "command -v codex"], { encoding: "utf8" }).stdout.trim();
+// (The agents' programs aren't on a test's PATH: REAL_PATH has them.)
+const codex = process.env.KUVO_TEST_CODEX || spawnSync("sh", ["-c", "command -v codex"], { encoding: "utf8", env: { ...process.env, PATH: REAL_PATH } }).stdout.trim();
 const agentsJS = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 const skip = !authFile ? "KUVO_TEST_CODEX_AUTH isn't set" : !modelID ? "KUVO_TEST_CODEX_MODEL isn't set" : !bun ? NO_BUN : !codex ? "Codex isn't installed" : false;
 
@@ -43,6 +44,8 @@ function ageOf(file) {
 }
 
 test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, async t => {
+  // The sign-in you named (your own Codex's, maybe) is read to copy it, and your Codex runs: as you asked.
+  allowRealAgents();
   // A copy must never refresh, which would rotate the token and sign the original out: Codex does so
   // when the access token is near its end, and by itself once it was last refreshed some 8 days ago.
   const { left, refreshed } = ageOf(authFile);
@@ -93,10 +96,14 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
 
   // The agents' bridge, as the app starts it, with everything of its own in the test's folders.
   const workspace = path.join(home, "work");
+  const only = path.join(home, "codex-bin");
+  fs.mkdirSync(only);
+  fs.symlinkSync(codex, path.join(only, "codex"));
   const child = spawn(bun, [agentsJS], {
     cwd: workspace,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { PATH: `${path.dirname(codex)}:${process.env.PATH}`, HOME: home, TMPDIR: `${home}/tmp`, KUVO_AGENTS_HOME: path.join(home, "agents"), OPENCODE_PASSWORD: "pw", CODEX_HOME: codexHome, BUN_BE_BUN: "1" },
+    // (Only Codex on its PATH: not the other agents installed beside it, nor Claude Code's sign-in.)
+    env: { PATH: `${only}:${process.env.PATH}`, HOME: home, CLAUDE_CONFIG_DIR: path.join(home, "claude"), TMPDIR: `${home}/tmp`, KUVO_AGENTS_HOME: path.join(home, "agents"), OPENCODE_PASSWORD: "pw", CODEX_HOME: codexHome, BUN_BE_BUN: "1" },
   });
   atEnd(() => new Promise(resolve => { if (child.exitCode !== null) return resolve(); child.on("exit", resolve); child.stdin.end(); child.kill(); }));
   const port = await new Promise((resolve, reject) => {

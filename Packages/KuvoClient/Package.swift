@@ -26,8 +26,8 @@ let package = Package(
     targets: [
         .target(name: "ClientText"),
         .testTarget(name: "ClientTextTests", dependencies: ["ClientText"]),
-        .target(name: "ClientAccounts"),
-        .testTarget(name: "ClientAccountsTests", dependencies: ["ClientAccounts"]),
+        .target(name: "ClientAccounts", dependencies: [.product(name: "OpenCodeKit", package: "OpenCodeKit")]),
+        .testTarget(name: "ClientAccountsTests", dependencies: ["ClientAccounts", .product(name: "OpenCodeKit", package: "OpenCodeKit")]),
         .target(name: "ClientDesign", dependencies: [
             "ClientText",
             .product(name: "Textual", package: "textual"),

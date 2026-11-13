@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { addDefaultRules, CONFIG_FILE, deepMerged, KEY_NAME, readSettings, sortedKeys } from "../areas/config";
-import { locked, writePrivate } from "../files";
+import { locked, writePrivate, writeSecret } from "../files";
 import { BOX, BOX_KEYS, CONFIG_LOCK, K, RUN, shownRoot } from "../home";
 import { launchLocked } from "./launch-lock";
 
@@ -52,7 +52,7 @@ export function adoptBox(seed: { settings?: unknown; keys?: unknown } | null | u
     fs.chmodSync(BOX, 0o700);
     if (seeded) {
       for (const [name, value] of Object.entries(isObject(seed!.keys) ? seed!.keys : {})) {
-        if (KEY_NAME.test(name) && typeof value === "string") writePrivate(path.join(BOX_KEYS, name), value);
+        if (KEY_NAME.test(name) && typeof value === "string") writeSecret(path.join(BOX_KEYS, name), value);
       }
     } else {
       // The shared keys; a bot's own (`…__<bot>`) stay where its folder names them.
@@ -60,14 +60,14 @@ export function adoptBox(seed: { settings?: unknown; keys?: unknown } | null | u
       try { names = fs.readdirSync(MAC_KEYS); } catch {}
       for (const name of names) {
         if (!KEY_NAME.test(name) || name.includes("__")) continue;
-        try { writePrivate(path.join(BOX_KEYS, name), fs.readFileSync(path.join(MAC_KEYS, name), "utf8")); } catch {}
+        try { writeSecret(path.join(BOX_KEYS, name), fs.readFileSync(path.join(MAC_KEYS, name), "utf8")); } catch {}
       }
     }
     // What it was made from, kept beside it.
     const kept = path.join(BOX, "adopted-from");
     fs.mkdirSync(kept, { recursive: true, mode: 0o700 });
     for (const [file, name] of [[GLOBAL_FILE, "opencode.json"], [MAC_SETTINGS, "settings.json"]] as const) {
-      try { writePrivate(path.join(kept, name), fs.readFileSync(file, "utf8")); } catch {}
+      try { writeSecret(path.join(kept, name), fs.readFileSync(file, "utf8")); } catch {}
     }
     writePrivate(CONFIG_FILE, JSON.stringify(sortedKeys(settings), null, 2) + "\n");
     addDefaultRules();

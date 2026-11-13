@@ -37,7 +37,7 @@ extension AppModel {
         #endif
         BrowserTools.vaultDefinitions = { [weak self] in
             if let kept = VaultTools.definitions { return kept }
-            guard let self, let answer = try? await box(BoxClient.mac).send("GET", "kuvo/vault/tools"), answer.status == 200,
+            guard let self, let answer = try? await box(BoxClient.thisMac).send("GET", "kuvo/vault/tools"), answer.status == 200,
                   let tools = (try? JSONSerialization.jsonObject(with: answer.body) as? [String: Any])?["tools"] as? [[String: Any]] else { return [] }
             VaultTools.definitions = tools
             return tools
@@ -49,7 +49,7 @@ extension AppModel {
         // (Asked each time it's empty: the sandbox is set up as the box starts, and checked again.)
         BrowserTools.sandboxDefinitions = { [weak self] in
             if let kept = SandboxTools.definitions { return kept }
-            guard let self, let answer = try? await box(BoxClient.mac).send("GET", "kuvo/sandbox/tools"), answer.status == 200,
+            guard let self, let answer = try? await box(BoxClient.thisMac).send("GET", "kuvo/sandbox/tools"), answer.status == 200,
                   let tools = (try? JSONSerialization.jsonObject(with: answer.body) as? [String: Any])?["tools"] as? [[String: Any]] else { return [] }
             if !tools.isEmpty { SandboxTools.definitions = tools }
             return tools
@@ -62,7 +62,7 @@ extension AppModel {
         // told of them, in this Mac's box's own words.
         BrowserTools.workQueueDefinitions = { [weak self] in
             if let kept = WorkQueueTools.kept { return kept }
-            guard let self, let answer = try? await box(BoxClient.mac).send("GET", "kuvo/work-queue/tools"), answer.status == 200,
+            guard let self, let answer = try? await box(BoxClient.thisMac).send("GET", "kuvo/work-queue/tools"), answer.status == 200,
                   let said = try? JSONSerialization.jsonObject(with: answer.body) as? [String: Any],
                   let tools = said["tools"] as? [[String: Any]] else { return ([], "") }
             let kept = (tools, said["instructions"] as? String ?? "")
@@ -75,7 +75,7 @@ extension AppModel {
         }
         BrowserTools.vaultFill = { [weak self] body in
             guard let self, let data = try? JSONSerialization.data(withJSONObject: body),
-                  let answer = try? await box(BoxClient.mac).send("POST", "kuvo/vault/fill", body: data) else { return nil }
+                  let answer = try? await box(BoxClient.thisMac).send("POST", "kuvo/vault/fill", body: data) else { return nil }
             return (answer.status, ((try? JSONSerialization.jsonObject(with: answer.body)) as? [String: Any]) ?? [:])
         }
     }
@@ -85,7 +85,7 @@ extension AppModel {
         var body: [String: Any] = ["name": name, "arguments": arguments]
         if let caller { body["session"] = caller }
         guard let data = try? JSONSerialization.data(withJSONObject: body),
-              let answer = try? await box(BoxClient.mac).send("POST", route, body: data) else { return (unreachable, true) }
+              let answer = try? await box(BoxClient.thisMac).send("POST", route, body: data) else { return (unreachable, true) }
         let said = (try? JSONSerialization.jsonObject(with: answer.body)) as? [String: Any]
         guard answer.status == 200, let text = said?["text"] as? String else { return (said?["message"] as? String ?? "\(failed) (\(answer.status)).", true) }
         return (text, said?["isError"] as? Bool ?? false)

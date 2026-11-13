@@ -427,6 +427,11 @@ final class SessionModel {
     @ObservationIgnored private var queueFollow: Task<Void, Never>?
     /// The session's box (this Mac's, or its machine's).
     @ObservationIgnored var box: () -> BoxClient? = { nil }
+    /// What its box says of its model (`kuvo/sessions/models`, `readModelState`): the model it runs
+    /// on, whether it can, and what's missing if not, which its model button, Send and a sign-in
+    /// card draw. Nil until read, and from a box without `sessions.models`, whose model this Mac
+    /// works out as before (`Catalog`'s old-box path).
+    private(set) var modelState: SessionModelState?
     /// Its approval as its box shows it (`readApproval`); nil until read.
     var approvalShown: ApprovalShown?
     /// Auto's reviewer's decisions here, as its box keeps them (`readDecisions`); nil until read.
@@ -1991,7 +1996,8 @@ final class SessionModel {
             queueFollow = nil
             return
         }
-        guard queueFollow == nil, let box = box(), box.box != BoxClient.mac else { return }
+        // (The app's own box's queues stream to `Workspace.followQueues`.)
+        guard queueFollow == nil, let box = box(), !BoxClient.streams(box.box) else { return }
         struct Listed: Decodable { var queues: [String: BoxQueue] }
         let id = id
         queueFollow = Task { [weak self] in
@@ -2025,7 +2031,7 @@ final class SessionModel {
     private func carriesQueue() async -> Bool {
         if let boxCarriesQueue { return boxCarriesQueue }
         guard let box = box() else { return true }
-        guard box.box != BoxClient.mac else {
+        guard !BoxClient.hasEveryFeature(box.box) else {
             boxCarriesQueue = true
             return true
         }
@@ -2037,17 +2043,31 @@ final class SessionModel {
 
     /// What its box answers (`kuvo/info`'s `features`), once read; this Mac's has all of them.
     @ObservationIgnored private var readFeatures: Set<String>?
+
+    /// Reads what its box says of its model again (`modelState`): as it opens, as its model
+    /// changes, and as its box's accounts, models or Custom Auto lists do. One the box can't say
+    /// about yet (it leaves it out) is as this Mac works it out, as from an older box; what can't
+    /// be read keeps what was.
+    func readModelState() async {
+        guard let box = box(), await boxHas("sessions.models") else {
+            modelState = nil
+            return
+        }
+        guard let read = try? await box.value(SessionModelStates.self, "GET", SessionModelState.path([id])), !Task.isCancelled else { return }
+        let state = read.sessions[id]
+        if modelState != state { modelState = state }
+    }
     /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
     func boxHas(_ feature: String) async -> Bool {
         guard let box = box() else { return false }
-        guard box.box != BoxClient.mac else { return true }
+        guard !BoxClient.hasEveryFeature(box.box) else { return true }
         return await boxFeatures().contains(feature)
     }
 
     private func boxFeatures() async -> Set<String> {
         if let readFeatures { return readFeatures }
         guard let box = box() else { return [] }
-        if box.box == BoxClient.mac { return ["queue", "queue.waits"] }
+        if BoxClient.hasEveryFeature(box.box) { return ["queue", "queue.waits"] }
         struct Info: Decodable { var features: [String]? }
         guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return [] }
         readFeatures = Set(info.features ?? [])
@@ -2542,6 +2562,8 @@ final class SessionModel {
                     if session.model == model { session.model = previous }
                     throw error
                 }
+                // What its box says of the new one, now it's set there.
+                await readModelState()
                 // The note starts a turn of its own: only when there was a run to stop, as there
                 // may not be by now (it ended while the model was being set); and not if it has
                 // asked you something meanwhile.

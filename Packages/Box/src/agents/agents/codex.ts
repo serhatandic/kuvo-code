@@ -14,7 +14,7 @@ import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot, fullAccessMark } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "../toolrelay"
 import { computerServers } from "../servers"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
@@ -649,15 +649,23 @@ export class CodexAgent implements Agent {
     this.known.reset()
   }
 
-  async models(): Promise<Model[]> {
-    if (this.modelList && Date.now() - this.modelList.at < 30 * 60_000) return this.modelList.models
+  async models(options: { hidden?: boolean } = {}): Promise<Model[]> {
+    // (Those Codex hides from its picker it still runs: listed only when asked for.)
+    const shown = (models: Model[]) => (options.hidden ? models : models.filter((each) => !each.hidden))
+    if (this.modelList && Date.now() - this.modelList.at < 30 * 60_000) return shown(this.modelList.models)
     try {
-      return await this.listModels()
+      return shown(await this.listModels())
     } catch (error) {
       // Codex couldn't list them just now (busy, or starting): the ones it listed last.
-      if (this.modelList) return this.modelList.models
+      if (this.modelList) return shown(this.modelList.models)
       throw error
     }
+  }
+
+  /** Only once it listed those it hides from its picker (asked for: a Codex too old to take
+   * `includeHidden` lists none), so one missing from its list isn't one it hides. */
+  listsEveryModel(): boolean {
+    return this.modelList?.models.some((model) => model.hidden) === true
   }
 
   private async listModels(): Promise<Model[]> {
@@ -666,9 +674,9 @@ export class CodexAgent implements Agent {
     let cursor: string | undefined
     let order = 1000
     do {
-      const page: any = await rpc.request("model/list", cursor ? { cursor } : {}, 30_000)
+      // (With those it hides from its picker, which it lists only when asked: they still run.)
+      const page: any = await rpc.request("model/list", { includeHidden: true, ...(cursor ? { cursor } : {}) }, 30_000)
       for (const info of page?.data ?? []) {
-        if (info.hidden) continue
         models.push(
           model(this.providerID, info.model ?? info.id, info.displayName ?? info.model, {
             variants: (info.supportedReasoningEfforts ?? []).map((effort: any) => effort.reasoningEffort),
@@ -676,6 +684,7 @@ export class CodexAgent implements Agent {
             context: this.windows.get(info.model ?? info.id) ?? 400_000,
             // Listed in Codex's order: its default first.
             released: info.isDefault ? 2000 : order--,
+            hidden: Boolean(info.hidden),
           }),
         )
       }
@@ -1087,14 +1096,16 @@ class CodexThread implements Thread {
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys.
     const computer = await computerServers(directory)
+    // (Those set right since the relay stood in for them first, so their addresses are new.)
+    const serversNow = await serversKey(this.session.id, computer)
     const servers = relayedServers(this.session.id, this.agent, directory, computer)
     // Your subagents (Settings › Agents), as its roles, and the model its subagents use.
     const subagents = codexSubagents(await subagentsFor(directory))
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the
     // skills, the servers or the subagents changed.
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey && subagents.key === this.subagentsKey) return rpc
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && serversNow === this.serversKey && subagents.key === this.subagentsKey) return rpc
     this.toolsKey = tools?.key
-    this.serversKey = computer.key
+    this.serversKey = serversNow
     this.skillsKey = skillsKey
     this.subagentsKey = subagents.key
     this.instructions = instructions

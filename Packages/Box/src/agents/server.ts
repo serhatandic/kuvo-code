@@ -16,6 +16,7 @@ import { reviewRoutes, type Reviews } from "./reviews"
 import { voiceRoutes, type VoiceWords } from "./voice"
 import { limitsRoutes, type Limits } from "./limits"
 import { isOutdated, type Maintenance } from "./maintenance"
+import { forgetUpdate, inUpdateAll, programUpdate, updateAll, updateProgram } from "./updates"
 import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
 import { noteToolServer } from "./fence"
@@ -43,6 +44,8 @@ export interface Context {
   build?: string | null
   /** The group chats that live on this computer (groups/runner.ts), and its part in those on your others; none where they don't run here. */
   groups?: { runner: GroupRunner; store: GroupStore; peers?: PeerParts }
+  /** What this bridge tells your other computers and hears from them, through the box's link (groups/post.ts): its group chats' mail, its plan limits. */
+  peers?: PeerParts
   /** Restarts the agents' processes started before the box's sandbox was on, as you said to (main.ts). */
   restartOutside?: () => void
   /** Goals that conversations here and on the engine work toward (goals.ts). */
@@ -95,26 +98,33 @@ const error = (status: number, message: string) => json({ message }, status)
 
 /** What each agent's account looked like when last asked: a change means other models. */
 const lastSeen = new Map<string, { installed: boolean; signedIn: boolean; label?: string }>()
-/** Each agent's program's version and the newest, as last known. */
+/** Each agent's program's version and the newest, as last known, by program (`agent.id`: one
+ * program serves every account with it). */
 const lastMaintained = new Map<string, Maintenance>()
 
 /**
  * Its version and the newest, if they come soon (checking may ask Homebrew or npm): what was
  * known before otherwise, and the account is said again once they do.
  */
+/** What `agent`'s program is now, as just read; whether that's news. */
+function maintainedNow(agent: Agent, value: Maintenance): boolean {
+  const changed = JSON.stringify(lastMaintained.get(agent.id)) !== JSON.stringify(value)
+  lastMaintained.set(agent.id, value)
+  return changed
+}
+
 async function maintainedSoon(agent: Agent, fresh: boolean): Promise<Maintenance | undefined> {
   if (!agent.maintenance) return undefined
   let answered = false
   const asked = agent.maintenance(fresh).then(
     (value) => {
-      const changed = JSON.stringify(lastMaintained.get(agent.providerID)) !== JSON.stringify(value)
-      lastMaintained.set(agent.providerID, value)
+      const changed = maintainedNow(agent, value)
       if (answered && changed) emit("integration.updated", { integrationID: agent.providerID })
       return value
     },
-    () => lastMaintained.get(agent.providerID),
+    () => lastMaintained.get(agent.id),
   )
-  const value = await Promise.race([asked, Bun.sleep(2_000).then(() => lastMaintained.get(agent.providerID))])
+  const value = await Promise.race([asked, Bun.sleep(2_000).then(() => lastMaintained.get(agent.id))])
   answered = true
   return value
 }
@@ -160,8 +170,15 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
       outdated: maintained ? isOutdated(maintained) : false,
       updateCommand: maintained?.shown,
       updates: Boolean(agent.update && maintained?.command),
+      // How its update stands, the same for every account with its program, and whether Update
+      // All updates it (said of the agent's own sign-in, once for its program): the box's to say,
+      // so every client shows the same (updates.ts).
+      programUpdate: programUpdate(agent.id, maintained?.installed),
+      updateAll: agent.instance.id === "default" && inUpdateAll(agent, maintained),
       // Whether its sign-in can finish on another device (`remote: true`).
       remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
+      // Its list (`api/model?hidden=1`) is every model it runs: one missing from it is gone.
+      modelsComplete: agent.listsEveryModel ? agent.listsEveryModel() : true,
     },
     methods: agent.methods(),
     connections: account.signedIn
@@ -170,12 +187,12 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
   }
 }
 
-async function models(agents: Agent[]): Promise<Model[]> {
+async function models(agents: Agent[], hidden = false): Promise<Model[]> {
   const lists = await Promise.all(
     agents.map(async (agent) => {
       try {
         const account = await agent.account()
-        return account.signedIn ? await agent.models() : []
+        return account.signedIn ? await agent.models(hidden ? { hidden } : undefined) : []
       } catch {
         return []
       }
@@ -271,17 +288,10 @@ export function handler(context: Context) {
           await agent.signInWithKey(String(key ?? "").trim())
           return json({})
         }
-        // Its program updated through the installer that owns it; then what it lists anew.
+        // COMPAT(0.7 update-answer): its program updated, answered once it's done, for a client from before `api/kuvo/updates` (which answers at once). Goes 3 months after 0.8.0.
         if (b === "update" && method === "POST") {
-          if (!agent.update) return error(400, `Update ${agent.name} the way you installed it.`)
-          const result = await agent.update()
-          if (result.updated) {
-            // Every account with it runs that program.
-            for (const each of roster.all()) if (each.id === agent.id) each.programUpdated?.()
-            emit("integration.updated", { integrationID: agent.providerID })
-            emit("model.updated", {})
-          }
-          return json({ data: result })
+          if (!agent.update || !agent.maintenance) return error(400, `Update ${agent.name} the way you installed it.`)
+          return json({ data: await updateProgram(agent, () => roster.all(), maintainedNow) })
         }
         // Its program installed with its maker's installer (the command `metadata.install` shows),
         // as you'd run it in Terminal; then what it lists.
@@ -289,6 +299,8 @@ export function handler(context: Context) {
           if (!agent.installProgram) return error(400, `Install ${agent.name} the way its maker says.`)
           const result = await agent.installProgram()
           if (result.installed) {
+            // How an update went before is no longer news.
+            forgetUpdate(agent.id)
             for (const each of roster.all()) if (each.id === agent.id) each.programUpdated?.()
             emit("integration.updated", { integrationID: agent.providerID })
             emit("model.updated", {})
@@ -305,7 +317,9 @@ export function handler(context: Context) {
       // Catalog
       if (area === "model") {
         if (a === "default") return located(null)
-        return located(await models(roster.all()))
+        // `hidden=1`: also those an agent still runs but keeps out of its picker (the box's
+        // `kuvo/sessions/models` reads them; pickers don't).
+        return located(await models(roster.all(), url.searchParams.get("hidden") === "1"))
       }
       if (area === "agent" || area === "command" || area === "skill" || area === "mcp") return located([])
       if (area === "provider") return located([])
@@ -497,6 +511,30 @@ export function handler(context: Context) {
         }
       }
 
+      // Updating the agents' programs, answered as it starts: every account with the program says
+      // how it goes (`metadata.programUpdate`). `POST kuvo/updates`: Update All, each program it
+      // picks (`metadata.updateAll`); `POST kuvo/updates/<provider>`: that account's program;
+      // `DELETE kuvo/updates/<provider>?at=…`: how that one went, seen, for every client.
+      if (area === "kuvo" && a === "updates" && !c) {
+        if (!b) {
+          if (method !== "POST") return error(405, "Not allowed.")
+          return json({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow, (agent) => lastMaintained.get(agent.id)) } })
+        }
+        const agent = agentFor(b)
+        if (!agent) return error(404, `No agent ${b}.`)
+        if (method === "DELETE") {
+          const at = url.searchParams.get("at")
+          if (forgetUpdate(agent.id, at === null ? undefined : Number(at))) {
+            for (const each of roster.all()) if (each.id === agent.id) emit("integration.updated", { integrationID: each.providerID })
+          }
+          return json({})
+        }
+        if (method !== "POST") return error(405, "Not allowed.")
+        if (!agent.update || !agent.maintenance) return error(400, `Update ${agent.name} the way you installed it.`)
+        void updateProgram(agent, () => roster.all(), maintainedNow)
+        return json({ data: { updating: [agent.id] } })
+      }
+
       // Where Kuvo Code's own tools are (the app says each time they start), for every agent here.
       // The group chats that live on this machine.
       // You said to restart the agents started before the box's sandbox was on (`kuvo/sandbox/restart`, from the box's link).
@@ -518,8 +556,8 @@ export function handler(context: Context) {
       // What this computer's agents made (`kuvo/artifacts`, which the box's link passes on).
       if (area === "kuvo" && a === "artifacts" && b === "noted" && !c) return await notedRoute(context.noted, method, body)
       if (area === "kuvo" && a === "link" && b === "artifacts") return await artifactRoutes(context.artifacts, method, parts.slice(4), url.searchParams, body, request.signal)
-      // Group chats across your computers, as the box's link carries their mail (groups/post.ts).
-      if (area === "kuvo" && a === "peers") return await peerRoutes(context.groups?.peers, method, parts.slice(3), body, request.signal)
+      // Group chats and plan limits across your computers, as the box's link carries their mail (groups/post.ts).
+      if (area === "kuvo" && a === "peers") return await peerRoutes(context.peers ?? context.groups?.peers, method, parts.slice(3), body, request.signal)
 
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body()

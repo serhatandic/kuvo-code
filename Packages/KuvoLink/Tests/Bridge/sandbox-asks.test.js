@@ -166,16 +166,20 @@ async function agentRuns(folder, command, session, stopOnce) {
   shell.env.OPENCODE_SESSION_ID = session;
   const run = spawnSync(shell.shell, ["-c", shell.command], { cwd: shell.cwd, env: shell.env, encoding: "utf8" });
   calling[session] = [{ type: "tool", id: `call_${++calls}`, name: "shell", state: { status: "running", input } }];
-  // (As engine 2.2.0's shell tool answers: what it printed, and how it ended.)
+  // (As the engine's shell tool answers: what it printed, and how it ended, in 2.2.7's words one
+  // call and in 2.2.0's the next.)
   const printed = run.stdout + run.stderr;
+  const ended = calls % 2 ? "Exit code: " : "Exited with code ";
   const call = { tool: "shell", sessionID: session, agent: "build", messageID: "msg_1", id: `call_${calls}`, input, status: "completed",
     result: { output: { exit: run.status, truncated: false, output: printed, status: "completed" },
-      content: [{ type: "text", text: printed }, ...(run.status ? [{ type: "text", text: `Exited with code ${run.status}` }] : [])],
+      content: [{ type: "text", text: printed }, ...(run.status ? [{ type: "text", text: `${ended}${run.status}` }] : [])],
       metadata: { status: "completed", truncated: false, exit: run.status } } };
   const stopping = stopOnce && setInterval(() => { if (fs.existsSync(stopOnce)) delete calling[session]; }, 50);
   try { await hooks["execute.after"]?.(call); } finally { delete calling[session]; clearInterval(stopping); }
   assert.equal(call.result.output.exit, call.result.metadata.exit);
   const texts = call.result.content.filter(part => part.type === "text").map(part => part.text);
+  // How it ended, in the engine's own words.
+  for (const line of texts.filter(text => /^(Exit code: |Exited with code )\d+$/.test(text))) assert.ok(line.startsWith(ended), `it ended as the engine says it: ${line}`);
   return { text: texts[0], refusal: texts.at(-1), exit: call.result.metadata.exit, sandboxExit: run.status, inSandbox: printed };
 }
 

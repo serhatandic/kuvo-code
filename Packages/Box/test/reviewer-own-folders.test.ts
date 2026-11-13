@@ -148,10 +148,12 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
       said.keysSession = await ask("ses_keys", home.BOX_KEYS, "cat ./box.key");
       // Its commands can't trade their temporary folder for a link into Kuvo Code's folders...
       said.swapped = run('t=\${TMPDIR%/}; cd / && rm -rf "$t" 2>/dev/null; [ -e "$t" ] || ln -s ' + home.BOX_KEYS + ' "$t" && [ -L "$t" ] && echo swapped', ${JSON.stringify(project)}).stdout.trim();
-      said.movedIn = run('t=\${TMPDIR%/}; cd / && rm -rf "$t"; l=/tmp/kuvo-link-$$; ln -s ' + home.BOX_KEYS + ' "$l" && mv "$l" "$t" 2>/dev/null && echo moved; rm -f "$l"', ${JSON.stringify(project)}).stdout.trim();
+      said.movedIn = run('t=\${TMPDIR%/}; cd / && rm -rf "$t"; l=/tmp/kuvo-link-$$; ln -s ' + home.BOX_KEYS + ' "$l" && mv "$l" "$t" 2>/dev/null && [ -L "$t" ] && echo moved; rm -f "$l"', ${JSON.stringify(project)}).stdout.trim();
       said.stillFolder = !fs.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink();
-      // (Though it may take it away, as \`rm -rf $TMPDIR\` does, and make it again as a folder.)
-      said.removed = run('rm -rf "$TMPDIR"; echo "rm $?"; mkdir "$TMPDIR" && echo again', ${JSON.stringify(project)}).stdout.trim();
+      // (Though it may take it away, as \`rm -rf $TMPDIR\` does, and make it again as a folder. On
+      // Linux it's only emptied: in the command's namespace it's mounted in place, in a folder it can't
+      // change (fence/landlock.ts's HIDE, since c923f4f6b), so it stays, as safe.)
+      said.removed = run('rm -rf "$TMPDIR"; echo "rm $?"; mkdir "$TMPDIR" 2>/dev/null && echo again; [ -d "$TMPDIR" ] && [ ! -L "\${TMPDIR%/}" ] && [ -O "$TMPDIR" ] && echo "its own, with $(ls -A "$TMPDIR" | wc -l | tr -d " ") in it"', ${JSON.stringify(project)}).stdout.trim();
       // ...and one put there before the sandbox kept them from it isn't theirs: the reviewer doesn't
       // follow it, and the next command gets a folder of its own again.
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -164,7 +166,7 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
       different: true, othersRead: refused, othersAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
       keys: refused, keysAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
       keysSession: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
-      swapped: "", movedIn: "", stillFolder: true, removed: "rm 0\nagain", linkedRead: refused, next: "unreadable",
+      swapped: "", movedIn: "", stillFolder: true, removed: process.platform === "darwin" ? "rm 0\nagain\nits own, with 0 in it" : "rm 1\nits own, with 0 in it", linkedRead: refused, next: "unreadable",
     })
     // Only the command outside the sandbox went to the model.
     expect(prompts.length).toBe(1)
@@ -240,6 +242,10 @@ test.skipIf(!canFence)("in Ask First and Accept Edits, a conversation's own tool
       const tmp = run('mkdir -p "$TMPDIR/shots" && echo png > "$TMPDIR/shots/frame-01.png" && printf %s "$TMPDIR"', project).stdout.replace(/\\/$/, "");
       said.first = await read("ses_first", path.join(tmp, "shots", "frame-01.png"));
       said.edits = await read("ses_edits", path.join(tmp, "shots", "frame-01.png"));
+      // A screenshot, its name's space a narrow one, read by a name typed with a plain one (the
+      // engine reads it in that name's place, #434).
+      fs.writeFileSync(path.join(tmp, "shots", "Screenshot at 10.00.00\\u202fAM.png"), "png");
+      said.screenshot = await read("ses_first", path.join(tmp, "shots", "Screenshot at 10.00.00 AM.png"));
       // A file you attached to it, kept in Kuvo Code's folders.
       const attached = path.join(home.K, "attachments", "ses_first", "a1b2c3d4", "plan.pdf");
       fs.mkdirSync(path.dirname(attached), { recursive: true });
@@ -255,7 +261,7 @@ test.skipIf(!canFence)("in Ask First and Accept Edits, a conversation's own tool
       said.theirs = await read("ses_first", theirs);
       fs.symlinkSync(home.BOX_KEYS, path.join(tmp, "keys"));
       said.linked = await read("ses_first", path.join(tmp, "keys", "box.key"));`)
-    expect(said).toEqual({ first: "allow", edits: "allow", attached: "allow", writes: null, elsewhere: null, theirs: null, linked: null })
+    expect(said).toEqual({ first: "allow", edits: "allow", screenshot: "allow", attached: "allow", writes: null, elsewhere: null, theirs: null, linked: null })
     expect(prompts.length).toBe(0)
   } finally {
     rmSync(project, { recursive: true, force: true })

@@ -298,9 +298,12 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
   // (The queues, what your other computers told of theirs, and the categories beside them: not the
   // locks and the numbers there.)
   try { fs.mkdirSync(TOLD, { recursive: true, mode: 0o700 }); } catch {}
-  const queuesWatch = watchFolders([path.join(WORK_QUEUE, "queues"), TOLD], told, { recursive: false });
+  // (What a watch may have missed, as one started or stopped: read again now, as every few seconds,
+  // but who's under whom only as they change.)
+  const looked = () => wake?.();
+  const queuesWatch = watchFolders([path.join(WORK_QUEUE, "queues"), TOLD], told, { recursive: false, missed: looked });
   // (And what GitHub said of its issues and pull requests, read as it's shown.)
-  const categoriesWatch = watchFolders([WORK_QUEUE], ((_: unknown, name: unknown) => { if (["categories.json", path.basename(SEEN_FILE)].includes(String(name ?? ""))) told(); }) as () => void, { recursive: false });
+  const categoriesWatch = watchFolders([WORK_QUEUE], ((_: unknown, name: unknown) => { if (["categories.json", path.basename(SEEN_FILE)].includes(String(name ?? ""))) told(); }) as () => void, { recursive: false, missed: looked });
   const watching = { close: () => { queuesWatch.close(); categoriesWatch.close(); } };
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   let last = "";

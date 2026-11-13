@@ -17,7 +17,7 @@ import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
 import { allowed, takeBack } from "./limits";
 import { deliverNote, noteOf } from "./note";
 import { ANSWER_TEXT, answered } from "./outbox";
-import { switchedMove } from "../moves/records";
+import { switchedHere, switchedMove } from "../moves/records";
 import { awaitingAnswer } from "../work/awaited";
 import { homesOf, noteHomes } from "../work/homes";
 import { under, workSessions } from "../work/tree";
@@ -239,7 +239,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     if (note) went = await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
     // One this box doesn't list (older than the latest it tells of) only from the conversation it's
     // under: a lead following up the sessions it started, found by address (bridge 0.9.204).
-    else if (!(await listedOrUnder(letter.from, letter.to, targets))) return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
+    else if (!(await listedOrUnder(letter.from, letter.to, targets, now))) return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
     else {
       // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
       // (`from` isn't checked: one that's no session finds no agent.) One that moved from here to
@@ -280,11 +280,12 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
   if (text) answer({ from: letter.to, to: letter.from as string, text, answers: id, peer: sender.key });
 }
 // Whether a conversation here may be written to by another computer's agent `from`: one this box
-// lists to its peers (its bots, its latest sessions), or one under `from`. (Before this box has
+// lists to its peers (its bots, its latest sessions), one switched to here lately (`switchedHere`:
+// as it lands, and after the list leaves it out as older), or one under `from`. (Before this box has
 // written its list, as it starts, any.)
-async function listedOrUnder(from: unknown, session: string, targets: Target[]): Promise<boolean> {
+async function listedOrUnder(from: unknown, session: string, targets: Target[], now: number): Promise<boolean> {
   const listed = ownListed();
-  if (!listed.length || listed.some(agent => agent.session === session)) return true;
+  if (!listed.length || listed.some(agent => agent.session === session) || switchedHere(now).has(session)) return true;
   return typeof from === "string" && under(from, await workSessions(targets)).some(each => each.data.id === session);
 }
 

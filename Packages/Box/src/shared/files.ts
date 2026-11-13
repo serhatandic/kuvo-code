@@ -1,6 +1,7 @@
 // Reading and writing the box's files: what's there or nothing, written so only you can read them
 // and never seen half-written, one process at a time where two would clash.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { sleep } from "./wait";
@@ -25,9 +26,46 @@ export const listOf = (folder: string): string[] => {
 /** `text` in `file`, readable by you only (its folder made so too), moved into place whole. */
 export function writePrivate(file: string, text: string | Uint8Array) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, text, { mode: 0o600 });
-  fs.renameSync(temporary, file);
+  placeWhole(file, text);
+}
+
+/**
+ * A key, token or sign-in in `file`: as `writePrivate`, and in a folder only you can open however
+ * it was made (one others could read is closed to them first).
+ */
+export function writeSecret(file: string, text: string | Uint8Array, mode = 0o600) {
+  privateFolder(path.dirname(file));
+  placeWhole(file, text, mode);
+}
+
+/** `folder`, made if it isn't there, and closed to everyone but you, where it really is (a link to
+ * one elsewhere, as when you've moved it to another disk, is followed); one that's someone else's is
+ * refused, as what's written in it could be read or swapped (root may write in anyone's). */
+export function privateFolder(folder: string): string {
+  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const real = fs.realpathSync(folder);
+  const made = fs.statSync(real);
+  if (!made.isDirectory()) throw new Error(`${folder} isn't a folder: nothing secret is written there.`);
+  const me = process.getuid?.();
+  if (me !== undefined && me !== 0 && made.uid !== me) throw new Error(`${folder} isn't yours: nothing secret is written in it.`);
+  if (made.mode & 0o077) fs.chmodSync(real, 0o700);
+  return folder;
+}
+
+// Through a new file only you can read (one of that name already there, or a link, isn't written
+// through), renamed into place: never seen half-written, and nothing left beside it if it fails.
+// (`mode` 0o700 for a script that runs as it lands.)
+export function placeWhole(file: string, text: string | Uint8Array, mode = 0o600) {
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(temporary, text, { mode, flag: "wx" });
+    // (Only a mode your umask took bits from, as a script's.)
+    if ((fs.statSync(temporary).mode & 0o777) !== mode) fs.chmodSync(temporary, mode);
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }); } catch {}
+    throw error;
+  }
 }
 
 // Takes `lock` (a folder, made while it's held) when it's free: whether it was. A lock left by one

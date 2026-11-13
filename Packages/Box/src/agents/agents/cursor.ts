@@ -16,11 +16,12 @@ import { kuvoTools } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { cursorSubagents, subagentsFor } from "../subagents"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "../toolrelay"
 import { computerServers } from "../servers"
 import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
 import { CursorWorker, cursorWorker } from "./cursor-worker"
+import { privateFolder } from "../../shared/files"
 
 /** A file's bytes as base64, or nothing when it can't be read. */
 function readable(path: string): string | undefined {
@@ -97,7 +98,8 @@ export class CursorAgent implements Agent {
   }
 
   private async store(sdk: any) {
-    mkdirSync(this.folder, { recursive: true, mode: 0o700 })
+    // (Its sign-in, which the SDK writes: in a folder only you can open.)
+    privateFolder(this.folder)
     return new sdk.FileCredentialStore(this.authFile)
   }
 
@@ -336,7 +338,10 @@ class CursorThread implements Thread {
     const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     // And the computer's MCP servers (yours, the integrations', a bot's with its own keys), through
     // the relay, which keeps their keys.
-    const servers = relayedServers(this.session.id, this, cwd, await computerServers(cwd))
+    // (Those set right since the relay stood in for them, at new addresses, which start it again.)
+    const computer = await computerServers(cwd)
+    await serversKey(this.session.id, computer)
+    const servers = relayedServers(this.session.id, this, cwd, computer)
     const mcpServers: Record<string, unknown> = Object.fromEntries(servers.map((each) => [each.name, { type: "http", url: each.url, headers: each.headers }]))
     if (tools) mcpServers[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env }
     // Your subagents (Settings › Agents), on a model of Cursor's when theirs is one.
@@ -372,7 +377,7 @@ class CursorThread implements Thread {
     // mode, other skills or other tools (Kuvo Code's, or another set of the computer's servers),
     // or other subagents, start it again.
     const skills = options.local?.dirs?.[0] as string | undefined
-    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort(), options.agents ?? {}])
+    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.entries(options.mcpServers ?? {}).map(([name, server]: [string, any]) => [name, server?.url ?? ""]).sort(), options.agents ?? {}])
     // In the sandbox: its rules and the folders Also Allowed gives the project, as it starts.
     const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : ""
     // (And the worker it runs in, as it starts again, or once it has stopped.)

@@ -739,3 +739,28 @@ echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com"}'
     }
   })
 })
+
+test("the picker's models leave out those an agent keeps from its own; the box asks for them too, marked, to say they still run", async () => {
+  const listed = (hidden: boolean) => [
+    { id: "gpt-5.5", providerID: "codex-cli" },
+    ...(hidden ? [{ id: "gpt-5.1-codex-mini", providerID: "codex-cli", hidden: true }] : []),
+  ]
+  const agent = { providerID: "codex-cli", account: async () => ({ installed: true, signedIn: true }), models: async (options?: { hidden?: boolean }) => listed(options?.hidden === true) } as unknown as Agent
+  const answer = handler({ roster: { all: () => [agent], find: () => agent }, password: "pw" } as any)
+  const ask = async (route: string) => ((await (await answer(new Request(`http://box/api/${route}`, { headers: { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64") } }))).json()) as any).data
+  expect((await ask("model")).map((model: any) => model.id)).toEqual(["gpt-5.5"])
+  expect(await ask("model?hidden=1")).toEqual(listed(true))
+})
+
+test("an account says whether its list is every model it runs: not while its agent can't say so (Claude Code's usual ones, a Codex that lists none it hides)", async () => {
+  const of = (listsEveryModel?: () => boolean) =>
+    ({ providerID: "codex-cli", id: "codex", name: "Codex", instance: { id: "default" }, methods: () => [], account: async () => ({ installed: true, signedIn: true }), models: async () => [], ...(listsEveryModel ? { listsEveryModel } : {}) }) as unknown as Agent
+  const metadata = async (agent: Agent) => {
+    const answer = handler({ roster: { all: () => [agent], find: () => agent }, password: "pw" } as any)
+    const response = await answer(new Request("http://box/api/integration/codex-cli", { headers: { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64") } }))
+    return ((await response.json()) as any).data.metadata
+  }
+  expect((await metadata(of(() => false))).modelsComplete).toBe(false)
+  expect((await metadata(of(() => true))).modelsComplete).toBe(true)
+  expect((await metadata(of())).modelsComplete).toBe(true)
+})

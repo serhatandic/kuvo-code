@@ -46,7 +46,7 @@ struct BoxSkills {
     /// Whether the box has Recently Deleted, as its `kuvo/info` says (`skills.trash`). This Mac's
     /// always has: it's the one the app brings.
     func offersRecentlyDeleted() async throws -> Bool {
-        if box.box == BoxClient.mac { return true }
+        if BoxClient.hasEveryFeature(box.box) { return true }
         struct Info: Decodable { var features: [String]? }
         return try await box.value(Info.self, "GET", "kuvo/info").features?.contains("skills.trash") == true
     }

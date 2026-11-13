@@ -228,8 +228,8 @@ extension AppModel {
     /// Signs out of `integration` (a server's or an account's, which engines name alike) on one
     /// computer: this Mac, or a machine, in its tab in Settings. Each keeps its own.
     /// Throws when that computer's engine can't be reached, or refused one.
-    func forgetSignIn(_ integration: String, on box: SidebarBox = .mac) async throws {
-        try await Self.forgetSignIn(integration, in: reachableAPI(for: box))
+    func forgetSignIn(_ integration: String, on box: SidebarBox? = nil) async throws {
+        try await Self.forgetSignIn(integration, in: reachableAPI(for: box ?? thisMacsBox))
     }
 
     /// Each of its keys and sign-ins that can go goes; then throws if the engine refused one.

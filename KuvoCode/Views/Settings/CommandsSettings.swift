@@ -9,8 +9,8 @@ struct CommandsSettings: View {
     @State private var editing: CommandEdit?
     /// What to remove once its sheet has closed (and its fields are done saving).
     @State private var removal: [String]?
-    /// Claude Code's commands, to bring over.
-    @State private var claudeCommands: [ClaudeCommands.Command] = []
+    /// Claude Code's commands, to bring over: this page's computer's own, as its box lists them.
+    @State private var claudeCommands: [ClaudeCodeImports.Item] = []
 
     private var config: EngineConfig { app.config(for: box) }
     static let path = ["commands"]
@@ -18,11 +18,6 @@ struct CommandsSettings: View {
     private var names: [String] { (config.value(at: Self.path)?.object?.keys).map { $0.sorted() } ?? [] }
     /// The engine's own, and ones from plugins and MCP servers.
     private var others: [Command] { catalog.commands.filter { !names.contains($0.name) } }
-
-    /// The name a Claude Code command comes over as.
-    private func importedName(_ command: ClaudeCommands.Command) -> String {
-        ClaudeCommands.importedName(command, others: Set(others.map(\.name)))
-    }
 
     var body: some View {
         ScrollingSettingsForm {
@@ -59,7 +54,7 @@ struct CommandsSettings: View {
             if !claudeCommands.isEmpty {
                 Section {
                     ForEach(claudeCommands) { command in
-                        let name = importedName(command)
+                        let name = command.name
                         HStack(alignment: .firstTextBaseline) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("/" + name)
@@ -71,13 +66,13 @@ struct CommandsSettings: View {
                                 }
                             }
                             Spacer()
-                            if config.value(at: Self.path + [name]) != nil {
+                            if config.value(at: command.path) != nil {
                                 Label("Imported", systemImage: "checkmark")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             } else {
                                 Button("Import") {
-                                    config.set(command.settings, at: Self.path + [name])
+                                    config.set(command.settings, at: command.path)
                                     Analytics.shared.track("command_created", ["from": "claude"])
                                 }
                             }
@@ -86,7 +81,7 @@ struct CommandsSettings: View {
                 } header: {
                     Text("From Claude Code")
                 } footer: {
-                    Text("Commands in ~/.claude/commands. Their prompts come over as they are.")
+                    Text("Commands in ~/.claude/commands\(box.machine == nil ? "" : " on \(app.name(of: box))"). Their prompts come over as they are.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -107,7 +102,8 @@ struct CommandsSettings: View {
                 }
             }
         }
-        .task { claudeCommands = await Task.detached { ClaudeCommands.load() }.value }
+        // (Again as the engine's list comes, or changes: the names they're named apart from.)
+        .task(id: [box.id] + others.map(\.name)) { claudeCommands = await ClaudeCodeImports.read(for: app.box(box.id)).commands }
         .settingsDetail(item: $editing, title: { $0.name.map { "/" + $0 } ?? "New Command" }, onDismiss: removePending) { edit in
             CommandEditor(name: edit.name) { editing = nil } remove: { path in
                 removal = path

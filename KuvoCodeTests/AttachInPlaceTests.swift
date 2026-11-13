@@ -52,6 +52,8 @@ import Testing
     private func prepared(ownSessions: Bool = false, hereFails: Bool = false, _ setUp: () throws -> Void) throws -> URL {
         let binary = try fakeEngine(hereFails: hereFails)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        // (No projects of another test's: a new session with none is a chat. `setUp` can keep some.)
+        for key in ["projectFolders", "projectSettings", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try setUp()
         try? FileManager.default.removeItem(at: BoxProcess.home)
         for database in databases { try? FileManager.default.removeItem(at: database) }
@@ -75,11 +77,22 @@ import Testing
     }
 
     private func cleanUp(_ app: AppModel?) {
+        // The box here's connection ends, and what follows it there with it.
+        app?.machines.engine(SSHConnection.thisMac)?.disconnect()
         app?.stop()
+        // (The usage panel reads the app's own engine's spend again, not this test's folder, and
+        // the shared stores look at no box of this test's.)
+        app?.usage.readEngineData([AppModel.engineFolders.dataDirectory])
+        Personalities.shared.box = { nil }
+        Analytics.shared.catalog = nil
         AppModel.attachesInPlace = false
         BackgroundWork.heldBack = nil
         for database in databases { try? FileManager.default.removeItem(at: database) }
         AppModel.hereHome = AppModel.defaultHereHome
+        SSHConnection.thisMacHome = AppModel.defaultHereHome.path(percentEncoded: false)
+        MachineEngine.standIn = nil
+        BoxClient.thisMac = BoxClient.mac
+        BoxClient.readAgainAfter = .seconds(30)
         unsetenv("KUVO_OPENCODE_BINARY")
         try? FileManager.default.removeItem(at: folder)
         engine.stop()
@@ -102,6 +115,7 @@ import Testing
             let pid = box.appending(path: "run/box.pid").path(percentEncoded: false)
             try FileManager.default.createDirectory(at: start.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: box.appending(path: "run"), withIntermediateDirectories: true)
+            try Data().write(to: box.appending(path: "run/asked.log"))
             try """
                 #!/bin/sh
                 if [ "$1" = keep ]; then while [ -d '\(folder.path(percentEncoded: false))' ]; do sleep 0.2; done; exit 0; fi
@@ -116,9 +130,35 @@ import Testing
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: engine.path(percentEncoded: false))
             try """
                 const fs = require("fs"), path = require("path"), run = path.join(process.env.KUVO_HOME, "run");
+                const read = name => { try { return JSON.parse(fs.readFileSync(path.join(run, name), "utf8")); } catch { return {}; } };
                 fs.writeFileSync(path.join(run, "app-attached.json"), "{}");
                 fs.writeFileSync(path.join(run, "setup-card.json"), JSON.stringify({ app: true, by: "its own" }));
-                console.log(JSON.stringify({ status: 200, body: "{}" }));
+                // The route asked, noted first, in order (a worktree handed over with its root); then
+                // answered as the test says it is there (`answers.json`, with `statuses.json`'s status,
+                // or its status for each time it's asked, then 200); any other with where its chats
+                // go, as its `kuvo/info` says.
+                let asked = {};
+                try { asked = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
+                const line = asked.method + " " + asked.path + (asked.body && asked.body.root ? " " + asked.body.root : "");
+                if (asked.path) fs.appendFileSync(path.join(run, "asked.log"), line + "\\n");
+                const nth = asked.path ? fs.readFileSync(path.join(run, "asked.log"), "utf8").split("\\n").filter(each => each === line).length : 0;
+                const given = read("statuses.json")[asked.path], answers = read("answers.json");
+                const status = (Array.isArray(given) ? given[nth - 1] : given) || 200;
+                // One the test holds (`hold.json`: by path, how many of its asks go through) waits,
+                // with what it read, until it's let go (or the test's folder goes); noted as it does
+                // ("held <nth> <line>").
+                if (read("hold.json")[asked.path] < nth) fs.appendFileSync(path.join(run, "asked.log"), "held " + nth + " " + line + "\\n");
+                while (fs.existsSync(run) && read("hold.json")[asked.path] < nth) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+                // A worktree handed over is one it keeps from then on.
+                const records = "kuvo/worktrees?records=1";
+                if (asked.path === "kuvo/worktrees/record" && status === 200) {
+                    const kept = read("answers.json");
+                    kept[records] = { worktrees: [...((kept[records] || {}).worktrees || []), asked.body] };
+                    fs.writeFileSync(path.join(run, "answers.json.new"), JSON.stringify(kept));
+                    fs.renameSync(path.join(run, "answers.json.new"), path.join(run, "answers.json"));
+                }
+                const body = asked.path in answers ? answers[asked.path] : { chats: path.join(process.env.KUVO_HOME, "box-chats") };
+                console.log(JSON.stringify({ status, body: JSON.stringify(body) }));
 
                 """.write(to: box.appending(path: "bin/kuvo-link.js"), atomically: true, encoding: .utf8)
             if runs == .running {
@@ -144,7 +184,7 @@ import Testing
         let attached = try #require(app?.attached)
         #expect(attached.use == .attach && attached.verdict == "elsewhere" && attached.runs == .running)
         #expect(attached.box?.primary?.name == "MacBook" && attached.box?.role == "member")
-        #expect(app?.engine != .ready)
+        #expect(app?.api == nil, "no engine of its own")
         #expect(!BackgroundWork.shared.register() && BackgroundWork.shared.failure?.contains("already here") == true, "Turn On registers no keeper beside it")
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path), "no box of its own: not even its folder")
         // Told so, by its own CLI and engine, its card says Kuvo Code is on this Mac: a Mac adding it
@@ -159,8 +199,482 @@ import Testing
         defer { cleanUp(app) }
         app = try await started { try memberOfMacBooks(runs: .stopped) }
         #expect(app?.attached?.runs == .running)
-        #expect(app?.engine != .ready)
+        #expect(app?.api == nil)
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
+    }
+
+    /// The window opens on the box here (#333): this Mac is that box, reached as a machine with no SSH,
+    /// from its own home folder, named as this Mac; never saved with your machines (whose list is in
+    /// the app's own box's folder, never made) nor removed from here; and the app starts no engine.
+    @Test func theWindowOpensOnTheBoxHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        // Its connection isn't followed here: only that it's tried.
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.engine == .ready && model.api == nil)
+        #expect(model.boxes == [.attached] && model.boxInView == .attached && model.thisMacsBox == .attached)
+        #expect(model.name(of: .attached) == PhoneLink.computerName)
+        let box = try #require(model.machines.engine(SSHConnection.thisMac))
+        #expect(box.machine.connection.isLocal && box.machine.name == PhoneLink.computerName)
+        #expect(SSHConnection.thisMacHome == home.path(percentEncoded: false))
+        #expect(engine.requests("GET", "/api/info").isEmpty, "the app's own engine never started")
+        model.removeMachine(SSHConnection.thisMac, uninstall: true)
+        #expect(model.machines.engine(SSHConnection.thisMac) != nil, "not removed from here")
+        #expect(!FileManager.default.fileExists(atPath: Machines.file.path(percentEncoded: false)) && !FileManager.default.fileExists(atPath: BoxProcess.home.path))
+        // Its name is never one of your machines to add.
+        #expect(MachineForm.problem(with: SSHConnection.thisMac) == "That’s this Mac.")
+    }
+
+    /// What has no computer of its own is on the box here (#333): Settings and ⌘, open on it, this
+    /// Mac's own pages with it; a new session with no project is a chat in its chats folder, and a
+    /// folder you open is one of its folders; and Settings › Machines offers nothing that would
+    /// disconnect, start or remove this Mac's box.
+    @Test func whatHasNoComputerIsOnTheBoxHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        // (As ⌘, and Settings… open it, without bringing the window forward.)
+        model.settingsTabs.show(.general)
+        #expect(model.settingsTabs.page == .general && model.settingsTabs.box == .attached)
+        model.settingsTabs.show(.accounts)
+        #expect(model.settingsTabs.page == .accounts && model.settingsTabs.box == .attached)
+        // Its chats where its box says they go.
+        try await model.readChatsHere()
+        model.tabs.newSession(in: nil, conversation: true)
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
+        #expect(model.tabs.selection == .draft(chats))
+        #expect(Workspace.onThisMac("/Users/me/project") == RemoteFolder.folder("/Users/me/project", on: SSHConnection.thisMac))
+        #expect(Workspace.box(of: "/Users/me/project") == SSHConnection.thisMac)
+    }
+
+    /// A new chat before the box here has said where its chats go: it's asked then, and the chat
+    /// opens there.
+    @Test func aNewChatAsksTheBoxHereWhereItsChatsGo() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        model.workspace.attachedChats = nil
+        model.tabs.newChat()
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
+        try await until { model.tabs.selection == .draft(chats) }
+        #expect(model.tabs.selection == .draft(chats))
+    }
+
+    /// The box here went (its Mac removed it) and the app starts again: it runs its own box, and
+    /// this Mac shows once, as its own; nothing of the box that was is left: listed, its sessions,
+    /// their tabs, or a new one in a folder there.
+    @Test func aBoxThatWentIsNoLongerListed() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([StubEngine.session("ses_there", directory: "/Users/me/project")])
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.boxes == [.attached])
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady && !onTheBoxHere(model.workspace.sessions.map(\.location.directory)).isEmpty }
+        model.tabs.open(.session("ses_there"))
+        try await model.readChatsHere()
+        model.tabs.newSession(in: nil, conversation: true)
+        // Its Mac removed it: its way to start and its engine went, its card stayed. (The app's own
+        // engine lists none.)
+        engine.list([])
+        let box = home.appending(path: RemoteEngineInstaller.root)
+        for gone in ["bin", "engine", "run/box.pid"] { try FileManager.default.removeItem(at: box.appending(path: gone)) }
+        await model.restart()
+        #expect(model.attached == nil && model.engine == .ready)
+        #expect(model.boxes == [.mac] && model.machines.engine(SSHConnection.thisMac) == nil)
+        #expect(BoxClient.thisMac == BoxClient.mac && model.settingsTabs.box == .mac)
+        // (As the window drops tabs whose sessions went.)
+        model.tabs.dropClosed()
+        #expect(onTheBoxHere(model.workspace.sessions.map(\.location.directory)).isEmpty)
+        #expect(!model.tabs.keys.contains(.session("ses_there")), "its session's tab went with it")
+        let drafts = model.tabs.keys.compactMap { key -> String? in if case .draft(let folder) = key { folder } else { nil } }
+        #expect(onTheBoxHere(drafts).isEmpty, "and a new one in a folder there")
+    }
+
+    /// A check that can't tell, as the app starts again: what was attached is let go of as well.
+    @Test func aBoxThatCantBeToldIsLetGoOf() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.attached != nil)
+        _ = try fakeEngine(hereFails: true)
+        await model.restart()
+        #expect(model.attached == nil && model.machines.engine(SSHConnection.thisMac) == nil && BoxClient.thisMac == BoxClient.mac)
+        guard case .failed = model.engine else { Issue.record("started something: \(model.engine)"); return }
+    }
+
+    /// Connected, the box here keeps its own link: this Mac's is never laid over it.
+    @Test func theBoxHereKeepsItsOwnLink() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady }
+        let link = home.appending(path: "\(RemoteEngineInstaller.root)/bin/kuvo-link.js")
+        let before = try Data(contentsOf: link)
+        await model.phoneLink.sync(here, asked: true)
+        #expect(try Data(contentsOf: link) == before)
+        #expect(model.phoneLink.setupFailed[SSHConnection.thisMac] == nil)
+    }
+
+    /// What the box here answers for each of `routes` (by its path, with its query), from now on.
+    private func boxHereAnswers(_ routes: [String: Any]) throws {
+        // (Whole, as the box is read meanwhile.)
+        let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/answers.json")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: routes).write(to: file, options: .atomic)
+    }
+
+    /// The routes the box here was asked, in order ("GET kuvo/info").
+    private var askedOfTheBoxHere: [String] {
+        let log = home.appending(path: "\(RemoteEngineInstaller.root)/run/asked.log")
+        return ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    }
+
+    /// How many times the box here was asked `line` ("GET kuvo/info").
+    private func asked(_ line: String) -> Int {
+        askedOfTheBoxHere.filter { $0 == line }.count
+    }
+
+    /// Which time it was asked `line` that the box here holds now, the first (`hold`).
+    private func held(_ line: String) -> Int? {
+        askedOfTheBoxHere.lazy.compactMap { entry -> Int? in
+            let parts = entry.split(separator: " ", maxSplits: 2).map(String.init)
+            return parts.count == 3 && parts[0] == "held" && parts[2] == line ? Int(parts[1]) : nil
+        }.first
+    }
+
+    /// The box here's asks, followed: each one noted beats `TestPulse`, so a wait on them looks
+    /// again. Ended by the test.
+    private func followAsks() -> DispatchSourceFileSystemObject {
+        let log = home.appending(path: "\(RemoteEngineInstaller.root)/run/asked.log")
+        let file = open(log.path(percentEncoded: false), O_EVTONLY)
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: file, eventMask: [.write, .extend], queue: .main)
+        source.setEventHandler { TestPulse.beat() }
+        source.setCancelHandler { close(file) }
+        source.resume()
+        return source
+    }
+
+    /// The box here's status for each of `routes` (by its path), for each time it's asked in turn,
+    /// then 200; any other answers 200. (For asks made one at a time.)
+    private func boxHereStatuses(_ routes: [String: [Int]]) throws {
+        let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/statuses.json")
+        try JSONSerialization.data(withJSONObject: routes).write(to: file, options: .atomic)
+    }
+
+    /// The box here answers `path` the first `through` times it's asked (0: holds every ask from
+    /// now on), and holds the asks after those, answered with what it read as it was asked, until
+    /// it's let go (`nil`). (For asks made one at a time.)
+    private func hold(_ path: String, through: Int?) throws {
+        let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/hold.json")
+        var held = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Int]) ?? [:]
+        held[path] = through
+        try JSONSerialization.data(withJSONObject: held).write(to: file, options: .atomic)
+    }
+
+    /// Worktrees this Mac kept from before, by folder, as `Workspace` keeps them.
+    private func keptWorktrees(_ trees: [String: Workspace.Worktree]) throws {
+        UserDefaults.standard.set(try JSONEncoder().encode(trees), forKey: "worktrees")
+    }
+
+    private func library(_ names: [String]) -> [String: Any] {
+        ["personalities": names.map { ["id": "custom.\($0.lowercased())", "name": $0, "description": "Talks like \($0).", "symbol": "person", "updated": 1] }, "removed": []]
+    }
+
+    /// The personalities you write are the box here's (#333): the ones it keeps show as it connects,
+    /// and one written there since (from a phone, say) shows too, as it's read again.
+    @Test func thePersonalitiesShownAreTheBoxHeres() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/personalities/document": library(["Ada"])])
+        }
+        let shared = Personalities.shared
+        try await until { shared.custom.map(\.name) == ["Ada"] }
+        try boxHereAnswers(["kuvo/personalities/document": library(["Ada", "Grace"])])
+        try await until { shared.custom.map(\.name) == ["Ada", "Grace"] }
+        #expect(!askedOfTheBoxHere.contains { $0.hasSuffix("kuvo/personalities/take") }, "its own library isn't met with itself")
+        // (Read empty again, as the next test finds it.)
+        try boxHereAnswers(["kuvo/personalities/document": library([])])
+        await shared.refresh()
+    }
+
+    /// A bot on the box here: its wake-ups show without its conversation being opened, and one
+    /// canceled there (from a phone, say) goes, as the box is read again (#333).
+    @Test func theBoxHeresBotsWakeUpsAreFollowed() async throws {
+        var app: AppModel?
+        defer {
+            cleanUp(app)
+            // (Its bot, kept with the others, isn't the next test's.)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        try? FileManager.default.removeItem(at: Bots.file)
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let bot: [String: Any] = ["id": "bot_ci", "session": "ses_ci", "name": "Ci", "look": ["color": "mint", "shape": "round", "face": "calm"]]
+        let wake = ["id": "4102444800-abcd", "note": "Check CI"]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/bots": ["bots": [bot]],
+                                "kuvo/wakes/events": ["sessions": [["session": "ses_ci", "wakes": [wake], "watches": [], "paused": false]]]])
+        }
+        let model = try #require(app)
+        try await until { model.wakeUps.wakes["bot_ci"]?.map(\.note) == ["Check CI"] }
+        #expect(model.bots.bot("bot_ci")?.machine == SSHConnection.thisMac)
+        try boxHereAnswers(["kuvo/bots": ["bots": [bot]], "kuvo/wakes/events": ["sessions": []]])
+        try await until { model.wakeUps.wakes["bot_ci"] == nil }
+    }
+
+    /// A bot on the box here moved to one of your machines: its wake-ups aren't forgotten as the box
+    /// here no longer lists them, as they're that machine's to say now (#645).
+    @Test func aBotMovedFromTheBoxHereKeepsItsWakeUps() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        try? FileManager.default.removeItem(at: Bots.file)
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let bot: [String: Any] = ["id": "bot_ci", "session": "ses_ci", "name": "Ci", "look": ["color": "mint", "shape": "round", "face": "calm"]]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/bots": ["bots": [bot]],
+                                "kuvo/wakes/events": ["sessions": [["session": "ses_ci", "wakes": [["id": "4102444800-abcd", "note": "Check CI"]], "watches": [], "paused": false]]]])
+        }
+        let model = try #require(app)
+        asks = followAsks()
+        try await until { model.wakeUps.wakes["bot_ci"]?.map(\.note) == ["Check CI"] }
+        // Moved to the machine "lab": the box here no longer has it.
+        model.bots.take(try JSONDecoder().decode([ListedBot].self, from: JSONSerialization.data(withJSONObject: [bot])), from: "lab")
+        #expect(model.bots.bot("bot_ci")?.machine == "lab")
+        try boxHereAnswers(["kuvo/bots": ["bots": []], "kuvo/wakes/events": ["sessions": []]])
+        let reads = asked("GET kuvo/wakes/events")
+        try await until { asked("GET kuvo/wakes/events") >= reads + 2 }
+        #expect(model.wakeUps.wakes["bot_ci"]?.map(\.note) == ["Check CI"])
+    }
+
+    /// Attached, your time zone or how you write dates changing reaches the box here's group chats,
+    /// as it reaches this Mac's own (#645).
+    @Test func aNewTimeZoneReachesTheBoxHeresGroupChats() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        engine.on("PUT", "/api/kuvo/groups/clock", json: [String: Any]())
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady }
+        // Its group chats' bridge, at the stand-in.
+        let bridge = engine.api
+        model.boxGroups.bridge = { $0 == SSHConnection.thisMac ? bridge : nil }
+        NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil)
+        try await until { !engine.requests("PUT", "/api/kuvo/groups/clock").isEmpty }
+    }
+
+    /// A worktree the box here removed (from a phone, say) goes here too, as it's read again (#333).
+    @Test func theBoxHeresWorktreesAreFollowed() async throws {
+        var app: AppModel?
+        defer {
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let tree: [String: Any] = ["project": "/Users/me/api", "root": "/Users/me/.worktrees/api-1", "branch": "kuvo/fix"]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": [tree]]])
+        }
+        let model = try #require(app)
+        let root = RemoteFolder.folder("/Users/me/.worktrees/api-1", on: SSHConnection.thisMac)
+        try await until { model.workspace.worktrees[root]?.branch == "kuvo/fix" }
+        try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": []]])
+        try await until { model.workspace.worktrees[root] == nil }
+        #expect(!askedOfTheBoxHere.contains { $0.hasPrefix("POST kuvo/worktrees/record") }, "what it removed isn't handed back to it")
+    }
+
+    /// Attached, the worktrees the app's own box kept (in this Mac's own folders) aren't the box
+    /// here's: none is handed to it, nor taken for gone as it doesn't list them (#645).
+    @Test func theAppsOwnWorktreesArentHandedToTheBoxHere() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let own = "/Users/me/.worktrees/api-old"
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": [["project": "/Users/me/api", "root": "/Users/me/.worktrees/api-1", "branch": "kuvo/fix"]]]])
+            try keptWorktrees([own: Workspace.Worktree(project: "/Users/me/api", root: own, branch: "kuvo/old")])
+        }
+        let model = try #require(app)
+        asks = followAsks()
+        try await until { model.workspace.worktrees[RemoteFolder.folder("/Users/me/.worktrees/api-1", on: SSHConnection.thisMac)] != nil }
+        // Read as it connected, and again after.
+        let read = asked("GET kuvo/worktrees?records=1")
+        try await until { asked("GET kuvo/worktrees?records=1") >= read + 2 }
+        #expect(model.workspace.worktrees[own]?.branch == "kuvo/old", "still the app's own box's")
+        #expect(!askedOfTheBoxHere.contains { $0.hasPrefix("POST kuvo/worktrees/record") })
+    }
+
+    /// One this Mac kept on the box here that it couldn't hand over as it connected (the box didn't
+    /// answer) isn't taken for removed there as it's read again: it's handed over then, once (#645).
+    @Test func aWorktreeTheBoxHereNeverGotIsKept() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let root = "/Users/me/.worktrees/api-2"
+        let folder = RemoteFolder.folder(root, on: SSHConnection.thisMac)
+        let read = "GET kuvo/worktrees?records=1", handOver = "POST kuvo/worktrees/record " + root
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": []]])
+            // (It doesn't answer as it connects, nor as it's read again once.)
+            try boxHereStatuses(["kuvo/worktrees/record": [500, 500]])
+            try keptWorktrees([folder: Workspace.Worktree(project: RemoteFolder.folder("/Users/me/api", on: SSHConnection.thisMac), root: folder, branch: "kuvo/two")])
+        }
+        let model = try #require(app)
+        asks = followAsks()
+        // As it connected, and as it's read again (taken in by the time it's read once more).
+        try await until { asked(read) >= 3 }
+        #expect(asked(handOver) >= 2, "handed over again")
+        #expect(model.workspace.worktrees[folder]?.branch == "kuvo/two")
+        // It answers the next time, and keeps it.
+        try await until { asked(handOver) >= 3 }
+        let after = asked(read)
+        try await until { asked(read) >= after + 2 }
+        #expect(model.workspace.worktrees[folder]?.branch == "kuvo/two")
+        #expect(asked(handOver) == 3, "taken, it's handed over no more")
+    }
+
+    /// A worktree removed here while the box here was being read: what it said before isn't taken
+    /// over that, bringing it back (#645).
+    @Test func whatTheBoxHereSaidBeforeAChangeHereIsntTaken() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let records = "kuvo/worktrees?records=1", read = "GET kuvo/worktrees?records=1"
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers([records: ["worktrees": [["project": "/Users/me/api", "root": "/Users/me/.worktrees/api-1", "branch": "kuvo/fix"]]]])
+        }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        asks = followAsks()
+        let root = RemoteFolder.folder("/Users/me/.worktrees/api-1", on: SSHConnection.thisMac)
+        try await until { here.isReady && model.workspace.worktrees[root] != nil }
+        // The next read waits, with what it read: the worktree.
+        try hold(records, through: 0)
+        try await until { held(read) != nil }
+        let waiting = try #require(held(read))
+        try await model.workspace.removeWorktree(root)
+        #expect(model.workspace.worktrees[root] == nil)
+        // Gone there too. The read that waited goes on (taken in by the time it's read again), and
+        // the one after waits.
+        try boxHereAnswers([records: ["worktrees": []]])
+        try hold(records, through: waiting)
+        try await until { asked(read) > waiting }
+        #expect(model.workspace.worktrees[root] == nil, "not brought back by what was read before")
+        try hold(records, through: nil)
+    }
+
+    /// Attached, this Mac's engine is the box here's: the usage panel reads its accounts (#333).
+    @Test func theUsagePanelReadsTheBoxHeresEngine() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        try await until { model.usage.api != nil }
+        #expect(model.usage.api?.client.endpoint.url.absoluteString == engine.url)
+    }
+
+    /// The box here keeps its own link to your phones: the app never tells it what to do with it,
+    /// and Pair a Phone says why it can't from here, rather than that a service isn't running (#333).
+    @Test func aPhoneIsntPairedFromHereYet() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        await model.phoneLink.beginPairing()
+        #expect(model.phoneLink.pairingProblem == PhoneLink.keptByTheBoxHere)
+        #expect(!askedOfTheBoxHere.contains { $0.contains("kuvo/link/") || $0.contains("kuvo/phones/") })
+    }
+
+    /// Folders, of `folders`, on the box here.
+    private func onTheBoxHere(_ folders: [String]) -> [String] {
+        folders.filter { RemoteFolder.machine(of: $0) == SSHConnection.thisMac }
+    }
+
+    /// The box here's engine reached at the stand-in, which answers as a machine's does.
+    private func connectsReady() {
+        engine.on("GET", "/api/mcp", json: ["location": ["directory": "/"], "data": []])
+        engine.on("GET", "/api/credential", json: ["data": []])
+        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: SSHConnection.thisMac))
+        MachineEngine.standIn = { _ in api }
+    }
+
+    /// Connected, this Mac's own box offers nothing in Settings › Machines (or to a phone): it's
+    /// never disconnected from the window that's on it, nor started or removed from here.
+    @Test func thisMacsBoxIsntDisconnectedFromHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        engine.list([])
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let box = try #require(app?.machines.engine(SSHConnection.thisMac))
+        try await until { box.isReady }
+        #expect(box.offer == nil, "no Disconnect")
+    }
+
+    /// Its routes go to its own CLI here, in its own home folder, with no SSH: as a machine's do.
+    @Test func itsRoutesGoToItsOwnCLIHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let card = home.appending(path: "\(RemoteEngineInstaller.root)/run/setup-card.json")
+        try FileManager.default.removeItem(at: card)
+        let (status, _) = try await BoxClient.machine(SSHConnection.thisMac).send("POST", "kuvo/setup/attached")
+        #expect(status == 200)
+        #expect(self.card()?["by"] as? String == "its own", "answered by the box's own CLI, in its home folder")
     }
 
     /// One that won't start is said so, to try again, rather than waited on.
@@ -176,18 +690,20 @@ import Testing
     }
 
     /// Started again by launchd, through the launch agent its Mac put in place, as at login (never
-    /// under Kuvo Code's own permissions); by its own script where there's none.
+    /// under Kuvo Code's own permissions): started, or loaded where launchd hasn't it loaded yet,
+    /// and never by the app then; by its own script only where there's no agent.
     @Test func aStoppedBoxIsStartedByLaunchdWhereItCanBe() throws {
         defer { try? FileManager.default.removeItem(at: folder) }
-        let own = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
-        #expect(own.path == "/bin/sh" && own.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
+        let own = Here.startCommands(home: home, root: ".kuvo-code", user: 501, real: true)
+        #expect(own.map(\.path) == ["/bin/sh"] && own.first?.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
         let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
         try FileManager.default.createDirectory(at: agent.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: agent)
-        let launchd = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
-        #expect(launchd.path == "/bin/launchctl" && launchd.arguments == ["kickstart", "gui/501/run.kuvo.code.machine"])
+        let launchd = Here.startCommands(home: home, root: ".kuvo-code", user: 501, real: true)
+        #expect(launchd.map(\.path) == ["/bin/launchctl", "/bin/launchctl"])
+        #expect(launchd.map(\.arguments) == [["kickstart", "gui/501/run.kuvo.code.machine"], ["bootstrap", "gui/501", agent.path]])
         // A test's home is never the account's, whose agent launchd would start.
-        #expect(Here.startCommand(home: home, root: ".kuvo-code", user: 501).path == "/bin/sh")
+        #expect(Here.startCommands(home: home, root: ".kuvo-code", user: 501).map(\.path) == ["/bin/sh"])
     }
 
     /// MacBook removed this Mac as a machine (its way to start and keys went, its card stayed): no box

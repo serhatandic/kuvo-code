@@ -13,6 +13,8 @@ import { subscribe } from "../../src/agents/events"
 import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { callServer, computerServers, KEYS } from "./support/servers"
+import { forgetServers } from "../../src/agents/servers"
+import { relayTiming } from "../../src/agents/toolrelay"
 import { subagentEngine } from "./support/subagents"
 import { Auto } from "../../src/agents/auto"
 import { agentAccounts, Limits } from "../../src/agents/limits"
@@ -1248,6 +1250,96 @@ describe("Claude Code and the computer's MCP servers", () => {
       expect(await callServer(given.notes)).toBe(`auth:none,key:${KEYS.notes},at:/notes`)
       // (On the same pipe as before: its conversation goes on.)
       expect(fake.closed).toBe(false)
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("one whose sign-in is turned down (taken back) still connects, its call saying to sign in again; signed in again, the same Claude Code is told it afresh at its next message, and reaches it", async () => {
+    const servers = computerServers(root)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const { id, first } = await begin()
+      const before = (fake.mcpServers as Record<string, any>).tracker
+      expect(await callServer(before)).toMatch(/^The tracker server turned down its sign-in.*sign in to it again in Kuvo Code \(Settings › Integrations/)
+      fake.result([first])
+      await until(() => sessions.messages(id).some((message) => message.type === "idle"))
+      servers.signedInAgain = true
+      forgetServers()
+      const sent = fake.sent.length
+      sessions.prompt(id, { id: "msg_claude_turn_0141", text: "again", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === sent + 1)
+      const after = (fake.mcpServers as Record<string, any>).tracker
+      expect(after.url).not.toBe(before.url)
+      expect(await callServer(after)).toBe(`auth:Bearer ${KEYS.again},key:none,at:/tracker`)
+      expect(fake.closed).toBe(false)
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("its connection to a stand-in stays one once the server's set right: never passed on to the server under a name the server never gave", async () => {
+    const servers = computerServers(root)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const { id, first } = await begin()
+      const before = (fake.mcpServers as Record<string, any>).tracker
+      const headers = { ...before.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
+      const started = await fetch(before.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
+      const standIn = started.headers.get("mcp-session-id")!
+      expect(standIn).toStartWith("unavailable-")
+      fake.result([first])
+      await until(() => sessions.messages(id).some((message) => message.type === "idle"))
+      servers.signedInAgain = true
+      forgetServers()
+      const sent = fake.sent.length
+      sessions.prompt(id, { id: "msg_claude_turn_0143", text: "again", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === sent + 1)
+      const after = (fake.mcpServers as Record<string, any>).tracker
+      expect(after.url).not.toBe(before.url)
+      const listed = await fetch(after.url, { method: "POST", headers: { ...headers, "mcp-session-id": standIn }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) })
+      expect(((await listed.json()) as any).result.tools).toEqual([])
+      expect(servers.seen.filter((connection) => connection.startsWith("unavailable-"))).toEqual([])
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("a server slow to start is waited for in its own time, as Claude Code doesn't give up its session over one", async () => {
+    const servers = computerServers(root)
+    await servers.serve()
+    const timing = { ...relayTiming }
+    // (No time at all for a brief start.)
+    relayTiming.starts = 0
+    try {
+      await begin()
+      expect(await callServer((fake.mcpServers as Record<string, any>).notes)).toBe(`auth:none,key:${KEYS.notes},at:/notes`)
+    } finally {
+      Object.assign(relayTiming, timing)
+      servers.stop()
+    }
+  })
+
+  test("one it reached for real once you signed in again (it connected again by itself) isn't told it afresh as well", async () => {
+    const servers = computerServers(root)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const { id, first } = await begin()
+      const before = (fake.mcpServers as Record<string, any>).tracker
+      expect(await callServer(before)).toStartWith("The tracker server turned down its sign-in")
+      fake.result([first])
+      await until(() => sessions.messages(id).some((message) => message.type === "idle"))
+      servers.signedInAgain = true
+      forgetServers()
+      // It connects again by itself: the relay renews the sign-in it turned down, and reaches it.
+      expect(await callServer(before)).toBe(`auth:Bearer ${KEYS.again},key:none,at:/tracker`)
+      const sent = fake.sent.length
+      sessions.prompt(id, { id: "msg_claude_turn_0142", text: "again", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === sent + 1)
+      expect((fake.mcpServers as Record<string, any>).tracker.url).toBe(before.url)
     } finally {
       servers.stop()
     }

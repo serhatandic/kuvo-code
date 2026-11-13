@@ -15,6 +15,7 @@ import { appNoticeRoute, attentionRoute } from "../areas/attention";
 import { botKeysRefreshRoute, botKeysRoute } from "../areas/bot-keys";
 import { arrivedRoute, botEventsRoute, botRoute, botsRoute, botTemplatesRoute, newBotRoute, retellRoute } from "../areas/bots";
 import { CARRY_ROUTE, carryRoute } from "../areas/carry";
+import { claudeCodeRoute } from "../areas/claude-code";
 import { engineControlRoute, signInReturnRoute } from "../areas/engine";
 import { fileAt } from "../areas/file";
 import { foldersRoute } from "../areas/folders";
@@ -28,6 +29,7 @@ import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } 
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { GLANCE_ROUTE, glanceRoute } from "../areas/glance";
+import { SESSION_MODELS_ROUTE, sessionModelsRoute } from "../areas/session-models";
 import { READ_ALL_ROUTE, readAllRoute } from "../areas/read-all";
 import { WORK_QUEUE_ROUTE, workQueueRoute } from "../areas/work-queue";
 import { pluginSearchRoute } from "../areas/plugins";
@@ -99,6 +101,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   // A session at a glance: its row's and card's (PROTOCOL.md, "A session at a glance").
   { when: route => route.match(GLANCE_ROUTE), answer: glanceRoute },
+  // What a session's model button shows, and whether its model can run (PROTOCOL.md, "A session's model").
+  { when: route => route === SESSION_MODELS_ROUTE, answer: sessionModelsRoute },
   // Mark All as Read (PROTOCOL.md, "What's been read").
   { when: route => route === READ_ALL_ROUTE, answer: readAllRoute },
   // The Work Queue (PROTOCOL.md, "The Work Queue"), before a bot's work, whose routes it starts like.
@@ -110,6 +114,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(/^kuvo\/asks\/([^/]+)$/), answer: askAnswerRoute },
   { when: route => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },
   { when: route => route === "kuvo/sign-in/return", answer: signInReturnRoute },
+  { when: route => route === "kuvo/claude-code", answer: claudeCodeRoute },
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
   { when: route => route === "kuvo/accounts/ended" || route === "kuvo/accounts/refreshable" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },
   { when: route => route === "kuvo/accounts/credentials", answer: credentialsRoute },

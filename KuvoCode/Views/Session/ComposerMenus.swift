@@ -18,20 +18,6 @@ enum ToolApproval: String, CaseIterable, Codable {
     /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer.
     case fullAccess
 
-    /// This Mac's last pick, for what isn't a conversation's own (a bot's kit, group chats).
-    static let key = "toolApproval"
-
-    /// One kept by name: an older version's Approve All is Auto now.
-    init?(kept: String) {
-        if kept == "approveAll" { self = .auto } else { self.init(rawValue: kept) }
-    }
-
-    /// This Mac's last pick (`key`), Auto where there's none.
-    static var lastPicked: ToolApproval {
-        get { UserDefaults.standard.string(forKey: key).flatMap(ToolApproval.init(kept:)) ?? .auto }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
-    }
-
     // Its words, the same on every client (KuvoClient's ApprovalWords).
     var title: String { ApprovalWords.title(rawValue) }
     var detail: String { ApprovalWords.detail(rawValue) }
@@ -94,19 +80,6 @@ enum ToolApproval: String, CaseIterable, Codable {
     static func asksBeforeCommands(_ rules: [PermissionRule]?) -> Bool {
         (rules ?? []).contains { $0.action == "shell" && $0.resource == "*" && $0.effect == .ask }
     }
-
-    /// Whether a conversation with these rules asks before commands, but nothing has asked you
-    /// about a watch's check before its tool ran: its rules are from before watches asked, or it
-    /// runs with the coding agents (`agents`), whose bridge doesn't check Kuvo Code's tools against
-    /// them. Then the tool mustn't start it (see `WakeUps.call`).
-    static func watchWentUnasked(_ rules: [PermissionRule]?, agents: Bool) -> Bool {
-        guard asksBeforeCommands(rules) else { return false }
-        return agents || !(rules ?? []).contains { $0.action == "kuvo-browser_watch_for_change" && $0.effect == .ask }
-    }
-
-    /// What the agent hears instead: the same watch, as a command, which asks you with the check
-    /// written out.
-    static let watchAsCommand = "This conversation asks before running commands, and a watch runs its check by itself, so the user approves it first: start it with the shell command kuvo-wake watch <every> \"<check>\" \"<what to do when it changes>\" instead, which asks them."
 }
 
 /// A conversation's approval as its box shows it (`GET kuvo/sessions/<id>/approval`): the one
@@ -385,13 +358,14 @@ struct ModelChip<Label: View>: View {
     /// Whose models it offers: the engine's (a bot's, a machine's session), or every one with the
     /// coding agents' and Auto (a session with the agents, a new one on this Mac).
     var scope: ModelScope = .engine
+    /// What the conversation's box says of its model (`kuvo/sessions/models`), which the chip
+    /// names and its help says; nil where there's none (a bot's model, a new conversation, a box
+    /// from before it).
+    var said: SessionModelState? = nil
     /// Auto among them (not in your Auto list's own picker).
     var offersAuto = true
     /// Opens it when it changes.
     var openRequest = 0
-    /// Drawn as a filled pop-up button, like the pop-up menus in a row beside it, rather than the
-    /// composer's quiet chip.
-    var popUp = false
     /// Drawn with the model in use and its effort.
     @ViewBuilder let label: (Model?, String?) -> Label
     @State private var isOpen = false
@@ -401,10 +375,9 @@ struct ModelChip<Label: View>: View {
     @State private var placement = ModelPicker.Placement()
     @State private var anchor = ScreenRoom()
 
-    /// The model picked can't be used now: the chip asks for another rather than show the
-    /// default as if it were in use.
-    private var isUnavailable: Bool { catalog.isUnavailable(selection) || selection.map { !scope.allows($0.providerID) } == true }
-    private var current: Model? { catalog.chipModel(selection, in: scope) }
+    /// The model picked, unless it can't be used now: the chip asks for another rather than show
+    /// the default as if it were in use.
+    private var current: Model? { catalog.chipModel(selection, in: scope, said: said) }
     private var variant: String? { current.flatMap { model in selection.map({ catalog.isSameModel(model.ref, $0) }) == true ? selection?.variant : nil } }
 
     var body: some View {
@@ -414,9 +387,9 @@ struct ModelChip<Label: View>: View {
         } label: {
             label(current, variant)
         }
-        .modelChipStyle(popUp: popUp)
+        .buttonStyle(.plain)
         .clickablePointer()
-        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable && current == nil ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
+        .help(catalog.chipHelp(selection, in: scope, on: catalog.machine.map { app.name(of: .machine($0)) }, said: said))
         .background(ScreenRoomReader(room: anchor))
         .closesWhenKept($isOpen)
         .popover(isPresented: $isOpen, arrowEdge: placement.below ? .bottom : .top) {
@@ -457,16 +430,10 @@ struct ModelChip<Label: View>: View {
     }
 }
 
-private extension View {
-    @ViewBuilder func modelChipStyle(popUp: Bool) -> some View {
-        if popUp { buttonStyle(.bordered) } else { buttonStyle(.plain) }
-    }
-}
-
 extension ModelChip where Label == ModelChipLabel {
     /// `inUse`: on Auto, the model of your list at work now, shown beside it.
-    init(selection: ModelRef?, onSelect: @escaping (ModelRef) -> Void, scope: ModelScope = .engine, offersAuto: Bool = true, inUse: ModelRef? = nil, openRequest: Int = 0) {
-        self.init(selection: selection, onSelect: onSelect, scope: scope, offersAuto: offersAuto, openRequest: openRequest) { model, variant in
+    init(selection: ModelRef?, onSelect: @escaping (ModelRef) -> Void, scope: ModelScope = .engine, said: SessionModelState? = nil, offersAuto: Bool = true, inUse: ModelRef? = nil, openRequest: Int = 0) {
+        self.init(selection: selection, onSelect: onSelect, scope: scope, said: said, offersAuto: offersAuto, openRequest: openRequest) { model, variant in
             ModelChipLabel(model: model, variant: variant, inUse: model?.providerID == OutsideAgents.autoProvider ? inUse : nil)
         }
     }

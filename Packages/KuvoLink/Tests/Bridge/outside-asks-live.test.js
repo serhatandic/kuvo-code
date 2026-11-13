@@ -127,7 +127,10 @@ async function engineOf(box) {
     const text = await response.text();
     return text ? JSON.parse(text) : null;
   };
-  // Its agents loaded, and the skills it found, as a conversation starts.
+  // Its plugins set up (its providers wait for them; from 2.2.7 its agents and skills are listed at
+  // once, with what it has so far), then its agents loaded, and the skills it found, as a
+  // conversation starts.
+  await api("GET", "api/provider");
   const agents = (await api("GET", "api/agent")).data;
   await api("GET", "api/skill");
   const session = (await api("POST", "api/session", { location: { directory: path.join(box.home, "work") } })).data.id;
@@ -167,14 +170,22 @@ for (const mac of [false, true]) {
     const engine = await engineOf(box);
     assert.equal(fs.existsSync(path.join(box.config, "opencode", "plugins", "kuvo-defaults.js")), false, "the box hasn't written its plugin yet");
     for (const agent of AGENTS) assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "allow", `without the plugin, ${agent} doesn't ask`);
-    const reloaded = engine.changed("plugin.updated");
+    let reloaded = engine.changed("agent.updated");
     reloaded.catch(() => {});
     // (With its sandbox off, so its plugin is the only one that changes: after an update the
     // sandbox's is there already.)
     await startBox(box, { KUVO_SANDBOX: "off" });
     // The engine sees its plugins folder change and sets up its plugins and agents again, for the
-    // folders it has open (its agents first).
-    await reloaded;
+    // folders it has open, and says its agents changed: once with the plugin's rules in them (the
+    // box may change its settings too, each read again on its own).
+    const plugged = agent => agent.permissions?.some(rule => rule.action === "external_directory" && rule.resource === "*" && rule.effect === "ask");
+    for (let round = 1; ; round++) {
+      await reloaded;
+      reloaded = engine.changed("agent.updated");
+      reloaded.catch(() => {});
+      if ((await engine.api("GET", "api/agent")).data.filter(each => AGENTS.includes(each.id)).every(plugged)) break;
+      assert.ok(round < 10, "the engine said its agents changed ten times without the plugin's rules in them");
+    }
     for (const agent of AGENTS) {
       assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "ask", `${agent} asks before reading your SSH keys`);
       assert.equal(await engine.effect(agent, path.join(box.home, "shared")), "allow", `${agent}: your allow wins`);

@@ -292,6 +292,11 @@ const MAC_SECRETS = ["Library/Application Support/Google/Chrome", "Library/Appli
 // (`Library/Keychains/<UUID>`), which only its daemons read: `keychainDaemons`.
 const LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
 
+/** Your secrets by name in your home folder, as commands are kept from them here (not your SSH keys
+ * by name, nor gh's sign-in, which the policy reads ~/.ssh and gh's settings for): what else reads
+ * your home for an agent keeps out of them too (`claude-code.ts`). */
+export const homeSecrets = (): string[] => [...SECRETS, ...(process.platform === "darwin" ? MAC_SECRETS : LINUX_SECRETS)];
+
 /** The system's own keychain folders in your Keychain's (`Library/Keychains/<UUID>`), which only
  * its daemons read, never gh or git themselves. */
 function keychainDaemons(home: string): string[] {
@@ -485,7 +490,9 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       // SSH's shared connections and agents your settings name; those named by host, by the names
       // they can have (each that's there as a command starts).
       ...sshPaths, ...sshGlobs],
-    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...opencodes, ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)])],
+    // (Your keys as the rest are, where they really are: a ~/.ssh your dotfiles link in is still
+    // yours, as Auto's reviewer finds a file by where it really is.)
+    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...opencodes, ...homes.flatMap(each => [...sshKeys(each), ...ghHosts(each)]).map(throughLinks)],
   };
 }
 
@@ -632,6 +639,13 @@ function deepestThere(where: string, resolve: (at: string) => string): string {
     try { return path.join(resolve(at), rest); } catch {}
     if (at === path.dirname(at)) return full;
   }
+}
+
+/** Where a file tool reading or writing `where` lands: through its links, a link to a name that
+ * isn't there included (writing it makes that name; read takes a look-alike beside it), the rest as
+ * the system has it (`realish`). Where `realish` stops at such a link, this goes on. */
+export function landsAt(where: string): string {
+  return realish(leadsTo(where));
 }
 
 /** Where a path leads through its links, opening nothing: as `followLinks`, but past a name that

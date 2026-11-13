@@ -1,4 +1,5 @@
 import AppKit
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 import Testing
@@ -168,6 +169,9 @@ import Testing
             let ref = ModelRef(id: "default", providerID: account, variant: "high")
             #expect(app.catalog.model(ref)?.name == "Opus 5.5")
             #expect(app.catalog.chipModel(ref)?.name == "Opus 5.5")
+            // As its box says it (#572): the model `default` stands for, by its name.
+            let said = SessionModelState(model: ref, name: "Opus 5.5", runs: true)
+            #expect(app.catalog.chipModel(ref, in: .all, said: said)?.name == "Opus 5.5")
             #expect(!app.catalog.isUnavailable(ref))
             // What a new message goes out on: the model itself, on the same account, with its effort.
             #expect(app.catalog.startingModel(ref) == ModelRef(id: "opus", providerID: account, variant: "high"))

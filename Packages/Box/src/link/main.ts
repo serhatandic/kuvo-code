@@ -103,6 +103,8 @@ import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
 import { fenceOwnPort, keepFence } from "./fence/state";
 import { keepApprovals } from "./areas/approval";
+import { keepGroupSettings } from "./areas/group-settings";
+import { keepOldBranchPrefix } from "./areas/git-words";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -129,6 +131,7 @@ export { PLACE_TRIES } from "./letters/letter";
 export { keepReadThroughSummary, keepWorkRead, settleWorkRead, under } from "./work/tree";
 export { readAllOn, readGroups } from "./areas/read-all";
 export { glances, Unreached } from "./areas/glance";
+export { forgetModelLists, noteModelsEvent } from "./areas/session-models";
 export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/asked";
 export { checksOf, pullOf, queryFor, readPulls } from "./glance/github";
 export { linkPull, pullCatcher, readPullLinks } from "./glance/pulls";
@@ -189,11 +192,11 @@ export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
 export { setupView } from "./setup/view";
 export { foundOf, hereNow, judgeComputer, judgeHere, oursNow, OWN_BOX_RAN } from "./setup/judge";
 export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
-export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
+export { keptFeatures, peerOf, readPeerAgents, takeAgents, vouchedOf } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
-export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
+export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeLimits, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
@@ -369,6 +372,10 @@ async function run(): Promise<void> {
   keepFence();
   // Conversations' approval kept to what it comes to as the sandbox starts or stops.
   keepApprovals();
+  // What its group chats go by, worked out here and given to the bridge that runs them.
+  keepGroupSettings();
+  // The branch prefix it kept before Settings › Git was each computer's, made its setting.
+  keepOldBranchPrefix();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
@@ -497,6 +504,8 @@ async function box(command: string): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      // Its settings its own now: the branch prefix it kept before, taken into them.
+      keepOldBranchPrefix();
       // As its catalogs have them now: a Mac runs this as it connects, having just put newer ones here,
       // whether or not this box has a bridge or starts its engine again. (Stays when adopting goes.)
       await upgradeIntegrations().catch(() => {});
@@ -667,6 +676,7 @@ async function serve(): Promise<void> {
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();
   keepApprovals();
+  keepGroupSettings();
   keepEngineDefaults();
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link: listening before it says where it is, so what reaches
