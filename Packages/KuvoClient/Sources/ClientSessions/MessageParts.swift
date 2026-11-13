@@ -248,9 +248,19 @@ public struct MessageParts: Codable, Hashable, Sendable {
         public var command: String?
         /// `queue/add`'s: how it's shown is its words; ahead of `before` (Undo's).
         public var before: String?
-        /// One sent before, sent again as the agent read it (another agent's letter put back):
-        /// its text goes as it is, and `words` is how it's shown.
+        /// One sent before, sent again as the agent read it (Retry, another agent's letter put back,
+        /// one from before whose parts couldn't be read): its text goes as it is (`again`), and
+        /// `words` is how it's shown. Make one with `again(…)`.
         public var text: String?
+        public var again: Bool?
+
+        /// `text`, sent again as the agent read it: `words`, how it's shown.
+        public static func again(id: String? = nil, text: String, words: String, files: [OpenCodeAPI.PromptFile] = [], delivery: InboxItem.Delivery? = nil, before: String? = nil) -> Sending {
+            var sending = Sending(id: id, words: words, files: files, delivery: delivery, before: before)
+            sending.text = text
+            sending.again = true
+            return sending
+        }
 
         public init(id: String? = nil, words: String, files: [OpenCodeAPI.PromptFile] = [], delivery: InboxItem.Delivery? = nil, keyword: String? = nil, widget: String? = nil,
                     comments: [Comment] = [], named: [String] = [], notes: Notes = Notes(), command: String? = nil, before: String? = nil) {

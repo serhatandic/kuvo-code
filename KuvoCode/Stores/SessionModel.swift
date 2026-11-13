@@ -1079,7 +1079,7 @@ final class SessionModel {
         if paused { isQueuePaused = true }
         var message = MessageParts.Sending(words: parts.words, keyword: parts.keyword, widget: parts.widget, comments: parts.comments, named: parts.agents.map(\.session))
         // Another agent's letter goes back as the agent read it, still theirs.
-        if parts.mail != nil { message.text = item.text }
+        if parts.mail != nil { message = .again(text: item.text, words: parts.words) }
         post(message, files: Attachments.restored(item.files + Attachments.writeCarried(item.inlineFiles), noting: parts.paths), for: model, queue: true, holds: paused, before: paused ? before : nil,
              written: parts.words, comments: parts.reviewComments)
     }
