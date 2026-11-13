@@ -1392,9 +1392,12 @@ start on a model by the same rule.
   client starts on the one named, as it is.
 - An agent's `list_models`, and `start_session` with a `model` named, go by the same rule: one that
   runs is taken (one its agent keeps out of its picker, or its provider is retiring, too); one of a
-  coding agent's account in `listing` is taken as it's named (the bridge says whether it runs);
-  one whose account needs a sign-in, a key or its agent installed is refused saying which; while
-  the engine or the bridge can't say, one of theirs is refused saying to try again in a moment.
+  coding agent's account in `listing` with none of its own models listed yet (none, or only its
+  agent's usual ones) is taken as it's named (the bridge says whether it runs); one whose account
+  needs a sign-in, a key or its agent installed is refused saying which. While the engine can't
+  say, its models whose provider it says is ready (`api/provider`) are taken, as a start naming
+  none goes then; while the bridge can't say, one of the coding agents' is refused saying to try
+  again in a moment.
 - A lead on another computer starting a session there (`start_session` from "Peers") starts on it
   the same way, for the lead's model, where a bridge not running is no coding agents there; a new
   bot there (`kuvo/bots/templates`' `startingModel`) the same way, for the one its client named.

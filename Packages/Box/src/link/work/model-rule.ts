@@ -262,9 +262,10 @@ export function listedOf(ref: Ref, lists: Lists): Listed | undefined {
   return models ? named(ref, models) : undefined;
 }
 
-/** A model that runs here, as a picker offers it (with the other ids it's known by, and its
- * efforts, for an agent naming it: list_models and start_session). */
-export interface Offered { providerID: string; id: string; name: string; aliases: string[]; efforts: string[]; retiring: boolean; hidden: boolean; agents: boolean; free: boolean }
+/** A model that runs here, as a picker offers it (with the other ids it's known by, its efforts,
+ * and whether it's one of its agent's usual ones, for an agent naming it: list_models and
+ * start_session). */
+export interface Offered { providerID: string; id: string; name: string; aliases: string[]; efforts: string[]; provisional: boolean; retiring: boolean; hidden: boolean; agents: boolean; free: boolean }
 
 /** Every model that runs here now, as a picker offers it: the engine's, newest first in its
  * featured providers' order and the others' by id; then the coding agents', as the bridge lists
@@ -283,8 +284,8 @@ export function offeredHere(lists: Lists): Offered[] {
   const agents = (lists.bridge?.models ?? []).filter(model => withAgents(model, lists.bridge)?.runs === true);
   const auto = (lists.bridge?.auto ?? []).filter(list => list.entries > 0);
   return [
-    ...[...engine, ...agents].map(model => ({ providerID: model.providerID, id: model.id, name: model.name, aliases: model.aliases, efforts: model.efforts, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
-    ...auto.map(list => ({ providerID: "auto", id: list.id, name: list.name, aliases: [], efforts: [], retiring: false, hidden: false, agents: true, free: false })),
+    ...[...engine, ...agents].map(model => ({ providerID: model.providerID, id: model.id, name: model.name, aliases: model.aliases, efforts: model.efforts, provisional: model.provisional, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
+    ...auto.map(list => ({ providerID: "auto", id: list.id, name: list.name, aliases: [], efforts: [], provisional: false, retiring: false, hidden: false, agents: true, free: false })),
   ];
 }
 

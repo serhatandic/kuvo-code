@@ -296,8 +296,8 @@ export async function answerAskTool(caller: Lead, args: Record<string, unknown>,
 
 /** list_models: the models that run here, by the one rule every client's picker offers by
  * (`modelsHere`, model-rule.ts). */
-export async function listModelsTool(engine: Target | null, bridge: Target | null, _signal?: AbortSignal, where = HERE): Promise<ToolAnswer> {
-  const here = await modelsHere(engine, bridge, undefined, where);
+export async function listModelsTool(engine: Target | null, bridge: Target | null, signal?: AbortSignal, where = HERE): Promise<ToolAnswer> {
+  const here = await modelsHere(engine, bridge, undefined, where, signal);
   return said(describeModels(here.models, undefined, where, here));
 }
 

@@ -422,9 +422,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     if (!target) return no(503, runsWithAgents(model) ? `The coding agents aren't running on ${HERE}.` : `The engine on ${HERE} isn't running.`);
   } else if ((given.model !== undefined && given.model !== null && given.model !== "") || (given.effort !== undefined && given.effort !== null && given.effort !== "")) {
     // By the one rule every client's picker offers by (work/model-rule.ts), in the session's folder.
-    const here = await modelsHere(engine, bridge, folder ?? undefined);
+    const here = await modelsHere(engine, bridge, folder ?? undefined, HERE, place.signal);
     const models = here.models;
-    const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models, here);
+    const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, here);
     if ("refused" in choice) return no(400, choice.refused);
     // An agent's, on one that just failed at its account or its limit, is started all the same (it
     // may answer again), with a word on it and a model that can. (You choose for yourself.)

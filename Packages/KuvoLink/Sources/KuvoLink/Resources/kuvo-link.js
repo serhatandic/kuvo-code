@@ -16163,8 +16163,8 @@ function offeredHere(lists) {
   const agents = (lists.bridge?.models ?? []).filter((model) => withAgents(model, lists.bridge)?.runs === true);
   const auto = (lists.bridge?.auto ?? []).filter((list) => list.entries > 0);
   return [
-    ...[...engine, ...agents].map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, aliases: model.aliases, efforts: model.efforts, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
-    ...auto.map((list) => ({ providerID: "auto", id: list.id, name: list.name, aliases: [], efforts: [], retiring: false, hidden: false, agents: true, free: false }))
+    ...[...engine, ...agents].map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, aliases: model.aliases, efforts: model.efforts, provisional: model.provisional, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
+    ...auto.map((list) => ({ providerID: "auto", id: list.id, name: list.name, aliases: [], efforts: [], provisional: false, retiring: false, hidden: false, agents: true, free: false }))
   ];
 }
 function stillListing(lists) {
@@ -16242,22 +16242,33 @@ async function usableModels(engine, bridge, signal) {
     models.push(...modelsIn2(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
   return models;
 }
-async function modelsHere(engine, bridge, folder, where = HERE) {
+async function modelsHere(engine, bridge, folder, where = HERE, signal) {
   const lists = await listsHere(engine, bridge, folder);
-  const models = offeredHere(lists).flatMap((each) => {
+  const offered = offeredHere(lists);
+  let models = offered.flatMap((each) => {
     const target = each.agents ? bridge : engine;
     return target ? [{ ...each, target }] : [];
   });
-  const unsaid = [...engine && !lists.engine ? ["engine"] : [], ...bridge && !lists.bridge ? ["agents"] : []];
+  const unsaid = bridge && !lists.bridge ? ["agents"] : [];
+  if (engine && !lists.engine) {
+    const ready = await usableModels(engine, null, signal);
+    if (ready.length)
+      models = [...ready, ...models];
+    else
+      unsaid.unshift("engine");
+  }
+  const listing = stillListing(lists).filter((account) => !offered.some((model) => model.providerID === account && !model.provisional));
   const refusal = (ref) => {
+    if (onAgents(ref) && !bridge)
+      return `The coding agents aren't running on ${where} now. Use list_models to see the models you can use.`;
     const state = stateOf(ref, lists);
     if (!state || state.runs || !state.account || !["signIn", "key", "install"].includes(state.missing ?? ""))
       return;
     const account = state.account.label ? `${state.account.name} (${state.account.label})` : state.account.name;
-    const why = state.missing === "signIn" ? `it isn't signed in: ask the user to sign in to ${account} in Settings › Accounts` : state.missing === "key" ? `it needs a key: ask the user to add one for ${account} in Settings › Accounts${state.plan ? ` (a ${state.plan.name} plan runs ${state.plan.agent}'s models, as ${state.plan.provider}/…)` : ""}` : `${account}'s coding agent isn't installed there: ask the user to install it in Settings › Accounts`;
+    const why = state.missing === "signIn" ? `it isn't signed in: ask the user to sign in to ${account} in Settings › Accounts` : state.missing === "key" ? `it needs a key: ask the user to add one for ${account} in Settings › Accounts${state.plan ? ` (a ${state.plan.name} plan runs ${state.plan.agent}'s models, as ${state.plan.provider}/…)` : ""}` : `its coding agent isn't installed: ask the user to install ${account} in Settings › Accounts`;
     return `There's no account for ${ref.providerID} ready on ${where}: ${why}. Or use list_models to see the models you can use.`;
   };
-  return { models, listing: stillListing(lists), unsaid, bridge, refusal };
+  return { models, listing, unsaid, bridge, refusal };
 }
 var modelNamed = (ref, models) => {
   const ofProvider = ref ? models.filter((model) => model.providerID === ref.providerID) : [];
@@ -16289,7 +16300,9 @@ ${holds.map((each) => "- " + holdWords(each)).join(`
 ${notes.join(`
 `)}` : whole;
 }
-function pickModel(given, effort, models, here, where = HERE) {
+function pickModel(given, effort, from, where = HERE) {
+  const here = Array.isArray(from) ? null : from;
+  const models = here ? here.models : from;
   let providerID = "", id = "";
   if (typeof given === "string") {
     const at = given.trim().indexOf("/");
@@ -18954,9 +18967,9 @@ async function startSession(given, by, place) {
     if (!target)
       return no(503, runsWithAgents(model) ? `The coding agents aren't running on ${HERE}.` : `The engine on ${HERE} isn't running.`);
   } else if (given.model !== undefined && given.model !== null && given.model !== "" || given.effort !== undefined && given.effort !== null && given.effort !== "") {
-    const here = await modelsHere(engine, bridge, folder ?? undefined);
+    const here = await modelsHere(engine, bridge, folder ?? undefined, HERE, place.signal);
     const models = here.models;
-    const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models, here);
+    const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, here);
     if ("refused" in choice)
       return no(400, choice.refused);
     const held = by ? holdOf(choice.model, unansweringNow()) : null;
@@ -19806,8 +19819,8 @@ async function answerAskTool(caller, args, targets, signal, { made } = {}) {
   changed(data, { kind: "answered", by: caller });
   return said(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
 }
-async function listModelsTool(engine, bridge, _signal, where = HERE) {
-  const here = await modelsHere(engine, bridge, undefined, where);
+async function listModelsTool(engine, bridge, signal, where = HERE) {
+  const here = await modelsHere(engine, bridge, undefined, where, signal);
   return said(describeModels(here.models, undefined, where, here));
 }
 async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
@@ -40769,7 +40782,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c40072234646";
+var BRIDGE_VERSION = "6c196639aedf";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

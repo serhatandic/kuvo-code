@@ -172,19 +172,20 @@ final class KeeperTools {
         case "initialize":
             let requested = params["protocolVersion"] as? String
             let supported = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+            let tools = await listed()
             result = [
                 "protocolVersion": requested.flatMap { supported.contains($0) ? $0 : nil } ?? "2025-06-18",
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": "kuvo-browser", "title": "Kuvo Code browser", "version": AppInfo.version],
                 // What the tools are for, as the app tells it: a model that starts while the app
                 // is closed hears it too (the Work Queue's in the box's words).
-                "instructions": BrowserTools.instructions(machine: false, vault: await listed().contains { BrowserTools.isVault($0["name"] as? String ?? "") })
-                    + (await boxTools.workQueueDefinitions()).instructions,
+                "instructions": BrowserTools.instructions(machine: false, vault: tools.tools.contains { BrowserTools.isVault($0["name"] as? String ?? "") })
+                    + tools.queueInstructions,
             ]
         case "ping":
             result = [:]
         case "tools/list":
-            result = ["tools": await listed()]
+            result = ["tools": await listed().tools]
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -214,13 +215,15 @@ final class KeeperTools {
 
     /// The tools as the app last listed them; before it ever has, Kuvo Code's own, with the
     /// vault's as this Mac's box lists them. The sandbox's and the Work Queue's as the box lists
-    /// them now, whatever the app last listed (the sandbox's only while commands here run in it).
-    private func listed() async -> [[String: Any]] {
-        let fromBox = await boxTools.sandboxDefinitions() + (await boxTools.workQueueDefinitions()).tools
+    /// them now, whatever the app last listed (the sandbox's only while commands here run in it),
+    /// with what agents are told of the Work Queue's.
+    private func listed() async -> (tools: [[String: Any]], queueInstructions: String) {
+        let queue = await boxTools.workQueueDefinitions()
+        let fromBox = await boxTools.sandboxDefinitions() + queue.tools
         if let kept = (try? Data(contentsOf: Self.listFile)).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }) {
-            return kept.filter { !BrowserTools.isSandbox($0["name"] as? String ?? "") && !BrowserTools.isWorkQueue($0["name"] as? String ?? "") } + fromBox
+            return (kept.filter { !BrowserTools.isSandbox($0["name"] as? String ?? "") && !BrowserTools.isWorkQueue($0["name"] as? String ?? "") } + fromBox, queue.instructions)
         }
-        return BrowserTools.definitions(vault: await boxTools.vaultDefinitions()) + fromBox
+        return (BrowserTools.definitions(vault: await boxTools.vaultDefinitions()) + fromBox, queue.instructions)
     }
 
     private static func key(_ id: Any, client: String?) -> String { (client ?? "") + "|" + String(describing: id) }

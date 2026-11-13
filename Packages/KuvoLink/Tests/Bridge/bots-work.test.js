@@ -87,6 +87,8 @@ function resetEngine() {
 }
 resetEngine();
 let integrationsAskedFresh = 0;
+// The engine not saying its accounts (slow, or yet to load a folder): the one rule can't say.
+let engineAccountsUnsaid = false;
 // (As the engine lists them: every provider it knows, with its ways to sign in; OpenAI's signed out.)
 const engineAccounts = {
   anthropic: { id: "anthropic", name: "Anthropic", methods: [{ type: "key" }], metadata: {}, connections: [{ type: "credential", id: "crd_work", label: "Work", method: "key" }, { type: "credential", id: "crd_home", label: "Personal", method: "key" }] },
@@ -97,7 +99,7 @@ const engineAccounts = {
 const bridgeAccounts = {
   "claude-code": { id: "claude-code", name: "Claude Code", methods: [{ type: "oauth", id: "agent" }], metadata: { source: "agent", accountID: "default", installed: true, modelsComplete: true }, connections: [{ type: "agent", label: "ada@example.com · Max plan", method: "oauth" }] },
   "claude-code@acc0001": { id: "claude-code@acc0001", name: "Claude Code", methods: [{ type: "oauth", id: "agent" }], metadata: { source: "agent", accountID: "acc0001", accountLabel: "Athas", installed: true, modelsComplete: true }, connections: [{ type: "agent", label: "athas@example.com", method: "oauth" }] },
-  // Signed out: its models are still in its agent's list, but don't run.
+  // Signed out: the bridge lists none of its models.
   "claude-code@away": { id: "claude-code@away", name: "Claude Code", methods: [{ type: "oauth", id: "agent" }], metadata: { source: "agent", accountID: "away", accountLabel: "Away", installed: true, modelsComplete: true }, connections: [] },
   "codex-cli": { id: "codex-cli", name: "Codex", methods: [{ type: "oauth", id: "agent" }], metadata: { source: "agent", accountID: "default", installed: true, modelsComplete: true }, connections: [{ type: "agent", label: "ada@example.com", method: "oauth" }] },
   // Just signed in: its agent's usual ones listed until it says which this account has.
@@ -108,7 +110,6 @@ const bridgeAccounts = {
 const bridgeModels = [
   { id: "opus", providerID: "claude-code", name: "Opus 5.5", variants: [{ id: "high" }, { id: "max" }], aliases: ["default"] },
   { id: "sonnet", providerID: "claude-code@acc0001", name: "Sonnet 5.5", variants: [] },
-  { id: "opus", providerID: "claude-code@away", name: "Opus 5.5", variants: [] },
   { id: "gpt-5.5", providerID: "codex-cli", name: "GPT-5.5", variants: [{ id: "low" }, { id: "high" }] },
   { id: "gpt-5.1-codex-mini", providerID: "codex-cli", name: "GPT-5.1 Codex Mini", variants: [], hidden: true },
   { id: "opus", providerID: "claude-code@new", name: "Opus", variants: [], provisional: true },
@@ -224,6 +225,7 @@ const standIn = onBridge => (request, response) => {
     if (request.url.includes("/instructions/entries/")) return reply({});
     // An account as Settings › Accounts lists it: the engine's plans with their sign-ins (the one in
     // use first), the coding agents' accounts with the names you gave them.
+    if (!onBridge && engineAccountsUnsaid && url.pathname === "/api/integration") return reply({ message: "Not loaded yet." }, 503);
     if (url.pathname.startsWith("/api/integration") && request.method === "GET") {
       // (Asked of each agent's program again, the bridge's `fresh` and one account's: what a read of a bot's work never needs.)
       if (url.pathname !== "/api/integration" || url.searchParams.has("fresh")) integrationsAskedFresh += 1;
@@ -666,7 +668,7 @@ test("list_models lists the models there are accounts for, with their efforts", 
 
 // #664: an agent is offered, and refused, the models every client's picker is (the one rule,
 // work/model-rule.ts), not every model the engine and the coding agents list.
-test("list_models offers the coding agents' models as the apps' pickers do: a signed-out account's left out, a hidden one too, and an account still listing named", async t => {
+test("list_models offers the coding agents' models as the apps' pickers do: a hidden one left out, Custom Auto in, and an account still listing named", async t => {
   write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
   t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
   const said = await tool("list_models", {}, "ses_pixel");
@@ -676,6 +678,7 @@ test("list_models offers the coding agents' models as the apps' pickers do: a si
   assert.match(said.text, /- codex-cli\/gpt-5\.5 \(GPT-5\.5\), efforts: low, high/);
   assert.match(said.text, /- auto\/auto \(Custom Auto\)/);
   assert.doesNotMatch(said.text, /claude-code@away/, "signed out");
+  assert.doesNotMatch(said.text, /Still listing their models: [^\n]*(codex-cli|claude-code@acc0001)/, "their own models are listed");
   assert.doesNotMatch(said.text, /gpt-5\.1-codex-mini/, "Codex keeps it out of its picker");
   assert.match(said.text, /Still listing their models: claude-code@new\./);
   // The engine's, in the featured providers' order, before the coding agents'.
@@ -701,7 +704,22 @@ test("start_session takes a model by the same rule: a hidden one, one of an acco
   assert.match(away.text, /^There's no account for claude-code@away ready on this machine: it isn't signed in: ask the user to sign in to Claude Code \(Away\) in Settings › Accounts\./);
   const key = await tool("start_session", { task: "Hi.", project: "Tidepool", model: "openai/gpt-5" }, "ses_pixel");
   assert.match(key.text, /it needs a key: ask the user to add one for OpenAI in Settings › Accounts \(a ChatGPT plan runs Codex's models, as codex-cli\/…\)/);
+  // A typo of a model of an account whose own are listed is refused, not taken as named.
+  const typo = await tool("start_session", { task: "Hi.", project: "Tidepool", model: "codex-cli/gpt-5.5-codx" }, "ses_pixel");
+  assert.match(typo.text, /^There's no gpt-5\.5-codx among codex-cli's models here\./);
   assert.equal(made.length, 3);
+});
+
+test("while the engine can't say which of its models run (not loaded yet, or slow), a model it lists with its provider ready still starts, and list_models lists them", async t => {
+  engineAccountsUnsaid = true;
+  t.after(() => { engineAccountsUnsaid = false; });
+  const said = await tool("start_session", { task: "Hi.", project: "Tidepool", model: "anthropic/claude-sonnet-5-5", effort: "high" }, "ses_pixel");
+  assert.equal(said.isError, false, said.text);
+  assert.deepEqual(made.map(each => [each.on, each.model]), [["engine", { providerID: "anthropic", id: "claude-sonnet-5-5", variant: "high" }]]);
+  const listed = await tool("list_models", {}, "ses_pixel");
+  assert.match(listed.text, /- anthropic\/claude-opus-5-5 \(Claude Opus 5\.5\), efforts: high, max/);
+  assert.doesNotMatch(listed.text, /openai\/gpt-5/, "its provider isn't ready");
+  assert.doesNotMatch(listed.text, /can't say/);
 });
 
 test("a client sees a bot's work: its sessions, the answers it gave and today's count", async () => {
