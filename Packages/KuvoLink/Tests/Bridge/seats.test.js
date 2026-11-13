@@ -499,7 +499,12 @@ test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between yo
   link.takeAgents(second.peer, { at: Date.now(), list: [], boxes: [here.peer, air.peer] });
   const sent = [];
   const host = { send: bytes => sent.push(bytes) };
-  const mail = { kind: "settings", at: 7, digest: "d", usage: { notifications: { value: { underTenPercent: true, healthyToClose: false, closeToRunningOut: false }, stamp: { v: 7, by: here.pub } } } };
+  // The bridge is told the setup this box follows, which settings stay within; none while it's set aside (a shared machine).
+  assert.equal(link.seatPeers(link.readLink()).setup, undefined, "in no setup");
+  const withSetup = { ...link.readLink(), setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub, sign: mac.pub, role: "member" } };
+  assert.equal(link.seatPeers(withSetup).setup, "set_AAAAAAAAAAAAAAAAAAAAAA");
+  assert.equal(link.seatPeers({ ...withSetup, setup: { ...withSetup.setup, aside: true } }).setup, undefined, "set aside: none");
+  const mail = { kind: "settings", at: 7, digest: "d", setup: "set_AAAAAAAAAAAAAAAAAAAAAA", usage: { notifications: { value: { underTenPercent: true, healthyToClose: false, closeToRunningOut: false }, stamp: { v: 7, by: here.pub } } } };
   // To one of your computers: as a seat's, kept nowhere.
   assert.equal(link.carrySeat(host, { id: "sm_settings01", to: second.pub, durable: false, mail }, link.readLink()), true);
   assert.equal(sent.length, 1);

@@ -9,7 +9,7 @@
 // set, at an import's version, which any change made since beats; between two imports the earlier
 // wins, so a Mac set up today never puts its first-run defaults over the panel you made on another.
 
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
@@ -178,6 +178,8 @@ export class UsageSettings {
   /** The highest version seen, so a change counts on from it whatever this clock says. */
   private highest = 0
   private listeners: ((units: SettingsUnit[]) => void)[] = []
+  /** Who made a change before the link named this box: two such never tie. */
+  private readonly unnamed = "?" + randomBytes(8).toString("hex")
 
   constructor(
     private readonly file?: string,
@@ -256,7 +258,7 @@ export class UsageSettings {
       // (The same as it is: no new version, so nothing goes to your other computers.)
       if (before && !before.stamp.imported && JSON.stringify(before.value) === JSON.stringify(value)) continue
       this.highest = Math.max(this.now(), this.highest + 1)
-      this.units[name] = { value, stamp: { v: this.highest, by: this.self() } }
+      this.units[name] = { value, stamp: { v: this.highest, by: this.self() || this.unnamed } }
       changed.push(name)
     }
     if (changed.length) this.changed(changed)
@@ -276,7 +278,7 @@ export class UsageSettings {
       if (!isUnit(name) || this.units[name]) continue
       const clean = checked(name, value)
       if (clean === undefined) continue
-      this.units[name] = { value: clean, stamp: { v: at, by: this.self(), imported: true } }
+      this.units[name] = { value: clean, stamp: { v: at, by: this.self() || this.unnamed, imported: true } }
       took.push(name)
     }
     this.imported = true

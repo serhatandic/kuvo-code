@@ -246,6 +246,8 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
   private listeners: (() => void)[] = []
   /** Whether the link has said who your computers are since this started. */
   told = false
+  /** The setup this box follows, as the link last said (none: it follows none). */
+  setup?: string
 
   constructor(
     private readonly transport: PeerTransport,
@@ -266,6 +268,7 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
     for (const box of Array.isArray(given.also) ? given.also : []) {
       if (box && typeof box.key === "string" && box.key && !boxes.has(box.key)) this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer")
     }
+    this.setup = typeof given.setup === "string" && /^set_[A-Za-z0-9_-]{1,64}$/.test(given.setup) ? given.setup : undefined
     this.told = true
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))

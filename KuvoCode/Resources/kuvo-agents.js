@@ -22035,7 +22035,7 @@ async function headOf(handle, length) {
 }
 
 // Packages/Box/src/agents/usage/settings.ts
-import { createHash as createHash12 } from "crypto";
+import { createHash as createHash12, randomBytes as randomBytes5 } from "crypto";
 import { mkdirSync as mkdirSync21, readFileSync as readFileSync29, renameSync as renameSync17, statSync as statSync13, writeFileSync as writeFileSync22 } from "fs";
 import { dirname as dirname16 } from "path";
 var SETTINGS_UNITS = ["layout", "providers", "totalSpend", "codexFallback", "notifications"];
@@ -22140,6 +22140,7 @@ class UsageSettings {
   imported = false;
   highest = 0;
   listeners = [];
+  unnamed = "?" + randomBytes5(8).toString("hex");
   constructor(file, now = Date.now, self = () => "") {
     this.file = file;
     this.now = now;
@@ -22202,7 +22203,7 @@ class UsageSettings {
       if (before && !before.stamp.imported && JSON.stringify(before.value) === JSON.stringify(value))
         continue;
       this.highest = Math.max(this.now(), this.highest + 1);
-      this.units[name] = { value, stamp: { v: this.highest, by: this.self() } };
+      this.units[name] = { value, stamp: { v: this.highest, by: this.self() || this.unnamed } };
       changed.push(name);
     }
     if (changed.length)
@@ -22220,7 +22221,7 @@ class UsageSettings {
       const clean = checked2(name, value);
       if (clean === undefined)
         continue;
-      this.units[name] = { value: clean, stamp: { v: at, by: this.self(), imported: true } };
+      this.units[name] = { value: clean, stamp: { v: at, by: this.self() || this.unnamed, imported: true } };
       took.push(name);
     }
     this.imported = true;
@@ -29148,16 +29149,21 @@ class SettingsPeers {
     });
   }
   ours() {
-    if (!this.directory.told || !this.directory.isPeer)
+    if (!this.directory.told || !this.directory.setup || !this.directory.isPeer)
       return [];
     return this.directory.peerBoxes().flatMap(({ key }) => this.directory.isPeer(key) ? [key] : []);
   }
+  taking;
   tell(changed = false) {
     if (!this.transport.followed)
       return;
     const now = this.now();
     const digest = this.settings.digest();
     for (const key of this.ours()) {
+      if (this.taking?.key === key && this.taking.digest === digest) {
+        this.told.set(key, { digest, at: now });
+        continue;
+      }
       const last = this.told.get(key);
       if (!last)
         this.send(key, { kind: "settings", at: now, digest, usage: this.settings.kept(), ask: true });
@@ -29171,10 +29177,16 @@ class SettingsPeers {
     }
   }
   take(from, mail) {
-    if (!isSettingsMail(mail) || !this.ours().includes(from))
+    if (!isSettingsMail(mail) || mail.setup !== this.directory.setup || !this.ours().includes(from))
       return;
-    if (mail.usage)
-      this.settings.merge(mail.usage);
+    if (mail.usage) {
+      this.taking = typeof mail.digest === "string" ? { key: from, digest: mail.digest } : undefined;
+      try {
+        this.settings.merge(mail.usage);
+      } finally {
+        this.taking = undefined;
+      }
+    }
     if (!this.transport.followed)
       return;
     const digest = this.settings.digest();
@@ -29189,7 +29201,9 @@ class SettingsPeers {
     this.told.set(from, { digest, at: now });
   }
   send(to, mail) {
-    this.transport.send(to, mail, false);
+    if (!this.directory.setup)
+      return;
+    this.transport.send(to, { ...mail, setup: this.directory.setup }, false);
   }
   directorySaid() {
     const ours = new Set(this.ours());
@@ -32173,6 +32187,7 @@ class LinkDirectory {
   also = new Map;
   listeners = [];
   told = false;
+  setup;
   constructor(transport, clock = realClock) {
     this.transport = transport;
     this.clock = clock;
@@ -32193,6 +32208,7 @@ class LinkDirectory {
       if (box && typeof box.key === "string" && box.key && !boxes.has(box.key))
         this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer");
     }
+    this.setup = typeof given.setup === "string" && /^set_[A-Za-z0-9_-]{1,64}$/.test(given.setup) ? given.setup : undefined;
     this.told = true;
     this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
       id: bot.id,
@@ -33996,4 +34012,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 6a224323011ffefca943b7df43e5a73cba1280f35fe6860f4bcab31bfaf3816e
+// Built from Packages/Box/src/agents 1599de61bca1cd671fd24346ade26c481aad1a94d1dee2bfa814a4303f21aefa

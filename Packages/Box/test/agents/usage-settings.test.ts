@@ -104,9 +104,12 @@ class Box {
     }
   }
 
-  /** The link says who your computers are (`others`) and which boxes only a peer knows (`also`). */
-  async meet(others: Box[], also: Box[] = []) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
+  /**
+   * The link says who your computers are (`others`), which boxes only a peer knows (`also`), and the
+   * setup this box follows (`setup`: none for a machine two people's Macs share).
+   */
+  async meet(others: Box[], also: Box[] = [], setup: string | null = "set_yours") {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [], ...(setup ? { setup } : {}) }))
   }
 
   async route(method: string, rest: string[] = [], given?: unknown) {
@@ -308,7 +311,7 @@ describe("across your own computers", () => {
     await mac.route("PUT", [], { notifications: alerts(true) })
     await relay.settled()
     other.settings.change({ layout: layout(["claude.session"]) })
-    mac.peers.take("other-key", { kind: "settings", at, digest: "x", usage: other.settings.kept() })
+    mac.peers.take("other-key", { kind: "settings", at, digest: "x", usage: other.settings.kept(), setup: "set_yours" })
     expect((await mac.read()).settings.layout).toBeUndefined()
 
     await mac.meet([], [other])
@@ -322,8 +325,8 @@ describe("across your own computers", () => {
     await relay.settled()
     expect(relay.sent.filter((each) => each.mail.kind === "settings")).toEqual([])
     // Its mail, should it come anyway: not taken.
-    mac.peers.take("other-key", { kind: "settings", at, digest: "x", usage: other.settings.kept() })
-    await peerRoutes(mac.parts, "POST", ["mail"], async () => ({ from: "other-key", mail: { kind: "settings", at, digest: "x", usage: other.settings.kept() } }))
+    mac.peers.take("other-key", { kind: "settings", at, digest: "x", usage: other.settings.kept(), setup: "set_yours" })
+    await peerRoutes(mac.parts, "POST", ["mail"], async () => ({ from: "other-key", mail: { kind: "settings", at, digest: "x", usage: other.settings.kept(), setup: "set_yours" } }))
     expect((await mac.read()).settings).toEqual({ notifications: alerts(false) })
     expect((await other.read()).settings).toEqual({ layout: layout(["claude.session"]) })
 
@@ -342,5 +345,38 @@ describe("across your own computers", () => {
     await relay.settled()
     expect(relay.sent.slice(before).filter((each) => each.mail.kind === "settings")).toEqual([])
     expect((await dev.read()).settings).toEqual({ notifications: alerts(false) })
+  })
+
+  test("a machine two people's Macs share follows no setup: it neither passes your settings on to the other Mac nor takes theirs; a box of another setup's mail isn't taken", async () => {
+    // Your Mac and someone else's both use the machine; neither Mac leads a setup while it's shared.
+    const yours = make("a-key", "Your Mac")
+    const shared = make("m-key", "shared machine")
+    const theirs = make("c-key", "Their Mac")
+    await yours.meet([shared], [theirs], null)
+    await shared.meet([yours, theirs], [], null)
+    await theirs.meet([shared], [yours], null)
+    await relay.settled()
+    await yours.route("PUT", [], { layout: layout(["claude.session"], ["claude.session"]) })
+    at += 10 * MINUTE
+    for (const box of [yours, shared, theirs]) box.peers.tell()
+    await relay.settled()
+    expect(relay.sent.filter((each) => each.mail.kind === "settings")).toEqual([])
+    // Mail said to come from the machine anyway, in a setup: none of them takes it.
+    const mail = { kind: "settings" as const, at, digest: "x", usage: yours.settings.kept(), setup: "set_yours" }
+    shared.peers.take("a-key", mail)
+    theirs.peers.take("m-key", mail)
+    expect((await shared.read()).settings).toEqual({})
+    expect((await theirs.read()).settings).toEqual({})
+
+    // Two of your computers in your setup; a box that names another setup is turned away.
+    const mac = make("mac-key", "MacBook")
+    const dev = make("dev-key", "devbox")
+    await mac.meet([dev])
+    await dev.meet([mac])
+    await relay.settled()
+    dev.peers.take("mac-key", { kind: "settings", at, digest: "y", usage: yours.settings.kept(), setup: "set_another" })
+    expect((await dev.read()).settings).toEqual({})
+    dev.peers.take("mac-key", { kind: "settings", at, digest: "y", usage: yours.settings.kept(), setup: "set_yours" })
+    expect((await dev.read()).settings.layout).toEqual(layout(["claude.session"], ["claude.session"]))
   })
 })

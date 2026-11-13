@@ -47,4 +47,8 @@ export interface SeatPeers {
   also?: { key: string; name: string }[];
   boxes: SeatBox[];
   bots: SeatBot[];
+  /** The setup this box follows now, by its id (PROTOCOL.md, "Your setup"): none while it follows
+   * none (a machine Macs share, a Mac that leads none). The usage panel's settings go only between
+   * boxes of the same setup. */
+  setup?: string;
 }

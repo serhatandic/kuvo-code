@@ -1,8 +1,9 @@
 // The usage panel's settings shared between your own computers' boxes (PROTOCOL.md, "Usage
 // settings"): each tells the others its parts with their versions as they change, and each takes
-// what's newer (`UsageSettings.merge`), so every box holds the same. Only to and from your own
-// computers, never a box a peer vouches for (another person's Mac beside a machine you share), and
-// nothing before the link has said which are which. Every ten minutes a box says only what it holds
+// what's newer (`UsageSettings.merge`), so every box holds the same. Only between the boxes of one
+// setup ("Your setup"), whose boxes are all yours: never a box a peer vouches for, nor through a
+// machine two people's Macs share (it follows no setup, so it neither sends nor takes them), and
+// nothing before the link has said. Every ten minutes a box says only what it holds
 // (`digest`); one that holds something else answers with all of its own and asks for the other's.
 // The mail goes through the box's link (`{"seat": {"kind": "settings", …}}`), which carries this
 // kind only between your own computers too.
@@ -21,6 +22,8 @@ export interface SettingsMail {
   usage?: Partial<Record<SettingsUnit, KeptUnit>>
   /** Tell me yours (it just started, or holds something else). */
   ask?: true
+  /** The setup the sender follows (its id): taken only by a box of the same. */
+  setup: string
 }
 
 export const isSettingsMail = (value: any): value is SettingsMail => value !== null && typeof value === "object" && value.kind === "settings"
@@ -38,7 +41,7 @@ export class SettingsPeers {
   constructor(
     private readonly settings: UsageSettings,
     private readonly transport: Pick<LimitsTransport, "followed" | "onFollowed"> & { send(to: string, mail: SettingsMail, durable: boolean): void },
-    private readonly directory: LimitsDirectory,
+    private readonly directory: LimitsDirectory & { readonly setup?: string },
     private readonly now: () => number = Date.now,
   ) {
     settings.self = () => directory.own()?.key ?? ""
@@ -51,11 +54,17 @@ export class SettingsPeers {
     })
   }
 
-  /** Your own computers: the link's peers, never a box only a peer knows. None before the link says. */
+  /**
+   * Your own computers: the link's peers while this box follows a setup (its peers are then that
+   * setup's boxes), never a box only a peer knows. None before the link says, or in no setup.
+   */
   private ours(): string[] {
-    if (!this.directory.told || !this.directory.isPeer) return []
+    if (!this.directory.told || !this.directory.setup || !this.directory.isPeer) return []
     return this.directory.peerBoxes().flatMap(({ key }) => (this.directory.isPeer!(key) ? [key] : []))
   }
+
+  /** A mail from a box whose last word was this digest, being taken: not told back what it just said. */
+  private taking?: { key: string; digest: string }
 
   /**
    * This box's settings told to each of your computers: all of them to one not told since this
@@ -67,6 +76,11 @@ export class SettingsPeers {
     const now = this.now()
     const digest = this.settings.digest()
     for (const key of this.ours()) {
+      // (The box whose mail this is holds what it's now: nothing goes back.)
+      if (this.taking?.key === key && this.taking.digest === digest) {
+        this.told.set(key, { digest, at: now })
+        continue
+      }
       const last = this.told.get(key)
       if (!last) this.send(key, { kind: "settings", at: now, digest, usage: this.settings.kept(), ask: true })
       else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN)) this.send(key, { kind: "settings", at: now, digest, usage: this.settings.kept() })
@@ -78,9 +92,16 @@ export class SettingsPeers {
 
   /** What another box told (`from`, its key): taken only from one of your own computers. */
   take(from: string, mail: unknown) {
-    if (!isSettingsMail(mail) || !this.ours().includes(from)) return
+    if (!isSettingsMail(mail) || mail.setup !== this.directory.setup || !this.ours().includes(from)) return
     // (Newer parts taken tell the rest of your computers, `listen` above.)
-    if (mail.usage) this.settings.merge(mail.usage)
+    if (mail.usage) {
+      this.taking = typeof mail.digest === "string" ? { key: from, digest: mail.digest } : undefined
+      try {
+        this.settings.merge(mail.usage)
+      } finally {
+        this.taking = undefined
+      }
+    }
     if (!this.transport.followed) return
     const digest = this.settings.digest()
     const now = this.now()
@@ -95,8 +116,9 @@ export class SettingsPeers {
     this.told.set(from, { digest, at: now })
   }
 
-  private send(to: string, mail: SettingsMail) {
-    this.transport.send(to, mail, false)
+  private send(to: string, mail: Omit<SettingsMail, "setup">) {
+    if (!this.directory.setup) return
+    this.transport.send(to, { ...mail, setup: this.directory.setup }, false)
   }
 
   private directorySaid() {
