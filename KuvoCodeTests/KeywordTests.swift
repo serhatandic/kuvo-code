@@ -659,10 +659,12 @@ import Testing
         let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
         let text = try #require(sent.body["text"] as? String)
         #expect(text.hasPrefix("how to test the blur pause"))
-        // Its bubble, read from what the agent got (on any client), draws the keyword as typed in
-        // front of the words; taken back (Undo, a draft), it's the words alone.
-        #expect(SentMessage.keyword(of: text) == "/plan")
-        #expect(SentMessage.split(text).text == "how to test the blur pause")
+        // Its bubble, read from the parts its box keeps with it (on any client), draws the keyword
+        // as typed in front of the words; taken back (Undo, a draft), it's the words alone.
+        #expect(text.contains("\n\n<sent-with>\n"))
+        let parts = (sent.body["metadata"] as? [String: Any]).flatMap { $0["kuvo"] as? [String: Any] }?["parts"] as? [String: Any]
+        #expect(parts?["keyword"] as? String == "/plan")
+        #expect(parts?["words"] as? String == "how to test the blur pause")
     }
 
     /// `/plan` alone turns Plan on, and again turns it off, back to Build; with words in Plan it

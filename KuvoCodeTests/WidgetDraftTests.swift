@@ -25,7 +25,7 @@ import WebKit
         let written = Message.ToolCall(id: id, name: "kuvo-browser_show_widget", state: .streaming(input: String(arguments.dropLast())))
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 640, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let host = NSHostingView(rootView: WidgetCard(call: written, send: { _ in }))
+        let host = NSHostingView(rootView: WidgetCard(call: written, send: { _, _ in }))
         window.contentView = host
         window.orderBack(nil)
         defer { window.close() }
@@ -42,7 +42,7 @@ import WebKit
 
         host.rootView = WidgetCard(call: Message.ToolCall(id: id, name: "kuvo-browser_show_widget",
                                                           state: .completed(input: .object(["title": .string("Benchmarks"), "html": .string(html)]), output: [], metadata: nil)),
-                                   send: { _ in })
+                                   send: { _, _ in })
         host.layoutSubtreeIfNeeded()
         try await until { page.title == "drawn" }
     }

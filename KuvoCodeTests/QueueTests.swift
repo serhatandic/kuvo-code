@@ -1,3 +1,4 @@
+import ClientSessions
 import ClientText
 import Foundation
 import KuvoLink
@@ -103,8 +104,10 @@ import Testing
     /// in its row and the folded line, as its bubble does (it read as the words alone, so a waiting
     /// /goal looked like any message).
     @Test func aMessageWaitingWithAKeywordReadsAsTyped() {
-        let goal = Transcript.Pending(id: "msg_8", text: "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>", delivery: .queue, isLocal: false)
-        let loop = Transcript.Pending(id: "msg_9", text: SentWithKeyword.message("check CI", typed: "/loop every hour"), delivery: .queue, isLocal: false)
+        var goal = Transcript.Pending(id: "msg_8", text: KeptParts.text("Summarize the commits weekly"), delivery: .queue, isLocal: false)
+        goal.metadata = KeptParts.value(words: "Summarize the commits weekly", keyword: "/goal")
+        var loop = Transcript.Pending(id: "msg_9", text: KeptParts.text("check CI"), delivery: .queue, isLocal: false)
+        loop.metadata = KeptParts.value(words: "check CI", keyword: "/loop every hour")
         #expect(QueueRow.summary(of: goal) == "/goal Summarize the commits weekly")
         #expect(QueueRow.summary(of: loop) == "/loop every hour check CI")
         let row = QueueRow.styledSummary(of: goal, folders: [])
@@ -297,6 +300,23 @@ import Testing
         #expect(engine.requests("POST", "/prompt").count == 1, "one run at a time")
     }
 
+    /// Another agent's letter waiting in the engine's queue, removed and put back with Undo: it goes
+    /// back as the agent read it, still theirs to answer, never as words of yours.
+    @Test func anotherAgentsLetterPutBackStaysTheirs() async throws {
+        let letter = "[Message from Ada · ses_ada] (To answer, use send_message to ses_ada.)\n\nThe build is green."
+        let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", letter)])
+        defer { box.stop(); engine.stop() }
+        let item = try #require(model.waiting.first)
+        // Read by its box: from Ada.
+        #expect(SentMessage.parts(item).mail?.name == "Ada")
+        model.cancelPending(item)
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+        model.requeue(item, for: nil, paused: false)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        #expect(engine.requests("POST", "/prompt").last?.body["text"] as? String == letter)
+    }
+
     /// Stopped from another client a moment ago, before this Mac heard: a message sent for after
     /// this run still waits on the box, which decides, rather than reaching the engine, which would
     /// run all it holds.
@@ -469,7 +489,7 @@ import Testing
         let queued: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
         let (model, box, _) = try await open(running: true, inbox: [queued])
         defer { box.stop(); engine.stop() }
-        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Ship v2", typed: "/goal")]
+        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]
         engine.on("POST", "/api/experimental/session/\(id)/wait", json: [:])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
@@ -488,7 +508,7 @@ import Testing
     /// Edit on a waiting goal, then on another waiting message: the goal Edit put back loses its
     /// "/goal" as the other goes ahead of it.
     @Test func editingTwoWaitingMessagesBackLeavesNoGoalInTheMiddle() async throws {
-        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": SentWithKeyword.message("Ship v2", typed: "/goal")]]
+        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]]
         let lint: [String: Any] = ["id": "msg_05", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
         let (model, box, _) = try await open(running: true, inbox: [goal, lint])
         defer { box.stop(); engine.stop() }
@@ -506,7 +526,7 @@ import Testing
     /// bringing it back, or the undo made final elsewhere, still leaves no "/goal" in the middle
     /// when a waiting message is edited back ahead of it.
     @Test func aGoalPutBackStaysOneUntilItsSent() async throws {
-        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": SentWithKeyword.message("Ship v2", typed: "/goal")]]
+        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]]
         let lint: [String: Any] = ["id": "msg_05", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
         let docs: [String: Any] = ["id": "msg_06", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then the docs"]]
         let (model, box, _) = try await open(running: true, inbox: [goal, lint, docs])
@@ -538,7 +558,7 @@ import Testing
         // An undone goal, the undo made final (by another client, a starter, a command) with the
         // goal still in the composer.
         model.draftText = ""
-        let goalSent: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Ship v2", typed: "/goal")]
+        let goalSent: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]
         guard case .user(let undoneGoal) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: goalSent)) else { return }
         model.undo(from: undoneGoal)
         try await until { model.draftText == "/goal Ship v2" }

@@ -11,6 +11,7 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct UndoRedoTests {
     let engine = StubEngine(port: 47992)
     let workspace = Workspace()
+    let box = SessionsBox()
     let id = "ses_undo_\(UUID().uuidString.prefix(8))"
     let older: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Add a settings page"]
     let newer: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": "Make it dark"]
@@ -26,6 +27,7 @@ import Testing
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
         }
         engine.on("DELETE", "/api/session/\(id)/revert", json: [:])
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         return try #require(workspace.model(for: id))
     }
@@ -38,6 +40,7 @@ import Testing
     }
 
     private func done() {
+        box.stop()
         engine.stop()
         Drafts.shared.remove(id)
     }
@@ -111,6 +114,7 @@ import Testing
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
         }
         engine.on("POST", "/api/session/\(id)/prompt", json: [:])
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -141,13 +145,14 @@ import Testing
     @Test func aGoalUndoneOrGoneBackToComesBackAsAGoal() async throws {
         defer { done() }
         let goal: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1],
-                                   "text": "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"]
-        let plan: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Plan the move", typed: "/plan")]
+                                   "text": KeptParts.text("Summarize the commits weekly"), "metadata": KeptParts.json(words: "Summarize the commits weekly", keyword: "/goal")]
+        let plan: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("Plan the move"), "metadata": KeptParts.json(words: "Plan the move", keyword: "/plan")]
         engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
         engine.conversation(id, [goal, plan])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
         }
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -166,12 +171,13 @@ import Testing
     @Test func aGoalUndoneBesideWhatYouTypedComesBackAsItsWords() async throws {
         defer { done() }
         let goal: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1],
-                                   "text": "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>"]
+                                   "text": KeptParts.text("Summarize the commits weekly"), "metadata": KeptParts.json(words: "Summarize the commits weekly", keyword: "/goal")]
         engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
         engine.conversation(id, [goal])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
         }
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -183,15 +189,36 @@ import Testing
 
     /// Undoing past a goal: the goal Undo just put back loses its "/goal" as the message before it
     /// goes ahead of it, so no "/goal" is left in the middle to go as plain words.
+    /// A message from before whose parts its box can't read isn't taken back: it says so before
+    /// anything's undone, rather than putting the text the agent read in the composer.
+    @Test func aMessageItsBoxCantReadIsntUndone() async throws {
+        defer { done() }
+        let sent: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Fix it\n\n<review-comments>\nComments on lines of the current changes:\n\n[a.js:4]\n> x()\nOnce\n</review-comments>"]
+        engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
+        engine.conversation(id, [sent])
+        engine.on("POST", "/api/session/\(id)/revert/stage", json: ["data": ["messageID": "msg_01"]])
+        // (No box to read it: its computer doesn't answer.)
+        workspace.boxes = { _ in nil }
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: id))
+        await model.load()
+        model.undo(from: try user(sent))
+        try await until { model.failure != nil }
+        #expect(model.failure == SessionModel.unread)
+        #expect(model.draftText.isEmpty)
+        #expect(engine.requests("POST", "/revert/stage").isEmpty, "nothing undone")
+    }
+
     @Test func undoingPastAGoalLeavesNoGoalInTheMiddle() async throws {
         defer { done() }
         let first: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "fix tests"]
-        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("ship v2", typed: "/goal")]
+        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("ship v2"), "metadata": KeptParts.json(words: "ship v2", keyword: "/goal")]
         engine.list([StubEngine.session(id, title: "Undo", directory: "/tmp/kuvo-tests-undo")])
         engine.conversation(id, [first, goal])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
         }
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()

@@ -153,6 +153,11 @@ nonisolated final class StubEngine: @unchecked Sendable {
                 }])
             case ("GET", "/api/session/active"):
                 return StubWeb.json(["data": Dictionary(uniqueKeysWithValues: running.map { ($0, ["type": "busy"]) })])
+            case ("GET", _) where path.hasPrefix("/api/session/") && !path.dropFirst("/api/session/".count).contains("/"):
+                // One it lists, as the engine answers for it (its box asks, to send it a message).
+                let id = String(path.dropFirst("/api/session/".count)).removingPercentEncoding
+                guard let session = sessions.first(where: { $0["id"] as? String == id }) else { return StubWeb.Answer(status: 404) }
+                return StubWeb.json(["data": session])
             default:
                 return StubWeb.Answer(status: 404)
             }

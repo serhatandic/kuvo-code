@@ -22,8 +22,9 @@ struct WidgetCard: View {
     }
 
     let call: Message.ToolCall
-    /// Sends what the page wrote back, as your message.
-    let send: (String) -> Void
+    /// Sends what the page wrote back, as your message, with the title of the widget it came from
+    /// ("" for none).
+    let send: (String, String) -> Void
     @State private var height: CGFloat
 
     /// Each page's height when last drawn, by call. The conversation makes a row again when you
@@ -31,7 +32,7 @@ struct WidgetCard: View {
     /// under it down as you scroll.
     private static var heights: [String: CGFloat] = [:]
 
-    init(call: Message.ToolCall, send: @escaping (String) -> Void) {
+    init(call: Message.ToolCall, send: @escaping (String, String) -> Void) {
         self.call = call
         self.send = send
         _height = State(initialValue: Self.heights[call.id] ?? 0)
@@ -41,9 +42,10 @@ struct WidgetCard: View {
     @State private var attempt = 0
     @Environment(\.colorScheme) private var scheme
 
-    /// What the page writes back, sent with which widget it came from (`WidgetAnswer`).
+    /// What the page writes back, sent with which widget it came from: its box (or a group chat's)
+    /// says so to the agent.
     private func answer(from title: String?) -> (String) -> Void {
-        { [send] text in send(WidgetAnswer.message(text, from: title)) }
+        { [send] text in send(text, title ?? "") }
     }
 
     private static let shape = RoundedRectangle(cornerRadius: 12)
@@ -178,8 +180,8 @@ struct WidgetAnswerChip: View {
 
 extension EnvironmentValues {
     /// Sends text to the agent of the conversation in view, as your message (a widget's
-    /// `kuvo.send`).
-    @Entry var answerAgent: (String) -> Void = { _ in }
+    /// `kuvo.send`), with the title of the widget it came from ("" for none).
+    @Entry var answerAgent: (String, String) -> Void = { _, _ in }
 }
 
 /// Words that change while a widget is on its way and its name isn't written yet.

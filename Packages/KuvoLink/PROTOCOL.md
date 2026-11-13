@@ -3739,24 +3739,21 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   bridge answers it too, with the Mac closed: its own, then those its other computers told it of
   (`Peers`). While its engine can't list them (starting), its own are as it last listed them
   (from 0.9.66). Insert
-  `&` and the name, and send the message as it is: every box adds to a prompt it passes on
-  (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, from everyone it
-  lists then (its `run/agents.json`; worked out again meanwhile, and waited for a moment only when
+  `&` and the name, and send the message as fields (`kuvo/sessions/<id>/send`, "A message's
+  parts"): its box writes a block naming each agent the text names (as it does on a prompt passed
+  on the way before, `api/…` and `kuvo/agents/api/…`), from everyone it lists then (its `run/agents.json`; worked out again meanwhile, and waited for a moment only when
   a name after `&` isn't there yet), which the agent reads
   (bridge 0.9.64; before, only the Mac did, and a machine sent it without). The Mac and the boxes
   read the same cases (`Vectors/routes/names/agent-naming.json`). A message to a group
   chat (`POST kuvo/groups/<id>`) gets its block on the computer the chat lives on, from the agents
   there are to name there (not the chat's own bots), for every client alike: send only the words,
-  and a block sent is not taken. Show a message
-  without it: it ends the text, from a line `<named-agents>` (then a heading line, then
-  `- &<name> (<session>): <what it is>` lines) to a line `</named-agents>`, before the
-  `<review-comments>` and `<attached-files>` blocks. Show each `&<name>` it lists in bold
-  (a bot's in its color), opening that session.
+  and a block sent is not taken. Show a message from its parts (`agents`), each `&<name>` they
+  list in bold (a bot's in its color), opening that session.
 - A message a keyword sends (/plan's words, /loop's when it sends now, a bot's /goal) carries the
   keyword as typed, right after its words and before every other block: a line `<sent-with>`, a
   heading in `SentWithKeyword.swift`, the keyword on one line (`/plan`, `/loop every hour`,
-  `/goal`), and a line `</sent-with>`. The client sending it writes it (the box, for a bot's
-  /goal). Show the keyword in front of the message's words, drawn as the composer draws it (its
+  `/goal`), and a line `</sent-with>`. Its box writes it from the message's `keyword` (and for a
+  bot's /goal). Show the keyword (its parts' `keyword`) in front of the message's words, drawn as the composer draws it (its
   mark for the "/", the rest in bold, in the accent; Plan's in orange). Taken back (Undo, a failed
   send, editing a queued one), it's the words alone, so sending them again sets no second loop.
 - A message the box writes to an agent in its conversation (a goal starting, changed, at its
@@ -3796,9 +3793,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
-  words (this Mac's box since bridge 0.9.64; the app did before); send the text without it. Show a
-  message without it (everything from a line `<from-phone>` to the line `</from-phone>`), as
-  sent from the phone. It tells the agent to keep replies short and to show files with
+  words (this Mac's box since bridge 0.9.64; the app did before); send the words without it. Show a
+  message from its parts (`phone`), as sent from the phone. It tells the agent to keep replies short and to show files with
   `show_file`.
 - A message whose request arrived whole (`POST api/session/<id>/prompt`, and
   `kuvo/agents/api/…` alike) goes on to its conversation even if the phone that sent it ends its
@@ -5296,6 +5292,61 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   (`TypedVectorsTests`) are held to.
 - Kept in clients, as drawing: which keyword or command a text starts with as it's typed (to draw
   it), the side thread's tag following what runs as typed, and whether Send needs a model.
+
+### A message's parts
+
+A client sends what was written and what goes with it as fields, and the conversation's box writes
+the text the agent reads (feature `messages.send`, which the update gate requires); every message
+the box sends keeps its parts, which clients draw it by. No client writes or reads the blocks.
+
+- `POST kuvo/sessions/<session>/send` `{id, words, files?, delivery?, keyword?, widget?, comments?,
+  named?, notes?}`: `words` as written (the composer's text, quotes and all), `files` as the engine
+  takes them (`file://` on the box's own disk, or `data:` inline, which the box keeps as
+  `attachedIn` does), `keyword` as typed (from `typed`'s `send.typed`), `widget` the title of the
+  widget it answers (`""` for none), `comments` `[{file, line, side: "new"|"old", snippet, text}]`,
+  `named` the sessions picked from the "&" list (of two agents with one name, these), `notes`
+  `{included?, paths?, unsent?}` (files the client sent with their contents, by path, or couldn't
+  send). With `command`, that command runs with `words` as its arguments, as written, and only the
+  files' note after them. `{id, text, files?, delivery?}` sends one sent before again as the agent
+  read it (Retry; another agent's letter put back; one from before whose parts couldn't be read),
+  `words` then only how it's shown; its files are kept as a message's are (a picture for a model that
+  only reads words goes as a path, in the note it has). A session picked in `named` that this box
+  doesn't list, after a moment's wait for its list, is refused (`409`), never dropped. It goes to the
+  engine or the coding agents' bridge, wherever the session is, once per `id` (`sentOnce`), and
+  answers as they do; `400` nothing to send, `404` no such session, `409` moving or an agent not
+  listed, `503` not running. `queue/add` takes the same fields, `{text, again: true, words?}` for one
+  sent again as the agent read it, and `{text, kept: true, words?, metadata?}` for one a DELETE gave
+  back (Undo) with the parts it had; `text` alone is an older client's own envelope.
+- **What the agent reads,** in this order (the words Kuvo Code wrote before, byte for byte): the
+  words (trimmed; the widget's block after them: a line `<from-widget>`, a heading, its title on one
+  line, `</from-widget>`), the keyword's block (`<sent-with>`, a heading, the keyword on one line,
+  `</sent-with>`; a bot's /goal has its own heading and how to plan it), who the "&" names are
+  (`<named-agents>`, from everyone the box lists then, `- &<name> (<session>): <what it is>`), the
+  comments (`<review-comments>`, a heading, then for each a blank line, `[<file>:<line>]` or
+  `[<file>:<line> (removed)]`, `> <the line>`, what was said), the files' note (`<attached-files>`,
+  the client's `notes` then what the box keeps, each list under its heading), and from a phone
+  (a request that isn't a Kuvo Code app's) `<from-phone>`. An `&` in a keyword or a title is written
+  `＆`; words ending like the named, comments' or files' block get a space after its tag, so they
+  stay words.
+- **Parts:** kept in the engine message's (and inbox item's) `metadata.kuvo.parts`: `{words,
+  keyword?, widget?, comments?, paths?, agents?: [{name, session}], phone?: true, mail?: {name,
+  session}}` (`paths`: files its note names that it doesn't carry; `mail`: another agent wrote it,
+  `"[Message from <name> · <session>] (…)"`, and `words` is what they wrote). Those sent here and
+  `queue/add`'s with fields keep them, as do a started session's task and a bot's /goal; a letter
+  between agents, a prompt passed on the way before (`api/session/<id>/prompt`) and anything else
+  the box sends keep them where there's more to them than the text. The box's own notes keep none
+  (`kuvo.note`), nor does a plain message, which a client asks about once.
+- **Messages from before** keep no parts: `POST kuvo/messages/parts {texts}` (at most 500) answers
+  `{parts}`, one for each, read from the text as the apps read it before (every block, a /goal
+  sent as `[Goal] …`, a file listed with ` (on the user's Mac: …)`, the named block's earlier
+  heading). A client asks once for each message (KuvoClient's `MessageParts.read`), before it shows
+  the page, and shows one its box couldn't read as written. A command shows as typed: a client
+  keeps which messages ran one (`CommandMessages`).
+- Both directions: `Vectors/message-parts.json` (written from the apps' Swift before this), which
+  the box (`test/message-parts.test.ts`) and KuvoClient (`MessagePartsTests`) are held to.
+- One waiting on the box (`waiting` in a queue) says the keyword it was sent with (`keyword`), for
+  its row to show in front of its words.
+- A group chat's message still carries the widget it answers as its own block (`WidgetAnswer`).
 
 ### Features
 
@@ -8062,6 +8113,12 @@ before connects (the box notes one: `run/attached`).
   to the copy. Marking a box, a Mac puts its `kuvo-npx` there only with its own engine version
   there, which it runs.
   <!-- compat: 0.7 files -->
+- **Messages it writes itself**: such a Mac, and every Mac and phone from before `messages.send`,
+  writes a message's blocks itself and sends its text (`api/session/<id>/prompt`, `queue/add` with
+  `text`): the box still tells who a phone's names with "&", adds the phone's block and the files'
+  note for files it carries, and keeps the parts where there's more to them than the text ("A
+  message's parts").
+  <!-- compat: 0.7 own-envelope -->
 - **Its keeper**: such a Mac's `kuvo-start` only starts the engine after a restart, and its
   `kuvo-launch` knows neither Stop nor the box's settings. The keeper keeps a copy of both
   (`bin/.kuvo-start-keeper`, `bin/.kuvo-launch-keeper`), runs its starts from them, and puts them

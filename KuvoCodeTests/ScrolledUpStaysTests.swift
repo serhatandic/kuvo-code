@@ -414,8 +414,13 @@ import Testing
     /// Scrolled up to its top, what you send takes you to its end once: in every frame drawn its
     /// end comes nearer, never further, and it stays there, following it (the phone's #403).
     @Test func sendingFromTheTopGoesToTheEndOnce() async throws {
-        defer { done() }
+        let box = SessionsBox()
+        defer {
+            box.stop()
+            done()
+        }
         try await conversation(turns: 30)
+        try await box.start(engine, for: app.workspace)
         model.apply(try engine.event("session.execution.succeeded", session: id))
         try await until { laidOut && !model.isRunning }
         await settled()
