@@ -70,7 +70,7 @@ export function resetGiven(row: Record<string, unknown>, offer: Record<string, u
  * One reset used now (asked of the bridge, then confirmed with the id it gave), and Always Allow
  * kept first where it's given: what the agent hears, with the account's limits as read just after.
  */
-export async function spendReset(bridge: Target, row: string, by: string, { always = false, signal }: { always?: boolean; signal?: AbortSignal } = {}): Promise<{ text: string; isError: boolean }> {
+export async function spendReset(bridge: Target, row: string, by: string, { always = false, unasked = false, signal }: { always?: boolean; unasked?: boolean; signal?: AbortSignal } = {}): Promise<{ text: string; isError: boolean }> {
   try {
     if (always) await call(bridge, "PUT", "/api/kuvo/limits/reset/always", { row, always: true }, signal);
     let offer: unknown;
@@ -83,7 +83,8 @@ export async function spendReset(bridge: Target, row: string, by: string, { alwa
       throw error;
     }
     if (!isObject(offer) || typeof offer.confirm !== "string") return refused("The reset couldn't be asked for.");
-    const done = await call(bridge, "POST", "/api/kuvo/limits/reset", { row, confirm: offer.confirm, by }, signal);
+    // (`unasked`: no one confirmed it, under Always Allow: the box with the sign-in checks it's still allowed.)
+    const done = await call(bridge, "POST", "/api/kuvo/limits/reset", { row, confirm: offer.confirm, by, ...(unasked ? { unasked: true } : {}) }, signal);
     if (!isObject(done)) return refused("The reset's answer didn't come.");
     const limits = isObject(done.row) ? `\n\n${describePlanLimits({ rows: [done.row] })}` : "";
     const name = isObject(done.row) ? rowTitle(done.row) : "the account";
@@ -133,7 +134,7 @@ export async function useResetTool(
       return refused(`${rowTitle(found.row)}'s resets can't be used now: ${why(error)}`);
     }
     if (!isObject(offer)) return refused("The reset couldn't be asked for.");
-    if (offer.always === true) return spendReset(bridge, id, asker.name, { signal });
+    if (offer.always === true) return spendReset(bridge, id, asker.name, { unasked: true, signal });
     return ask(resetGiven(found.row, offer));
   } catch (error) {
     return refused(`Couldn't read the plan limits on ${HERE}: ${why(error)}`);

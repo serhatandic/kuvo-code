@@ -15,7 +15,7 @@ import { accountName, ContextWindows, failure, KnownAccount, lostWorkNote, model
 import { fileDiff, fromPatch } from "../diff"
 import { install, installedVersion, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { fingerprint, type LimitsSource } from "../limits"
-import { CLAUDE_GRANTS_EVERY, CLAUDE_LIMITS_EVERY, claimableGrant, claimClaudeGrant, claudeIdentity, claudeOrganization, credentialsIn, grantsExtra, heardWindows, limitWarning, MAC_TOKEN_CANT, readClaudeGrants, readClaudeLimits, type ClaudeGrants, type ClaudeSignIn } from "./claude-limits"
+import { CLAUDE_GRANTS_EVERY, CLAUDE_LIMITS_EVERY, claimableGrant, claimClaudeGrant, claudeIdentity, claudeOrganization, credentialsIn, tokenAccount, grantsExtra, heardWindows, limitWarning, MAC_TOKEN_CANT, readClaudeGrants, readClaudeLimits, type ClaudeGrants, type ClaudeSignIn } from "./claude-limits"
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
@@ -461,6 +461,11 @@ export class ClaudeAgent implements Agent {
         // keeps it, never none).
         afterReset: () => {
           if (this.grants) this.grants = { ...this.grants, at: -Infinity }
+        },
+        // Who its token is for, as Anthropic says, right before a reset is spent with it.
+        spender: async () => {
+          const signIn = this.limitsSignIn()
+          return signIn ? tokenAccount(signIn, await this.programVersion()) : undefined
         },
       }
 

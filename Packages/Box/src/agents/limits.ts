@@ -219,6 +219,12 @@ export interface LimitsSource {
   reset?(attempt: ResetAttempt, now: number): Promise<{ outcome: ResetOutcome; until?: number; already?: true }>
   /** A reset was spent (or may have been): what's kept of its resets is read again, now. */
   afterReset?(): void
+  /**
+   * Who the account a reset would be spent from is, as its sign-in's own maker says right now
+   * (`identity`'s form): asked right before a reset goes, where the sign-in's local files can't
+   * say for sure. Undefined where it can't be told now.
+   */
+  spender?(): Promise<string | undefined>
 }
 
 /** An account whose limits are read: a coding agent's, or a sign-in of the engine's. */

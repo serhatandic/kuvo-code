@@ -305,6 +305,25 @@ export async function readClaudeGrants(signIn: ClaudeSignIn, version: string | u
   return claudeGrants(((await response.json()) as any)?.cedar_ember)
 }
 
+/**
+ * Who a sign-in's token is for, as Anthropic says (its profile: the account and the organization
+ * whose plan it uses), in `claudeIdentity`'s form: the token itself says nothing (it isn't one that
+ * carries claims), and Claude Code's own record of it (`.claude.json`) can lag a sign-in to another
+ * account. None where Anthropic doesn't answer now.
+ */
+export async function tokenAccount(signIn: ClaudeSignIn, version: string | undefined): Promise<string | undefined> {
+  try {
+    const response = await fetch(new URL("profile", claudeUsage.url), { headers: claudeHeaders(signIn.token, version), signal: AbortSignal.timeout(15_000) })
+    if (!response.ok) return undefined
+    const body = (await response.json()) as any
+    const account = typeof body?.account?.uuid === "string" ? body.account.uuid.trim().toLowerCase() : ""
+    const organization = typeof body?.organization?.uuid === "string" ? body.organization.uuid.trim().toLowerCase() : ""
+    return account && organization ? `anthropic:${account}|${organization}` : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** The organization a sign-in claims against: as Claude Code keeps it beside the sign-in, else as Anthropic's profile says. */
 export async function claudeOrganization(configHome: string | undefined, signIn: ClaudeSignIn, version: string | undefined): Promise<string | undefined> {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

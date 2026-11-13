@@ -76,6 +76,12 @@ class Makers {
   unconfirmedOnce = false
   /** ChatGPT holding reads of the plan off (a 429 for an hour). */
   holdUsage = false
+  /** Anthropic holding reads of the plan off (a 429 for an hour). */
+  holdClaude = false
+  /** The next claim: spent, then answered with a failure (its answer lost). */
+  claimFailsAfterSpending = false
+  /** Who each token is for, where it isn't the account the tests sign in to. */
+  profiles = new Map<string, { account: string; organization: string }>()
   /** Credits it refuses outright (expired since they were listed): a 400. */
   refuses = new Set<string>()
   fiveHour = 92
@@ -88,8 +94,14 @@ class Makers {
       const token = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "")
       if (url.pathname === "/api/oauth/usage") {
         if (!token.startsWith("claude-")) return new Response("{}", { status: 401 })
+        if (this.holdClaude) return new Response("{}", { status: 429, headers: { "retry-after": "3600" } })
         if (url.searchParams.get("cedar_ember") === "1") return Response.json({ cedar_ember: this.grants })
         return Response.json({ five_hour: { utilization: this.fiveHour, resets_at: new Date(time + 3_600_000).toISOString() }, seven_day: { utilization: 40, resets_at: new Date(time + 3 * DAY).toISOString() }, extra_usage: { is_enabled: true, used_credits: 1240, monthly_limit: 5000 } })
+      }
+      // Who a token is for, as Anthropic says (its profile).
+      if (url.pathname === "/api/oauth/profile") {
+        const who = this.profiles.get(token) ?? (token.startsWith("claude-") ? { account: ACCOUNT, organization: ORG } : undefined)
+        return who ? Response.json({ account: { uuid: who.account }, organization: { uuid: who.organization } }) : new Response("{}", { status: 401 })
       }
       const claim = url.pathname.match(/^\/api\/organizations\/([^/]+)\/reset_rate_limits$/)
       if (claim && request.method === "POST") {
@@ -109,6 +121,10 @@ class Makers {
         grant.resets_left--
         this.spent.set(body.request_id, grant.id)
         this.fiveHour = 0
+        if (this.claimFailsAfterSpending) {
+          this.claimFailsAfterSpending = false
+          return new Response("{}", { status: 502 })
+        }
         return Response.json({ result: "reset" })
       }
       if (url.pathname === "/wham/usage") {
@@ -357,10 +373,11 @@ class Box {
   private following = new AbortController()
   /** Mail of its own the relay loses (it never reaches the box it's for). */
   loses?: (mail: any) => boolean
-  constructor(readonly key: string, readonly name: string, accounts: () => LimitedAccount[], folder: string, relay: Map<string, Box>, peerWait = 5_000) {
-    this.limits = new Limits(accounts, join(folder, "limits.json"), now)
-    this.peers = new LimitsPeers(this.limits, this.post, this.directory, undefined, now)
-    this.resets = new LimitResets(this.limits, join(folder, "limits-resets.json"), now, this.post, this.directory, peerWait)
+  constructor(readonly key: string, readonly name: string, accounts: () => LimitedAccount[], folder: string, relay: Map<string, Box>, peerWait = 5_000, readonly ahead = 0) {
+    const clock = () => time + ahead
+    this.limits = new Limits(accounts, join(folder, "limits.json"), clock)
+    this.peers = new LimitsPeers(this.limits, this.post, this.directory, undefined, clock)
+    this.resets = new LimitResets(this.limits, join(folder, "limits-resets.json"), clock, this.post, this.directory, peerWait)
     this.parts = { post: this.post, directory: this.directory, limits: this.peers, resets: this.resets }
     relay.set(key, this)
     void this.carry(relay)
@@ -819,5 +836,152 @@ describe("the third review's cases", () => {
     expect(makers.consumes.map((each) => each.request)).toEqual([makers.consumes[0]!.request, makers.consumes[0]!.request, makers.consumes[2]!.request])
     expect(makers.consumes[2]!.request).not.toBe(makers.consumes[0]!.request)
     expect(makers.spends).toBe(2)
+  })
+})
+
+describe("the fourth review's cases", () => {
+  /** This Mac (Kuvo Code's Claude token) and hetzner (Claude Code's own sign-in, the same account), on the relay. */
+  async function macAndHetzner(peerWait = 20, ahead = 0) {
+    const relay = new Map<string, Box>()
+    const macFolder = mkdtempSync(join(base, "mac-4-"))
+    const claudeMac = macClaude(macFolder)
+    const mac = new Box("key-mac", "MacBook Pro", () => agentAccounts([claudeMac]), macFolder, relay, peerWait)
+    const hetznerFolder = mkdtempSync(join(base, "hetzner-4-"))
+    const claudeLinux = linuxClaude(hetznerFolder)
+    const hetzner = new Box("key-hetzner", "hetzner", () => agentAccounts([claudeLinux]), hetznerFolder, relay, 5_000, ahead)
+    await mac.meet([hetzner])
+    await hetzner.meet([mac])
+    await mac.limits.tick()
+    claudeMac.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+    await hetzner.limits.tick()
+    const merged = () => mac.limits.rows().find((row) => row.boxes.length === 2)
+    await until(() => !!merged()?.extras?.some((extra) => extra.kind === "resets"))
+    return { mac, hetzner, macFolder, hetznerFolder, id: merged()!.id, merged, stop: () => (mac.stop(), hetzner.stop()) }
+  }
+  const journal = (folder: string) => JSON.parse(readFileSync(join(folder, "limits-resets.json"), "utf8"))
+
+  test("no answer came from the computer with the sign-in, then it's held off: the Mac's spend stays open, never 'nothing was used', and Retry goes again", async () => {
+    const two = await macAndHetzner()
+    try {
+      makers.claimFailsAfterSpending = true
+      const offer = await post(two.mac.limits, { row: two.id })
+      expect((await post(two.mac.limits, { row: two.id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("unknown")
+      await until(() => makers.claims.length === 1 && !!journal(two.hetznerFolder).spends.length)
+      // Anthropic holds hetzner off now.
+      makers.holdClaude = true
+      time += 16 * 60_000
+      await two.hetzner.limits.tick()
+      const again = await post(two.mac.limits, { row: two.id, confirm: offer.body.data.confirm })
+      expect(again.body.data.outcome).toBe("not-now")
+      expect(again.body.data.message).toContain("An earlier try may have gone through")
+      expect(journal(two.macFolder).spends[0].state).toBe("sending")
+    } finally {
+      two.stop()
+    }
+  })
+
+  test("a peer's ask more than 10 minutes after an open spend that went through: that one is settled first, and this one is a reset of its own", async () => {
+    const two = await macAndHetzner()
+    try {
+      makers.claimFailsAfterSpending = true
+      const offer = await post(two.mac.limits, { row: two.id })
+      expect((await post(two.mac.limits, { row: two.id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("unknown")
+      await until(() => makers.claims.length === 1)
+      // A quarter of an hour on, another of your computers asks hetzner for one, as a new ask.
+      time += 15 * 60_000
+      two.hetzner.resets.take("key-mac", { kind: "reset", at: time, ask: { id: "rsc_new", row: two.id } })
+      await until(() => makers.claims.length === 3)
+      // The first again as itself (Anthropic: done before), then the new one, its own request.
+      expect(makers.claims[1]!.request).toBe(makers.claims[0]!.request)
+      expect(makers.claims[2]!.request).not.toBe(makers.claims[0]!.request)
+      expect(makers.spends).toBe(2)
+    } finally {
+      two.stop()
+    }
+  })
+
+  test("hetzner's clock a minute ahead: Always Allow on there, then off from the Mac within that minute, is off on both", async () => {
+    const two = await macAndHetzner(5_000, 60_000)
+    try {
+      expect((await limitsRoutes(two.hetzner.limits, "PUT", ["reset", "always"], async () => ({ row: two.id, always: true }))).status).toBe(200)
+      const resets = () => two.merged()?.extras?.find((extra) => extra.kind === "resets")
+      await until(() => resets()?.agents === true)
+      time += 10_000
+      const off = await limitsRoutes(two.mac.limits, "PUT", ["reset", "always"], async () => ({ row: two.id, always: false }))
+      expect(off.status).toBe(200)
+      await until(() => resets()?.agents !== true)
+      expect(two.hetzner.resets.agentsMay("claude-code")).toBe(false)
+      expect((await post(two.mac.limits, { row: two.id })).body.data.always).toBe(false)
+    } finally {
+      two.stop()
+    }
+  })
+
+  test("an agent's reset under Always Allow, with it turned off on the computer with the sign-in: refused there, nothing used", async () => {
+    const two = await macAndHetzner()
+    try {
+      // The Mac still thinks it's allowed (it hasn't heard of the off yet).
+      two.mac.resets.take("key-hetzner", { kind: "reset", at: time, always: { row: two.id, on: true, at: time } })
+      ;(two.hetzner.resets as any).allowed.set(two.id, { on: false, at: time + 1 })
+      const offer = await post(two.mac.limits, { row: two.id })
+      const done = await post(two.mac.limits, { row: two.id, confirm: offer.body.data.confirm, unasked: true })
+      expect(done.body.data.outcome).toBe("failed")
+      expect(done.body.data.message).toBe("Always Allow is off for this account now: nothing was used. Ask the user first.")
+      expect(makers.claims).toEqual([])
+    } finally {
+      two.stop()
+    }
+  })
+
+  test("two confirmations at once, well after one that never heard back: that one settled first, then one fresh request for both", async () => {
+    const { limits } = await chatGPTBox(mkdtempSync(join(base, "two-late-")))
+    const [row] = limits.rows()
+    makers.failAfterSpending = true
+    const first = await post(limits, { row: row!.id })
+    expect((await post(limits, { row: row!.id, confirm: first.body.data.confirm })).body.data.outcome).toBe("unknown")
+    time += 15 * 60_000
+    const a = await post(limits, { row: row!.id })
+    const b = await post(limits, { row: row!.id })
+    const [one, two] = await Promise.all([post(limits, { row: row!.id, confirm: a.body.data.confirm }), post(limits, { row: row!.id, confirm: b.body.data.confirm })])
+    expect([one.body.data.outcome, two.body.data.outcome]).toEqual(["reset", "reset"])
+    expect(makers.consumes).toHaveLength(3)
+    expect(makers.spends).toBe(2)
+  })
+
+  test("the computer with the sign-in can't be reached while a spend is open: it stays open and says an earlier try may have gone, never 'nothing was used'", async () => {
+    const two = await macAndHetzner()
+    try {
+      makers.claimFailsAfterSpending = true
+      const offer = await post(two.mac.limits, { row: two.id })
+      expect((await post(two.mac.limits, { row: two.id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("unknown")
+      // hetzner isn't one the Mac reaches now.
+      await two.mac.meet([])
+      const again = await post(two.mac.limits, { row: two.id, confirm: offer.body.data.confirm })
+      expect(again.body.data.outcome).toBe("not-now")
+      expect(again.body.data.message).toContain("An earlier try may have gone through")
+      expect(journal(two.macFolder).spends).toHaveLength(1)
+      expect(journal(two.macFolder).spends[0].state).toBe("sending")
+    } finally {
+      two.stop()
+    }
+  })
+
+  test("Claude on Linux: the token is another account's than Claude Code's record says: nothing is spent from it", async () => {
+    const relay = new Map<string, Box>()
+    const folder = mkdtempSync(join(base, "token-"))
+    const claude = linuxClaude(folder)
+    const box = new Box("key-l", "hetzner", () => agentAccounts([claude]), folder, relay)
+    try {
+      await box.meet([])
+      await box.limits.tick()
+      const id = box.limits.rows()[0]!.id
+      // Signed in to another account; Claude Code hasn't written its record of it yet.
+      makers.profiles.set("claude-linux", { account: "6f1e0c4a-0000-4000-8000-0000000000ff", organization: ORG })
+      const offer = await post(box.limits, { row: id })
+      expect((await post(box.limits, { row: id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("no-reset")
+      expect(makers.claims).toEqual([])
+    } finally {
+      box.stop()
+    }
   })
 })

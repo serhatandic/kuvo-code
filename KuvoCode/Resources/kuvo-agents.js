@@ -9528,6 +9528,7 @@ import { randomBytes as randomBytes5 } from "crypto";
 import { mkdirSync as mkdirSync10, readFileSync as readFileSync15, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "fs";
 import { dirname as dirname10 } from "path";
 var isResetMail = (value) => value !== null && typeof value === "object" && value.kind === "reset";
+var NOT_ALLOWED = "Always Allow is off for this account now: nothing was used. Ask the user first.";
 var JOIN_FOR = 10 * 60000;
 var STILL_OPEN = "It can't be asked of its maker from here right now. An earlier try may have gone through: asking again later won't use another.";
 var OPEN = new Set(["unknown", "unconfirmed"]);
@@ -9579,7 +9580,7 @@ class LimitResets {
   }
   decide(rowID, on, at) {
     const kept = this.allowed.get(rowID);
-    if (kept && kept.at > at)
+    if (kept && (kept.at > at || kept.at === at && on && !kept.on))
       return false;
     this.allowed.set(rowID, { on, at });
     this.save();
@@ -9593,15 +9594,16 @@ class LimitResets {
       return { status: 404, message: "No account of yours by that name has resets." };
     if (!rowID.includes("#"))
       return { status: 409, message: "This account doesn't say who it is yet, so Always Allow can't be kept for it." };
-    const row = this.limits.rows().find((each) => each.id === rowID);
     const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.liveRow(ownProvider) === rowID;
-    const others = tell ? (row?.boxes ?? []).filter((box) => !box.here && box.key && this.directory?.isPeer?.(box.key) === true) : [];
+    const own = this.directory?.own()?.key;
+    const others = tell ? (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true) : [];
     if (!ownCan && !others.length)
       return { status: 404, message: "No computer of yours has this account's sign-in." };
-    const at = this.now();
+    const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1);
     if (ownCan)
       this.saw(ownProvider, rowID);
-    this.decide(rowID, on, at);
+    if (!this.decide(rowID, on, at))
+      return { status: 409, message: "A later decision for this account is kept: look again." };
     for (const box of others)
       this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true);
     return null;
@@ -9644,46 +9646,63 @@ class LimitResets {
         count: Number(resets.count),
         ...resets.refills?.length ? { refills: resets.refills } : {},
         on: resets.on,
-        always: resets.agents === true,
+        always: resets.agents === true && this.allowed.get(rowID)?.on !== false,
         expires: at + CONFIRM_FOR
       }
     };
   }
-  async spend(rowID, confirm, by) {
+  async spend(rowID, confirm, by, unasked = false) {
     const kept = this.spends.find((spend) => (spend.id === confirm || spend.also?.includes(confirm)) && spend.row === rowID);
     let result;
     if (kept?.state === "done") {
       result = { outcome: kept.outcome, ...kept.until ? { until: kept.until } : {} };
     } else if (kept) {
-      result = kept.via ? await this.passed(kept) : await this.here(kept.id, kept.row, kept.provider, kept.by);
+      result = await this.rerun(kept, rowID);
     } else {
       const asked = this.confirms.get(confirm);
       if (!asked || asked.row !== rowID || this.now() - asked.at > CONFIRM_FOR)
         return { refused: { status: 404, message: "That confirmation has expired: ask again." } };
+      if (unasked && this.allowed.get(rowID)?.on === false)
+        return { done: { outcome: "failed", message: NOT_ALLOWED, row: this.limits.rows().find((each) => each.id === rowID) } };
       this.confirms.delete(confirm);
-      const open = this.open(rowID, asked.via);
-      const rerun = (spend) => spend.via ? this.passed(spend) : this.here(spend.id, rowID, spend.provider ?? asked.provider, spend.by ?? by);
-      const join = (spend) => {
-        spend.also = [...new Set([...spend.also ?? [], confirm])].slice(-20);
-        this.save();
-      };
-      let settledFirst;
-      if (open && this.now() - open.at < JOIN_FOR) {
+      result = await this.attach(confirm, rowID, { via: asked.via, provider: asked.provider, by, unasked });
+    }
+    const { already: _, open: __, message, ...told } = result;
+    return { done: { ...told, ...message ?? words2(result.outcome) ? { message: message ?? words2(result.outcome) } : {}, row: this.limits.rows().find((each) => each.id === rowID) } };
+  }
+  rerun(spend, rowID, given = {}) {
+    return spend.via ? this.passed(spend) : this.here(spend.id, rowID, spend.provider ?? given.provider, spend.by ?? given.by, spend.unasked === true);
+  }
+  async attach(id, rowID, given) {
+    const join = (spend) => {
+      spend.also = [...new Set([...spend.also ?? [], id])].slice(-20);
+      this.save();
+    };
+    const open = this.open(rowID, given.via);
+    if (open && this.now() - open.at < JOIN_FOR) {
+      join(open);
+      return this.rerun(open, rowID, given);
+    }
+    if (open) {
+      const settled = await this.rerun(open, rowID, given);
+      if (OPEN.has(settled.outcome) || settled.open || settled.outcome === "reset" && !settled.already) {
         join(open);
-        result = await rerun(open);
-      } else if (open && (settledFirst = await rerun(open), OPEN.has(settledFirst.outcome) || settledFirst.outcome === "reset" && !settledFirst.already)) {
-        join(open);
-        result = settledFirst;
-      } else if (asked.via) {
-        const spend = { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...by ? { by } : {} };
-        this.keep(spend);
-        result = await this.passed(spend);
-      } else {
-        result = await this.here(confirm, rowID, asked.provider, by);
+        return settled;
+      }
+      const since = this.open(rowID, given.via);
+      if (since && since !== open) {
+        join(since);
+        return this.rerun(since, rowID, given);
       }
     }
-    const { already: _, message, ...told } = result;
-    return { done: { ...told, ...message ?? words2(result.outcome) ? { message: message ?? words2(result.outcome) } : {}, row: this.limits.rows().find((each) => each.id === rowID) } };
+    if (given.via) {
+      if (!this.reaches(given.via))
+        return { outcome: "failed" };
+      const spend = { id, row: rowID, via: given.via, request: id, at: this.now(), state: "sending", ...given.by ? { by: given.by } : {}, ...given.unasked ? { unasked: true } : {} };
+      this.keep(spend);
+      return this.passed(spend);
+    }
+    return this.here(id, rowID, given.provider, given.by, given.unasked === true);
   }
   open(rowID, via) {
     return this.spends.findLast((each) => each.row === rowID && each.state === "sending" && (via ? each.via === via : !each.via) && this.now() - each.at < UNSETTLED_FOR);
@@ -9708,13 +9727,10 @@ class LimitResets {
     const by = typeof ask.by === "string" ? ask.by.slice(0, 200) : undefined;
     const id = `${from}:${ask.id}`;
     const known = this.spends.find((each) => each.id === id || each.also?.includes(id));
-    const open = known ? undefined : this.open(ask.row);
-    if (open) {
-      open.also = [...new Set([...open.also ?? [], id])].slice(-20);
-      this.save();
-    }
-    this.here(known?.id ?? open?.id ?? id, ask.row, open?.provider, by).then((result) => {
-      this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: result.outcome, ...result.until ? { until: result.until } : {}, ...result.already ? { already: true } : {} } }, false);
+    const unasked = ask.unasked === true;
+    const run = known ? known.state === "done" ? this.here(known.id, ask.row, known.provider, by) : this.rerun(known, ask.row, { by }) : this.attach(id, ask.row, { by, unasked });
+    run.then((result) => {
+      this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: result.outcome, ...result.until ? { until: result.until } : {}, ...result.already ? { already: true } : {}, ...result.open || OPEN.has(result.outcome) ? { open: true } : {}, ...result.message ? { message: result.message.slice(0, 300) } : {} } }, false);
     });
   }
   reaches(key) {
@@ -9731,7 +9747,7 @@ class LimitResets {
   }
   async pass(spend) {
     if (!this.reaches(spend.via))
-      return { outcome: "failed" };
+      return { outcome: "not-now", message: STILL_OPEN, open: true };
     const answer = await new Promise((resolve) => {
       const timer = setTimeout(() => resolve(null), this.peerWait);
       timer.unref?.();
@@ -9739,53 +9755,65 @@ class LimitResets {
         clearTimeout(timer);
         resolve(given);
       });
-      this.transport.send(spend.via, { kind: "reset", at: this.now(), ask: { id: spend.id, row: spend.row, ...spend.by ? { by: spend.by } : {} } }, false);
+      this.transport.send(spend.via, { kind: "reset", at: this.now(), ask: { id: spend.id, row: spend.row, ...spend.by ? { by: spend.by } : {}, ...spend.unasked ? { unasked: true } : {} } }, false);
     });
     this.waiting.delete(spend.id);
     if (!answer)
       return { outcome: "unknown" };
     const outcome = OUTCOMES.has(answer.outcome) ? answer.outcome : "unknown";
-    if (!OPEN.has(outcome)) {
+    const open = OPEN.has(outcome) || answer.open === true;
+    if (!open) {
       spend.state = "done";
       spend.outcome = outcome;
       if (typeof answer.until === "number")
         spend.until = answer.until;
       this.save();
     }
-    return { outcome, ...typeof answer.until === "number" ? { until: answer.until } : {}, ...answer.already === true ? { already: true } : {} };
+    return { outcome, ...typeof answer.until === "number" ? { until: answer.until } : {}, ...answer.already === true ? { already: true } : {}, ...answer.open === true && !OPEN.has(outcome) ? { message: STILL_OPEN, open: true } : typeof answer.message === "string" && answer.message ? { message: answer.message.slice(0, 300) } : {} };
   }
-  here(id, rowID, provider, by) {
+  here(id, rowID, provider, by, unasked = false) {
     const running = this.running.get(id);
     if (running)
       return running;
-    const run = this.spendHere(id, rowID, provider, by).finally(() => this.running.delete(id));
+    const run = this.spendHere(id, rowID, provider, by, unasked).finally(() => this.running.delete(id));
     this.running.set(id, run);
     return run;
   }
-  async spendHere(id, rowID, provider, by) {
+  async spendHere(id, rowID, provider, by, unasked) {
     let spend = this.spends.find((each) => each.id === id);
     if (spend?.state === "done")
       return { outcome: spend.outcome, ...spend.until ? { until: spend.until } : {}, ...spend.outcome === "reset" ? { already: true } : {} };
-    const refused = (outcome) => spend ? { outcome, message: STILL_OPEN } : { outcome };
+    const fresh = !spend;
+    const refused = (outcome, message) => !fresh ? { outcome, message: STILL_OPEN, open: true } : { outcome, ...message ? { message } : {} };
     const account = provider ? this.limits.account(provider) : this.limits.accountOf(rowID);
     if (!account?.limits.reset)
       return refused("no-reset");
     if (this.limits.held(account.provider))
       return refused("not-now");
+    if ((unasked || spend?.unasked) && this.allowed.get(rowID)?.on !== true)
+      return refused("failed", NOT_ALLOWED);
+    if (!spend) {
+      spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...by ? { by } : {}, ...unasked ? { unasked: true } : {} };
+      this.keep(spend);
+    }
+    const stopped = (outcome) => {
+      if (!fresh)
+        return { outcome, message: STILL_OPEN, open: true };
+      spend.state = "done";
+      spend.outcome = outcome;
+      this.save();
+      return { outcome };
+    };
     if (rowID.includes("#")) {
-      const live = this.limits.liveRow(account.provider);
+      const live = await this.spender(account);
       if (live === undefined)
-        return refused("not-now");
+        return stopped("not-now");
       if (live !== rowID) {
         this.saw(account.provider, live);
         if (this.allowed.get(rowID)?.on)
-          this.decide(rowID, false, this.now());
-        return refused("no-reset");
+          this.decide(rowID, false, Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1));
+        return stopped("no-reset");
       }
-    }
-    if (!spend) {
-      spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...by ? { by } : {} };
-      this.keep(spend);
     }
     const kept = spend;
     let result;
@@ -9810,6 +9838,14 @@ class LimitResets {
       await Promise.race([this.limits.readAgain(account.provider), new Promise((resolve) => setTimeout(resolve, READ_AFTER).unref?.())]);
     }
     return result;
+  }
+  async spender(account) {
+    if (!account.limits.spender)
+      return this.limits.liveRow(account.provider);
+    const raw = await account.limits.spender().catch(() => {
+      return;
+    });
+    return raw ? `${account.service}#${identityOf(raw)}` : undefined;
   }
   keep(spend) {
     this.spends.push(spend);
@@ -9876,7 +9912,7 @@ async function resetRoutes(resets, method, rest, body) {
     }
     if (typeof given.confirm !== "string" || !given.confirm)
       return json6({ message: "That isn't a confirmation." }, 400);
-    const spent = await resets.spend(given.row, given.confirm, typeof given.by === "string" ? given.by.slice(0, 200) : undefined);
+    const spent = await resets.spend(given.row, given.confirm, typeof given.by === "string" ? given.by.slice(0, 200) : undefined, given.unasked === true);
     return "refused" in spent ? json6({ message: spent.refused.message }, spent.refused.status) : json6({ data: spent.done });
   }
   if (rest.length === 1 && rest[0] === "always" && method === "PUT") {
@@ -13899,6 +13935,19 @@ async function readClaudeGrants(signIn, version) {
     throw new Error(`Anthropic answered ${response.status}.`);
   return claudeGrants((await response.json())?.cedar_ember);
 }
+async function tokenAccount(signIn, version) {
+  try {
+    const response = await fetch(new URL("profile", claudeUsage.url), { headers: claudeHeaders(signIn.token, version), signal: AbortSignal.timeout(15000) });
+    if (!response.ok)
+      return;
+    const body = await response.json();
+    const account = typeof body?.account?.uuid === "string" ? body.account.uuid.trim().toLowerCase() : "";
+    const organization = typeof body?.organization?.uuid === "string" ? body.organization.uuid.trim().toLowerCase() : "";
+    return account && organization ? `anthropic:${account}|${organization}` : undefined;
+  } catch {
+    return;
+  }
+}
 async function claudeOrganization(configHome, signIn, version) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const kept = configHome ? claudeIdentity(configHome)?.split("|")[1] : undefined;
@@ -14468,6 +14517,10 @@ class ClaudeAgent {
     afterReset: () => {
       if (this.grants)
         this.grants = { ...this.grants, at: -Infinity };
+    },
+    spender: async () => {
+      const signIn = this.limitsSignIn();
+      return signIn ? tokenAccount(signIn, await this.programVersion()) : undefined;
     }
   };
   grants;
@@ -35893,4 +35946,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9a2710e217b24fa7cecc2817e9c68de80bb74769ff1967ecc603c4bfce1ae761
+// Built from Packages/Box/src/agents 1e0c164c9f9255f88ecc8e5659928712ef2620808edf35bf373d2d89c2576a02

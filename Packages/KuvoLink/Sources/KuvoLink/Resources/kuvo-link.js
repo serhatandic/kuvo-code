@@ -1322,7 +1322,7 @@ function resetGiven(row, offer) {
     ...on ? { on } : {}
   };
 }
-async function spendReset(bridge, row, by, { always = false, signal } = {}) {
+async function spendReset(bridge, row, by, { always = false, unasked = false, signal } = {}) {
   try {
     if (always)
       await call(bridge, "PUT", "/api/kuvo/limits/reset/always", { row, always: true }, signal);
@@ -1336,7 +1336,7 @@ async function spendReset(bridge, row, by, { always = false, signal } = {}) {
     }
     if (!isObject(offer) || typeof offer.confirm !== "string")
       return refused("The reset couldn't be asked for.");
-    const done = await call(bridge, "POST", "/api/kuvo/limits/reset", { row, confirm: offer.confirm, by }, signal);
+    const done = await call(bridge, "POST", "/api/kuvo/limits/reset", { row, confirm: offer.confirm, by, ...unasked ? { unasked: true } : {} }, signal);
     if (!isObject(done))
       return refused("The reset's answer didn't come.");
     const limits = isObject(done.row) ? `
@@ -1381,7 +1381,7 @@ async function useResetTool(bridge, args, asker, ask, signal) {
     if (!isObject(offer))
       return refused("The reset couldn't be asked for.");
     if (offer.always === true)
-      return spendReset(bridge, id, asker.name, { signal });
+      return spendReset(bridge, id, asker.name, { unasked: true, signal });
     return ask(resetGiven(found.row, offer));
   } catch (error) {
     return refused(`Couldn't read the plan limits on ${HERE}: ${why(error)}`);
@@ -40024,7 +40024,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4398a449182f";
+var BRIDGE_VERSION = "be58469dc06f";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

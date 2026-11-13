@@ -4257,7 +4257,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     row with no resets, none left, none any computer of yours can use (a Mac's Claude token alone:
     its `unreadable` message), or one whose maker holds requests off; 503 when the computer with the
     sign-in can't be reached.
-  - `POST … {row, confirm, by?}` → `{data: {outcome, until?, message?, row?}}`: one reset spent,
+  - `POST … {row, confirm, by?, unasked?}` → `{data: {outcome, until?, message?, row?}}`: one reset spent,
     once. `outcome` `reset` (done: the windows it refills start over; the account is read again at
     once, and `row` is as it is then), `unconfirmed` (its maker took it but couldn't say it went
     through), `nothing-to-reset` (not at a limit), `no-reset` (none to spend), `not-now` (a
@@ -4282,15 +4282,24 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     one is asked again first, as itself, and the new one is that one only if it was used just now
     or still can't be told, else it goes as its own. Right before a request goes, the account
     signed in there now (its sign-in's own identity, not as last read) must be the row's: if
-    another is, nothing is spent (`no-reset`) and Always Allow for the row is turned off. A client sends the same
+    another is, nothing is spent (`no-reset`) and Always Allow for the row is turned off. (Claude on
+    Linux: who its token is for, as Anthropic's profile says right then, since the token carries no
+    claims and Claude Code's own record of the sign-in can lag a new one.) `unasked: true` marks an
+    agent's spend under Always Allow that no one confirmed: refused (`failed`) where the asking
+    box's own decision for the row is off, and again by the box that spends it unless its decision
+    is on. A peer asked to spend one follows these same rules for a new ask (joining within 10
+    minutes, settling an older one first). A client sends the same
     `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
     longer knows it) asks anew.
   - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
     `on`, a peer of yours (never a box a peer vouches for), as `{"seat": {"kind": "reset", at, ask:
     {id, row, by?}}}`, and answers when that one does (`{"seat": {"kind": "reset", at, answer: {id,
-    outcome, until?}}}`), or `unknown` after 45 seconds (asked again, with the same `confirm` or a
-    new one for that row, it's asked there again under the same id, which that box's journal
-    answers once). A box takes a
+    outcome, until?, already?, open?, message?}}}`: `already`, its maker said this request was done
+    before; `open`, the spend stays open there, so it stays open here too), or `unknown` after 45
+    seconds (asked again, with the same `confirm` or a new one for that row, it's asked there again
+    under the same id, which that box's journal answers once). An open one that can't be passed
+    there now stays open (`not-now`, saying an earlier try may have gone); a new one that can't is
+    never kept. A box takes a
     reset's mail only from your own computers; its link drops it from a box a peer vouches for.
   - **Always Allow**: `PUT kuvo/agents/api/kuvo/limits/reset/always {provider | row, always}`:
     agents may (or may not) use an account's resets without asking. It's the account's, by who it
@@ -4298,8 +4307,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     stamped with when it was made and kept in the journal (`allowed`, by row, whether or not the box
     knows the account yet) on every computer of yours with its sign-in, here (`provider`, as
     Settings › Accounts names it here, or the `row`) and on the others among its row's `boxes`,
-    told as `{"seat": {"kind": "reset", at, always: {row, on, at}}}` mail that's kept until it's
-    there; a decision older than the one kept is ignored (of two at once, the last told holds). A
+    told to every computer of yours as `{"seat": {"kind": "reset", at, always: {row, on, at}}}` mail
+    that's kept until it's there; a decision older than the one kept is ignored, and of two stamped
+    the same, an off holds. One made here is stamped after any this box knows of (so a computer
+    whose clock is ahead doesn't outlast it); a decision that isn't kept answers 409. A
     slot signed in to another account since turns its earlier account's off, so coming back asks
     again. Stated as
     `agents: true` on its `resets`, and as `agentsReset: true` on the account in this box's own
