@@ -17,13 +17,13 @@ import Testing
     }
 
     /// A machine's kit names it as this Mac does (what its bots are told they run on) and carries
-    /// your time zone and its rules, never words of this Mac's: a box tells its bots its own.
+    /// your time zone, never words of this Mac's: a box tells its bots its own. Nor rules: its box
+    /// makes a new bot's from its own default and Settings › Permissions.
     @Test func aMachinesKitCarriesWhatsItsOwnAndNoWords() throws {
         let kit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(app.bots.kit(for: "box"))) as? [String: Any] ?? [:]
         #expect(kit["machine"] as? String == "box")
         #expect(kit["timeZone"] as? String == TimeZone.current.identifier)
-        #expect(kit["rules"] is [Any])
-        for words in ["instructions", "jobInstructions", "templates", "greeting", "memory", "personalityWords", "identityNote"] {
+        for words in ["instructions", "jobInstructions", "templates", "greeting", "memory", "personalityWords", "identityNote", "rules"] {
             #expect(kit[words] == nil, "\(words) is the box's own")
         }
         // Only the personalities you made: Kuvo Code's own come with the box's words.
