@@ -15944,80 +15944,6 @@ function pastLimit(limits, { depth, working, started, tokens }) {
   return null;
 }
 
-// Packages/Box/src/link/work/models.ts
-function modelsIn(listed, target, agents, ready) {
-  const models = [];
-  for (const each of Array.isArray(listed) ? listed : []) {
-    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
-      continue;
-    if (ready && !ready.has(each.providerID))
-      continue;
-    const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
-    const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias) => typeof alias === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, aliases, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", free: isFree(each) });
-  }
-  return models;
-}
-async function usableModels(engine, bridge, signal) {
-  const models = [];
-  if (engine) {
-    const [providers, listed] = await Promise.all([call(engine, "GET", "/api/provider", undefined, signal).catch(() => null), call(engine, "GET", "/api/model", undefined, signal).catch(() => null)]);
-    const ready = new Set((Array.isArray(providers) ? providers : []).map((each) => isObject(each) ? each.id : null).filter((id) => typeof id === "string"));
-    models.push(...modelsIn(listed, engine, false, ready));
-  }
-  if (bridge)
-    models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
-  return models;
-}
-var modelNamed = (ref, models) => {
-  const ofProvider = ref ? models.filter((model) => model.providerID === ref.providerID) : [];
-  return ofProvider.find((model) => model.id === ref?.id) ?? ofProvider.find((model) => model.aliases.includes(ref?.id ?? ""));
-};
-function describeModels(all, held = unansweringNow(), where = HERE) {
-  const models = all.filter((model) => !model.retiring);
-  if (!models.length)
-    return `There's no model with an account on ${where}. Ask the user to sign in to one in Settings › Accounts.`;
-  const line = (model) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
-  const answering = models.filter((model) => !holdOf(model, held));
-  const holds = held.filter((each) => models.some((model) => holdOf(model, [each])));
-  const list = answering.length ? `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):
-${answering.map(line).join(`
-`)}` : `No model here can answer now: tell the user why, from below.`;
-  return holds.length ? `${list}
-
-Left out, as a session on them just failed:
-${holds.map((each) => "- " + holdWords(each)).join(`
-`)}` : list;
-}
-function pickModel(given, effort, models) {
-  let providerID = "", id = "";
-  if (typeof given === "string") {
-    const at = given.trim().indexOf("/");
-    if (at > 0)
-      [providerID, id] = [given.trim().slice(0, at), given.trim().slice(at + 1)];
-    else
-      id = given.trim();
-  } else if (isObject(given) && typeof given.id === "string") {
-    id = given.id;
-    providerID = typeof given.providerID === "string" ? given.providerID : "";
-  }
-  if (!id)
-    return { refused: "Name the model as provider/model, from list_models." };
-  const matches = models.filter((model) => (model.id === id || model.aliases.includes(id)) && (!providerID || model.providerID === providerID));
-  if (!matches.length) {
-    const known = providerID && models.some((model) => model.providerID === providerID);
-    return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
-  }
-  const model = matches.find((each) => each.id === id) ?? matches[0];
-  if (effort === undefined || effort === null || effort === "")
-    return { model, variant: null };
-  if (!model.efforts.length)
-    return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
-  if (typeof effort !== "string" || !model.efforts.includes(effort))
-    return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
-  return { model, variant: effort };
-}
-
 // Packages/Box/src/shared/subagents.ts
 var SUBAGENT_MODEL = ["subagent_model"];
 var ENGINE_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"]);
@@ -16098,7 +16024,7 @@ function noteModelsEvent(event) {
 function forgetModelLists() {
   kept2.clear();
 }
-function modelsIn2(listed) {
+function modelsIn(listed) {
   if (!Array.isArray(listed))
     return null;
   return listed.flatMap((each) => {
@@ -16106,11 +16032,13 @@ function modelsIn2(listed) {
       return [];
     const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias) => typeof alias === "string") : [];
     const released = isObject(each.time) && typeof each.time.released === "number" ? each.time.released : 0;
+    const efforts = Array.isArray(each.variants) ? each.variants.flatMap((variant) => isObject(variant) && typeof variant.id === "string" ? [variant.id] : []) : [];
     return [{
       providerID: each.providerID,
       id: each.id,
       name: typeof each.name === "string" && each.name ? each.name : each.id,
       aliases,
+      efforts,
       free: isFree(each),
       provisional: each.provisional === true,
       hidden: each.hidden === true,
@@ -16144,7 +16072,7 @@ function accountsIn(listed) {
 var named2 = (ref, models) => models.find((model) => model.providerID === ref.providerID && model.id === ref.id) ?? models.find((model) => model.providerID === ref.providerID && model.aliases.includes(ref.id));
 async function engineLists(engine, folder) {
   const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map((route) => asked4(engine, route, folder)));
-  const models = modelsIn2(listed), accounts = accountsIn(integrations);
+  const models = modelsIn(listed), accounts = accountsIn(integrations);
   if (!Array.isArray(providers) || !models || !accounts)
     return null;
   const ready = new Set(providers.flatMap((each) => isObject(each) && typeof each.id === "string" ? [each.id] : []));
@@ -16156,7 +16084,7 @@ async function engineLists(engine, folder) {
 async function bridgeLists(bridge) {
   const listed = await asked4(bridge, "/api/model?hidden=1");
   const [integrations, auto] = await Promise.all(["/api/integration", "/api/kuvo/auto"].map((route) => asked4(bridge, route)));
-  const models = modelsIn2(listed), accounts = accountsIn(integrations);
+  const models = modelsIn(listed), accounts = accountsIn(integrations);
   if (!models || !accounts)
     return null;
   const lists = isObject(auto) && Array.isArray(auto.lists) ? auto.lists.flatMap((each) => isObject(each) && typeof each.id === "string" ? [{ id: each.id, name: typeof each.name === "string" && each.name ? each.name : "Custom Auto", entries: Array.isArray(each.entries) ? each.entries.length : 0 }] : []) : null;
@@ -16235,8 +16163,8 @@ function offeredHere(lists) {
   const agents = (lists.bridge?.models ?? []).filter((model) => withAgents(model, lists.bridge)?.runs === true);
   const auto = (lists.bridge?.auto ?? []).filter((list) => list.entries > 0);
   return [
-    ...[...engine, ...agents].map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
-    ...auto.map((list) => ({ providerID: "auto", id: list.id, name: list.name, retiring: false, hidden: false, agents: true, free: false }))
+    ...[...engine, ...agents].map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, aliases: model.aliases, efforts: model.efforts, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
+    ...auto.map((list) => ({ providerID: "auto", id: list.id, name: list.name, aliases: [], efforts: [], retiring: false, hidden: false, agents: true, free: false }))
   ];
 }
 function stillListing(lists) {
@@ -16287,6 +16215,120 @@ function startingModel(wanted, lists) {
     return { model: fallback, why: "default" };
   const first = offeredHere(lists).find((model) => !model.retiring && !model.hidden && model.providerID !== "auto");
   return first ? { model: { providerID: first.providerID, id: first.id }, why: "first" } : null;
+}
+
+// Packages/Box/src/link/work/models.ts
+function modelsIn2(listed, target, agents, ready) {
+  const models = [];
+  for (const each of Array.isArray(listed) ? listed : []) {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
+      continue;
+    if (ready && !ready.has(each.providerID))
+      continue;
+    const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
+    const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias) => typeof alias === "string") : [];
+    models.push({ providerID: each.providerID, id: each.id, aliases, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", hidden: each.hidden === true, free: isFree(each) });
+  }
+  return models;
+}
+async function usableModels(engine, bridge, signal) {
+  const models = [];
+  if (engine) {
+    const [providers, listed] = await Promise.all([call(engine, "GET", "/api/provider", undefined, signal).catch(() => null), call(engine, "GET", "/api/model", undefined, signal).catch(() => null)]);
+    const ready = new Set((Array.isArray(providers) ? providers : []).map((each) => isObject(each) ? each.id : null).filter((id) => typeof id === "string"));
+    models.push(...modelsIn2(listed, engine, false, ready));
+  }
+  if (bridge)
+    models.push(...modelsIn2(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
+  return models;
+}
+async function modelsHere(engine, bridge, folder, where = HERE) {
+  const lists = await listsHere(engine, bridge, folder);
+  const models = offeredHere(lists).flatMap((each) => {
+    const target = each.agents ? bridge : engine;
+    return target ? [{ ...each, target }] : [];
+  });
+  const unsaid = [...engine && !lists.engine ? ["engine"] : [], ...bridge && !lists.bridge ? ["agents"] : []];
+  const refusal = (ref) => {
+    const state = stateOf(ref, lists);
+    if (!state || state.runs || !state.account || !["signIn", "key", "install"].includes(state.missing ?? ""))
+      return;
+    const account = state.account.label ? `${state.account.name} (${state.account.label})` : state.account.name;
+    const why = state.missing === "signIn" ? `it isn't signed in: ask the user to sign in to ${account} in Settings › Accounts` : state.missing === "key" ? `it needs a key: ask the user to add one for ${account} in Settings › Accounts${state.plan ? ` (a ${state.plan.name} plan runs ${state.plan.agent}'s models, as ${state.plan.provider}/…)` : ""}` : `${account}'s coding agent isn't installed there: ask the user to install it in Settings › Accounts`;
+    return `There's no account for ${ref.providerID} ready on ${where}: ${why}. Or use list_models to see the models you can use.`;
+  };
+  return { models, listing: stillListing(lists), unsaid, bridge, refusal };
+}
+var modelNamed = (ref, models) => {
+  const ofProvider = ref ? models.filter((model) => model.providerID === ref.providerID) : [];
+  return ofProvider.find((model) => model.id === ref?.id) ?? ofProvider.find((model) => model.aliases.includes(ref?.id ?? ""));
+};
+function describeModels(all, held = unansweringNow(), where = HERE, here) {
+  const models = all.filter((model) => !model.retiring && !model.hidden);
+  const notes = [
+    ...here?.listing.length ? [`Still listing their models: ${here.listing.join(", ")}. One of theirs not above may still run: name it to start_session as provider/model.`] : [],
+    ...here?.unsaid.includes("engine") ? [`The engine on ${where} can't say which of its models run yet: try list_models again in a moment.`] : [],
+    ...here?.unsaid.includes("agents") ? [`The coding agents on ${where} can't say which of their models run yet: try list_models again in a moment.`] : []
+  ];
+  if (!models.length)
+    return notes.length ? notes.join(`
+`) : `There's no model with an account on ${where}. Ask the user to sign in to one in Settings › Accounts.`;
+  const line = (model) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
+  const answering = models.filter((model) => !holdOf(model, held));
+  const holds = held.filter((each) => models.some((model) => holdOf(model, [each])));
+  const list = answering.length ? `Models you can start a session on, as provider/model (give it to start_session as model, and an effort as effort):
+${answering.map(line).join(`
+`)}` : `No model here can answer now: tell the user why, from below.`;
+  const whole = holds.length ? `${list}
+
+Left out, as a session on them just failed:
+${holds.map((each) => "- " + holdWords(each)).join(`
+`)}` : list;
+  return notes.length ? `${whole}
+
+${notes.join(`
+`)}` : whole;
+}
+function pickModel(given, effort, models, here, where = HERE) {
+  let providerID = "", id = "";
+  if (typeof given === "string") {
+    const at = given.trim().indexOf("/");
+    if (at > 0)
+      [providerID, id] = [given.trim().slice(0, at), given.trim().slice(at + 1)];
+    else
+      id = given.trim();
+  } else if (isObject(given) && typeof given.id === "string") {
+    id = given.id;
+    providerID = typeof given.providerID === "string" ? given.providerID : "";
+  }
+  if (!id)
+    return { refused: "Name the model as provider/model, from list_models." };
+  const matches = models.filter((model) => (model.id === id || model.aliases.includes(id)) && (!providerID || model.providerID === providerID));
+  if (!matches.length) {
+    if (here && providerID) {
+      const ref = { providerID, id };
+      if (here.listing.includes(providerID) && here.bridge) {
+        const variant = typeof effort === "string" && effort ? effort : null;
+        return { model: { providerID, id, name: id, efforts: [], aliases: [], target: here.bridge, agents: true, retiring: false, hidden: false, free: false }, variant };
+      }
+      const why = here.refusal(ref);
+      if (why)
+        return { refused: why };
+      if (here.unsaid.includes(onAgents(ref) ? "agents" : "engine")) {
+        return { refused: `${onAgents(ref) ? "The coding agents" : "The engine"} on ${where} can't say which of ${onAgents(ref) ? "their" : "its"} models run yet: try again in a moment.` };
+      }
+    }
+    const known = providerID && models.some((model) => model.providerID === providerID);
+    return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${where}. Use list_models to see the models you can use.` };
+  }
+  const model = matches.find((each) => each.id === id) ?? matches[0];
+  if (effort === undefined || effort === null || effort === "")
+    return { model, variant: null };
+  if (!model.efforts.length)
+    return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
+  if (typeof effort !== "string" || !model.efforts.includes(effort))
+    return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
+  return { model, variant: effort };
 }
 
 // Packages/Box/src/link/areas/approval.ts
@@ -18912,8 +18954,9 @@ async function startSession(given, by, place) {
     if (!target)
       return no(503, runsWithAgents(model) ? `The coding agents aren't running on ${HERE}.` : `The engine on ${HERE} isn't running.`);
   } else if (given.model !== undefined && given.model !== null && given.model !== "" || given.effort !== undefined && given.effort !== null && given.effort !== "") {
-    const models = await usableModels(engine, bridge, place.signal);
-    const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models);
+    const here = await modelsHere(engine, bridge, folder ?? undefined);
+    const models = here.models;
+    const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models, here);
     if ("refused" in choice)
       return no(400, choice.refused);
     const held = by ? holdOf(choice.model, unansweringNow()) : null;
@@ -19763,8 +19806,9 @@ async function answerAskTool(caller, args, targets, signal, { made } = {}) {
   changed(data, { kind: "answered", by: caller });
   return said(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
 }
-async function listModelsTool(engine, bridge, signal, where = HERE) {
-  return said(describeModels(await usableModels(engine, bridge, signal), undefined, where));
+async function listModelsTool(engine, bridge, _signal, where = HERE) {
+  const here = await modelsHere(engine, bridge, undefined, where);
+  return said(describeModels(here.models, undefined, where, here));
 }
 async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   const name = typeof args.name === "string" ? args.name.trim() : "";
@@ -40725,7 +40769,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c8f10d299c2a";
+var BRIDGE_VERSION = "c40072234646";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

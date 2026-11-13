@@ -1390,6 +1390,11 @@ start on a model by the same rule.
   retiring or hidden and isn't a Custom Auto list. `null`: nothing runs there. Left out while the engine
   can't say, or didn't say its default (and the one named is the engine's, or no longer there): a
   client starts on the one named, as it is.
+- An agent's `list_models`, and `start_session` with a `model` named, go by the same rule: one that
+  runs is taken (one its agent keeps out of its picker, or its provider is retiring, too); one of a
+  coding agent's account in `listing` is taken as it's named (the bridge says whether it runs);
+  one whose account needs a sign-in, a key or its agent installed is refused saying which; while
+  the engine or the bridge can't say, one of theirs is refused saying to try again in a moment.
 - A lead on another computer starting a session there (`start_session` from "Peers") starts on it
   the same way, for the lead's model, where a bridge not running is no coding agents there; a new
   bot there (`kuvo/bots/templates`' `startingModel`) the same way, for the one its client named.
@@ -1458,8 +1463,10 @@ client shows it from the same routes.
   `kuvo/work` gives that row none), `stop_session`
   (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
   own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
-  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
-  an account for here, `provider/model`, with their efforts; none its provider is retiring).
+  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models that run
+  here, as "The models offered" offers them, `provider/model`, with their efforts; none its
+  provider is retiring or its agent keeps out of its picker; then the coding agents' accounts
+  still listing theirs, and a place that can't say yet).
   - **Across your computers** (bridge 0.9.204): a lead reaches the sessions under it on another
     computer (a bot that moved, say) by a call ("Peers", `call`). `stop_session`, `compact_session`
     and `answer_ask` for a session that isn't here go to the computer that told of it, or where it's

@@ -22,9 +22,10 @@ export type ModelState = Omit<SessionModel, "model">;
 
 /** A model as a place lists it; `provisional`, one of its agent's usual ones, listed until it says
  * which your account has (Claude Code's, as it starts); `hidden`, one its agent keeps out of its
- * picker but still runs (Codex's); `retiring`, one its provider deprecated. */
+ * picker but still runs (Codex's); `retiring`, one its provider deprecated; `efforts`, its
+ * variants' ids. */
 export interface Listed {
-  providerID: string; id: string; name: string; aliases: string[]; free: boolean; provisional: boolean;
+  providerID: string; id: string; name: string; aliases: string[]; efforts: string[]; free: boolean; provisional: boolean;
   hidden: boolean; retiring: boolean; released: number;
 }
 
@@ -105,8 +106,9 @@ function modelsIn(listed: unknown): Listed[] | null {
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) return [];
     const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias): alias is string => typeof alias === "string") : [];
     const released = isObject(each.time) && typeof each.time.released === "number" ? each.time.released : 0;
+    const efforts = Array.isArray(each.variants) ? each.variants.flatMap(variant => (isObject(variant) && typeof variant.id === "string" ? [variant.id] : [])) : [];
     return [{
-      providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, aliases, free: isFree(each),
+      providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, aliases, efforts, free: isFree(each),
       provisional: each.provisional === true, hidden: each.hidden === true, retiring: each.status === "deprecated", released,
     }];
   });
@@ -260,8 +262,9 @@ export function listedOf(ref: Ref, lists: Lists): Listed | undefined {
   return models ? named(ref, models) : undefined;
 }
 
-/** A model that runs here, as a picker offers it. */
-export interface Offered { providerID: string; id: string; name: string; retiring: boolean; hidden: boolean; agents: boolean; free: boolean }
+/** A model that runs here, as a picker offers it (with the other ids it's known by, and its
+ * efforts, for an agent naming it: list_models and start_session). */
+export interface Offered { providerID: string; id: string; name: string; aliases: string[]; efforts: string[]; retiring: boolean; hidden: boolean; agents: boolean; free: boolean }
 
 /** Every model that runs here now, as a picker offers it: the engine's, newest first in its
  * featured providers' order and the others' by id; then the coding agents', as the bridge lists
@@ -280,8 +283,8 @@ export function offeredHere(lists: Lists): Offered[] {
   const agents = (lists.bridge?.models ?? []).filter(model => withAgents(model, lists.bridge)?.runs === true);
   const auto = (lists.bridge?.auto ?? []).filter(list => list.entries > 0);
   return [
-    ...[...engine, ...agents].map(model => ({ providerID: model.providerID, id: model.id, name: model.name, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
-    ...auto.map(list => ({ providerID: "auto", id: list.id, name: list.name, retiring: false, hidden: false, agents: true, free: false })),
+    ...[...engine, ...agents].map(model => ({ providerID: model.providerID, id: model.id, name: model.name, aliases: model.aliases, efforts: model.efforts, retiring: model.retiring, hidden: model.hidden, agents: onAgents(model), free: model.free })),
+    ...auto.map(list => ({ providerID: "auto", id: list.id, name: list.name, aliases: [], efforts: [], retiring: false, hidden: false, agents: true, free: false })),
   ];
 }
 

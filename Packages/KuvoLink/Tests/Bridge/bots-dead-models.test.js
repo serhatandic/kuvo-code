@@ -74,6 +74,11 @@ const engine = http.createServer((request, response) => {
     const reply = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     if (request.url === "/api/provider") return reply({ data: [{ id: "opencode" }, { id: "opencode-go" }] });
     if (request.url === "/api/model") return reply({ data: models });
+    // (Its accounts, as Settings › Accounts lists them: both signed in, with a key.)
+    if (request.url === "/api/integration") return reply({ data: [
+      { id: "opencode", name: "OpenCode Zen", methods: [{ type: "key" }, { type: "oauth", id: "device" }], connections: [{ type: "credential", method: "key" }] },
+      { id: "opencode-go", name: "OpenCode Go", methods: [{ type: "key" }], connections: [{ type: "credential", method: "key" }] },
+    ] });
     if (request.url.startsWith("/api/session?")) return reply({ data: Object.values(sessions) });
     if (request.url === "/api/session/active") return reply({ data: {} });
     if (request.method === "POST" && request.url === "/api/session") {
