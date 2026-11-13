@@ -25,6 +25,9 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         let verdict: String
         let key: String?
         let name: String
+        /// What it says it is: `mac` for a Mac's own box (this Mac's, once it moved into a home of
+        /// its own), `machine` for one a Mac set up; nil for one from before cards said.
+        var kind: String? = nil
         let setup: String?
         let role: String?
         let primary: Primary?

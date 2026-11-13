@@ -118,6 +118,8 @@ final class PhoneLink {
     private var identity: (key: LinkKey, secret: RelaySecret) {
         get {
             if let keptIdentity { return keptIdentity }
+            // (Never read: they're its box's, `hasIdentity` says none. A stand-in, never kept or shown.)
+            if keysOnBox() { return (LinkKey(), RelaySecret()) }
             let read = tookIdentity(Self.readIdentity(in: service, asking: true))
             keptIdentity = read
             return read
@@ -142,8 +144,22 @@ final class PhoneLink {
     /// Pushes not yet handed to the relay, which quitting waits for (see `flushBeforeQuit`).
     @ObservationIgnored let delivering = OSAllocatedUnfairLock(initialState: 0)
 
-    /// Where the phones and machines are kept: phone-link.json (a test's own, for a test).
-    private let savedFile: URL
+    /// Where the phones and machines are kept: phone-link.json (a test's own, for a test), in the
+    /// app's folder, or in this Mac's box's home once it has moved, where the box reads your
+    /// machines' bridges from (`OwnBoxHome`).
+    private var savedFile: URL { testFile ?? OwnBoxHome.file("phone-link.json", inSupport: "phone-link.json") }
+    /// A test's own file, if it gave one.
+    private let testFile: URL?
+
+    /// This Mac's keys are its box's (it moved into a home of its own, `OwnBoxHome.hasMoved`): the app
+    /// reads none of them, and has no identity of its own; what's signed with them, its box signs
+    /// (`kuvo/box/proof`). Set by AppModel; a test's own.
+    @ObservationIgnored var keysOnBox: () -> Bool = { OwnBoxHome.hasMoved }
+    /// This Mac's public link key, as its box says it once it has moved (`here`). Set by AppModel.
+    @ObservationIgnored var boxKey: () -> String? = { nil }
+    /// Whether a key found missing may be made here: never while this Mac's keys are its box's, moved
+    /// or moving (`OwnBoxHome.keysAreTheBoxs`), whether the app uses that box yet or not. A test's own.
+    @ObservationIgnored var makesKeys: () -> Bool = { !OwnBoxHome.keysAreTheBoxs }
 
     /// Where its keys are in the Keychain (`keychainService`, a test's own).
     private let service: String
@@ -151,9 +167,9 @@ final class PhoneLink {
     /// `file`, `identity`, `signing` and `keychain`: a test's own, kept apart from the app's file
     /// and Keychain (one giving an identity and no signing key gets a new one).
     init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil, keychain: String = PhoneLink.keychainService) {
-        savedFile = file ?? AppInfo.supportDirectory.appending(path: "phone-link.json")
+        testFile = file
         service = keychain
-        let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
+        let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: file ?? OwnBoxHome.file("phone-link.json", inSupport: "phone-link.json")))) ?? Saved()
         // Only what names a phone (an earlier build kept anything a document named).
         toRemove = saved.toRemove.filter { PairedPhones.fits($0, macs: []) }
         paired = Self.without(toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
@@ -176,6 +192,7 @@ final class PhoneLink {
 
     /// This Mac's own key and secret, as your phones and machines know them (not a stand-in).
     private var hasIdentity: Bool {
+        guard !keysOnBox() else { return false }
         _ = identity
         return !unreadable
     }
@@ -185,6 +202,7 @@ final class PhoneLink {
     private var signing: Documents.SigningKey {
         get {
             if let keptSigning { return keptSigning }
+            if keysOnBox() { return Documents.SigningKey() }
             let read = tookSigning(Self.readSigning(in: service, asking: true))
             keptSigning = read
             return read
@@ -254,6 +272,14 @@ final class PhoneLink {
             if readAgainAt == nil { readAgainAt = .now }
             return make()
         case .missing:
+            // This Mac's keys are its box's (moved, or moving): none is made here, whatever's missing.
+            // Gone from your Keychain, the box says so (its helper never makes one it had again).
+            guard makesKeys() else {
+                log.error("This Mac's phone link \(account, privacy: .public) is missing, and its keys are its box's: none made here")
+                unreadable = true
+                saidNo = true
+                return make()
+            }
             let value = make()
             // Added only where there's none: one made meanwhile (the keeper's, or the app's) is kept.
             if Self.addKeychain(bytes(value), for: account, in: service) == errSecDuplicateItem {
@@ -747,7 +773,8 @@ final class PhoneLink {
 
     /// This Mac's public key, as your machines know it (none while the Keychain won't give it out).
     var macKey: String? {
-        hasIdentity ? key.publicBytes.base64URL : nil
+        if keysOnBox() { return boxKey() }
+        return hasIdentity ? key.publicBytes.base64URL : nil
     }
 
     /// A machine's link key, as your computers name it (one whose bridge talks to them itself).
@@ -927,7 +954,7 @@ final class PhoneLink {
     /// Read off the main actor, never asking you to unlock your Keychain (the keeper has no window,
     /// and a prompt would hold up everything it answers meanwhile).
     func boxIdentity() async -> [String: String]? {
-        guard relayWanted else { return nil }
+        guard relayWanted, !keysOnBox() else { return nil }
         await readForBox()
         // One the Keychain won't give out isn't stood in for.
         guard !unreadable, let keptIdentity, let keptSigning else { return nil }
@@ -1283,26 +1310,27 @@ final class PhoneLink {
         switch (given.answer, ask.kind) {
         case ("signIn", .signIn):
             let host = ask.host
-            let username: String?, password: String?, savedPassword: String?
+            let username: String?, password: String?, saved: BrowserAsks.Saved?
             if let account = given.saved {
                 // Said, and the card left up: a 404 would tell the phone it was answered.
                 guard let login = Passwords.logins(for: host).first(where: { $0.account == account }) else {
                     return (422, Self.message("No password is saved for \(account.isEmpty ? host : account) any more. Type it instead."))
                 }
-                guard let saved = Passwords.password(for: login) else {
+                guard let value = await Passwords.password(for: login) else {
                     return (422, Self.message("The saved password for \(host) couldn’t be read. Type it instead."))
                 }
-                (username, password, savedPassword) = (account.isEmpty ? nil : account, saved, saved)
+                (username, password, saved) = (account.isEmpty ? nil : account, value, .same)
             } else {
                 username = given.username.flatMap { $0.isEmpty ? nil : $0 }
                 password = given.password.flatMap { $0.isEmpty ? nil : $0 }
                 // A saved account's password typed anew is kept too, as the card keeps it.
-                savedPassword = Passwords.logins(for: host).first { $0.account == (username ?? "") }.flatMap(Passwords.password(for:))
+                let savedLogin = Passwords.logins(for: host).first { $0.account == (username ?? "") }
+                saved = await Passwords.compared(password ?? "", savedLogin)
                 guard username != nil || password != nil else { return (400, Data()) }
             }
             asks.answer(id, .signIn(username: username, password: password))
             if let failure = await BrowserAsks.keep(host: host, account: username ?? "", password: password ?? "", saving: given.save == true,
-                                                    savedPassword: savedPassword, allowAgents: given.agents == true) {
+                                                    saved: saved, allowAgents: given.agents == true) {
                 if let session = ask.session { workspace?.model(for: session)?.failure = failure }
                 return (200, Self.message(failure))
             }

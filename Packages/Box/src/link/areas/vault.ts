@@ -299,6 +299,17 @@ async function* answerVault(context: RouteContext): AsyncGenerator<AnswerPiece> 
       note({ what: "shown", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { values });
     }
+    // Whether what a client has is what's kept (a password you signed in with, to offer to save it
+    // or not): told without giving the values, so nothing's shown and nothing's noted.
+    if (parts.length === 5 && parts[4] === "same") {
+      if (method !== "POST") return yield* json(405, {});
+      const item = itemByID(id);
+      if (!item) return yield* json(404, { message: "That item isn't in this vault." });
+      const asked = isObject(given) && isObject(given.values) ? given.values : null;
+      if (!asked || !Object.keys(asked).length || !Object.values(asked).every(value => typeof value === "string")) return yield* json(400, { message: "Send {\"values\": {…}}." });
+      const values = await valuesOf(id);
+      return yield* json(200, { same: Object.entries(asked).every(([name, value]) => typeof values?.[name] === "string" && values[name] === value) });
+    }
     if (parts.length !== 4) return yield* json(404, {});
     if (method === "PATCH") {
       const item = await changeItem(id, given);

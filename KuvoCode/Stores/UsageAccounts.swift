@@ -108,7 +108,8 @@ final class UsageAccounts {
     /// it's good, only while this Mac's box doesn't read Cursor's plan and history itself (it does
     /// from #631 piece D1: `HostLimits.covers("cursor")`), with the panel's own Cursor reads.
     /// COMPAT(0.7 cursor-box): the key for a box from before. Goes 3 months after 0.8.0.
-    static func cursorAgentKey(in home: URL = OutsideAgents.home, now: Date = .now) -> HostCredential? {
+    /// (Where its box keeps the bridge's folder: in its home once it has moved, `OwnBoxHome`.)
+    static func cursorAgentKey(in home: URL = OwnBoxHome.file("agents", inSupport: "agents"), now: Date = .now) -> HostCredential? {
         struct Saved: Decodable { var apiKey: String?; var apiKeyExpiresAtMs: Double? }
         let accounts = home.appending(path: "cursor/accounts")
         let added = ((try? FileManager.default.contentsOfDirectory(atPath: accounts.path)) ?? []).sorted().map { accounts.appending(path: "\($0)/auth.json") }

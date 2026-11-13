@@ -55,6 +55,7 @@ import { linkRoute } from "../mac/routes";
 import { boxUpdateRoute, updateRoute } from "../updates/update";
 import { rehomeRoute } from "../rehome/route";
 import { appOpenRoute, appRoute } from "../mac/app";
+import { keptKeysRoute, proofRoute } from "../mac/app-keys";
 import { serveRoute } from "../serve-kept";
 import { browserRoute } from "../browser/install";
 import { IS_MAC } from "../home";
@@ -91,6 +92,9 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/box/app", answer: appRoute },
   { when: route => route === "kuvo/box/app/open", answer: appOpenRoute },
   { when: route => route === "kuvo/box/serve", answer: serveRoute },
+  // What its app asks of the keys a Mac's box in a home of its own holds (PROTOCOL.md, "Its keys").
+  { when: route => route === "kuvo/box/proof", answer: proofRoute },
+  { when: route => route === "kuvo/box/kept-keys", answer: keptKeysRoute },
   // (A machine's: this Mac's agents browse in its app's panel.)
   { when: route => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },

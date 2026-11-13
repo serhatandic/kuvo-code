@@ -3077,6 +3077,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.appKeys"
+           },
+           {
             "literal": "box.helper"
            },
            {
@@ -3330,6 +3333,9 @@
            },
            {
             "literal": "vault"
+           },
+           {
+            "literal": "vault.same"
            },
            {
             "literal": "wakes"
@@ -3508,6 +3514,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.appKeys"
+           },
+           {
             "literal": "box.helper"
            },
            {
@@ -3761,6 +3770,9 @@
            },
            {
             "literal": "vault"
+           },
+           {
+            "literal": "vault.same"
            },
            {
             "literal": "wakes"

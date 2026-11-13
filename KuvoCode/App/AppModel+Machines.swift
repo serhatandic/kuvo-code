@@ -881,13 +881,23 @@ extension AppModel {
     /// on they're the machine's own, changed in its own tab in Settings.
     /// Refused while this Mac's settings can't be read (its box isn't up): a copy of nothing would
     /// stay the machine's for good.
+    /// Once this Mac's box has moved into a home of its own, its settings and keys are that box's,
+    /// read through its routes (its keys are its helper's in your Keychain, which the app never reads).
     func machineSeed() async throws -> MachineBox.Seed {
-        await prepareSettings()
-        guard engineConfig.isLoaded else {
+        let moved = OwnBoxHome.hasMoved
+        let config: EngineConfig?
+        if moved {
+            config = machines.engine(SSHConnection.thisMac)?.config
+            _ = await config?.loaded()
+        } else {
+            await prepareSettings()
+            config = engineConfig
+        }
+        guard let config, config.isLoaded else {
             throw MachineBox.Failure.refused("This Mac’s settings can’t be read now, and a new machine starts with a copy of them. Try again in a moment.")
         }
         var seed: [String: JSONValue] = [:]
-        if engineConfig.isLoaded, engineConfig.problem == nil, let data = try? JSONEncoder().encode(engineConfig.settings),
+        if config.isLoaded, config.problem == nil, let data = try? JSONEncoder().encode(config.settings),
            var settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             // A shell or a worktree folder on this Mac means nothing on the machine, nor do
             // integrations that use this Mac's apps.
@@ -909,7 +919,28 @@ extension AppModel {
         // app's secret for a sign-in, say), nor bots' own, which reach only their bot's machine
         // (`BotKeys`).
         let here = Set(Integrations.macOnly.map { IntegrationKeys.variable($0, "") })
-        let keys = await Task.detached { IntegrationKeys.environment }.value.filter { name, _ in !here.contains { name.hasPrefix($0) } && !IntegrationKeys.isBots(name) }
+        let all = moved ? try await ownBoxKeys() : await Task.detached { IntegrationKeys.environment }.value
+        let keys = all.filter { name, _ in !here.contains { name.hasPrefix($0) } && !IntegrationKeys.isBots(name) }
         return MachineBox.Seed(settings: seed, keys: keys)
+    }
+
+    /// The integrations' keys this Mac's box keeps, moved into a home of its own: each as its box gives
+    /// it (`kuvo/keys`, a bot's own not among them). Refused while they can't all be read: a machine
+    /// would start without some for good.
+    private func ownBoxKeys() async throws -> [String: String] {
+        struct Names: Decodable { var keys: [String] }
+        struct Key: Decodable { var value: String }
+        let own = box(SSHConnection.thisMac)
+        let cantRead = MachineBox.Failure.refused("This Mac’s integration keys can’t be read now, and a new machine starts with a copy of them. Try again in a moment.")
+        guard let names = try? await own.value(Names.self, "GET", "kuvo/keys") else { throw cantRead }
+        var keys: [String: String] = [:]
+        for name in names.keys {
+            // (One taken away since it was listed is none.)
+            let (status, data) = (try? await own.send("GET", "kuvo/keys/\(name)")) ?? (0, Data())
+            if status == 404 { continue }
+            guard status == 200, let key = try? JSONDecoder().decode(Key.self, from: data) else { throw cantRead }
+            keys[name] = key.value
+        }
+        return keys
     }
 }
