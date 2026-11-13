@@ -2193,8 +2193,10 @@ async function onAutopilot(id) {
 }
 
 /// A route of this machine's box, answered once: `{status, body}`, or null when its script didn't
-/// answer (in `timeout` ms). Its call `cancelled`, it's told to stop (and answers at once).
-function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
+/// answer (in `timeout` ms). Its call `cancelled`, it's told to stop (and answers at once): told
+/// again and again (a route that doesn't stop is ended), or with `once`, told once, for a route that
+/// sees what it began through for others (opening the app) and then ends by itself.
+function boxRoute(request, { timeout = 30_000, cancelled = () => false, once = false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [...OWN_RUNTIME, path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
       cwd: K,
@@ -2204,8 +2206,11 @@ function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
     const stop = setTimeout(() => child.kill("SIGTERM"), timeout);
+    let told = false;
     const watch = setInterval(() => {
-      if (cancelled()) child.kill("SIGTERM");
+      if (!cancelled() || (once && told)) return;
+      told = true;
+      child.kill("SIGTERM");
     }, 500);
     child.on("error", () => {
       clearTimeout(stop);
@@ -2224,6 +2229,95 @@ function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
     });
     child.stdin.end(JSON.stringify(request));
   });
+}
+
+// A Mac's own box in a home of its own (#333: `box/kind` says `mac`): its agents browse in its app's
+// panel, as they do with the app's box in its folder, with no Chromium of its own. Each browser call
+// goes to the app's tools while the app is registered (`run/app.json`, PROTOCOL.md, "This Mac's
+// app"); while it isn't, the box opens it (`kuvo/box/app/open`, which decides, and waits for it with
+// every call meanwhile), and the call goes on once it's there.
+const MAC_BOX = (() => {
+  try {
+    return fs.readFileSync(path.join(K, "box", "kind"), "utf8").trim() === "mac";
+  } catch {
+    return false;
+  }
+})();
+
+/// Where the app's tools answer, as it registered: `{url, token}`, or null while it isn't open.
+function registeredApp() {
+  const tools = readJSON(path.join(RUN, "app.json"))?.tools;
+  return tools && typeof tools.url === "string" && typeof tools.token === "string" ? tools : null;
+}
+
+// Each process its own client to the app (its calls' ids are its own there, for a cancel to name).
+const APP_CLIENT = crypto.randomUUID();
+
+/// One browser call, to the app's tools: its result, or `{gone: true}` when the app doesn't answer
+/// there (it quit without saying: nothing there, or something else). Stopped, the app's told.
+async function appCall(tools, call) {
+  const id = crypto.randomUUID();
+  const send = (message, signal) =>
+    fetch(tools.url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tools.token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-session-id": APP_CLIENT,
+        ...(call.session ? { "x-kuvo-session": call.session } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", ...message }),
+      signal,
+    });
+  const abort = new AbortController();
+  const stop = () => {
+    abort.abort();
+    send({ method: "notifications/cancelled", params: { requestId: id } }, AbortSignal.timeout(5_000)).catch(() => {});
+  };
+  call.stops.add(stop);
+  try {
+    const response = await send({ id, method: "tools/call", params: { name: call.name, arguments: call.args, ...(call.meta ? { _meta: call.meta } : {}) } }, abort.signal);
+    const answer = await response.json().catch(() => null);
+    // Something else answering there (the app quit, and another took its port; or one that refuses
+    // its token): taken for the app gone, so it's opened again, never asked of again.
+    if (answer?.jsonrpc !== "2.0" || answer.id !== id) return { gone: true };
+    if (answer.result) return answer.result;
+    return text(answer.error?.message ? `Kuvo Code's browser said: ${answer.error.message}` : `Kuvo Code's browser said ${response.status}.`, true);
+  } catch (error) {
+    if (call.cancelled) return text("The call was stopped.", true);
+    const code = error?.cause?.code ?? error?.code;
+    if (code === "ECONNREFUSED" || code === "ConnectionRefused") return { gone: true };
+    return text(`The call didn't finish: ${error?.message || error}`, true);
+  } finally {
+    call.stops.delete(stop);
+  }
+}
+
+/// A browser call on a Mac's own box: to the app, opened first if it isn't open (once more if the
+/// app registered had gone without saying).
+async function appBrowser(call, reply) {
+  let gone = null;
+  for (let tries = 0; tries < 2; tries++) {
+    let tools = gone ? null : registeredApp();
+    if (!tools) {
+      const answer = await boxRoute({ method: "POST", path: "kuvo/box/app/open", body: gone ? { gone } : {} }, { timeout: 120_000, cancelled: () => call.cancelled, once: true });
+      if (call.cancelled) return reply(text("The call was stopped.", true));
+      if (answer?.status !== 200) {
+        let said = null;
+        try {
+          said = JSON.parse(answer?.body || "null");
+        } catch {}
+        return reply(text(said?.message || "Kuvo Code on this Mac didn't answer. Try again in a moment.", true));
+      }
+      tools = registeredApp();
+      if (!tools) break;
+    }
+    const result = await appCall(tools, call);
+    if (!result?.gone) return reply(result);
+    gone = tools.token;
+  }
+  reply(text("Kuvo Code on this Mac didn't take the browser's call. Ask the user to open Kuvo Code, then try again.", true));
 }
 
 /// One of the vault's or the sandbox's routes on this machine's box (PROTOCOL.md, "Vault",
@@ -2836,6 +2930,12 @@ async function mcp() {
           mail(params.name, params.arguments || {}, call.session, () => stops && call.cancelled).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
+        // A Mac's own box: the browser is its app's panel's.
+        if (MAC_BOX && typeof params.name === "string" && params.name.startsWith("browser_")) {
+          call.meta = params._meta;
+          appBrowser(call, reply).catch((error) => reply(text(String(error?.message || error), true)));
+          return;
+        }
         // An added integration's site: to its tools instead, with no browser needed.
         if (params.name === "browser_navigate" || params.name === "browser_new_tab") {
           const note = integrationNote(params.arguments?.url, call.session);
@@ -2849,6 +2949,8 @@ async function mcp() {
     }
   });
   process.stdin.on("end", () => process.exit(0));
+  // (A Mac's own box has no browser of its own: its app's panel is.)
+  if (MAC_BOX) return;
   // A keeper that's already running stays up while the engine does, across its restarts.
   if (await reachable()) browser().catch(() => {});
   // No browser here: the box sets it up now, ready for the first tool (it waits a while after a

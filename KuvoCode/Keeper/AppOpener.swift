@@ -14,10 +14,12 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 /// one that failed, it isn't opened again for `rest` seconds (an app that crashes as it opens isn't
 /// opened over and over through the night). Not while an update installs: Sparkle opens it then.
 ///
-/// #333 piece 3 (the box's `kuvo-browser.js` passing the browser's tools to a registered app, in
-/// place of `KeeperTools`) carries this over: the decision and the shared wait go to the box, the
-/// app's place comes with its registration (`app {}`), and only the opening itself stays with
-/// what runs as the app (the keeper, or the helper after it, at the box's ask).
+/// #333 piece 3 carried this over for a Mac's box in a home of its own: there the box decides
+/// (`Packages/Box/src/link/mac/app.ts`, the same rules and words), the app's place comes with its
+/// registration (`kuvo/box/app`), and only the opening itself is the keeper's (the host interface's
+/// `app/open`; the helper's after #333 piece 4). This copy serves the box in the app's folder
+/// (`KeeperTools`) alone, and goes with it once this Mac's box has moved (#333 pieces 5–6); a
+/// change to the rules goes in both until then.
 @MainActor
 final class AppOpener {
     /// Opens the app at a place, quietly, or throws what went wrong (`openQuietly`; a test's stand-in).
