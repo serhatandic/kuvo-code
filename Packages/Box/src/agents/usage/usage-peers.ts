@@ -109,9 +109,13 @@ export class UsagePeers {
     transport.onFollowed?.(() => this.told.clear())
   }
 
+  private freshAt?: { at: number; fresh: Record<string, number> }
+
   /** A mail to a peer, with when this box last read each account its maker states whole (`fresh`). */
   private send(to: string, mail: UsageMail, durable: boolean) {
-    const fresh = Object.fromEntries(this.usage.own().flatMap((account) => (account.accountWide && account.scanned ? [[account.provider, account.scanned]] : [])))
+    // (Worked out once for the mails of one moment: each peer's is the same.)
+    if (this.freshAt?.at !== mail.at) this.freshAt = { at: mail.at, fresh: Object.fromEntries(this.usage.own().flatMap((account) => (account.accountWide && account.scanned ? [[account.provider, account.scanned]] : []))) }
+    const fresh = this.freshAt.fresh
     this.transport.send(to, Object.keys(fresh).length ? { ...mail, fresh } : mail, durable)
   }
 

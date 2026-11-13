@@ -63,6 +63,11 @@ export interface UsageSource {
   /** Who it is (`identityOf`) as its own read says, before plan limits next say (Cursor's: the token its history was read with). */
   identity?(): string | undefined
   /**
+   * When it was last read whole, where a read can give what was known before though part of it
+   * failed (Cursor's history): its box says it read it only then. None: as each read that answers.
+   */
+  wholeAt?(): number | undefined
+  /**
    * Its use is its maker's account of the whole account (Cursor's), wherever it ran, not this
    * computer's logs: a row of it takes the newest box's, never a sum of them.
    */
@@ -317,7 +322,10 @@ export class Usage {
           else continue
         } else if (slots) {
           entry.slots = slots
-          entry.scanned = this.now()
+          // (Where part of it failed, as known before: read as of its last whole read.)
+          const whole = source.wholeAt ? source.wholeAt() : this.now()
+          if (whole !== undefined) entry.scanned = whole
+          else delete entry.scanned
         } else {
           complete = false
           entry.slots = trimmed(entry.slots, at)
@@ -1001,11 +1009,14 @@ function cursorClientOf(agent: Agent): { client: CursorClient; unreadable: () =>
  */
 export function cursorSources(folder: string | undefined, elsewhere: (provider: string, identity: string | undefined) => boolean, history = new CursorHistory(folder ? join(folder, "cursor-history") : undefined), now: () => number = Date.now): (agents: Agent[]) => UsageSource[] {
   const last = new Map<string, { days: string; pricing: Pricing; since: number; slots: Slots }>()
+  /** When each account's history was last read whole. */
+  const wholeAt = new Map<string, number>()
   return (agents) => {
     if (!cursorReachable()) return []
     // (What's kept of an account no longer here goes.)
     const here = new Set(agents.map((agent) => agent.providerID))
     for (const provider of [...last.keys()]) if (!here.has(provider)) last.delete(provider)
+    for (const provider of [...wholeAt.keys()]) if (!here.has(provider)) wholeAt.delete(provider)
     return agents.flatMap((agent) => {
       const found = cursorClientOf(agent)
       // Signed out: no source (what it had goes). A sign-in file that can't be read just now isn't that.
@@ -1018,6 +1029,7 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
         agent: { kind: "cursor", account: parsed.id },
         ...(agent.instance.label ? { label: agent.instance.label } : {}),
         accountWide: true,
+        wholeAt: () => wholeAt.get(agent.providerID),
         identity: () => {
           const raw = client.identity()
           return raw ? identityOf(raw) : undefined
@@ -1026,7 +1038,9 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
           const raw = client.identity()
           if (elsewhere(agent.providerID, raw ? identityOf(raw) : undefined)) return null
           if (!client.key()) throw new Error("Cursor's sign-in can't be read just now.")
-          const days = await history.read(client, now())
+          const read = await history.readWhole(client, now())
+          if (read.whole) wholeAt.set(agent.providerID, now())
+          const days = read.days
           const said = createHash("sha256").update(JSON.stringify([...days] satisfies [string, CursorDay][])).digest("hex")
           const before = last.get(agent.providerID)
           if (before && before.days === said && before.pricing === pricing && before.since === since) return before.slots

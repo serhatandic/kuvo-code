@@ -3743,9 +3743,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
   doesn't state yet (a plan's limits are every box's own, in "Plan limits"). A provider whose
-  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out:
-  one this Mac's box states rows for (`services`, with an account listed), and Claude, whose bar
-  has no limits of its own, wherever any of the Mac's computers states a Claude account. Its
+  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out,
+  and for Claude and Cursor, whose bars have no limits of their own, the lines the card has from
+  the rows too (Cursor's `Credits` and its `extras`, `On-demand`), which a client draws from each
+  row under its own account: one this Mac's box states rows for (`services`, with an account
+  listed), and Claude and Cursor wherever any of the Mac's computers states an account of them. Its
   spend shows under the first of those rows. A client lists these in their order, the box's rows
   in the place of each that `covers`: each provider's name, plan, brand color, mark as a PNG
   to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
@@ -4033,8 +4035,9 @@ from Cursor's own record of each Cursor account signed in to Kuvo Code (its dash
 events, asked with the sign-in its plan limits are read with: "Plan limits"), which is the whole
 account's, wherever it ran: so a row of it is its newest box's, never a sum (below), and one of
 your own computers asks Cursor for it at a time, however its plan limits' read went: of those
-that read it lately (each tells when it last did, `fresh`, below), the one whose link key comes
-first; one that stopped telling for 25 minutes, or is away, is taken over. Nothing is asked of
+that read it whole lately (each tells when it last did, `fresh`, below; a read where part failed,
+or that a hold stopped, isn't one), the one whose link key comes first; one that hasn't for 25
+minutes, or is away, is taken over. Nothing is asked of
 Cursor while its plan's sign-in was turned away as it is now, or while Cursor holds reads off. A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
@@ -4144,7 +4147,7 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
     long-context rates (an event isn't a request's whole prompt). A key Cursor turned away isn't
     sent again until the sign-in changes; a 429 (the exchange's or the events') stops the read and
     holds every read of the account for as long as its `Retry-After` says (15 minutes without
-    one); a token turned away midway is exchanged again once. One exchange at a time per key. What came is kept per Cursor user
+    one, while its plan's own wait doubles as other makers' do); a token turned away midway is exchanged again once. One exchange at a time per key. What came is kept per Cursor user
     (`usage/cursor-history/<a hash of the user>.json`, never the user's ID); a read with a day still
     not known leaves what this box had as it was, never a day of nothing, as does a sign-in file
     that can't be read just now (being rewritten); signed out, the account's use from this box goes.

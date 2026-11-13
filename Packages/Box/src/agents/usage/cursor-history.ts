@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { LimitsProblem, retryAt } from "../limits"
+import { LimitsProblem } from "../limits"
 import { CursorClient, cursorSession } from "./cursor-api"
 import { add, addUnknown, noSlots, SLOT, UNATTRIBUTED, type Slots } from "./history"
 import { totalTokens, type Pricing, type Tokens } from "./pricing"
@@ -105,7 +105,7 @@ const dayKey = (start: number) => new Date(start).toISOString().slice(0, 10)
  */
 export class CursorHistory {
   private kept = new Map<string, Map<string, CursorDay>>()
-  private reading = new Map<string, Promise<Map<string, CursorDay>>>()
+  private reading = new Map<string, Promise<{ days: Map<string, CursorDay>; whole: boolean }>>()
   /** Each user's last whole read, and when: asked again within a minute (a refresh, a peer's), it stands. */
   private last = new Map<string, { at: number; days: Map<string, CursorDay> }>()
 
@@ -127,6 +127,16 @@ export class CursorHistory {
    * whole), so what the box had stays: never a day of nothing in place of one not known.
    */
   async read(client: CursorClient, now: number): Promise<Map<string, CursorDay>> {
+    return (await this.readWhole(client, now)).days
+  }
+
+  /**
+   * As `read`, and whether every day due was asked and came back this time (`whole`): when one
+   * didn't (Cursor failing, out of time, a hold), the days are as known before, and this read
+   * doesn't count as a read of the account (its box doesn't say it read it, so another of your
+   * computers takes over: `UsagePeers.readsWhole`).
+   */
+  async readWhole(client: CursorClient, now: number): Promise<{ days: Map<string, CursorDay>; whole: boolean }> {
     const access = await client.accessToken()
     const user = cursorSession(access)?.user
     if (!user) throw new LimitsProblem("failed", "Cursor's sign-in doesn't say whose it is.")
@@ -134,18 +144,18 @@ export class CursorHistory {
     const under = this.reading.get(key)
     if (under) return under
     const last = this.last.get(key)
-    if (last && now >= last.at && now - last.at < MIN_BETWEEN && Math.floor(now / DAY) === Math.floor(last.at / DAY)) return last.days
+    if (last && now >= last.at && now - last.at < MIN_BETWEEN && Math.floor(now / DAY) === Math.floor(last.at / DAY)) return { days: last.days, whole: true }
     const read = this.readFor(client, access, key, now)
-      .then((days) => {
-        this.last.set(key, { at: now, days })
-        return days
+      .then((result) => {
+        if (result.whole) this.last.set(key, { at: now, days: result.days })
+        return result
       })
       .finally(() => this.reading.delete(key))
     this.reading.set(key, read)
     return read
   }
 
-  private async readFor(client: CursorClient, access: string, key: string, now: number): Promise<Map<string, CursorDay>> {
+  private async readFor(client: CursorClient, access: string, key: string, now: number): Promise<{ days: Map<string, CursorDay>; whole: boolean }> {
     const token: Token = { access }
     const today = Math.floor(now / DAY) * DAY
     const window = Array.from({ length: CURSOR_DAYS }, (_, back) => {
@@ -160,6 +170,7 @@ export class CursorHistory {
     let first: Failure | undefined
     let succeeded = 0
     let stopped = false
+    let hit = false
     const deadline = (this.options.deadline ?? defaultDeadline)()
     const queue = [...due]
     const worker = async () => {
@@ -179,7 +190,7 @@ export class CursorHistory {
     }
     const workers = Promise.all(Array.from({ length: Math.min(this.options.concurrency ?? 4, due.length) }, worker))
     try {
-      const hit = await Promise.race([workers.then(() => false), deadline.done.then(() => true)])
+      hit = await Promise.race([workers.then(() => false), deadline.done.then(() => true)])
       if (hit) {
         stopped = true
         const missing = window.filter((day) => !cached.has(day.key)).length
@@ -191,7 +202,7 @@ export class CursorHistory {
     if (failures) this.log(`usage: Cursor's usage events: ${failures} day${failures === 1 ? "" : "s"} failed (${first})`)
     if (succeeded) this.save(key, cached)
     if (!window.every((day) => cached.has(day.key))) throw new Error(`Cursor's usage events: ${window.filter((day) => !cached.has(day.key)).length} of ${window.length} days aren't known yet.`)
-    return new Map(window.map((day) => [day.key, cached.get(day.key)!]))
+    return { days: new Map(window.map((day) => [day.key, cached.get(day.key)!])), whole: !failures && !hit }
   }
 
   /** One UTC day, page after page until Cursor has said all of it; what it didn't say whole is a failure. */
@@ -213,7 +224,7 @@ export class CursorHistory {
       }
       if (!answer) return "request"
       if (answer.status === 429) {
-        client.hold(retryAt(answer.headers.get("retry-after"), Date.now()))
+        client.holdFor(answer.headers.get("retry-after"))
         return "held"
       }
       // Its token turned away: exchanged again once for the whole read (as the plan's read does), and this page asked again.

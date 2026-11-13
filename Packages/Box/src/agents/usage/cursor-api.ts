@@ -124,6 +124,16 @@ export class CursorClient {
     this.holdUntil = Math.max(this.holdUntil, until ?? this.now() + HOLD_WITHOUT_WORD)
   }
 
+  /**
+   * A 429 with its `Retry-After` (by this client's clock): held off as long as it says, a while
+   * when it doesn't; and when it said, that (else none: its plan's limits double their own wait).
+   */
+  holdFor(header: string | null | undefined): number | undefined {
+    const until = retryAt(header, this.now())
+    this.hold(until)
+    return until
+  }
+
   /** Until when Cursor holds reads off, if it does now. */
   heldUntil(): number | undefined {
     return this.now() < this.holdUntil ? this.holdUntil : undefined
@@ -162,10 +172,7 @@ export class CursorClient {
       this.refused = fingerprint(key)
       throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings › Accounts.")
     }
-    if (answer.status === 429) {
-      this.hold(retryAt(answer.headers.get("retry-after"), this.now()))
-      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdUntil)
-    }
+    if (answer.status === 429) throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdFor(answer.headers.get("retry-after")))
     if (answer.status < 200 || answer.status >= 300) throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`)
     const access = typeof answer.body?.accessToken === "string" ? answer.body.accessToken.trim() : ""
     if (!access) throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.")

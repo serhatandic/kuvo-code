@@ -564,6 +564,32 @@ describe("Cursor's account across your computers", () => {
     expect(dev.usage.rows()[0]!.accountWide).toBe(true)
   })
 
+  test("a box whose reads keep failing (today's events, while older days are known) doesn't say it read the account, so another of your computers takes over", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    cursor.events = eventsEachDay(1)
+    const agent = account("key_work") as unknown as Agent
+    const sources = cursorSources(undefined, () => false, new CursorHistory(undefined, { deadline: instant, log: () => {} }), () => now)
+    const usage = new Usage(() => sources([agent]), store(cursorPricing()), () => "aaaaaaaaaaaaaaaa", undefined, () => now)
+    await usage.refresh()
+    const read = usage.own()[0]!.scanned!
+    expect(read).toBe(now)
+    // cursor.com turns its days away now: the days are as known, but it isn't read.
+    cursor.failing = () => 500
+    now += 6 * 60_000
+    await usage.refresh()
+    expect(usage.own()[0]!.scanned).toBe(read)
+  })
+
+  test("a 429 that doesn't say for how long: the plan's own wait doubles, as for other makers", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    const agent = account("key_work") as unknown as Agent
+    const limits = limitsOf([agent])
+    cursor.usageAnswers = [429]
+    await limits.refresh()
+    const [row] = limits.list()
+    expect(row!.problem).toMatchObject({ kind: "rate-limited", until: now + 60 * 60_000 })
+  })
+
   test("a box a peer vouches for (another person's Mac beside a machine you share) is never waited on", async () => {
     const peers = new UsagePeers(new Usage(() => [], store(cursorPricing()), () => undefined, undefined, () => now), { followed: true, send: () => {} }, { told: true, own: () => ({ key: "b", name: "b" }), peerBoxes: () => [{ key: "a", name: "a" }], listen: () => {}, isPeer: () => false } as any, undefined, () => now)
     const identity = "aaaaaaaaaaaaaaaa"

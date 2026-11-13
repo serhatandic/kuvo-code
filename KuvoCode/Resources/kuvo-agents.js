@@ -17209,6 +17209,11 @@ class CursorClient {
   hold(until) {
     this.holdUntil = Math.max(this.holdUntil, until ?? this.now() + HOLD_WITHOUT_WORD);
   }
+  holdFor(header) {
+    const until = retryAt(header, this.now());
+    this.hold(until);
+    return until;
+  }
   heldUntil() {
     return this.now() < this.holdUntil ? this.holdUntil : undefined;
   }
@@ -17248,10 +17253,8 @@ class CursorClient {
       this.refused = fingerprint(key);
       throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
     }
-    if (answer.status === 429) {
-      this.hold(retryAt(answer.headers.get("retry-after"), this.now()));
-      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdUntil);
-    }
+    if (answer.status === 429)
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdFor(answer.headers.get("retry-after")));
     if (answer.status < 200 || answer.status >= 300)
       throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
     const access = typeof answer.body?.accessToken === "string" ? answer.body.accessToken.trim() : "";
@@ -17691,10 +17694,8 @@ async function readCursorPlan(client, now = Date.now) {
     if (answer.status === 401 || answer.status === 403)
       throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
   }
-  if (answer.status === 429) {
-    client.hold(retryAt(answer.headers.get("retry-after"), now()));
-    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.heldUntil());
-  }
+  if (answer.status === 429)
+    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")));
   if (answer.status < 200 || answer.status >= 300)
     throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
   const usage = object(answer.body);
@@ -21368,6 +21369,9 @@ class CursorHistory {
     this.options = options;
   }
   async read(client, now) {
+    return (await this.readWhole(client, now)).days;
+  }
+  async readWhole(client, now) {
     const access = await client.accessToken();
     const user = cursorSession(access)?.user;
     if (!user)
@@ -21379,10 +21383,11 @@ class CursorHistory {
       return under;
     const last = this.last.get(key);
     if (last && now >= last.at && now - last.at < MIN_BETWEEN && Math.floor(now / DAY2) === Math.floor(last.at / DAY2))
-      return last.days;
-    const read = this.readFor(client, access, key, now).then((days) => {
-      this.last.set(key, { at: now, days });
-      return days;
+      return { days: last.days, whole: true };
+    const read = this.readFor(client, access, key, now).then((result) => {
+      if (result.whole)
+        this.last.set(key, { at: now, days: result.days });
+      return result;
     }).finally(() => this.reading.delete(key));
     this.reading.set(key, read);
     return read;
@@ -21402,6 +21407,7 @@ class CursorHistory {
     let first;
     let succeeded = 0;
     let stopped = false;
+    let hit = false;
     const deadline = (this.options.deadline ?? defaultDeadline)();
     const queue = [...due];
     const worker = async () => {
@@ -21422,7 +21428,7 @@ class CursorHistory {
     };
     const workers = Promise.all(Array.from({ length: Math.min(this.options.concurrency ?? 4, due.length) }, worker));
     try {
-      const hit = await Promise.race([workers.then(() => false), deadline.done.then(() => true)]);
+      hit = await Promise.race([workers.then(() => false), deadline.done.then(() => true)]);
       if (hit) {
         stopped = true;
         const missing = window.filter((day) => !cached.has(day.key)).length;
@@ -21437,7 +21443,7 @@ class CursorHistory {
       this.save(key, cached);
     if (!window.every((day) => cached.has(day.key)))
       throw new Error(`Cursor's usage events: ${window.filter((day) => !cached.has(day.key)).length} of ${window.length} days aren't known yet.`);
-    return new Map(window.map((day) => [day.key, cached.get(day.key)]));
+    return { days: new Map(window.map((day) => [day.key, cached.get(day.key)])), whole: !failures && !hit };
   }
   async fetchDay(client, token, day, stopped) {
     let renewed = false;
@@ -21458,7 +21464,7 @@ class CursorHistory {
       if (!answer)
         return "request";
       if (answer.status === 429) {
-        client.hold(retryAt(answer.headers.get("retry-after"), Date.now()));
+        client.holdFor(answer.headers.get("retry-after"));
         return "held";
       }
       if ((answer.status === 401 || answer.status === 403) && !renewed) {
@@ -22152,7 +22158,11 @@ class Usage {
             continue;
         } else if (slots) {
           entry.slots = slots;
-          entry.scanned = this.now();
+          const whole = source.wholeAt ? source.wholeAt() : this.now();
+          if (whole !== undefined)
+            entry.scanned = whole;
+          else
+            delete entry.scanned;
         } else {
           complete = false;
           entry.slots = trimmed2(entry.slots, at);
@@ -22703,6 +22713,7 @@ function cursorClientOf(agent) {
 }
 function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? join35(folder, "cursor-history") : undefined), now = Date.now) {
   const last = new Map;
+  const wholeAt = new Map;
   return (agents) => {
     if (!cursorReachable())
       return [];
@@ -22710,6 +22721,9 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
     for (const provider of [...last.keys()])
       if (!here.has(provider))
         last.delete(provider);
+    for (const provider of [...wholeAt.keys()])
+      if (!here.has(provider))
+        wholeAt.delete(provider);
     return agents.flatMap((agent) => {
       const found = cursorClientOf(agent);
       if (!found || !found.client.key() && !found.unreadable())
@@ -22722,6 +22736,7 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
         agent: { kind: "cursor", account: parsed.id },
         ...agent.instance.label ? { label: agent.instance.label } : {},
         accountWide: true,
+        wholeAt: () => wholeAt.get(agent.providerID),
         identity: () => {
           const raw = client.identity();
           return raw ? identityOf(raw) : undefined;
@@ -22732,7 +22747,10 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
             return null;
           if (!client.key())
             throw new Error("Cursor's sign-in can't be read just now.");
-          const days = await history.read(client, now());
+          const read = await history.readWhole(client, now());
+          if (read.whole)
+            wholeAt.set(agent.providerID, now());
+          const days = read.days;
           const said = createHash12("sha256").update(JSON.stringify([...days])).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.days === said && before.pricing === pricing && before.since === since)
@@ -28541,8 +28559,11 @@ class UsagePeers {
     directory.listen(() => this.directorySaid());
     transport.onFollowed?.(() => this.told.clear());
   }
+  freshAt;
   send(to, mail, durable) {
-    const fresh = Object.fromEntries(this.usage.own().flatMap((account) => account.accountWide && account.scanned ? [[account.provider, account.scanned]] : []));
+    if (this.freshAt?.at !== mail.at)
+      this.freshAt = { at: mail.at, fresh: Object.fromEntries(this.usage.own().flatMap((account) => account.accountWide && account.scanned ? [[account.provider, account.scanned]] : [])) };
+    const fresh = this.freshAt.fresh;
     this.transport.send(to, Object.keys(fresh).length ? { ...mail, fresh } : mail, durable);
   }
   readsWhole(service, identity) {
@@ -33616,4 +33637,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ddf60f535deb634d41d557bff683ab76b93f5ecb2674fc4a5dbe0cafc9da5034
+// Built from Packages/Box/src/agents ca9300c90b6027e341b641c51a7f0b1e7ca0325a178bea961310907798d23aff

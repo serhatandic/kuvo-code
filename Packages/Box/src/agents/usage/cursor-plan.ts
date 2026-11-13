@@ -428,10 +428,8 @@ export async function readCursorPlan(client: CursorClient, now: () => number = D
     answer = await attempt(access)
     if (answer.status === 401 || answer.status === 403) throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings › Accounts.")
   }
-  if (answer.status === 429) {
-    client.hold(retryAt(answer.headers.get("retry-after"), now()))
-    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.heldUntil())
-  }
+  // (As long as it says; where it doesn't, the plan's own wait doubles with each, Limits'.)
+  if (answer.status === 429) throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")))
   if (answer.status < 200 || answer.status >= 300) throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`)
   const usage = object(answer.body)
   if (!usage) throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.")
