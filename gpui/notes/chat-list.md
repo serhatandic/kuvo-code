@@ -22,7 +22,8 @@ Files read: `crates/agent_ui/src/conversation_view.rs` and
 - `ChatListState` wraps GPUI's `ListState`: bottom-aligned (a short conversation sits just
   above the composer, as in Messages and Slack), following its tail, with a 1200 px overdraw.
 - `push` for new messages, `changed(ix)` for a message that grew (streaming, a tool result):
-  the reader's place holds unless they're at the bottom, in which case the list follows.
+  the reader's place holds unless they're at the bottom, in which case the list follows. Only
+  new messages and changes below the view count as "new"; a change above the reader isn't.
 - A floating button at the bottom centre appears whenever the reader is away from the latest:
   a round ↓ button, or a "↓ New messages" pill if something arrived since they scrolled up
   (Claude, ChatGPT and Slack do the same; Zed has no button). It jumps back and follows again.

@@ -34,7 +34,9 @@ tooltip placement in `src/window.rs` (Apache-2.0).
 - `PopoverMenu` (a dropdown) with a `PopoverMenuHandle` so code can open one. Closing gives
   focus back to what had it, but only if the menu still has it: an entry that moves focus on
   purpose ("Rename" focusing a field) keeps it there, and a second right-click carries the
-  original place over rather than returning to the first menu. `ContextMenuArea` opens at the pointer and stays inside the
+  original place over rather than returning to the first menu. The same holds across menus:
+  opening one dropdown while another is open hands over the first one's place to return to
+  (a small registry of open menus, `OpenMenus`). `ContextMenuArea` opens at the pointer and stays inside the
   window. `HoverCard` uses GPUI's hoverable tooltip. `Tooltip` gains a shortcut keycap.
 
 ## Tests
@@ -43,7 +45,8 @@ The keyboard skips a disabled entry and choosing closes the menu and returns foc
 the last entry; Escape and a click outside close without choosing, and a second press on the
 trigger closes and gives focus back; a right-click opens the menu at the pointer and a click
 chooses; an entry that moves focus keeps it there; after a second right-click, Escape still
-gives focus back.
+gives focus back; opening a second dropdown from an open first one, then Escape, gives focus
+back to where it was before either.
 
 ## Not yet
 

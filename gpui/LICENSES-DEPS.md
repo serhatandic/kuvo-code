@@ -33,7 +33,9 @@ GPUI also brings in other crates from Zed's repository, all Apache-2.0: `gpui_ap
 `sum_tree`, `http_client`, `scheduler` and the like (listed in full below).
 
 **Adapted code:** parts of `kuvo_ui/src/text_field/` are adapted from GPUI's
-`examples/input.rs` (Copyright Zed Industries, Inc., Apache-2.0), modified; the files say so.
+`examples/input.rs` (Copyright 2022 - 2025 Zed Industries, Inc., Apache-2.0), modified; the
+files say so. The license text is `Licenses/gpui.txt`, and GPUI has its entry in the repo's
+`THIRD_PARTY_LICENSES.txt` (written by `scripts/third-party-licenses.sh`).
 
 Assets: the icons in `assets/icons` are drawn for Kuvo and are Kuvo's own. No fonts are
 bundled: the UI uses the system's SF Pro and SF Mono.
@@ -45,7 +47,7 @@ was added by us. All are permissive, except two MPL-2.0 crates worth a decision:
 
 | Crate | Licence | Comes from | Notes |
 |---|---|---|---|
-| option-ext 0.2 | MPL-2.0 | gpui_apple → zed-font-kit → dirs → dirs-sys | Linked into the app. MPL-2.0 is file-level copyleft: fine to ship unmodified, its source must stay available. **Flag for the user / lead.** |
+| option-ext 0.2 | MPL-2.0 | gpui_apple → zed-font-kit → dirs → dirs-sys | Linked into the app, unmodified. Kept (the lead's call); its notice and source location are in `THIRD_PARTY_LICENSES.txt`, its license in `Licenses/option-ext.txt`. |
 | cbindgen 0.28 | MPL-2.0 | gpui_apple (build dependency) | A build-time tool only; not shipped. |
 | icu_*, litemap, tinystr, writeable, yoke, zerofrom, zerotrie, zerovec, potential_utf | Unicode-3.0 | URL and text handling | Permissive. |
 | tiny-skia, tiny-skia-path, exr, lebe, avif-serialize, ravif, sha1_smol | BSD-3-Clause | SVG and image decoding | Permissive; keep notices. |
@@ -53,8 +55,9 @@ was added by us. All are permissive, except two MPL-2.0 crates worth a decision:
 | foldhash, slotmap, zlib-rs | Zlib | Hashing, GPUI's entity maps, compression | Permissive. |
 | unicode-ident | (MIT OR Apache-2.0) AND Unicode-3.0 | Parsing (proc macros) | Permissive. |
 
-When the client ships, these notices go into the app's third-party licences file, as the Mac
-app does today (`THIRD_PARTY_LICENSES.txt`).
+GPUI and option-ext are in the repo's `THIRD_PARTY_LICENSES.txt` now. When the client ships,
+the script should list every Rust crate in the shipped binary from `cargo metadata` (as
+`scripts/deps-licenses.py` does here), with the notices the BSD crates ask for.
 
 ## Every crate in the build
 

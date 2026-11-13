@@ -40,7 +40,7 @@ struct ConversationPicturesTests {
               Self.tool("call_failed", "generate_image", input: #"{"prompt": "a cat"}"#, status: "error"),
           ].joined(separator: ","))),
           {"id": "msg_3", "type": "idle", "time": {"created": 3}, "outcome": "succeeded"},
-          {"id": "msg_4", "type": "user", "time": {"created": 4}, "text": "And make one.\\n\\n<attached-files>\\nOpen these attached files with your tools if you need them:\\n/p/big.png\\n/p/spec.pdf\\n</attached-files>", "files": [{"mime": "image/jpeg", "name": "idea.jpg", "data": "/9j/"}]},
+          {"id": "msg_4", "type": "user", "time": {"created": 4}, "text": "And make one.\\n\\n<attached-files>\\nOpen these attached files with your tools if you need them:\\n/p/big.png\\n/p/spec.pdf\\n</attached-files>", "metadata": {"kuvo": {"parts": {"words": "And make one.", "paths": ["/p/big.png", "/p/spec.pdf"]}}}, "files": [{"mime": "image/jpeg", "name": "idea.jpg", "data": "/9j/"}]},
           \(Self.step("msg_5", at: 5, Self.tool("call_made", "generate_image", input: #"{"prompt": "a cat"}"#, content: made)))
         ]
         """)

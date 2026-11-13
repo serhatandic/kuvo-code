@@ -341,23 +341,30 @@ impl PopoverMenuHandle {
         self.0.borrow().as_ref().map(|open| open.menu.clone())
     }
 
-    /// Shows `menu`, giving it the keyboard. Replacing a menu that's already open (a second
-    /// right-click) keeps the original place to return focus to.
+    /// Shows `menu`, giving it the keyboard. When it closes, focus goes back to what had it
+    /// before: if that was another menu (a second right-click, or one dropdown opened while
+    /// another was open), to what that menu was going to give focus back to.
     pub fn open(&self, menu: Entity<Menu>, window: &mut Window, cx: &mut App) {
         let replaced = self.0.borrow_mut().take();
+        let focused = window.focused(cx);
         let return_to = match replaced {
-            Some(open) => open.return_to,
-            None => window.focused(cx),
+            Some(open) => {
+                OpenMenus::remove(&open.menu.focus_handle(cx), cx);
+                open.return_to
+            }
+            None => OpenMenus::return_target(focused, cx),
         };
         let menu_focus = menu.focus_handle(cx);
+        OpenMenus::add(menu_focus.clone(), return_to.clone(), cx);
         let dismissed = {
             let slot = self.0.clone();
             let menu_focus = menu_focus.clone();
             let return_to = return_to.clone();
             window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
                 slot.borrow_mut().take();
-                // If the chosen entry moved focus somewhere on purpose (a rename field), or a
-                // click outside focused something else, leave it there.
+                OpenMenus::remove(&menu_focus, cx);
+                // Leave focus alone if the chosen entry moved it on purpose (a rename field) or
+                // a press outside put it somewhere else.
                 let menu_kept_focus = menu_focus.contains_focused(window, cx) || window.focused(cx).is_none();
                 if let (true, Some(target)) = (menu_kept_focus, &return_to) {
                     window.focus(target, cx);
@@ -366,8 +373,8 @@ impl PopoverMenuHandle {
             })
         };
         *self.0.borrow_mut() = Some(OpenMenu { menu, return_to, _dismissed: dismissed });
-        // A menu draws in a deferred layer, which only joins the focus tree once drawn; take
-        // the keyboard after this frame.
+        // The menu is painted through `deferred`, so its element only exists after the next
+        // frame; focusing it before then would land nowhere.
         window.defer(cx, move |window, cx| window.focus(&menu_focus, cx));
         window.refresh();
     }
@@ -376,13 +383,42 @@ impl PopoverMenuHandle {
     pub fn close(&self, window: &mut Window, cx: &mut App) {
         let open = self.0.borrow_mut().take();
         if let Some(open) = open {
-            if open.menu.focus_handle(cx).contains_focused(window, cx) {
+            let menu_focus = open.menu.focus_handle(cx);
+            OpenMenus::remove(&menu_focus, cx);
+            if menu_focus.contains_focused(window, cx) {
                 if let Some(target) = &open.return_to {
                     window.focus(target, cx);
                 }
             }
         }
         window.refresh();
+    }
+}
+
+/// The menus open in the app, each with where it gives focus back. A menu opened while another
+/// has focus takes over that one's place to return to, rather than the other menu, which is
+/// about to close.
+#[derive(Default)]
+struct OpenMenus(Vec<(FocusHandle, Option<FocusHandle>)>);
+
+impl gpui::Global for OpenMenus {}
+
+impl OpenMenus {
+    fn return_target(focused: Option<FocusHandle>, cx: &mut App) -> Option<FocusHandle> {
+        let focused = focused?;
+        let menus = cx.default_global::<OpenMenus>();
+        match menus.0.iter().find(|(menu, _)| *menu == focused) {
+            Some((_, return_to)) => return_to.clone(),
+            None => Some(focused),
+        }
+    }
+
+    fn add(menu: FocusHandle, return_to: Option<FocusHandle>, cx: &mut App) {
+        cx.default_global::<OpenMenus>().0.push((menu, return_to));
+    }
+
+    fn remove(menu: &FocusHandle, cx: &mut App) {
+        cx.default_global::<OpenMenus>().0.retain(|(open, _)| open != menu);
     }
 }
 

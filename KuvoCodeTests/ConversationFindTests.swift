@@ -98,8 +98,9 @@ import Testing
     /// A message sent with a keyword shows it in front of its words: Find counts the places in
     /// both, as many as the bubble marks, so the place you're on is the one marked.
     @Test func aKeywordInFrontOfYourWordsIsFoundAsShown() async throws {
-        let json: [String: Any] = ["id": "you-1", "type": "user", "time": ["created": 1],
-                                   "text": SentWithKeyword.message("Review the tests", typed: "/review")]
+        // As its box keeps it: the text the agent read, and its parts.
+        let json: [String: Any] = ["id": "you-1", "type": "user", "time": ["created": 1], "text": "Review the tests\n\n<sent-with>…</sent-with>",
+                                   "metadata": ["kuvo": ["parts": ["words": "Review the tests", "keyword": "/review"]]]]
         guard case .user(let message) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: json)) else {
             Issue.record("not a user message"); return
         }

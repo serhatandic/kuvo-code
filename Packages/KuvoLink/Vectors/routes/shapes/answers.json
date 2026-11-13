@@ -3215,6 +3215,9 @@
             "literal": "mcp.catalog"
            },
            {
+            "literal": "messages.send"
+           },
+           {
             "literal": "models.offered"
            },
            {
@@ -3699,6 +3702,9 @@
            },
            {
             "literal": "mcp.catalog"
+           },
+           {
+            "literal": "messages.send"
            },
            {
             "literal": "models.offered"
@@ -8870,6 +8876,7 @@
             "files?": {
              "list": "string"
             },
+            "keyword?": "string",
             "at": "number"
            }
           }
@@ -9312,6 +9319,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9338,6 +9346,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9379,6 +9388,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9420,6 +9430,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9461,6 +9472,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9502,6 +9514,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9549,6 +9562,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -10056,6 +10070,105 @@
         "beside?": "string"
        }
       }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/send",
+   "answers": {
+    "200": "any",
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "405": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/messages/parts",
+   "answers": {
+    "200": {
+     "object": {
+      "parts": {
+       "list": {
+        "object": {
+         "words": "string",
+         "keyword?": "string",
+         "widget?": "string",
+         "comments?": {
+          "list": {
+           "object": {
+            "file": "string",
+            "line": "number",
+            "side": {
+             "oneOf": [
+              {
+               "literal": "new"
+              },
+              {
+               "literal": "old"
+              }
+             ]
+            },
+            "snippet": "string",
+            "text": "string"
+           }
+          }
+         },
+         "paths?": {
+          "list": "string"
+         },
+         "agents?": {
+          "list": {
+           "object": {
+            "name": "string",
+            "session": "string"
+           }
+          }
+         },
+         "phone?": {
+          "literal": true
+         },
+         "mail?": {
+          "object": {
+           "name": "string",
+           "session": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "405": {
+     "object": {
+      "message": "string"
      }
     }
    }

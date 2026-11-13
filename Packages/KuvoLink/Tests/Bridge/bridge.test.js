@@ -653,8 +653,8 @@ test("requests go to the engine with its password, all of its API; paths that ar
   assert.equal(answer.head.s, 200);
   assert.equal(answer.head.h["content-type"], "application/json");
   assert.equal(answer.head.h["set-cookie"], undefined);
-  // A message from the phone says so, at its end.
-  assert.deepEqual(JSON.parse(answer.body), { path: "/api/session/ses_1/prompt?x=1", body: JSON.stringify({ text: `hi\n\n${link.FROM_PHONE}` }) });
+  // A message from the phone says so, at its end, and keeps its parts (PROTOCOL.md, "A message's parts").
+  assert.deepEqual(JSON.parse(answer.body), { path: "/api/session/ses_1/prompt?x=1", body: JSON.stringify({ text: `hi\n\n${link.FROM_PHONE}`, metadata: { kuvo: { parts: { words: "hi", phone: true } } } }) });
   const call = engine.asked.at(-1);
   assert.equal(call.auth, `Basic ${Buffer.from("opencode:s3cret").toString("base64")}`);
   assert.equal(call.directory, "/home/me/p");
@@ -1603,6 +1603,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (Using a plan's resets, and the agents' tool for it: the bridge's `limits/reset`.)
     "limits.resets": ["POST", "kuvo/agents/api/kuvo/limits/reset"],
     "mcp.catalog": ["GET", "kuvo/mcp/catalog"],
+    // (And kuvo/sessions/<id>/send, which the same box answers.)
+    "messages.send": ["POST", "kuvo/messages/parts"],
     "models.offered": ["GET", "kuvo/models/offered"],
     moves: ["GET", "kuvo/moves"],
     // (Moves with a coding agent's own conversation: what kuvo/moves takes besides.)

@@ -1,5 +1,5 @@
 import AppKit
-import ClientText
+import ClientSessions
 import OpenCodeKit
 import UniformTypeIdentifiers
 
@@ -180,7 +180,7 @@ nonisolated enum Attachments {
     /// The same, for an engine on a machine, which can't read this Mac's files: each goes to the
     /// machine's box with its contents, whatever it is (a folder as its listing, as the engine lists
     /// one; a picture as the engine takes one), as a phone's do. The box keeps it there for the agent
-    /// and gives the model what it reads (`MachineBox.prompt`), and its note says where. One that
+    /// and gives the model what it reads (`kuvo/sessions/<id>/send`), and its note says where. One that
     /// can't be read, or is too big to send, stays here, and the note says so.
     static func prepareForMachine(_ urls: [URL]) -> Prepared {
         var prepared = Prepared()
@@ -254,27 +254,10 @@ nonisolated enum Attachments {
 
     // MARK: The note
 
-    private static let includedHeading = AttachedFilesNote.includedHeading
-    private static let pathsHeading = AttachedFilesNote.pathsHeading
-    private static let unsentHeading = AttachedFilesNote.unsentHeading
-    private static let note = AttachedFilesNote.block
-
-    /// The message text with the note: where the files sent with it are, the files sent as
-    /// paths, and those that couldn't be sent.
-    static func text(_ text: String, for prepared: Prepared) -> String {
-        let text = note.escaping(text)
-        var lines: [String] = []
-        if !prepared.included.isEmpty { lines += [includedHeading] + prepared.included }
-        if !prepared.paths.isEmpty { lines += [pathsHeading] + prepared.paths }
-        if !prepared.unsent.isEmpty { lines += [unsentHeading] + prepared.unsent }
-        guard !lines.isEmpty else { return text }
-        return (text.isEmpty ? "" : text + "\n\n") + ([note.start] + lines + [note.end]).joined(separator: "\n")
-    }
-
-    /// A message's text without the note that ends it, and the paths of the files it sent as
-    /// paths or couldn't send (the others are the message's own files): KuvoClient's, as the phone reads it.
-    static func split(_ text: String) -> (text: String, paths: [String]) {
-        AttachedFilesNote.split(text)
+    /// Where the files go, for the note its box writes at the message's end (`MessageParts.Notes`):
+    /// where those sent with it are, those sent as paths, and those that couldn't be sent.
+    static func notes(for prepared: Prepared) -> MessageParts.Notes {
+        MessageParts.Notes(included: prepared.included, paths: prepared.paths, unsent: prepared.unsent)
     }
 
     /// The paths a message's note names that aren't among its own `files`: a message on its way

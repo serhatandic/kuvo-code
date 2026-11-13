@@ -61,8 +61,12 @@ impl ChatListState {
     /// A message changed (text streamed into it, a tool result came back): measure it again.
     /// The reader's place is kept, unless they're following the latest.
     pub fn changed(&self, ix: usize) {
+        // Only a change below what the reader sees is news; one above or in view isn't.
+        let below = self.list.item_is_below_viewport(ix) == Some(true);
         self.list.remeasure_items(ix..ix + 1);
-        self.note_arrival();
+        if below {
+            self.note_arrival();
+        }
     }
 
     /// Everything was replaced (another conversation opened): show its latest.

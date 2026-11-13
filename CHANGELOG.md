@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- What goes with your message for the agent (your comments on the changes, where your files are, who the agents you name with & are) is written by the computer the conversation is on, the same way from your Mac and your iPhone; conversations from before show as they did.
 - New sessions in every project open as conversations. The project’s terminal-command setting and terminal tabs in the main window have been removed; existing projects keep their names, folders and Run commands. Terminals remain available in the side panel.
 - Antigravity's limits and conversation spend are read by your computers with the sign-ins you made in Kuvo Code, including on Linux, with the app closed. The Antigravity app's own login and history are no longer read.
 - The usage panel shows what a plan has beyond its limits under each account: Claude's extra usage, Codex's credits, an OpenRouter key's spend today, this week and this month, and a Copilot organization's credits, read by your computers with the app closed.

@@ -12,6 +12,7 @@
 // Kept in `run/work/goals.json`, each bot's latest, on the box doing the work, so it goes on with no
 // client there, through restarts, and every client shows the same goal.
 
+import { GOAL_HEADING, partsOf, withParts } from "../messages/parts";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -849,7 +850,7 @@ async function tellBot(goal: Pick<KeptGoal, "session">, said: string, line: stri
 // What the bot's told of a goal asked for with /goal, after your words, in the block your bubble
 // leaves out to show /goal in front of them, as the composer did (KuvoClient's
 // SentWithKeyword.goalHeading, in these words).
-const GOAL_ASKED = "The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:";
+const GOAL_ASKED = GOAL_HEADING;
 // How to plan it, after /goal in the block (clients read only its first two lines).
 const GOAL_PLANNING = [
   "Plan it as a lead whose sessions do the work: make each step one session's whole task (\"Build the app's screens\", \"Write the tests\"), not a command.",
@@ -866,10 +867,12 @@ export async function askGoal(session: string, words: string, targets: () => Tar
   if (!place) return { refused: { status: 404, message: "There's no such conversation here." } };
   // You asked for it now: as a message of yours to go now, the queue goes on.
   changeQueue(session, state => ({ ...state, paused: false }));
+  const asking = [said, "", "<sent-with>", GOAL_ASKED, "/goal", ...GOAL_PLANNING, "</sent-with>"].join("\n");
   const sent = await asked(place.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, {
     id: messageID(),
-    text: [said, "", "<sent-with>", GOAL_ASKED, "/goal", ...GOAL_PLANNING, "</sent-with>"].join("\n"),
+    text: asking,
     delivery: "queue",
+    metadata: withParts(undefined, partsOf(asking)),
   }).then(() => true, () => false);
   return sent ? { text: "Asked for a plan." } : { refused: { status: 404, message: "The conversation can't be reached now." } };
 }

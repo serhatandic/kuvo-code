@@ -19,7 +19,7 @@ import type { Target } from "../../shared/records";
 // found out (then it gets every file, as before).
 export type ModelInput = (session: string) => Promise<string[] | null>;
 
-interface PromptFile { uri?: unknown; name?: unknown }
+export interface PromptFile { uri?: unknown; name?: unknown }
 
 // `body` with its inline files kept on the box and only what the model reads left as files;
 // anything else as it is. A note the message ends with already joins this one only when it's the
@@ -31,8 +31,18 @@ export async function attachedIn(body: Buffer | undefined, session: string, mode
   let prompt: { text?: unknown; files?: unknown } | null;
   try { prompt = JSON.parse(Buffer.from(body ?? "").toString()); } catch { return body; }
   if (!prompt || !Array.isArray(prompt.files)) return body;
-  const files = prompt.files as PromptFile[];
-  if (!files.some(file => inline(file) !== null)) return body;
+  const kept = await keptFiles(prompt.files, session, modelInput, toAgents);
+  if (!kept) return body;
+  const text = typeof prompt.text === "string" ? prompt.text : "";
+  return Buffer.from(JSON.stringify({ ...prompt, text: withAttachedNote(text, kept.included, kept.paths, joinsNote), files: kept.files.length ? kept.files : undefined }));
+}
+
+/** A message's files as `attachedIn` sends them: those it carries inline kept on this box, and only
+ * what the model reads left as files (`files`); where the kept ones are, for its note (`included`,
+ * those it reads too; `paths`, those the agent opens). Null when it carries none inline. */
+export async function keptFiles(given: unknown[], session: string, modelInput: ModelInput, toAgents = false): Promise<{ files: PromptFile[]; included: string[]; paths: string[] } | null> {
+  const files = given as PromptFile[];
+  if (!files.some(file => inline(file) !== null)) return null;
   const input = await modelInput(session).catch(() => null);
   const attachments = path.join(K, "attachments");
   letOldGo(attachments);
@@ -57,8 +67,7 @@ export async function attachedIn(body: Buffer | undefined, session: string, mode
       sent.push(file);
     }
   }
-  const text = typeof prompt.text === "string" ? prompt.text : "";
-  return Buffer.from(JSON.stringify({ ...prompt, text: withAttachedNote(text, included, paths, joinsNote), files: sent.length ? sent : undefined }));
+  return { files: sent, included, paths };
 }
 
 // A file sent with its contents (a base64 `data:` URI): its type and bytes.

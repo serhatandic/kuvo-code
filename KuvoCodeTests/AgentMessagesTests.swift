@@ -2,29 +2,11 @@ import Foundation
 import Testing
 @testable import KuvoCode
 
-/// Agents writing to each other (how a message from another reads), sharing a bot as a .kuvobot
-/// file, and parts of a group chat's work that wait on each other.
+/// Sharing a bot as a .kuvobot file, and parts of a group chat's work that wait on each other. (How
+/// a message from another agent reads is its box's to say: Vectors/message-parts.json.)
 @MainActor
 @Suite(.serialized) struct AgentMessagesTests {
     init() { TestEnvironment.prepare() }
-
-    // MARK: Messages between agents
-
-    /// Who wrote, from where, and what: read back whatever the name holds.
-    @Test(arguments: ["Ada", "Build · main", "Ops] bot", "@Pixel", "Zoë (QA)"])
-    func aMessageSaysWhoSentIt(name: String) throws {
-        let message = AgentMail.compose(from: name, session: "ses_abc", text: "Can you check?\n\nThanks.", waits: true)
-        let read = try #require(AgentMail.parse(message))
-        #expect(read.name == name)
-        #expect(read.session == "ses_abc")
-        #expect(read.text == "Can you check?\n\nThanks.")
-    }
-
-    /// Not a message from an agent: your own words that look like one's start.
-    @Test(arguments: ["[Message from · ses_abc] hi", "[Message from Ada · not-a-session] hi", "Message from Ada · ses_abc", "[Message from Ada · ses_a b] hi"])
-    func yourOwnWordsArentOne(text: String) {
-        #expect(AgentMail.parse(text) == nil)
-    }
 
     // MARK: A bot to share
 
