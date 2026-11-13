@@ -247,20 +247,18 @@ final class WorkQueues {
 
     // MARK: One item
 
-    /// An item whole (by its id, or its number), read now: one the box says is on another of your
-    /// computers is read whole there (it keeps its description, notes and files).
+    /// An item whole (by its id, or its number), read now. One on another of your computers is read
+    /// whole there by the box asked (`told` when that one can't be asked now: as it last told it).
     @discardableResult
     func load(box: String, item: String) async -> WorkItemDetail? {
-        guard let client = client(box) else { return details[box + "|" + item] ?? details[box + "|#" + item] }
+        guard client(box) != nil else { return details[box + "|" + item] ?? details[box + "|#" + item] }
         do {
             // (An issue's ref has a "/", which no path may carry: it's asked by the id its chip knows.)
             let asked = refs[box]?[item]?.id ?? item
-            var detail = try await client.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(asked))").item
-            if let computer = detail.item.computer, let there = self.box(of: detail.item, in: box), there != box,
-               let whole = try? await self.client(there)?.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(detail.item.id))").item {
-                detail = whole
-                detail.item.computer = computer
-            }
+            // (As you, so the box reads one on another computer whole for you.)
+            let (status, data) = try await send("GET", "kuvo/work-queue/items/\(path(asked))", to: box)
+            guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+            let detail = try JSONDecoder().decode(DetailAnswer.self, from: data).item
             details[box + "|" + detail.item.id] = detail
             if let number = detail.item.number { details[box + "|#\(number)"] = detail }
             if let source = detail.item.source { details[box + "|" + source.ref.lowercased()] = detail }
@@ -292,10 +290,10 @@ final class WorkQueues {
         return nil
     }
 
-    /// A file kept with an item: its bytes (`box`: the one it's kept on, `box(of:in:)`).
+    /// A file kept with an item: its bytes (`box`: the one it's kept on where this Mac reaches it,
+    /// `box(of:in:)`, else the panel's, which brings it from there for you).
     func file(box: String, item: String, name: String) async -> Data? {
-        guard let client = client(box) else { return nil }
-        guard let answer = try? await client.send("GET", "kuvo/work-queue/items/\(path(item))/files/\(path(name))"), answer.status == 200 else { return nil }
+        guard let answer = try? await send("GET", "kuvo/work-queue/items/\(path(item))/files/\(path(name))", to: box), answer.status == 200 else { return nil }
         return answer.body
     }
 
@@ -314,9 +312,12 @@ final class WorkQueues {
         return (link.macKey, link.machineHosts.mapValues(\.key))
     }
 
-    /// The box an item is kept on: the one the view is from, or the computer it says it's on, by
-    /// its key: this Mac's own box, or one of your machines by its id on this Mac. Nil for one on
-    /// another Mac (or a machine only another Mac set up): it's changed from there.
+    /// The box an item's files are read from: the one the view is from, or the computer it says
+    /// it's on, by its key: this Mac's own box, or one of your machines by its id on this Mac. Nil for
+    /// one on another Mac (or a machine only another Mac set up), whose files the panel's box brings
+    /// (a few MB at most). (Only for files: read straight from a computer this Mac reaches, they can
+    /// be any size and need no relay. What you do to an item, and reading it whole, go to the box the
+    /// panel shows, which hands them on itself.)
     func box(of item: WorkItem, in box: String) -> String? {
         guard let computer = item.computer else { return box }
         let known = known
@@ -330,23 +331,11 @@ final class WorkQueues {
         return id
     }
 
-    /// What's said of an item on a computer this Mac doesn't reach.
-    private func elsewhere(_ item: WorkItem) -> String {
-        guard let computer = item.computer else { return "" }
-        return computer.kind == "mac"
-            ? "That item is on \(computer.name), another Mac: change it there."
-            : "That item is on \(computer.name), a computer this Mac doesn’t reach. Change it from a Mac or iPhone that reaches it."
-    }
-
-    /// What you do to an item, sent to the box it's kept on; refused, saying where it is, when this
-    /// Mac doesn't reach that one.
-    @discardableResult
-    private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on item: WorkItem, shownOn box: String) async -> T? {
-        guard let there = self.box(of: item, in: box) else {
-            refusal = (box, elsewhere(item))
-            return nil
-        }
-        return await act(type, method, path, body: body, on: there, shownOn: box)
+    /// The box what you do to an item in a view is sent to: the one the view was read from (this
+    /// Mac's own, for a machine that isn't answering). That box does it where the item is kept,
+    /// handing it on to that computer's box itself, and answers (or says why it couldn't).
+    private func source(_ box: String) -> String {
+        fellBack.contains { $0.box == box } ? BoxClient.thisMac : box
     }
 
     // MARK: What you do
@@ -370,7 +359,7 @@ final class WorkQueues {
         case .category(let category): Move(category: category)
         }
         undoable = nil
-        let moved = await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: item, shownOn: box)
+        let moved = await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: source(box), shownOn: box)
         // Refused: as the box has it. (Done, it stays shown there until the box says so: one on
         // another computer comes once that computer tells this one, never back meanwhile.)
         if moved == nil { await readAll(box) }
@@ -395,7 +384,7 @@ final class WorkQueues {
 
     /// Deletes an item: Undo brings it back, as does Recently Deleted for 30 days.
     func delete(_ item: WorkItem, on box: String) async {
-        if let answer = await act(ItemAnswer.self, "DELETE", "kuvo/work-queue/items/\(path(item.id))", on: item, shownOn: box) {
+        if let answer = await act(ItemAnswer.self, "DELETE", "kuvo/work-queue/items/\(path(item.id))", on: source(box), shownOn: box) {
             // (Undo goes where it was deleted.)
             var deleted = answer.item
             deleted.computer = item.computer
@@ -413,7 +402,7 @@ final class WorkQueues {
     /// Brings back a deleted item, into the category it was in.
     func restore(_ item: WorkItem, on box: String) async {
         if undoable?.item.id == item.id { undoable = nil }
-        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/restore", on: item, shownOn: box)
+        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/restore", on: source(box), shownOn: box)
         if item.computer != nil { await readAll(box) }
     }
 
@@ -443,23 +432,30 @@ final class WorkQueues {
 
     func dismissUndo() { undoable = nil }
 
-    /// What you do, sent as you: to a machine's box with this Mac's proof for that request alone
-    /// (as its vault takes one), since anything on that computer could ask its box otherwise.
+    /// A request sent as you: to a machine's box with this Mac's proof for that request alone (as
+    /// its vault takes one), since anything on that computer could ask its box otherwise.
+    private func send(_ method: String, _ path: String, body: Data? = nil, to box: String) async throws -> (status: Int, body: Data) {
+        guard let client = client(box) else { throw BoxRefusal(status: 503, message: "This Mac can’t reach that computer now.") }
+        var headers: [String: String] = [:]
+        if BoxClient.needsVaultProof(box) {
+            // (A read goes without one: the machine answers it, only not what it brings from another computer.)
+            if let proof = proof(box, method, path, body ?? Data()) { headers["x-kuvo-vault-proof"] = proof }
+            else if method != "GET" { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
+        }
+        return try await client.send(method, path, body: body, headers: headers)
+    }
+
+    /// What you do, sent as you (`send`) to `box`; what it refused said over the panel `shownOn`.
     @discardableResult
     private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on box: String, shownOn: String? = nil) async -> T? {
-        guard let client = client(box) else {
-            // (An item on a computer this Mac doesn't reach, one another Mac set up.)
-            if let shownOn, shownOn != box { refusal = (shownOn, "That item is on a computer this Mac can’t reach. Change it from a Mac or iPhone that reaches it.") }
+        guard client(box) != nil else {
+            // (A machine's panel read from this Mac's box, with that box out of reach too.)
+            if let shownOn, shownOn != box { refusal = (shownOn, "This Mac can’t reach Kuvo Code’s background service right now. Try again in a moment.") }
             return nil
         }
         do {
             let sent = try body.map { try JSONEncoder().encode($0) }
-            var headers: [String: String] = [:]
-            if BoxClient.needsVaultProof(box) {
-                guard let proof = proof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
-                headers["x-kuvo-vault-proof"] = proof
-            }
-            let (status, data) = try await client.send(method, path, body: sent, headers: headers)
+            let (status, data) = try await send(method, path, body: sent, to: box)
             guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
             let answer = try JSONDecoder().decode(T.self, from: data)
             refusal = nil

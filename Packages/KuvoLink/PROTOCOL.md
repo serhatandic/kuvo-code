@@ -4028,9 +4028,13 @@ before (a linked item is its owner's to change). A client shows them first, as "
   Work Queue itself shows), either reads no issue or pull request from GitHub: each is as last read.
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
   but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
-  item on another computer answers as that one told it, with `computer` and an empty `body`,
-  `notes`, `events`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
-  (a machine by `computer.id`; a Mac, its own box).
+  item on another computer has `computer` and `told`. Asked by a client (as "What you do" says
+  who), the box reads it whole from that computer's box ("Across your computers", Done where it's
+  kept): `told: false`. Otherwise, or when that computer can't be asked now (it isn't answering, or
+  doesn't take that from another box), it's as that one told it, with an empty `body`, `notes`,
+  `events`, `files`, `links` and `handed`: `told: true`. Its files' bytes, for a client, come from
+  there the same way, 4 MB at most (413 for a bigger one, read from that computer itself: a machine
+  by `computer.id`; a Mac, its own box), with 409 or 503 `{message, computer}` as for what you do.
 - `GET kuvo/work-queue/refs?refs=243,12`, or `POST kuvo/work-queue/refs {refs: [...],
   conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole;
   `conversation` is taken and not used yet: it's for "issue #12" in a project bound to a tracker,
@@ -4045,9 +4049,15 @@ before (a linked item is its owner's to change). A client shows them first, as "
 
 **What you do** (a paired phone, this Mac's app, or Kuvo Code on another computer through `box
 route` with its Mac's proof for that request alone, `x-kuvo-vault-proof` as the vault takes it; anything
-else, a command on that computer included, gets 403). An item on another computer is changed
-there: here, each of these answers 409 `{message, computer}`, and a client sends it to that
-computer instead. One on its way to another computer (`handing`) is refused (400) until it's there,
+else, a command on that computer included, gets 403). A client sends what it does to an item to
+any of your boxes, whichever computer keeps it: one on another computer is done there, by that
+computer's box, which this box asks ("Across your computers", Done where it's kept), and the answer
+is that box's, its `item` with `computer` as this box names it. When it can't be done there, it
+answers `{message, computer}`: 503 while that computer isn't answering or this box isn't on the
+relay (said at once, nothing sent), or when no answer came in 20 seconds (a file's, 60) or that
+computer stopped answering meanwhile (it may have been done: a client looks again); 409 for one that doesn't take it
+from another box (an older box), and on a machine Macs share outside one setup ("Your setup":
+another person's computers may tell it theirs), changed there. One on its way to another computer (`handing`) is refused (400) until it's there,
 but for `DELETE`, which calls its hand-off off (a note says so) and deletes it.
 `POST kuvo/work-queue/items/<item>/move` `{category?, before?,
 after?, top?}` (a category by its id or name; `before`/`after` an item in the same category);
@@ -4305,6 +4315,37 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   another computer itself (handed back before its receipt came), and refuses one for a conversation it doesn't have, or a
   queue that's full. So the item lives once, and stays in the hander's view on every computer
   (`handedBy`, `handedFrom`).
+- **Done where it's kept** (to a peer whose `features` say `work-queue.forward`): what a client
+  asks a box to do to an item another computer keeps ("What you do": a delete, a bringing back, a
+  move, and a client's whole read) goes to that computer's box as `{workQueue: {act: {id, method,
+  item, action?, name?, body?, at}}}` (`id` `wqa_…`; `method` `GET`, or with `action` `file` and
+  `name` one of its files, or `DELETE`, or `POST` with `action` `move` or `restore`; `item` its id;
+  `body` a move's `{category?, before?, after?, top?}`; `at` when it was asked), again every five
+  seconds while it's waited for, and the answer comes back as `{workQueue: {acted: {id, status,
+  value}}}` (in parts when it's big), what that box's own route would answer (`value` its JSON; a
+  file's `{type, data}`, its bytes in base64, 4 MB at most, else 413), taken only from the box it
+  went to, with a status from 200 to 599. The receiver takes it only from one of its peers, and not
+  from a machine that told it's shared (`told.shared`), which it refuses (409); it does it as its
+  own client's (`by: {user: true}`, numbered and told as any change of yours there), and answers
+  each `id` once: one that comes again is answered as it was (a few seconds after its last answer at
+  the soonest, a file not again while it's waited for), never done twice; a read's answer isn't
+  kept, and one asked again later is read again. It remembers each until it would be too old to take (ten minutes from when it came,
+  or from its `at` if that's later; 2,000 at most, the oldest going first), a change's on disk too
+  (`run/work-queue/acted.json`), so a restart doesn't do it again; one under way as it stopped is
+  answered 409, that it can't tell whether it was done. One whose `at` is more than ten minutes ago
+  or more than a minute ahead of its clock is refused (409). One it doesn't have (it moved on
+  meanwhile, or it knows it only as another computer told it) is 404, "It's no longer on <box>: it
+  may have moved", never handed on again. The asking box leaves
+  it in `run/work-queue/forward/<id>.json` (`{to, act}`) and waits for `<id>.answer.json` beside
+  it, so its link sends it whichever process took the request (on a machine, a Mac's `box route`
+  over SSH, which has no relay connection); what's past its wait is cleared at the link's next
+  round. This Mac's box, whose routes run in the process that sends, sends only what its own
+  routes left there: what anything else on the Mac leaves never goes out as you. A change done there
+  is put at once in what the asking box keeps of that computer's queue, as its box answered (one
+  deleted taken out of it), never over newer word of that item (one it told since as changed later); and one deleted there is kept a day
+  (`run/work-queue/deleted-there.json`, 200 at most, until that computer or this box has it again),
+  so a client's bringing it back (Undo) and reading it reach that computer after it has told without
+  it. Nothing else (agents' tools, chips) sees those.
 
 ### Side questions, handoffs and reviews
 
@@ -4577,6 +4618,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
 | `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
 | `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
+| `work-queue.forward` | (in a peer's agents' mail) it does what a client asked another box to do to an item it keeps, and answers (`act`, `acted`; "The Work Queue", Across your computers, Done where it's kept); a box with it sends what a client does to an item on another computer there itself, and reads one whole, and its files, there for a client (`told`) |
 | `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
 | `work.elsewhere.start` | (in a peer's agents' mail) it takes starts, reads of its models and projects, and a bot's `stop_work` from your other computers, while its switch lets them ("Peers", Starts) |
 | `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |

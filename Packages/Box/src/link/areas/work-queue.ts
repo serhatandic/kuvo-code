@@ -12,16 +12,17 @@ import { atWorkNow } from "../work/background";
 import { provedRequest } from "./vault";
 import { addCategory, categories, removeCategory, renameCategory } from "../work-queue/categories";
 import { importItems, importWords, parseBacklog, readBacklogFiles } from "../work-queue/import";
-import { numberWaiting, primaryOf } from "../work-queue/numbers";
-import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
-import { changeItem, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
-import { callOffHanding, refuseLiveElsewhere, twinOf } from "../work-queue/hand";
+import { primaryOf } from "../work-queue/numbers";
+import { changedThere, itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
+import { Refusal, refuseMoving } from "../work-queue/ops";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
-import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
+import { allItems, changeQueues, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { readSeen, SEEN_FILE } from "../work-queue/github";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
-import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, titlesHere, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
+import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, type Facts, type ItemSummary } from "../work-queue/view";
+import { forwardAct, type Acted } from "../work-queue/forward";
+import { actHere, fileOf, GITHUB_WAIT } from "../work-queue/acts";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -30,8 +31,6 @@ export const WORK_QUEUE_ROUTE = /^kuvo\/work-queue(?:\/(tools|events|refs|catego
 const YOU = { user: true } as const;
 // Every queue on the box at once, as the panel's All shows it.
 const ALL = "all";
-// An item a client named that isn't here.
-class Missing extends Refusal {}
 const ONLY_CLIENTS = "Only Kuvo Code on your Mac or iPhone can do this: agents change the Work Queue with their tools.";
 // A Mac over SSH whose proof didn't hold (too old, its clock off, or a Mac that didn't set this one up).
 const NOT_PROVED = "This machine couldn't tell the request was from the Mac that set it up (its proof was missing or too old; check both computers' clocks): try again.";
@@ -42,10 +41,6 @@ const NOT_PROVED = "This machine couldn't tell the request was from the Mac that
 const notClient = ({ request }: RouteContext) => (request.fromMac && request.headers["x-kuvo-vault-proof"] ? NOT_PROVED : ONLY_CLIENTS);
 const fromClient = ({ request, phone }: RouteContext) => Boolean(phone?.key || request.fromApp || (request.fromMac && provedRequest(request)));
 const queryOf = (request: RouteContext["request"]) => new URLSearchParams(request.path.split("?")[1] ?? "");
-
-/** How long a client's ask waits for GitHub to say what its issues and pull requests are now (a
- * read that takes longer goes on, for the next ask or the view's next line). */
-const GITHUB_WAIT = 3_000;
 
 /** An owner's view, as `kuvo/work-queue` gives it: the categories, its items and those it oversees
  * or handed on (summaries), those linked to it that are someone else's (what it's working on: seen
@@ -102,19 +97,6 @@ const refFacts = (item: Pick<ItemSummary, "id" | "number" | "title" | "category"
   owner: item.owner,
   ...(item.removed ? { removed: true } : {}),
 });
-
-// What a client's own change says: the item as it is now, or why not.
-function changed(work: () => Item, json: RouteContext["json"]): AnswerPiece[] {
-  try {
-    const item = work();
-    // Your other computers hear of it at their next round, not after the usual wait.
-    tellQueuesAgain();
-    return json(200, { item: summaryOf(item, new Set(), new Map()) });
-  } catch (error) {
-    if (error instanceof Refusal) return json(error instanceof Missing ? 404 : 400, { message: error.message });
-    throw error;
-  }
-}
 
 export async function* workQueueRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
   const { request, json, signal, readEngine, readBridge, bridge } = context;
@@ -208,90 +190,68 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   }
 
   // One item.
-  const ref = refOf(decodeURIComponent(rawItem ?? ""));
+  let named = "";
+  try { named = decodeURIComponent(rawItem ?? ""); } catch {}
+  const ref = refOf(named);
   if (!ref) return yield* json(404, { message: "There's no such item." });
   const find = (items: Item[]) => matching(items, ref)[0] ?? null;
   if (action === undefined && method === "GET") {
-    const item = find(allItems());
-    if (!item) {
-      // One on another of your computers: as it last told it, without what only that computer
-      // keeps (its description, notes, what happened to it, files, links), which a client reads
-      // there.
-      let far = itemElsewhere(ref);
-      if (far) {
-        await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
-        far = itemElsewhere({ id: far.id }) ?? far;
-        const { handedFrom: _, ...summary } = far;
-        return yield* json(200, { item: { ...summary, body: "", notes: [], events: [], files: [], links: [], handed: [] } });
-      }
-      return yield* json(404, { message: "There's no such item." });
+    if (find(allItems())) return yield* answered(await actHere({ method: "GET", ref, targets, signal }), json);
+    // One on another of your computers: whole, as that computer's box answers for a client (`told:
+    // false`); else as it last told it (`told: true`), without what only it keeps (its description,
+    // notes, what happened to it, files, links).
+    let far = itemElsewhere(ref, readLink(), { deleted: fromClient(context) });
+    if (!far) return yield* json(404, { message: "There's no such item." });
+    if (fromClient(context)) {
+      const there = await forwardAct(far.computer, nameOf(far), { method: "GET", item: far.id }, signal);
+      const whole = there.status === 200 && "value" in there && isObject(there.value) && isObject(there.value.item) ? there.value.item : null;
+      if (whole) return yield* json(200, { item: { ...whole, computer: far.computer, told: false } });
     }
-    const facts = await factsOf(targets, signal ?? undefined);
-    await readSeen([item], GITHUB_WAIT);
-    const { titles } = await ownersOf(item.owner, [item], facts, targets);
-    return yield* json(200, { item: wholeOf(item, facts.working, titles) });
+    await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
+    far = itemElsewhere({ id: far.id }) ?? far;
+    const { handedFrom: _, ...summary } = far;
+    return yield* json(200, { item: { ...summary, body: "", notes: [], events: [], files: [], links: [], handed: [], told: true } });
   }
   if (action?.startsWith("files/") && method === "GET") {
-    const name = decodeURIComponent(rawFile ?? "");
-    const item = find(allItems());
-    const kept = item?.files.find(each => each.name === name);
-    if (!item || !kept || !FILE_NAME.test(name)) return yield* json(404, { message: "There's no such file." });
-    let bytes: Buffer;
-    try {
-      bytes = fs.readFileSync(path.join(filesOf(item.id), name));
-    } catch {
-      return yield* json(404, { message: "There's no such file." });
+    let name = "";
+    try { name = decodeURIComponent(rawFile ?? ""); } catch {}
+    // One kept with an item on another of your computers: from there, for a client (up to a few MB).
+    const far = !find(allItems()) && fromClient(context) && name && name.length <= 300 ? itemElsewhere(ref) : null;
+    let file = far ? null : fileOf(ref, name);
+    if (far) {
+      const there = await forwardAct(far.computer, nameOf(far), { method: "GET", item: far.id, action: "file", name }, signal);
+      if ("refused" in there) return yield* json(there.status, { message: there.refused, computer: far.computer });
+      const value = isObject(there.value) ? there.value : {};
+      if (there.status !== 200) return yield* json(there.status, { ...value, computer: far.computer });
+      if (typeof value.data !== "string" || typeof value.type !== "string") return yield* json(502, { message: `${far.computer.name} answered something this computer can't read.`, computer: far.computer });
+      file = { type: value.type, bytes: Buffer.from(value.data, "base64") };
     }
-    yield { head: { status: 200, headers: { "content-type": kept.type } } };
-    return yield { body: bytes };
+    if (!file) return yield* json(404, { message: "There's no such file." });
+    yield { head: { status: 200, headers: { "content-type": file.type } } };
+    return yield { body: file.bytes };
   }
+  const asked: { method: "DELETE" | "POST"; action?: "move" | "restore" } | null = method === "DELETE" && action === undefined ? { method: "DELETE" }
+    : method === "POST" && (action === "move" || action === "restore") ? { method: "POST", action }
+    : null;
+  if (!asked) return yield* json(405, {});
   if (!fromClient(context)) return yield* json(403, { message: notClient(context) });
-  const now = Date.now();
-  const primary = primaryOf();
-  // One on another of your computers is changed there (a client asks that computer).
-  const far = !find(allItems()) ? itemElsewhere(ref) : null;
-  if (far) return yield* json(409, { message: `${nameOf(far)} is on ${far.computer.name}: change it there.`, computer: far.computer });
-  const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void, { handing = false } = {}) => () => changeQueues(book => {
-    const item = find(book.items());
-    if (!item) throw new Missing("There's no item like that.");
-    refuseMoving([item.owner]);
-    if (!handing) refuseHanding(item);
-    work(item, book);
-    numberWaiting(book, primary, null);
-    return item;
-  });
-  // (Deleting one on its way to another computer calls its hand-off off: one stuck going to a
-  // computer that doesn't answer is yours to let go of.)
-  if (action === undefined && method === "DELETE") {
-    return yield* changed(inBook(item => {
-      if (item.removed) throw new Refusal("It's deleted already.");
-      callOffHanding(item, YOU, now);
-      removeItem(item, YOU, now);
-    }, { handing: true }), json);
-  }
-  if (action === "restore" && method === "POST") {
-    // (Another item here its issue: named by its conversation's title, as you know it, looked up
-    // only then.)
-    const deleted = find(allItems());
-    const twin = deleted?.removed ? twinOf(deleted) : null;
-    const titled = twin && !("computer" in twin) ? await titlesHere([twin.owner], targets) : undefined;
-    return yield* changed(inBook((item, book) => {
-      if (!item.removed) throw new Refusal("It isn't deleted.");
-      refuseLiveElsewhere(item, book.items(), titled);
-      restoreItem(book, item, YOU, now);
-    }), json);
-  }
-  if (action === "move" && method === "POST") {
-    return yield* changed(inBook((item, book) => {
-      if (item.removed) throw new Refusal("It's deleted: bring it back first.");
-      // (Only where it goes: what it says is the agents' to change.)
-      const { category, before, after, top } = given;
-      if ([before, after].some(each => each !== undefined && refOf(each) === null)) throw new Refusal("There's no item like that to put it beside.");
-      changeItem(book, item, { category, before, after, top }, { who: YOU, now, fileOps: [] });
-    }), json);
-  }
-  return yield* json(405, {});
+  // One on another of your computers is done there, by that computer's box: this one hands it on
+  // and answers with what it said (a client never works out where an item is).
+  const far = !find(allItems()) ? itemElsewhere(ref, readLink(), { deleted: asked.action === "restore" }) : null;
+  if (!far) return yield* answered(await actHere({ ...asked, ref, given, targets, signal }), json);
+  const { category, before, after, top } = given;
+  const there = await forwardAct(far.computer, nameOf(far), { ...asked, item: far.id, ...(asked.action === "move" ? { body: { category, before, after, top } } : {}) }, signal);
+  if ("refused" in there) return yield* json(there.status, { message: there.refused, computer: far.computer });
+  // What this box has of it now, as that computer's box answered (not when it next tells).
+  if (there.status === 200 && isObject(there.value) && isObject(there.value.item) && there.value.item.id === far.id) changedThere(far.computer.key, asked.method === "DELETE" ? "delete" : asked.action ?? "move", there.value.item);
+  // (As this box names that computer, so a client knows where it is.)
+  const value = !isObject(there.value) ? there.value
+    : isObject(there.value.item) ? { ...there.value, item: { ...there.value.item, computer: far.computer } }
+    : there.status === 200 ? there.value : { ...there.value, computer: far.computer };
+  return yield* json(there.status, value);
 }
+
+const answered = (answer: Acted, json: RouteContext["json"]) => json(answer.status, answer.value);
 
 // An owner's view, a line now and one each time it changes: a change to the queues (here, or by
 // another process: its files), or a session linked to one of its items starting or stopping work

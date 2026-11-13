@@ -71,6 +71,7 @@ import { macName, mainElsewhere, pairElsewhere } from "./setup/main-only";
 import { writeCard } from "./setup/card";
 import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
+import { FORWARDS, forwardsSoon, sendForwards } from "./work-queue/forward";
 import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
@@ -215,6 +216,8 @@ export { pushRows, takeRows } from "./work/elsewhere";
 export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
 export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
 export { handUpkeep } from "./work-queue/hand";
+export { forgetActs as forgetQueueActs, FORWARDS as QUEUE_FORWARDS, forwardsSoon as queueForwardsSoon, forwardTiming as queueForwardTiming, sendForwards as sendQueueForwards, takeAct as takeQueueAct } from "./work-queue/forward";
+export { actForPeer as queueActForPeer } from "./work-queue/acts";
 export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
 export { parseBacklog } from "./work-queue/import";
 export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
@@ -433,11 +436,22 @@ async function run(): Promise<void> {
   };
   try { fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 }); } catch {}
   let outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
+  // What you do to an item another computer keeps, left by a route (`box route` too): it goes at
+  // once, and again each few seconds while it's waited for.
+  const forwardNow = () => { try { sendForwards(current); } catch {} };
+  forwardsSoon.send = forwardNow;
+  try { fs.mkdirSync(FORWARDS, { recursive: true, mode: 0o700 }); } catch {}
+  let forwardsWatch = watchFolders([FORWARDS], forwardNow, { recursive: false });
   setInterval(() => {
     if (!outboxWatch.whole) {
       outboxWatch.close();
       outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
     }
+    if (!forwardsWatch.whole) {
+      forwardsWatch.close();
+      forwardsWatch = watchFolders([FORWARDS], forwardNow, { recursive: false });
+    }
+    forwardNow();
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
     noteRelay(Boolean(current?.welcomed), lastWelcomed);

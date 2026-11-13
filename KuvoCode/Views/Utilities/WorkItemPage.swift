@@ -34,7 +34,8 @@ struct WorkItemPage: View {
         store.detail(box: opened.box, id: opened.id, number: opened.number, source: opened.source)
     }
 
-    /// The box the item is kept on: the panel's, or the computer it says it's on.
+    /// The box its files are read from: the computer it says it's on, where this Mac reaches it
+    /// (a file of any size), else the panel's, which brings one of a few MB from there.
     private var keptOn: String {
         (view.items.first(where: opened.matches) ?? detail?.item).flatMap { store.box(of: $0, in: opened.box) } ?? opened.box
     }

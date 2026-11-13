@@ -150,6 +150,9 @@ beforeEach(() => {
   sent.length = 0;
   calling.clear();
   link.forgetQueuesTold();
+  link.forgetQueueActs();
+  link.queueForwardsSoon.send = () => {};
+  link.queueForwardTiming.wait = 20_000;
   fresh();
   agentsTold();
 });
@@ -828,6 +831,337 @@ test("an issue another computer told of shows as it said, with no gh here; this 
   assert.equal(ghAsks(), 1, "nor asked again while lab's word is fresh");
 });
 
+// ---- What you do to an item another computer keeps (PROTOCOL.md, "The Work Queue", What you do to one)
+
+// Lab and the Mac take what you do from another box.
+const forwardsTold = () => agentsTold({
+  [lab.pub]: { at: 1, heard: Date.now(), kind: "machine", id: "lab", list: [], features: ["work-queue", "work-queue.elsewhere", "work-queue.forward"] },
+  [mac.pub]: { at: 1, heard: Date.now(), kind: "mac", list: [], features: ["work-queue", "work-queue.elsewhere", "work-queue.forward"] },
+});
+// This box's relay connection as its link has it: what goes to `to`, as it's sent.
+const relay = () => {
+  let waiting = null;
+  const connection = { welcomed: true, send: bytes => { sent.push(bytes); waiting?.(); } };
+  return { connection, sentTo: async to => {
+    for (;;) {
+      const mails = mailTo(to);
+      if (mails.length) return mails;
+      await new Promise(resolve => { waiting = resolve; });
+    }
+  } };
+};
+const actID = () => `wqa_${crypto.randomBytes(16).toString("base64url")}`;
+const forwards = path.join(queues, "forward");
+
+test("what you do to an item another computer keeps, asked of this box, is done there: this box hands it to that computer's box and answers with what it said", async () => {
+  forwardsTold();
+  receive(lab, { workQueue: telling([told(500, "ses_far"), told(501, "ses_far", { category: "later" })]) });
+  sent.length = 0;
+  // This box's link sends what's left as it's left.
+  const { connection, sentTo } = relay();
+  link.queueForwardsSoon.send = () => link.sendQueueForwards(connection);
+
+  // Moved: the move goes to lab, and lab's answer is this box's.
+  const moving = route("POST", `kuvo/work-queue/items/500/move`, { category: "later", top: true });
+  const [asked] = await sentTo(lab);
+  const act = asked.workQueue.act;
+  assert.deepEqual({ method: act.method, action: act.action, item: act.item, body: act.body }, { method: "POST", action: "move", item: told(500).id, body: { category: "later", top: true } });
+  // (Only from the box it went to: one from the Mac for it isn't lab's answer.)
+  receive(mac, { workQueue: { acted: { id: act.id, status: 200, value: { item: told(500, "ses_far", { category: "next" }) } } } });
+  receive(lab, { workQueue: { acted: { id: act.id, status: 200, value: { item: told(500, "ses_far", { category: "later", order: 0 }) } } } });
+  const moved = await moving;
+  assert.equal(moved.status, 200);
+  assert.equal(moved.body.item.category, "later", "lab's word, not the Mac's");
+  assert.deepEqual(moved.body.item.computer, { key: lab.pub, name: "lab", kind: "machine", id: "lab" }, "said to be on lab, as this box names it");
+  assert.deepEqual(fs.readdirSync(forwards), [], "nothing left behind");
+  assert.equal((await view("all")).items.find(item => item.number === 500).category, "later", "shown where it went at once, not when lab next tells");
+  // Lab tells something newer while its answer is on the way: lab's newer word stays.
+  const racing = route("POST", `kuvo/work-queue/items/500/move`, { category: "next", top: true });
+  const [raced] = await sentTo(lab);
+  receive(lab, { workQueue: telling([told(500, "ses_far", { category: "done", updated: { at: 9000, by: { session: "ses_far", name: "Far" } } }), told(501, "ses_far", { category: "later" })]) });
+  mailTo(lab);
+  receive(lab, { workQueue: { acted: { id: raced.workQueue.act.id, status: 200, value: { item: told(500, "ses_far", { category: "next" }) } } } });
+  assert.equal((await racing).status, 200);
+  assert.equal((await view("all")).items.find(item => item.number === 500).category, "done", "never over what lab told since");
+
+  // Refused there: lab's words, as lab said them.
+  const restoring = route("POST", "kuvo/work-queue/items/501/restore");
+  const [again] = await sentTo(lab);
+  assert.equal(again.workQueue.act.action, "restore");
+  receive(lab, { workQueue: { acted: { id: again.workQueue.act.id, status: 400, value: { message: "It isn't deleted." } } } });
+  assert.deepEqual(await restoring, { status: 400, body: { message: "It isn't deleted.", computer: { key: lab.pub, name: "lab", kind: "machine", id: "lab" } } });
+
+  // Read whole, from a client: lab's whole item, said to be read there.
+  const reading = route("GET", "kuvo/work-queue/items/500");
+  const [read] = await sentTo(lab);
+  assert.deepEqual({ method: read.workQueue.act.method, item: read.workQueue.act.item }, { method: "GET", item: told(500).id });
+  receive(lab, { workQueue: { acted: { id: read.workQueue.act.id, status: 200, value: { item: { ...told(500, "ses_far"), body: "What only lab keeps", notes: [], events: [], files: [], links: [], handed: [] } } } } });
+  const whole = await reading;
+  assert.equal(whole.body.item.body, "What only lab keeps");
+  assert.equal(whole.body.item.told, false);
+  assert.equal(whole.body.item.computer.id, "lab");
+  // One of its files, for a client: from lab, its bytes as they are.
+  const fetching = route("GET", "kuvo/work-queue/items/500/files/notes%20one.txt");
+  const [file] = await sentTo(lab);
+  assert.deepEqual({ method: file.workQueue.act.method, action: file.workQueue.act.action, name: file.workQueue.act.name }, { method: "GET", action: "file", name: "notes one.txt" });
+  receive(lab, { workQueue: { acted: { id: file.workQueue.act.id, status: 200, value: { type: "text/plain", data: Buffer.from("From lab.").toString("base64") } } } });
+  assert.deepEqual(await fetching, { status: 200, body: "From lab." });
+  // A picture too big for one mail: in parts, put together here.
+  const picture = crypto.randomBytes(120_000);
+  const fetchingPicture = (async () => {
+    const pieces = [];
+    for await (const piece of handle({ method: "GET", path: "kuvo/work-queue/items/500/files/shot.png", headers: {}, fromApp: true }, undefined)) pieces.push(piece);
+    return { status: pieces.find(each => each.head).head.status, bytes: Buffer.concat(pieces.filter(each => each.body).map(each => each.body)) };
+  })();
+  const [shot] = await sentTo(lab);
+  const answer = { acted: { id: shot.workQueue.act.id, status: 200, value: { type: "image/png", data: picture.toString("base64") } } };
+  const d = Buffer.from(JSON.stringify(answer)).toString("base64url");
+  const of = Math.ceil(d.length / 40_000);
+  assert.ok(of > 1);
+  const digest = crypto.createHash("sha256").update(d).digest("base64url");
+  for (let i = 0; i < of; i++) receive(lab, { workQueue: { part: { whole: digest, i, of, d: d.slice(i * 40_000, (i + 1) * 40_000), s: "" } } });
+  const got = await fetchingPicture;
+  assert.equal(got.status, 200);
+  assert.ok(got.bytes.equals(picture), "its bytes as they are");
+  // An answer that isn't a status is never taken.
+  const odd = route("GET", "kuvo/work-queue/items/500/files/big.png");
+  const [big] = await sentTo(lab);
+  receive(lab, { workQueue: { acted: { id: big.workQueue.act.id, status: 1000, value: {} } } });
+  receive(lab, { workQueue: { acted: { id: big.workQueue.act.id, status: 413, value: { message: "big.png is 9 MB: too big to bring from lab (4 MB at most). Open it there." } } } });
+  assert.deepEqual(await odd, { status: 413, body: { message: "big.png is 9 MB: too big to bring from lab (4 MB at most). Open it there.", computer: { key: lab.pub, name: "lab", kind: "machine", id: "lab" } } });
+  // Anyone else on this computer (an agent's `box route`, unproven) reads it only as lab told it.
+  const pieces = [];
+  for await (const piece of handle({ method: "GET", path: "kuvo/work-queue/items/500", headers: {}, fromMac: true }, undefined)) pieces.push(piece);
+  const told500 = JSON.parse(Buffer.concat(pieces.filter(each => each.body).map(each => each.body)).toString());
+  assert.deepEqual([told500.item.body, told500.item.told], ["", true]);
+  assert.deepEqual(mailTo(lab), [], "and lab isn't asked");
+  // And never changes it: only a client does.
+  const refused = [];
+  for await (const piece of handle({ method: "DELETE", path: "kuvo/work-queue/items/500", headers: {}, fromMac: true }, undefined)) refused.push(piece);
+  assert.equal(refused.find(each => each.head).head.status, 403);
+  assert.deepEqual(mailTo(lab), []);
+});
+
+test("a Mac's request over SSH (`box route`, a process with no relay connection) is left for this box's link, which sends it and leaves lab's answer for it", async () => {
+  forwardsTold();
+  receive(lab, { workQueue: telling([told(500, "ses_far")]) });
+  sent.length = 0;
+  // (And one left by something else on this computer.)
+  const planted = actID();
+  write(path.join(forwards, `${planted}.json`), { to: lab.pub, act: { id: planted, method: "DELETE", item: told(500).id, at: Date.now() } });
+  // (`box route`: nothing in this process sends; the link, another process, sees what's left.)
+  const theRoutes = () => fs.readdirSync(forwards).some(name => /^wqa_.+\.json$/.test(name) && name !== `${planted}.json` && !name.endsWith(".answer.json"));
+  const left = new Promise(resolve => {
+    const watch = fs.watch(forwards, () => { if (theRoutes()) { watch.close(); resolve(); } });
+    if (theRoutes()) { watch.close(); resolve(); }
+  });
+  const deleting = route("DELETE", "kuvo/work-queue/items/500");
+  await left;
+  const { connection } = relay();
+  // This Mac's box, whose routes run where it sends, sends only what they left: what anything else
+  // on the Mac leaves there never goes out as you.
+  link.sendQueueForwards(connection, undefined, undefined, { ownOnly: true });
+  const [asked, ...others] = mailTo(lab);
+  assert.deepEqual(others, []);
+  assert.notEqual(asked.workQueue.act.id, planted);
+  fs.rmSync(path.join(forwards, `${planted}.json`));
+  assert.equal(asked.workQueue.act.method, "DELETE");
+  // Sent again only after a few seconds while it's waited for (lab takes each id once anyway).
+  link.sendQueueForwards(connection);
+  assert.deepEqual(mailTo(lab), []);
+  link.sendQueueForwards(connection, undefined, Date.now() + 6_000);
+  assert.equal(mailTo(lab)[0].workQueue.act.id, asked.workQueue.act.id);
+  receive(lab, { workQueue: { acted: { id: asked.workQueue.act.id, status: 200, value: { item: told(500, "ses_far", { removed: { at: 3000, by: { user: true } } }) } } } });
+  const deleted = await deleting;
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.item.removed.by.user, true);
+  assert.deepEqual(fs.readdirSync(forwards), []);
+  // Gone from this box's views at once, beside Undo; and Undo still brings it back on lab once lab
+  // has told without it.
+  assert.equal((await view("all")).items.some(item => item.number === 500), false);
+  receive(lab, { workQueue: telling([]) });
+  mailTo(lab);
+  // What's kept of it is seen nowhere else (a chip, an agent's tools): only by a client's Undo and read.
+  assert.equal((await route("GET", "kuvo/work-queue/refs?refs=500")).body.refs["500"], null);
+  assert.match((await tool("queue_show", { item: 500 }, "ses_lead")).text, /no item|isn't|There's no/i);
+  assert.equal((await route("GET", "kuvo/work-queue/items/500")).body.item.told, true);
+  // Told again by lab (brought back there some other way): forgotten here.
+  const deletedThere = path.join(queues, "deleted-there.json");
+  const keptForUndo = fs.readFileSync(deletedThere, "utf8");
+  receive(lab, { workQueue: telling([told(500, "ses_far")]) });
+  assert.equal(fs.existsSync(deletedThere), false);
+  fs.writeFileSync(deletedThere, keptForUndo);
+  receive(lab, { workQueue: telling([]) });
+  mailTo(lab);
+  const again = relay();
+  link.queueForwardsSoon.send = () => link.sendQueueForwards(again.connection);
+  const undoing = route("POST", `kuvo/work-queue/items/${told(500).id}/restore`);
+  const [undo] = await again.sentTo(lab);
+  assert.equal(undo.workQueue.act.action, "restore");
+  receive(lab, { workQueue: { acted: { id: undo.workQueue.act.id, status: 200, value: { item: told(500, "ses_far") } } } });
+  assert.equal((await undoing).status, 200);
+  assert.equal((await view("all")).items.some(item => item.number === 500), true, "back at once");
+  link.queueForwardsSoon.send = () => {};
+  // One whose asker went (its process stopped mid-wait), and an answer left with no ask: cleared at
+  // the link's next round, never sent.
+  const stale = actID();
+  write(path.join(forwards, `${stale}.json`), { to: lab.pub, act: { id: stale, method: "DELETE", item: told(500).id, at: Date.now() - 60_000 } });
+  write(path.join(forwards, `${actID()}.answer.json`), { status: 200, value: {} });
+  link.sendQueueForwards(connection);
+  assert.deepEqual(mailTo(lab), []);
+  assert.deepEqual(fs.readdirSync(forwards), []);
+});
+
+test("a computer that keeps the item but isn't answering: said at once, plainly, and nothing goes; one that doesn't take it from another box yet is changed there, as before", async () => {
+  forwardsTold();
+  receive(lab, { workQueue: telling([told(500, "ses_far")]) });
+  sent.length = 0;
+  const { connection } = relay();
+  link.queueForwardsSoon.send = () => link.sendQueueForwards(connection);
+  write(path.join(run, "peer-reach.json"), { [lab.pub]: Date.now() - 60_000 });
+  const away = await route("DELETE", "kuvo/work-queue/items/500");
+  assert.equal(away.status, 503);
+  assert.match(away.body.message, /^lab isn't answering now \(it may be asleep, off or offline\), so nothing was changed there\. Try again once it's back\.$/);
+  assert.equal(away.body.computer.id, "lab");
+  assert.deepEqual(mailTo(lab), []);
+  // Read whole: as lab last told it, and said so.
+  const page = await route("GET", "kuvo/work-queue/items/500");
+  assert.deepEqual([page.status, page.body.item.title, page.body.item.told], [200, "Item 500", true]);
+  assert.deepEqual(mailTo(lab), []);
+
+  // Sent, and lab stops answering before it answers: it may have been done, and it says so.
+  fs.rmSync(path.join(run, "peer-reach.json"));
+  const { sentTo } = relay();
+  const stopping = route("POST", "kuvo/work-queue/items/500/move", { category: "later" });
+  await sentTo(lab);
+  write(path.join(run, "peer-reach.json"), { [lab.pub]: Date.now() });
+  const stopped = await stopping;
+  assert.equal(stopped.status, 503);
+  assert.match(stopped.body.message, /^lab stopped answering, so devbox can't tell whether it was done there\. Look again once it's back\.$/);
+  // No answer in time: the same.
+  fs.rmSync(path.join(run, "peer-reach.json"));
+  link.queueForwardTiming.wait = 0;
+  const late = await route("DELETE", "kuvo/work-queue/items/500");
+  assert.equal(late.status, 503);
+  assert.match(late.body.message, /^lab didn't answer in time, so devbox can't tell whether it was done there\. Look again in a moment\.$/);
+  link.queueForwardTiming.wait = 20_000;
+  mailTo(lab);
+
+  // On a machine Macs share outside one setup (another person may use it): never handed on.
+  fresh({ macs: [mac, later] });
+  const shared = await route("DELETE", "kuvo/work-queue/items/500");
+  assert.equal(shared.status, 409);
+  assert.match(shared.body.message, /#500 "Item 500" is on lab: change it there\./);
+  assert.deepEqual(mailTo(lab), []);
+  fresh();
+
+  // A lab from before: changed there, as it was.
+  agentsTold();
+  const older = await route("POST", "kuvo/work-queue/items/500/move", { category: "later" });
+  assert.equal(older.status, 409);
+  assert.match(older.body.message, /#500 "Item 500" is on lab: change it there\./);
+  assert.deepEqual(mailTo(lab), []);
+});
+
+test("asked by another of your computers' boxes, this box does it to the item it keeps as its own client would, answers once for each ask, and takes it only from your computers", async () => {
+  write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
+  await tool("queue_add", { title: "Ship the release" }, "ses_lead");
+  await tool("queue_add", { title: "Write the notes" }, "ses_lead");
+  const id = (await view("ses_lead")).items.find(item => item.number === 100).id;
+  sent.length = 0;
+  const act = { id: actID(), method: "POST", action: "move", item: id, body: { category: "later" }, at: Date.now() };
+  await takeFrom(mac, { act });
+  const [answer] = mailTo(mac);
+  assert.equal(answer.workQueue.acted.id, act.id);
+  assert.equal(answer.workQueue.acted.status, 200);
+  assert.equal(answer.workQueue.acted.value.item.category, "later");
+  assert.equal((await view("ses_lead")).items.find(item => item.number === 100).category, "later", "moved here, numbers as they were");
+  const moves = async () => (await route("GET", `kuvo/work-queue/items/${id}`)).body.item.events.filter(event => event.kind === "moved");
+  assert.deepEqual((await moves()).map(event => [event.by, event.to]), [[{ user: true }, "later"]], "by you, in its activity");
+
+  // The same ask again at once (sent again while it was on its way back): not answered twice in a
+  // moment; nor done twice, after this box starts again (its answer lost), when it's answered as it was.
+  await takeFrom(mac, { act: { ...act, body: { category: "next" } } });
+  assert.deepEqual(mailTo(mac), []);
+  link.forgetQueueActs();
+  await takeFrom(mac, { act: { ...act, body: { category: "next" } } });
+  assert.deepEqual(mailTo(mac).map(each => each.workQueue.acted), [answer.workQueue.acted]);
+  assert.equal((await moves()).length, 1);
+  // One that was under way as this box stopped: it can't tell whether it was done.
+  const cut = { id: actID(), method: "POST", action: "move", item: id, body: { category: "next" }, at: Date.now() };
+  write(path.join(queues, "acted.json"), { ...read(path.join(queues, "acted.json")), [`${mac.pub} ${cut.id}`]: { until: Date.now() + 600_000, answer: null } });
+  await takeFrom(mac, { act: cut });
+  assert.deepEqual(mailTo(mac)[0].workQueue.acted, { id: cut.id, status: 409, value: { message: "devbox stopped while it was doing this, so it can't tell whether it was done. Look again in a moment." } });
+  assert.equal((await moves()).length, 1);
+
+  // A file kept with it: its bytes, for the box that asked; one that isn't there, 404.
+  const files = path.join(queues, "files", id);
+  write(path.join(files, "plan.txt"), "The plan.");
+  const book = read(path.join(queues, "queues", "ses_lead.json"));
+  book.items.find(item => item.id === id).files = [{ name: "plan.txt", size: 9, type: "text/plain", at: 1 }];
+  write(path.join(queues, "queues", "ses_lead.json"), book);
+  await takeFrom(lab, { act: { id: actID(), method: "GET", action: "file", name: "plan.txt", item: id, at: Date.now() } });
+  const [bytes] = mailTo(lab);
+  assert.deepEqual([bytes.workQueue.acted.status, bytes.workQueue.acted.value.type, Buffer.from(bytes.workQueue.acted.value.data, "base64").toString()], [200, "text/plain", "The plan."]);
+  await takeFrom(lab, { act: { id: actID(), method: "GET", action: "file", name: "none.txt", item: id, at: Date.now() } });
+  assert.equal(mailTo(lab)[0].workQueue.acted.status, 404);
+
+  // Read whole, deleted, and refused as the route would.
+  const readAsk = { id: actID(), method: "GET", item: "100", at: Date.now() };
+  await takeFrom(lab, { act: readAsk });
+  const [whole] = mailTo(lab);
+  assert.deepEqual([whole.workQueue.acted.status, whole.workQueue.acted.value.item.title, whole.workQueue.acted.value.item.computer], [200, "Ship the release", undefined]);
+  await takeFrom(lab, { act: { id: actID(), method: "DELETE", item: id, at: Date.now() } });
+  assert.equal(mailTo(lab)[0].workQueue.acted.status, 200);
+  const twice = { id: actID(), method: "DELETE", item: id, at: Date.now() };
+  await takeFrom(lab, { act: twice });
+  assert.deepEqual(mailTo(lab)[0].workQueue.acted, { id: twice.id, status: 400, value: { message: "It's deleted already." } });
+  const deleted = async () => (await view("all")).removed.some(item => item.id === id);
+  // One from long ago (sent again, or a clock far off): not done.
+  const old = { id: actID(), method: "POST", action: "restore", item: id, at: Date.now() - 3_600_000 };
+  await takeFrom(lab, { act: old });
+  assert.equal(mailTo(lab)[0].workQueue.acted.status, 409);
+  assert.equal(await deleted(), true);
+  // An ask dated ahead of this clock by more than a minute: refused, as one long ago is. One a little
+  // ahead is remembered until it would be too old to take, so it's never taken twice.
+  const ahead = { id: actID(), method: "POST", action: "restore", item: id, at: Date.now() + 5 * 60_000 };
+  await takeFrom(mac, { act: ahead });
+  assert.equal(mailTo(mac)[0].workQueue.acted.status, 409);
+  assert.equal(await deleted(), true);
+  const doneFor = act => link.queueActForPeer(act, targets);
+  const answers = [];
+  const start = Date.now();
+  const soon = { id: actID(), method: "POST", action: "restore", item: id, at: start + 50_000 };
+  await link.takeQueueAct(mac.peer, soon, payload => answers.push(payload.acted), doneFor, start);
+  assert.equal(answers[0].status, 200);
+  await link.takeQueueAct(mac.peer, { id: actID(), method: "DELETE", item: id, at: start }, payload => answers.push(payload.acted), doneFor, start);
+  assert.equal(await deleted(), true);
+  link.forgetQueueActs();
+  await link.takeQueueAct(mac.peer, soon, payload => answers.push(payload.acted), doneFor, start + 630_000);
+  assert.deepEqual(answers.at(-1), answers[0], "answered as it was, not brought back again");
+  assert.equal(await deleted(), true);
+
+  // One it knows only as a third computer told it: no longer here, and never handed on (no loops).
+  receive(lab, { workQueue: telling([told(500, "ses_far")]) });
+  sent.length = 0;
+  await takeFrom(mac, { act: { id: actID(), method: "DELETE", item: told(500).id, at: Date.now() } });
+  const [noLonger] = mailTo(mac);
+  assert.deepEqual([noLonger.workQueue.acted.status, noLonger.workQueue.acted.value], [404, { message: "It's no longer on devbox: it may have moved. Look again in a moment." }]);
+  assert.deepEqual(mailTo(lab), [], "nothing sent on to lab");
+
+  // From a machine Macs share outside one setup (another person may use it): refused.
+  receive(lab, { workQueue: telling([], { shared: true }) });
+  sent.length = 0;
+  await takeFrom(lab, { act: { id: actID(), method: "POST", action: "restore", item: id, at: Date.now() } });
+  assert.deepEqual(mailTo(lab)[0].workQueue.acted.value, { message: "devbox doesn't take changes from lab, a machine shared with other Macs: change it from devbox." });
+  assert.equal(await deleted(), true);
+  // From a box that isn't one of your computers: nothing at all.
+  const stranger = box("machine", "stranger");
+  await link.takeWorkQueueMail(stranger.peer, { act: { id: actID(), method: "POST", action: "restore", item: id, at: Date.now() } }, host, places);
+  assert.deepEqual(sent, []);
+  assert.equal(await deleted(), true);
+});
+
 // GitHub's answer for one issue, as a repository's (`p0`), or as the node itself when it's asked by
 // its id.
 const ghIssue = (number, { state = "OPEN", byID = false } = {}) => {
@@ -875,6 +1209,10 @@ test("one item for each issue, wherever it's restored: a deleted one stays delet
   assert.equal(mailTo(lab).map(each => each.workQueue.handed).find(Boolean).ok, true);
   const again = await route("POST", `kuvo/work-queue/items/${deleted.id}/restore`);
   assert.deepEqual([again.status, again.body.message], [400, 'Another item is gh:kuvo-test/app#12 now, in the queue of "Sign-in": one item for each issue, so this one stays deleted.']);
+  // The same when the Mac's box hands the restore on for its client (#341).
+  sent.length = 0;
+  await takeFrom(mac, { act: { id: `wqa_${crypto.randomBytes(16).toString("base64url")}`, method: "POST", action: "restore", item: deleted.id, at: Date.now() } });
+  assert.deepEqual(mailTo(mac)[0].workQueue.acted.value, { message: 'Another item is gh:kuvo-test/app#12 now, in the queue of "Sign-in": one item for each issue, so this one stays deleted.' });
   assert.equal((await view("all")).items.filter(each => each.source?.ref === "gh:kuvo-test/app#12").length, 1);
 });
 
