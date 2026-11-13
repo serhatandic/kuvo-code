@@ -217,7 +217,7 @@ jobs:
       # What every box runs, for machines to update themselves with (Packages/KuvoLink/PROTOCOL.md,
       # "Updates"): the files this version puts on every box, with the app's helper bundles, packed,
       # and boxes.json, a manifest naming the pack and the engine's builds, signed. It goes in the
-      # app (Contents/Resources/box-release), which offers it to this Mac's box as it updates, before
+      # app (Contents/Resources/box-release), for it to offer this Mac's box as it updates, before
       # the app's signed again and notarized; "Package the box release" publishes the same files.
       # Without the key, there's none, and machines update only as a Mac connects.
       - name: Put the box release in the app

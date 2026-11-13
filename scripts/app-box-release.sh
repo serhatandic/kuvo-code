@@ -1,21 +1,21 @@
 #!/bin/sh
 # Puts the box's release in a built, signed "Kuvo Code.app" (`Contents/Resources/box-release`:
 # boxes.json and box-<version>.tar.gz, scripts/pack-box.sh), and signs the app again over it. The
-# app offers it to this Mac's box as it updates (`kuvo/box/update {from}`, PROTOCOL.md, "Updates"),
-# and the release workflow publishes the same two files for machines. build-app.sh runs it when
-# KUVO_BOX_SIGNING_KEY is set; the release workflow runs it in a step of its own, so the key never
-# reaches the build.
+# app is to offer it to this Mac's box as it updates (`kuvo/box/update {from}`, PROTOCOL.md,
+# "Updates"), and the release workflow publishes the same two files for machines. build-app.sh
+# runs it when KUVO_BOX_SIGNING_KEY is set; the release workflow runs it in a step of its own, so
+# the key never reaches the build.
 #   KUVO_BOX_SIGNING_KEY=<PEM> scripts/app-box-release.sh <app> <version>
 #   SIGN_IDENTITY   codesigning identity, as build-app.sh takes it (default "-": ad hoc)
 #   BOX_URL         where the pack is published (default: this version's GitHub release)
 set -eu
-cd "$(dirname "$0")/.."
 
 if [ $# -ne 2 ] || [ -z "${KUVO_BOX_SIGNING_KEY:-}" ]; then
     echo "Usage: KUVO_BOX_SIGNING_KEY=<PEM> scripts/app-box-release.sh <app> <version>" >&2
     exit 2
 fi
-APP=$1 VERSION=$2
+APP=$(cd "$1" && pwd -P) VERSION=$2
+cd "$(dirname "$0")/.."
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 BOX_URL="${BOX_URL:-https://github.com/serhatandic/kuvo-code/releases/download/v$VERSION/box-$VERSION.tar.gz}"
 RELEASE="$APP/Contents/Resources/box-release"

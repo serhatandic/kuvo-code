@@ -2024,8 +2024,9 @@ did: the box keeps working as itself ("For released Macs").
   it from a built app.
 - **From a folder here** (`box.update`): Kuvo Code carries its version's release
   (`Contents/Resources/box-release`: `boxes.json` and `box-<version>.tar.gz`, put there by
-  `scripts/app-box-release.sh` when the release is built) and offers it to the box on its computer
-  as it updates.
+  `scripts/app-box-release.sh` when the release is built), for it to offer the box on its computer
+  as it updates. The app doesn't offer it yet: that comes with this Mac's box in a home of its own
+  (a Mac's box in the app's folder is refused anyway, as it doesn't update itself).
   - `POST kuvo/box/update {from: "<folder>"}`, from Kuvo Code only (this Mac's app, or a Mac's
     `box route`; a phone gets 403): `from` is a full path to a folder with `boxes.json` and the pack
     its `pack.url` ends in, beside it. The box checks it as it would a download: a pinned key's
@@ -2042,7 +2043,10 @@ did: the box keeps working as itself ("For released Macs").
     while the box is blocked, its engine is stopped on purpose, an update runs or is on trial, or
     something runs. Taken, or no longer newer than the box, the offer goes. One that fails goes too,
     and its version rests a day (`offerFailed` in `run/update.json`; offered again sooner, it's
-    refused with 409), so a release that never comes up isn't tried at every open.
+    refused with 409), as it does when the keeper took an update to it back (its new bridge never
+    said it was well), so a release that never comes up isn't tried at every offer. One that failed
+    before anything changed (its engine's download, offline) stays, and is tried again an hour on;
+    offered again meanwhile, it's there already (202).
   - Its engine, when the box doesn't have it yet, still comes from the manifest's URL.
 - **When**: the night's window, 02:00 to 05:00 in `KUVO_TZ`, once a night, always (there's no
   switch: a machine keeps up with the Macs and phones that use it), for a release at least three

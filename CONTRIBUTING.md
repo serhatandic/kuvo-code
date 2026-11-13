@@ -85,8 +85,8 @@ it and prints the public key to pin): the app writes those files
 the app's helper bundles (`Contents/Helpers/*.app`), and `scripts/sign-box.mjs`
 signs `boxes.json`, which names them. `scripts/app-box-release.sh` puts the
 two files in the app (`Contents/Resources/box-release`) and signs it again,
-before it's notarized: the app offers them to this Mac's box as it updates
-(`kuvo/box/update`), and the release publishes the same files. A local
+before it's notarized, for the app to offer this Mac's box as it updates
+(`kuvo/box/update`; it doesn't yet), and the release publishes the same files. A local
 `scripts/build-app.sh` does it only with `KUVO_BOX_SIGNING_KEY` set, so a local
 build carries none. Machines take only
 what a key pinned in the box's link (`UPDATE_KEYS`, in `Packages/Box/src`) signed; see

@@ -6,9 +6,9 @@
 // it got, tries the new engine and bridge, keeps what it had, swaps its files one by one and
 // starts again; if that doesn't come up well, or the new bridge never says it's well (the keeper
 // waits twenty minutes), it goes back to what it had. A release can come from a folder on this
-// computer too (`kuvo/box/update {from}`: the one an app carries, offered as it updates), checked
-// the same way and taken at the next quiet moment; and it can carry a signed Mac bundle (the
-// box's helper), swapped whole.
+// computer too (`kuvo/box/update {from}`: the one an app carries, for it to offer as it updates),
+// checked the same way and taken at the next quiet moment; and it can carry a signed Mac bundle
+// (the box's helper), swapped whole.
 
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -54,8 +54,11 @@ const BOX_FILE = /^(bin\/[A-Za-z0-9._-]+|bin\/runtime\/[A-Za-z0-9._-]+|config\/o
 // none a link, no part starting with a dot (never `..`), and the bundle swapped whole.
 const BUNDLE = /^bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app$/;
 const BUNDLE_PART = /^(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
-// How long a release that was offered and didn't come up rests before it's taken again.
+// How long a release that was offered rests before it's taken again: one that was put in place and
+// didn't come up (taken back), a day; one that failed before anything changed (the engine's
+// download offline, say), an hour.
 const OFFER_REST = 86_400_000;
+const OFFER_RETRY = 3_600_000;
 // A release offered from a folder on this computer (`kuvo/box/update`), kept until it's taken.
 const OFFERED = path.join(UPDATES, "offered");
 const RELEASE_VERSION = /^\d+\.\d+\.\d+(-beta\.\d+)?$/;
@@ -141,8 +144,9 @@ export interface UpdateState {
   /** How the last update went, when (shared/routes/box.ts, `LAST_UPDATE`). */
   last?: LastUpdate;
   night?: string;
-  /** A release offered from a folder here that was taken and didn't come up: its version, when. */
-  offerFailed?: { version: string; at: number };
+  /** A release offered from a folder here that failed as it was taken: its version, when, and
+   * whether it was put in place and taken back. */
+  offerFailed?: { version: string; at: number; takenBack: boolean };
 }
 
 /** A change to `run/update.json`: each field given, null to take it away. */
@@ -346,6 +350,8 @@ export interface UpdateOptions {
   clock?: () => number;
   step?: (running: UpdateStep) => void;
   upWithin?: number;
+  /** Told as it starts putting the new version in place (from there, a failure is taken back). */
+  swapping?: () => void;
 }
 
 /** A release's `box.json`, in its pack: its version, its engine's, each file's SHA-256, and its
@@ -362,7 +368,7 @@ interface BoxFiles {
 // "failed", version?, message?}`; once "updated", the bridge goes for the keeper to start the new
 // one. `from`: a release in a folder here, taken whatever its age (the Kuvo Code it came with is
 // here already). `keys` and `url`: a test's (a test's folder only).
-export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120_000 }: UpdateOptions = {}): Promise<UpdateOutcome> {
+export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120_000, swapping = () => {} }: UpdateOptions = {}): Promise<UpdateOutcome> {
   if (!keys.length) return { result: "off", message: "Updates aren't set up for this machine yet." };
   if (blocked) return { result: "blocked", message: blocked };
   // COMPAT(0.7 engine-stop): no update while an older Mac's Stop holds the engine down. Goes 3 months after 0.8.0.
@@ -484,6 +490,7 @@ export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDA
     if (stop.status !== 0 || (previous?.pid && alive(previous.pid))) throw new Error("Its engine couldn't be stopped to update it.");
     if (otherEngine) keepData();
     swapped = true;
+    swapping();
     if (staged) {
       fs.mkdirSync(engineFolder, { recursive: true, mode: 0o700 });
       fs.renameSync(staged, path.join(engineFolder, "opencode"));
@@ -741,11 +748,22 @@ export interface Offered {
   message?: string;
 }
 
+// Whether a release offered from a folder here rests now, `version` at `now`: it failed as it was
+// taken lately (a day once it was taken back, an hour when it failed before anything changed), or
+// the update to it was taken back by the keeper (its new bridge never said it was well: the trial
+// says it's on its way to it, and the box is back where it was).
+function offerRests(version: string, now: number): boolean {
+  const { offerFailed: failed, trial } = updateState();
+  if (failed?.version === version && now - failed.at < (failed.takenBack ? OFFER_REST : OFFER_RETRY)) return true;
+  return trial?.to === version && boxVersion() !== version && !updateOnTrial() && now - trial.at < OFFER_REST;
+}
+
 /** A release offered from a folder on this computer (`kuvo/box/update {from}`: the one Kuvo Code
  * carries, as it updates): `boxes.json` and the pack it names, beside it. Checked as a downloaded
  * one is (the signature, a newer version, the pack's SHA-256), then kept in `updates/offered` (the
- * folder may go, the app updated again) for the next quiet moment (`takeOffer`). Not one that was
- * taken in the last day and didn't come up. `keys`, `blocked` and `clock`: a test's. */
+ * folder may go, the app updated again) for the next quiet moment (`takeOffer`), under the update
+ * lock, so a take never reads it half replaced. Not one that was put in place lately and taken
+ * back. `keys`, `blocked` and `clock`: a test's. */
 export function offerUpdate(from: unknown, { keys = UPDATE_KEYS, blocked = updatesBlocked(), clock = Date.now }: Pick<UpdateOptions, "keys" | "blocked" | "clock"> = {}): Offered {
   if (typeof from !== "string" || !path.isAbsolute(from)) return { status: 400, message: "Say which folder the release is in (from), as a full path." };
   if (!keys.length) return { status: 409, message: "Updates aren't set up for this machine yet." };
@@ -764,8 +782,10 @@ export function offerUpdate(from: unknown, { keys = UPDATE_KEYS, blocked = updat
   if (!newerVersion(manifest.version, before)) return { status: 409, message: `It has ${before} already, and takes only a newer version.` };
   const offered = offeredVersion();
   if (offered && newerVersion(offered, manifest.version)) return { status: 409, message: `A newer release (${offered}) waits to be taken already.` };
-  const failed = updateState().offerFailed;
-  if (failed?.version === manifest.version && clock() - failed.at < OFFER_REST) return { status: 409, message: `It tried ${manifest.version} lately and went back to what it had: it takes it again tomorrow.` };
+  const { offerFailed: failed } = updateState();
+  if (offerRests(manifest.version, clock()) && (failed?.version !== manifest.version || failed.takenBack)) return { status: 409, message: `It tried ${manifest.version} lately and went back to what it had: it takes it again tomorrow.` };
+  // The same, offered again (as Kuvo Code reconnects): it's there already.
+  if (offered === manifest.version) return { status: 202, version: manifest.version };
   let pack: Buffer;
   try {
     pack = readRelease(path.join(from, name), 100_000_000);
@@ -773,39 +793,53 @@ export function offerUpdate(from: unknown, { keys = UPDATE_KEYS, blocked = updat
     return { status: 422, message: String((error as Error | undefined)?.message ?? error) };
   }
   if (hexSHA256(pack) !== manifest.pack.sha256) return { status: 422, message: "The release's files aren't what it says." };
-  // Kept whole or not at all.
+  // Kept whole or not at all, and never while a take could be reading it.
+  if (!takeUpdateLock()) return { status: 409, message: "It's updating already." };
   const partial = `${OFFERED}.partial`;
-  fs.rmSync(partial, { recursive: true, force: true });
-  fs.mkdirSync(partial, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(partial, "boxes.json"), boxes, { mode: 0o600 });
-  fs.writeFileSync(path.join(partial, name), pack, { mode: 0o600 });
-  dropOffer();
-  fs.renameSync(partial, OFFERED);
+  try {
+    fs.rmSync(partial, { recursive: true, force: true });
+    fs.mkdirSync(partial, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(partial, "boxes.json"), boxes, { mode: 0o600 });
+    fs.writeFileSync(path.join(partial, name), pack, { mode: 0o600 });
+    dropOffer();
+    fs.renameSync(partial, OFFERED);
+  } catch (error) {
+    fs.rmSync(partial, { recursive: true, force: true });
+    return { status: 409, message: `It couldn't keep the release: ${String((error as Error | undefined)?.message ?? error).slice(0, 200)}` };
+  } finally {
+    fs.rmSync(UPDATE_LOCK, { recursive: true, force: true });
+  }
   return { status: 202, version: manifest.version };
 }
 
-/** Whether the release offered from a folder here is to be taken now: newer than the box, and
- * nothing in the way (an update under way or on trial, a block, something running). One the box
- * has caught up with goes. `blocked`: a test's. */
-export async function offerDue({ blocked = updatesBlocked() }: Pick<UpdateOptions, "blocked"> = {}): Promise<boolean> {
-  if (!fs.existsSync(OFFERED)) return false;
+/** Whether the release offered from a folder here is to be taken now: newer than the box, not
+ * resting after a failure, and nothing in the way (an update under way or on trial, a block, a
+ * stopped engine, something running). One the box has caught up with goes. `blocked` and `clock`:
+ * a test's. */
+export async function offerDue({ blocked = updatesBlocked(), clock = Date.now }: Pick<UpdateOptions, "blocked" | "clock"> = {}): Promise<boolean> {
   const offered = offeredVersion(), before = boxVersion();
-  if (!offered || (before && !newerVersion(offered, before))) {
+  // (None, or one being written: nothing to do yet.)
+  if (!offered) return false;
+  if (before && !newerVersion(offered, before)) {
     dropOffer();
     return false;
   }
-  return !blocked && !!before && !updating && !isUpdating() && !updateOnTrial() && !fs.existsSync(path.join(RUN, "stopped")) && !(await boxBusy());
+  return !blocked && !!before && !updating && !isUpdating() && !updateOnTrial() && !fs.existsSync(path.join(RUN, "stopped")) && !offerRests(offered, clock()) && !(await boxBusy());
 }
 
 /** The release offered from a folder here, taken when it's due (`offerDue`), as `update --offered`
- * does in a process of its own. Taken, or no longer newer, it goes; one that fails goes too, and
- * rests a day (Kuvo Code offers it again as it next opens); busy, it waits. Nothing due: null. */
+ * does in a process of its own. Taken, or no longer newer, it goes. One that fails once it was put
+ * in place is taken back, goes, and rests a day (offered again sooner, it's refused); one that
+ * fails before anything changed stays, and is tried again in an hour. Busy, it waits. Nothing due:
+ * null. */
 export async function takeOffer(options: UpdateOptions = {}): Promise<UpdateOutcome | null> {
   if (!(await offerDue(options))) return null;
   const version = offeredVersion()!;
-  const outcome = await update({ ...options, from: OFFERED });
-  if (outcome.result === "failed") noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)() } });
-  if (outcome.result !== "busy" && outcome.result !== "blocked") dropOffer();
+  let takenBack = false;
+  const outcome = await update({ ...options, from: OFFERED, swapping: () => { takenBack = true; } });
+  if (outcome.result === "failed") noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack } });
+  if (outcome.result === "updated" || outcome.result === "current") noteUpdate({ offerFailed: null });
+  if (outcome.result === "updated" || outcome.result === "current" || takenBack) dropOffer();
   return outcome;
 }
 

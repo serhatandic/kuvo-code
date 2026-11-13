@@ -4,7 +4,7 @@
 # (`Contents/Helpers/<name>.app`, signed already) as `bin/<name>.app`, packed as
 # `box-<version>.tar.gz`, and `boxes.json`, its manifest, signed (scripts/sign-box.mjs). The release
 # workflow publishes both, for machines to update themselves with; scripts/app-box-release.sh puts
-# them in the app, which offers them to this Mac's box as it updates (`kuvo/box/update {from}`).
+# them in the app, for it to offer this Mac's box as it updates (`kuvo/box/update {from}`).
 #   KUVO_BOX_SIGNING_KEY=<PEM> scripts/pack-box.sh <app> <version> <pack's URL> <folder>
 #   <pack's URL>   where the pack is published, ending in box-<version>.tar.gz: a box finds the pack
 #                  by that name beside boxes.json when it's given the folder
@@ -80,6 +80,15 @@ if tar --version 2>/dev/null | grep -q bsdtar; then
     COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata --uid 0 --gid 0 -czf "$pack.new" -C "$box" .
 else
     tar --owner=0 --group=0 --numeric-owner -czf "$pack.new" -C "$box" .
+fi
+# Each bundle, as a box unpacks it, still signed as it was (a signature kept in extended attributes
+# doesn't survive packing). Where there's codesign: a Mac, as a release is built.
+if command -v codesign >/dev/null 2>&1 && ls -d "$box/bin/"*.app >/dev/null 2>&1; then
+    mkdir "$work/unpacked"
+    tar -xzf "$pack.new" -C "$work/unpacked"
+    for helper in "$work/unpacked/bin/"*.app; do
+        codesign --verify --strict --deep "$helper" || { rm -f "$pack.new"; echo "$(basename "$helper") isn't signed as it was once packed." >&2; exit 1; }
+    done
 fi
 mv -f "$pack.new" "$pack"
 "$NODE" scripts/sign-box.mjs "$VERSION" "$pack" "$URL" "$box/box.json" > "$OUT/boxes.json.new"

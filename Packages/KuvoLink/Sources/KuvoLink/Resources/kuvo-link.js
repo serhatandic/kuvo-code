@@ -7633,6 +7633,7 @@ var BOX_FILE = /^(bin\/[A-Za-z0-9._-]+|bin\/runtime\/[A-Za-z0-9._-]+|config\/ope
 var BUNDLE = /^bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app$/;
 var BUNDLE_PART = /^(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
 var OFFER_REST = 86400000;
+var OFFER_RETRY = 3600000;
 var OFFERED = path35.join(UPDATES, "offered");
 var RELEASE_VERSION = /^\d+\.\d+\.\d+(-beta\.\d+)?$/;
 function versionOrder(version) {
@@ -7857,7 +7858,7 @@ async function cameUp(version, withAgents, timeout = 120000, readEngine = readEn
 }
 var OWN_TOOLS = ["kuvo-agents.js", "kuvo-browser.js", "kuvo-wake", "kuvo-npx"];
 var installOrder = (files) => [...files].sort((a, b) => a === "bin/box-version" ? -1 : b === "bin/box-version" ? 1 : a === "bin/.kuvo-boot" ? 1 : b === "bin/.kuvo-boot" ? -1 : a < b ? -1 : 1);
-async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120000 } = {}) {
+async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120000, swapping = () => {} } = {}) {
   if (!keys.length)
     return { result: "off", message: "Updates aren't set up for this machine yet." };
   if (blocked)
@@ -7995,6 +7996,7 @@ async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL,
     if (otherEngine)
       keepData();
     swapped = true;
+    swapping();
     if (staged) {
       fs34.mkdirSync(engineFolder, { recursive: true, mode: 448 });
       fs34.renameSync(staged, path35.join(engineFolder, "opencode"));
@@ -8227,6 +8229,12 @@ function offeredVersion() {
   }
 }
 var dropOffer = () => fs34.rmSync(OFFERED, { recursive: true, force: true });
+function offerRests(version, now) {
+  const { offerFailed: failed, trial } = updateState();
+  if (failed?.version === version && now - failed.at < (failed.takenBack ? OFFER_REST : OFFER_RETRY))
+    return true;
+  return trial?.to === version && boxVersion() !== version && !updateOnTrial() && now - trial.at < OFFER_REST;
+}
 function offerUpdate(from, { keys = UPDATE_KEYS, blocked = updatesBlocked(), clock = Date.now } = {}) {
   if (typeof from !== "string" || !path35.isAbsolute(from))
     return { status: 400, message: "Say which folder the release is in (from), as a full path." };
@@ -8252,9 +8260,11 @@ function offerUpdate(from, { keys = UPDATE_KEYS, blocked = updatesBlocked(), clo
   const offered = offeredVersion();
   if (offered && newerVersion(offered, manifest.version))
     return { status: 409, message: `A newer release (${offered}) waits to be taken already.` };
-  const failed = updateState().offerFailed;
-  if (failed?.version === manifest.version && clock() - failed.at < OFFER_REST)
+  const { offerFailed: failed } = updateState();
+  if (offerRests(manifest.version, clock()) && (failed?.version !== manifest.version || failed.takenBack))
     return { status: 409, message: `It tried ${manifest.version} lately and went back to what it had: it takes it again tomorrow.` };
+  if (offered === manifest.version)
+    return { status: 202, version: manifest.version };
   let pack;
   try {
     pack = readRelease(path35.join(from, name), 1e8);
@@ -8263,33 +8273,47 @@ function offerUpdate(from, { keys = UPDATE_KEYS, blocked = updatesBlocked(), clo
   }
   if (hexSHA256(pack) !== manifest.pack.sha256)
     return { status: 422, message: "The release's files aren't what it says." };
+  if (!takeUpdateLock())
+    return { status: 409, message: "It's updating already." };
   const partial = `${OFFERED}.partial`;
-  fs34.rmSync(partial, { recursive: true, force: true });
-  fs34.mkdirSync(partial, { recursive: true, mode: 448 });
-  fs34.writeFileSync(path35.join(partial, "boxes.json"), boxes, { mode: 384 });
-  fs34.writeFileSync(path35.join(partial, name), pack, { mode: 384 });
-  dropOffer();
-  fs34.renameSync(partial, OFFERED);
+  try {
+    fs34.rmSync(partial, { recursive: true, force: true });
+    fs34.mkdirSync(partial, { recursive: true, mode: 448 });
+    fs34.writeFileSync(path35.join(partial, "boxes.json"), boxes, { mode: 384 });
+    fs34.writeFileSync(path35.join(partial, name), pack, { mode: 384 });
+    dropOffer();
+    fs34.renameSync(partial, OFFERED);
+  } catch (error) {
+    fs34.rmSync(partial, { recursive: true, force: true });
+    return { status: 409, message: `It couldn't keep the release: ${String(error?.message ?? error).slice(0, 200)}` };
+  } finally {
+    fs34.rmSync(UPDATE_LOCK, { recursive: true, force: true });
+  }
   return { status: 202, version: manifest.version };
 }
-async function offerDue({ blocked = updatesBlocked() } = {}) {
-  if (!fs34.existsSync(OFFERED))
-    return false;
+async function offerDue({ blocked = updatesBlocked(), clock = Date.now } = {}) {
   const offered = offeredVersion(), before = boxVersion();
-  if (!offered || before && !newerVersion(offered, before)) {
+  if (!offered)
+    return false;
+  if (before && !newerVersion(offered, before)) {
     dropOffer();
     return false;
   }
-  return !blocked && !!before && !updating && !isUpdating() && !updateOnTrial() && !fs34.existsSync(path35.join(RUN, "stopped")) && !await boxBusy();
+  return !blocked && !!before && !updating && !isUpdating() && !updateOnTrial() && !fs34.existsSync(path35.join(RUN, "stopped")) && !offerRests(offered, clock()) && !await boxBusy();
 }
 async function takeOffer(options = {}) {
   if (!await offerDue(options))
     return null;
   const version = offeredVersion();
-  const outcome = await update({ ...options, from: OFFERED });
+  let takenBack = false;
+  const outcome = await update({ ...options, from: OFFERED, swapping: () => {
+    takenBack = true;
+  } });
   if (outcome.result === "failed")
-    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)() } });
-  if (outcome.result !== "busy" && outcome.result !== "blocked")
+    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack } });
+  if (outcome.result === "updated" || outcome.result === "current")
+    noteUpdate({ offerFailed: null });
+  if (outcome.result === "updated" || outcome.result === "current" || takenBack)
     dropOffer();
   return outcome;
 }
@@ -38994,7 +39018,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "e6b6f71af842";
+var BRIDGE_VERSION = "d52dc0fe68f0";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
