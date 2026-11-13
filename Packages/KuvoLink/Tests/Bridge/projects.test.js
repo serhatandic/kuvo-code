@@ -155,7 +155,9 @@ test("Remove Project archives every session of it, its worktree's, its other fol
 
   const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
   assert.equal(removed.status, 200, JSON.stringify(removed.json));
-  assert.deepEqual(removed.json, { archived: 105 });
+  assert.equal(removed.json.archived, 105);
+  // Which, so each client's lists hide them at once.
+  assert.deepEqual([...removed.json.sessions].sort(), sessions.filter(each => each.metadata["kuvo.archived"] === true && each.id !== "ses_old").map(each => each.id).sort());
   assert.ok(sessions.filter(each => !["ses_notes", "ses_moved"].includes(each.id)).every(each => each.metadata["kuvo.archived"] === true));
   assert.deepEqual(sessions.find(each => each.id === "ses_notes").metadata, { "kuvo.pinned": true }, "another project's stay");
   assert.equal(sessions.find(each => each.id === "ses_moved").metadata["kuvo.archived"], undefined, "one moved out of it since stays");
@@ -185,7 +187,8 @@ for (const [name, readable] of [["", true], [", its sessions at work unknown", f
 
     const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
     assert.equal(removed.status, 200, JSON.stringify(removed.json));
-    assert.deepEqual(removed.json, { archived: 270 });
+    assert.equal(removed.json.archived, 270);
+    assert.deepEqual([...removed.json.sessions].sort(), sessions.map(each => each.id).sort());
     assert.ok(sessions.every(each => each.metadata["kuvo.archived"] === true));
     assert.deepEqual([...engine.stopped].sort(), [...waiting].sort(), "only those that wait on you, each once");
     assert.deepEqual([...engine.looked].sort(), readable ? [...working].sort() : sessions.map(each => each.id).sort(), "what each asks is read only where it may ask");
@@ -204,6 +207,7 @@ test("a session the engine doesn't archive keeps its project, which says so", as
   const kept = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
   assert.equal(kept.status, 409);
   assert.equal(kept.json.kept, 1);
+  assert.deepEqual(kept.json.sessions, ["ses_a"], "those archived all the same");
   assert.match(kept.json.message, /One of its sessions couldn’t be archived/);
   assert.equal((await ask(handle, "GET", "kuvo/projects")).json.projects[0].removed, undefined);
 
@@ -242,7 +246,8 @@ test("Remove Project archives the sessions of a worktree of it that was removed 
   t.after(engine.close);
   const handle = link.engineHandler(() => engine, { name: "box" }, () => null);
   const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
-  assert.deepEqual(removed.json, { archived: 2 });
+  assert.deepEqual(removed.json.archived, 2);
+  assert.deepEqual([...removed.json.sessions].sort(), ["ses_gone", "ses_shop"], "named, so each client hides them at once");
   assert.equal(sessions.find(each => each.id === "ses_gone").metadata["kuvo.archived"], true);
   assert.deepEqual(sessions.find(each => each.id === "ses_else").metadata, {}, "another project's");
 });
@@ -254,7 +259,8 @@ test("Remove Project archives the sessions of folders the client shows under it 
   t.after(engine.close);
   const handle = link.engineHandler(() => engine, { name: "box" }, () => null);
   const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { folders: [old, "relative/one"] });
-  assert.deepEqual(removed.json, { archived: 2 });
+  assert.deepEqual(removed.json.archived, 2);
+  assert.deepEqual([...removed.json.sessions].sort(), ["ses_old_tree", "ses_shop"]);
   assert.equal(sessions.find(each => each.id === "ses_old_tree").metadata["kuvo.archived"], true);
 });
 

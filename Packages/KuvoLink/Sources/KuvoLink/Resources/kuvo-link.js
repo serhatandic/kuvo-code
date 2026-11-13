@@ -10675,7 +10675,7 @@ var PROJECTS = object({ projects: list(PROJECT), worktrees: map(string) });
 var PROJECT_ROUTES = [
   { route: "GET kuvo/projects", answers: { 200: PROJECTS } },
   { route: "PUT kuvo/projects", answers: { 200: object({ project: PROJECT }) } },
-  { route: "DELETE kuvo/projects", answers: { 200: object({ archived: number }), 409: object({ message: string, archived: number, kept: number }) } }
+  { route: "DELETE kuvo/projects", answers: { 200: object({ archived: number, sessions: list(string) }), 409: object({ message: string, archived: number, kept: number, sessions: list(string) }) } }
 ];
 
 // Packages/Box/src/shared/routes/work.ts
@@ -31498,12 +31498,12 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
   try {
     targets.push(readEngine());
   } catch {
-    return { archived: 0, kept: null };
+    return { archived: 0, kept: null, sessions: [] };
   }
   try {
     await call(targets[0], "GET", "/api/session?limit=1", undefined, signal);
   } catch {
-    return { archived: 0, kept: null };
+    return { archived: 0, kept: null, sessions: [] };
   }
   try {
     const bridge = readBridge();
@@ -31511,6 +31511,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
       targets.push(bridge);
   } catch {}
   let archived = 0, kept = 0;
+  const archivedIds = [];
   for (const target of targets) {
     for (const folder of [...folders, null]) {
       let query = `limit=100&order=desc&parentID=null${folder === null ? "" : `&directory=${encodeURIComponent(folder)}`}`;
@@ -31540,6 +31541,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
               if (!working || working.has(session.id))
                 await stopIfWaiting(target, session.id);
               archived += 1;
+              archivedIds.push(session.id);
             } catch {
               kept += 1;
             }
@@ -31550,7 +31552,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
       }
     }
   }
-  return { archived, kept };
+  return { archived, kept, sessions: archivedIds };
 }
 function filedElsewhere(session, directory, filed) {
   const mark = session?.metadata?.kuvo?.filed;
@@ -31593,16 +31595,16 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
   if (method === "DELETE") {
     const body = parsed(request.body);
     const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder) => typeof folder === "string" && path104.isAbsolute(folder)) : [];
-    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal, file);
+    const { archived, kept, sessions } = await archiveProject(given, also, readEngine, readBridge, signal, file);
     if (kept === null)
       return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
     if (kept > 0)
-      return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept });
+      return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept, sessions });
     changeProjects((projects) => {
       const before = projects.find((each) => each.directory === given);
       return before ? projects.map((each) => each === before ? { ...each, removed: true } : each) : projects;
     }, file, lock);
-    return yield* json(200, { archived });
+    return yield* json(200, { archived, sessions });
   }
   return yield* json(405, {});
 }
@@ -39865,7 +39867,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "85585df581e4";
+var BRIDGE_VERSION = "0a253834d007";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

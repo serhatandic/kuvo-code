@@ -7839,14 +7839,20 @@
    "answers": {
     "200": {
      "object": {
-      "archived": "number"
+      "archived": "number",
+      "sessions": {
+       "list": "string"
+      }
      }
     },
     "409": {
      "object": {
       "message": "string",
       "archived": "number",
-      "kept": "number"
+      "kept": "number",
+      "sessions": {
+       "list": "string"
+      }
      }
     }
    }

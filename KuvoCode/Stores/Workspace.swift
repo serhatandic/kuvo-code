@@ -249,7 +249,7 @@ final class Workspace {
     /// number on the Dock icon. A subagent's ask is its session's.
     var waitingCount: Int {
         let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).union(askingForWork).union(askingOutsideSandbox).union(goalCards).subtracting(seats)
-        return Set(sessions.filter { $0.isUnread && !Self.isArchived($0) }.map(\.id)).union(askers).count
+        return Set(sessions.filter { $0.isUnread && !isListedArchived($0) }.map(\.id)).union(askers).count
     }
 
     struct Project: Identifiable, Hashable {
@@ -341,7 +341,7 @@ final class Workspace {
         // A machine its box hasn't answered for since this update (away at the first launch with
         // it): its sessions as last seen, where this Mac filed them before, until its box says.
         guard let listing = sessionLists[box] else { return lastFiled(session) }
-        let place = SessionLists.place(of: listing.facts(of: session.id), isArchived: Self.isArchived(session))
+        let place = SessionLists.place(of: listing.facts(of: session.id))
         if case .project(let project) = place { return .project(Self.here(project, on: box)) }
         return place
     }
@@ -725,10 +725,40 @@ final class Workspace {
     /// there). Whether the engine took it.
     @discardableResult
     func setArchived(_ id: String, _ archived: Bool, carriedTo: String? = nil) async -> Bool {
+        // Its box's list shows it so at once, until its box says so too; as its box says if the
+        // engine doesn't take it.
+        changeListing(of: id) { $0.noteArchived(id, archived) }
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
-        guard await setFlag(Self.archivedKey, archived, of: id, also: carriedTo.map { ["kuvo.carriedTo": .string($0)] } ?? [:]) else { return false }
+        guard await setFlag(Self.archivedKey, archived, of: id, also: carriedTo.map { ["kuvo.carriedTo": .string($0)] } ?? [:]) else {
+            changeListing(of: id) { $0.forgetArchived(id, archived) }
+            return false
+        }
         onArchived?(id, archived, nil)
         return true
+    }
+
+    /// Whether `session` is archived, as its box says (or as this Mac just made it); as this Mac's
+    /// copy says for one its box hasn't listed.
+    func isListedArchived(_ session: Session) -> Bool {
+        sessionLists[Self.box(of: session.location.directory)]?.facts(of: session.id).map { $0.archived == true } ?? Self.isArchived(session)
+    }
+
+    /// `id`'s box's list, as this Mac shows it, changed.
+    private func changeListing(of id: String, _ change: (inout SessionLists.Listing) -> Void) {
+        guard let session = session(id) else { return }
+        let box = Self.box(of: session.location.directory)
+        guard var listing = sessionLists[box] else { return }
+        change(&listing)
+        if listing != sessionLists[box] { sessionLists[box] = listing }
+    }
+
+    /// The sessions `box`'s Remove Project `answer` names as archived: so here (their terminals
+    /// closed, their wake-ups held), and out of its lists at once.
+    private func noteArchived(on box: String, byRemoving answer: Data) {
+        for id in SessionLists.archived(byRemoving: answer) { noteArchivedThere(id) }
+        guard var listing = sessionLists[box] else { return }
+        listing.noteArchived(byRemoving: answer)
+        if listing != sessionLists[box] { sessionLists[box] = listing }
     }
 
     /// A session was archived, or brought back. The app sets it. `carriedTo`: archived as its box
@@ -1118,13 +1148,15 @@ final class Workspace {
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
         switch status {
         case 200:
-            // All of them, there: so here too, as the engine has them now, and it's off the list.
-            for session in sessions { noteArchivedThere(session.id) }
+            // Those its box archived, its worktrees' among them, as it names them: so here too, and
+            // it's off the list.
+            noteArchived(on: box, byRemoving: data)
             folders.removeAll { $0 == directory }
             UserDefaults.standard.set(folders, forKey: "projectFolders")
             await loadProjects(on: box)
             return 0
         case 409:
+            noteArchived(on: box, byRemoving: data)
             if box == BoxClient.mac { await refresh() }
             await loadProjects(on: box)
             return ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["kept"] as? Int) ?? 1

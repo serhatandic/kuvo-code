@@ -174,7 +174,7 @@ import Testing
         try await until { elements.contains { $0.label == "Answer" } && !model.transcript.messages.isEmpty }
         // Queued on the engine, as the conversation reads it.
         let item: [String: Any] = ["id": "msg_queued01", "sessionID": "ses_pixel", "type": "user", "delivery": "queue", "payload": ["text": "Then make the app icon"]]
-        engine.on("GET", "/api/session/ses_pixel/inbox") { _ in StubWeb.json(["data": [item]]) }
+        engine.on("GET", "/api/session/ses_pixel/inbox", json: ["data": [item]])
         await model.load()
         // (Its row is found by its own Remove, the one in the card.)
         try await until { elements.contains { $0.label == "Remove" } }

@@ -87,6 +87,9 @@ nonisolated final class FakeEngine: @unchecked Sendable {
                 let id = String(path.dropFirst("/api/integration/".count)).removingPercentEncoding ?? ""
                 guard let found = integrations.first(where: { $0["id"] as? String == id }) else { return StubWeb.json(["message": "Integration not found"], status: 404) }
                 return StubWeb.json(["location": location, "data": found])
+            // Its plugins set up: its lists are whole (the box asks before it trusts one).
+            case ("GET", "/api/provider"):
+                return StubWeb.json(["data": [] as [Any]])
             // No folder open, nothing running: a refresh of its models has nothing to wait for.
             case ("GET", "/api/debug/location"):
                 return StubWeb.json([] as [Any])

@@ -320,19 +320,20 @@ async function atWork(target: Target, signal: AbortSignal | undefined): Promise<
  * from another folder (`kuvo.filed`, a subfolder's say), archived, on the engine and the coding
  * agents' bridge, page after page; how many weren't. None while the engine doesn't answer (`kept` null):
  * its sessions are most of them, and the project would come back with them. */
-async function archiveProject(directory: string, also: string[], readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined, file = PROJECTS_FILE): Promise<{ archived: number; kept: number | null }> {
+async function archiveProject(directory: string, also: string[], readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined, file = PROJECTS_FILE): Promise<{ archived: number; kept: number | null; sessions: string[] }> {
   const filed = filedProjects(readProjects(file));
   const trees = Object.entries(filed).filter(([, project]) => project === directory).map(([folder]) => folder);
   const folders = [...new Set([directory, ...trees, ...also])];
   const targets: Target[] = [];
-  try { targets.push(readEngine()); } catch { return { archived: 0, kept: null }; }
+  try { targets.push(readEngine()); } catch { return { archived: 0, kept: null, sessions: [] }; }
   // Its record left by one that ended without a word: nothing archived, the bridge's neither.
-  try { await call(targets[0], "GET", "/api/session?limit=1", undefined, signal); } catch { return { archived: 0, kept: null }; }
+  try { await call(targets[0], "GET", "/api/session?limit=1", undefined, signal); } catch { return { archived: 0, kept: null, sessions: [] }; }
   try {
     const bridge = readBridge();
     if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
   } catch {}
   let archived = 0, kept = 0;
+  const archivedIds: string[] = [];
   for (const target of targets) {
     // Each folder's, then those filed under it from elsewhere, found among all of them.
     for (const folder of [...folders, null]) {
@@ -367,6 +368,7 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
               // One that waits on you stops, as any archived one does.
               if (!working || working.has(session.id)) await stopIfWaiting(target, session.id);
               archived += 1;
+              archivedIds.push(session.id);
             } catch {
               kept += 1;
             }
@@ -377,7 +379,7 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
       }
     }
   }
-  return { archived, kept };
+  return { archived, kept, sessions: archivedIds };
 }
 
 /** Whether `session` is filed under the project at `directory` by its own mark (`kuvo.filed`,
@@ -425,14 +427,14 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
   if (method === "DELETE") {
     const body = parsed(request.body);
     const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder): folder is string => typeof folder === "string" && path.isAbsolute(folder)) : [];
-    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal, file);
+    const { archived, kept, sessions } = await archiveProject(given, also, readEngine, readBridge, signal, file);
     if (kept === null) return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
-    if (kept > 0) return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept } satisfies { message: string; archived: number; kept: number });
+    if (kept > 0) return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept, sessions } satisfies { message: string; archived: number; kept: number; sessions: string[] });
     changeProjects(projects => {
       const before = projects.find(each => each.directory === given);
       return before ? projects.map(each => (each === before ? { ...each, removed: true } : each)) : projects;
     }, file, lock);
-    return yield* json(200, { archived } satisfies { archived: number });
+    return yield* json(200, { archived, sessions } satisfies { archived: number; sessions: string[] });
   }
   return yield* json(405, {});
 }
