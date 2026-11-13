@@ -2085,8 +2085,9 @@ did: the box keeps working as itself ("For released Macs").
   (`Contents/Resources/box-release`: `boxes.json` and `box-<version>.tar.gz`, put there by
   `scripts/app-box-release.sh` when the release is built), for it to offer the box on its computer
   as it updates. The app offers it to a box on this Mac it's attached to in place that's older than
-  it needs ("The update gate"); a Mac's box in the app's folder is refused, as it doesn't update
-  itself (its keeper takes the new app's).
+  it needs ("The update gate"), and to this Mac's own box in a home of its own each time it opens
+  (with `movesOwnBox`, "The app attached to this Mac's own box"); a Mac's box in the app's folder is
+  refused, as it doesn't update itself (its keeper takes the new app's).
   - `POST kuvo/box/update {from: "<folder>"}`, from Kuvo Code only (this Mac's app, or a Mac's
     `box route`; a phone gets 403): `from` is a full path to a folder with `boxes.json` and the pack
     its `pack.url` ends in, beside it. The box checks it as it would a download: a pinned key's
@@ -5225,11 +5226,13 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `box.app` | `kuvo/box/app` and `kuvo/box/app/open`: this Mac's app registering with a Mac's box in a home of its own, and opened by it for its agents' browser ("This Mac's box: this Mac's app") |
+| `box.app.host` | `kuvo/box/app`'s `host`: the app's own host interface, where a Mac's box in a home of its own sends a phone's ask of the Mac's own routes and asks what the panel's browser is signed in to ("This Mac's app") |
 | `box.appKeys` | `kuvo/box/proof` and `kuvo/box/kept-keys`: what this Mac's app asks of the keys a Mac's box in a home of its own holds ("This Mac's box: its keys, for its app"); `bin/integrations-mac.json` read there |
 | `box.helper` | `kuvo-link.js helper install [--load] [--app <bundle ID>] \| status`: the launch agent that starts Kuvo Code Box, a Mac's box's helper, at login ("This Mac's box: its helper"); `kuvo-start serve`; `serve` saying where it answers in `run/serve.json` |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
 | `box.serve` | `kuvo/box/serve`: the box's server kept running for clients ("Kept for clients"); `kuvo-link.js serve --kept` |
+| `box.serve.mac` | the box's server takes Kuvo Code on its computer (`x-kuvo-from: mac`) as `box route` takes it ("Kept for clients") |
 | `box.uninstall` | `kuvo-link.js uninstall [--check]`: removing Kuvo Code from this computer ("Uninstalling") |
 | `box.update` | `POST kuvo/box/update {from}`: a release from a folder on the box's computer, the one Kuvo Code carries, taken at the next quiet moment ("Updates"); a release's Mac bundles, swapped whole; `kuvo/update`'s `offered` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
@@ -5815,16 +5818,30 @@ in its folder, whose keeper does this) is where its app registers, and its agent
 app's panel through it, with no Chromium of its own. A machine's box answers `409` to both routes
 (after a phone's `403` where one asks what only Kuvo Code may).
 
-- **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle}`
-  as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
+- **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle,
+  host?}` as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
   `[::1]` only, to `Authorization: Bearer <token>`), and where it's installed (a whole path to its
-  `.app`). `{tools: null}` as it quits, its place kept. `{updating: true}` as it quits to install an
-  update (today's app doesn't say it yet: #333 piece 6b, with telling the box it quits; until then
-  the box finds it gone when its tools stop answering). `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
+  `.app`). `{tools: null}` as it quits, its place kept (the app says so over the box's server as it
+  goes, waiting a second at most; one that doesn't, a crash, is found gone when its tools stop
+  answering). `{updating: true}` as it quits to install an update, so the box doesn't open it while
+  Sparkle does. `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
   updating, opening, failed}`: where it's installed (null before it ever said), whether its tools
   answer now, whether an update installs (said in the last two minutes), whether an opening is under
   way, and the last opening that failed, within its rest (`{at, message}`, `at` in ms). Kept in
-  `run/app.json` (`{bundle, tools, at}`, `0600`).
+  `run/app.json` (`{bundle, tools, host, at}`, `0600`).
+- **The app's own host** (`box.app.host`, #333 piece 6b). The box's host is its helper, which holds
+  its keys but can't answer what only the open app can: a phone's ask of the Mac's own routes
+  (`link/route`, "This Mac's box: the relay") and what the panel's browser is signed in to
+  (`sites/signed-in`). So the app also says where its own host interface answers: `host: {url,
+  password}`, `url` `http://127.0.0.1:<port>`, taken only from the app itself (`x-kuvo-from: app` over
+  the box's server; `403` from `box route`, which anything you run could use to have your phones'
+  asks sent elsewhere; `400` for anything else). It's kept while the app's open (a registration
+  without `host` keeps it) and goes with `{tools: null}` and `{updating: true}`; never in what `GET`
+  answers. The box sends those two calls there, proving it's the app first (`hello`, "Host
+  interface") for each one, as the box outlives the app and a port it left after a crash could be
+  anyone's by the next; with no app there, a phone's ask is `503` ("isn't answering"). The app answers
+  only those there (`hello`, `sites/signed-in`, `link/route`; `404` for its keys, which are the
+  helper's).
 - **The browser's tools.** The box's tool server (`kuvo-browser.js mcp`, as its engine and coding
   agents run it) sends each `browser_*` call to the app's tools as it came (`tools/call`, with the
   session's `_meta`, `x-kuvo-session` naming the conversation, and an `mcp-session-id` of its own;
@@ -5851,6 +5868,33 @@ app's panel through it, with no Chromium of its own. A machine's box answers `40
   any more; it couldn't be opened (and why); it wasn't ready within 30 seconds; it never registered
   here (nothing to open). A call stopped while it waits stops waiting; the one that asked for the
   opening sees it through, for the others.
+
+#### The app attached to this Mac's own box
+
+#333 piece 6b, behind the app's `movesOwnBox` (off). Once this Mac's box has moved into a home of its
+own, the app attaches to it in place, as to any box already on this Mac (`here` answers `attach`,
+its `box.kind` `mac`), and does for it, through its routes, what it did for its box in its folder:
+
+- **Reached over its server**, where `run/serve.json` says it answers (its helper keeps it up), as
+  its own app (`x-kuvo-from: app`), so what the app follows there streams; while there's none, its
+  CLI (`box route`), a request at a time, as a machine's is read.
+- **Its link**: told what's wanted (`kuvo/link/config`), followed (`kuvo/link/status/events`,
+  `kuvo/link/phones/events`), told your machines (`kuvo/link/peers`, which it signs; and each
+  machine set up for your phones with what `kuvo/link/setup` gives), and phones paired from Settings
+  › Phone (`kuvo/phones/pair`), as the app's own box was. The app reads none of this Mac's keys and
+  makes none: its key is the one the box says.
+- **Registered** (`kuvo/box/app`, above): its browser's tools, its place, and its own host.
+- **Offered the release it carries** (`kuvo/box/update {from}`, "Updates"), once each time it opens,
+  where the box has `box.update`; one that isn't newer the box refuses (`409`), as it should.
+
+A machine's box attached in place (one a Mac set up on this one) keeps its own link: the app tells
+it nothing of it, pairs no phone there and reads or makes no key of this Mac's for it (its
+`kuvo/link/*` answer `403` all the same). It asks for the box's server to be kept each time it
+connects (`kuvo/box/serve {needed: true}`, "Kept for clients"; left asked for as it quits, for the
+next time it opens), and once the box says it takes Kuvo Code
+there (`box.serve.mac`), reaches it over that server as Kuvo Code on its computer (`x-kuvo-from:
+mac`, taken as `box route` is), so what it follows streams; else, and while there's no server, its
+CLI.
 
 #### This Mac's box: its keys, for its app
 
@@ -7812,7 +7856,10 @@ phone), which starts the
 keeper too if it isn't running; `{needed: false}` lets it go), the keeper keeps `kuvo-link.js serve
 --kept` running, as it keeps the link, starting it again within a round (15 s) when it ends. It
 answers clients' routes as `serve` does, streams included, at `127.0.0.1`, with a password of its
-own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); on a Mac its port
+own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); Kuvo Code on its
+computer (the app attached to this box in place) says so with `x-kuvo-from: mac` (`box.serve.mac`),
+and is taken as `box route` takes it: what only Kuvo Code asks, it may, and what only its own Macs'
+apps do (its link) it's refused, as there; on a Mac its port
 is refused to agents' commands in the sandbox, as the box's other servers are, from the sandbox's
 next look (ten seconds at most). It does nothing else: what the
 box does in the background stays with its link and its keeper. It goes once `run/serve.needed` is
