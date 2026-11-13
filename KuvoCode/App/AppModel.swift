@@ -50,6 +50,11 @@ final class AppModel {
         return BrowserToolServer(agent: BrowserAgent(utilities: utilities, asks: browserAsks))
     }()
     let workspace = Workspace()
+    /// What each box says it has (`kuvo/info`'s `features`): the app's one reader of them, which
+    /// tells the update gate what each says. This Mac's own box, of this version, has them all.
+    @ObservationIgnored private(set) lazy var boxFeatures = BoxFeatures(hasEverything: BoxClient.hasEveryFeature) { [unowned self] id in
+        try await self.box(id).send("GET", "kuvo/info")
+    }
     /// The main window's tabs; one window, so one set. Stores open tabs in it, also while the
     /// window is closed.
     @ObservationIgnored private(set) lazy var tabs = WindowTabs(app: self)
@@ -350,12 +355,19 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
-        // The update gate (#679): a box found older than this app needs is held; let go, it's read again.
-        workspace.onOlderBox = { [weak self] box, features in
+        // The update gate (#679): a box found older than this app needs, as it says what it has,
+        // is held; let go, it's read again.
+        workspace.features = boxFeatures
+        usageHistory.settings.features = boxFeatures
+        boxFeatures.onSaid = { [weak self] box, features in
             guard let self else { return }
-            machines.gates.foundOlder(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
+            let said = Array(features)
+            if BoxGate.isCurrent(said) {
+                machines.gates.foundCurrent(box, features: said)
+            } else {
+                machines.gates.foundOlder(box, features: said, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
+            }
         }
-        workspace.onCurrentBox = { [weak self] box, features in self?.machines.gates.foundCurrent(box, features: features) }
         workspace.isHeld = { [weak self] box in self?.machines.gates.state(of: box) != nil }
         machines.gates.onLetGo = { [weak self] box in
             self?.workspace.boxUpdated(box)
@@ -982,11 +994,9 @@ final class AppModel {
     /// Whether this Mac's own box has all this app needs, as it says (`kuvo/info`; a 404 or 405:
     /// from before it said); nil when it couldn't be asked.
     private func ownBoxIsCurrent() async -> Bool? {
-        struct Info: Decodable { var features: [String]? }
-        guard let (status, data) = try? await box(BoxClient.mac).send("GET", "kuvo/info") else { return nil }
-        if status == 404 || status == 405 { return false }
-        guard (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
-        return BoxGate.isCurrent(info.features ?? [])
+        guard let (status, data) = try? await box(BoxClient.mac).send("GET", "kuvo/info"),
+              case .has(let features) = BoxFeatures.said(status: status, body: data) else { return nil }
+        return BoxGate.isCurrent(features)
     }
 
     /// The box here answered, without a chats folder: it's from before chats had one there.

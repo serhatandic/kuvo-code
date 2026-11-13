@@ -1,5 +1,6 @@
 import AppKit
 import ClientAccounts
+import ClientSessions
 import Foundation
 import Observation
 import OpenCodeKit
@@ -26,6 +27,8 @@ final class UsageSettingsOnBox {
     /// features): nil until it says, asked again at each read until then.
     @ObservationIgnored private var box: String?
     @ObservationIgnored private var kept: Bool?
+    /// What each box says it has: the app's one reader (`AppModel.boxFeatures`, set as it starts).
+    @ObservationIgnored var features = BoxFeatures(hasEverything: BoxClient.hasEveryFeature) { id in try await BoxClient.routes(id).send("GET", "kuvo/info") }
     /// One ask of the box at a time, in order: a change made here goes after what was asked before it.
     @ObservationIgnored private var work: Task<Void, Never>?
     /// Parts changed here the box hasn't taken yet (it wasn't answering, or the app quit first), each
@@ -87,15 +90,10 @@ final class UsageSettingsOnBox {
 
     /// Whether `box` keeps the usage settings (`usage.settings`): this app's own box does. Nil when
     /// it couldn't be asked now.
-    private static func keeps(_ box: String) async -> Bool? {
-        if BoxClient.hasEveryFeature(box) { return true }
-        struct Info: Decodable { var features: [String]? }
-        do {
-            return try await BoxClient.routes(box).value(Info.self, "GET", "kuvo/info").features?.contains("usage.settings") ?? false
-        } catch {
-            log.info("usage settings: whether this Mac's box keeps them: \(String(describing: error), privacy: .public)")
-            return nil
-        }
+    private func keeps(_ box: String) async -> Bool? {
+        let keeps = await features.has("usage.settings", on: box)
+        if keeps == nil { log.info("usage settings: whether this Mac's box keeps them can't be told now") }
+        return keeps
     }
 
     /// Its bridge said they changed (another computer's change, or one of its routes).
@@ -129,7 +127,7 @@ final class UsageSettingsOnBox {
 
     /// Whether this Mac's box keeps them, asked if it hasn't said.
     private func keepsThem() async -> Bool {
-        if kept == nil, let box { kept = await Self.keeps(box) }
+        if kept == nil, let box { kept = await keeps(box) }
         return kept ?? false
     }
 

@@ -698,6 +698,8 @@ extension AppModel {
     /// chats show as last seen, nothing talking, until it's back.
     private func connectionClosed(_ machine: String) {
         workspace.forget(machine)
+        // (Connected again, it may have been updated meanwhile: what it has is read again.)
+        boxFeatures.forget(machine)
         boxGroups.disconnected(machine)
         planLimits.stopped(machine)
         if machine == SSHConnection.thisMac { usageHistory.stopped() }
