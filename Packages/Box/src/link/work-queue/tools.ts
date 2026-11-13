@@ -17,7 +17,8 @@ import { addItem, applyFileOps, changeItem, handItem, linkSession, linkSource, R
 import { allItems, byUser, changeQueues, matching, MOST_BODY, whoWords, type Book, type Item, type Who } from "./store";
 import { canonicalOf, readIssue, seenOf, sourceOf, withSeen, type IssueRead } from "./github";
 import { issueAt, refText, sameSource, sourceKey, sourceKeyOf, type IssueAt } from "./sources";
-import { computerName, itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
+import { itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
+import { computerName } from "../peers/computer-name";
 import { callOffHanding, elsewhereOf, handElsewhere, refuseLiveElsewhere } from "./hand";
 import { readPeerAgents } from "../peers/directory";
 import { awaySince } from "../peers/reach";

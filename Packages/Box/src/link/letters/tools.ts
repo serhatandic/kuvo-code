@@ -17,6 +17,7 @@ import { asked } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { ownAgentsNow, ownAsLast } from "../peers/agents";
+import { computerName } from "../peers/computer-name";
 import { composeAgents, isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { movedOf, peersOf } from "../peers/known";
 import { frozen } from "../moves/records";
@@ -34,9 +35,10 @@ import { answerAskTool, describeList, finishGoalTool, goalProgressTool, leadOf, 
 import { under, workSessions } from "../work/tree";
 import { rowsBox } from "../work/elsewhere";
 import { awaySince } from "../peers/reach";
-import { awaitAnswer, boxName, boxOf, callPeer, elsewhereTool, rowsEverywhere } from "./calls";
+import { awaitAnswer, boxOf, callPeer, elsewhereTool, rowsEverywhere } from "./calls";
 import { computerOf, readElsewhere, startElsewhere } from "./start-call";
-import { setJobTool, SHOW_TOOLS, showTool, WAKE_TOOLS, wakeTool } from "./own-tools";
+import { setJobTool, showTool, wakeTool } from "./own-tools";
+import { SHOW_TOOLS, WAKE_TOOLS } from "./tool-names";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
 
@@ -133,7 +135,7 @@ async function addressed(wanted: string, targets: Target[], here: string | null,
   const place = await placeOfSession(wanted, targets).catch(() => undefined);
   if (place === null && /^ses_[A-Za-z0-9]{1,60}$/.test(wanted)) {
     const peer = boxOf(wanted);
-    return peer ? { session: wanted, name: rowsBox(wanted)?.row.title ?? "New session", kind: "session", machine: boxName(peer) } : null;
+    return peer ? { session: wanted, name: rowsBox(wanted)?.row.title ?? "New session", kind: "session", machine: computerName(peer) } : null;
   }
   if (!place || place.data.parentID || place.data.metadata?.kuvo?.seat) return null;
   if (isPutAway(place.data) && !(archivedOwn && caller && under(caller, await workSessions(targets, undefined, { archived: true })).some(each => each.data.id === wanted))) return null;
@@ -262,7 +264,7 @@ async function readOne(args: Record<string, unknown>, caller: string | null, all
   if (!away || !caller || offRelay()) return refused(later);
   if (!away.features.includes("letters-read")) return refused(`${target.name}'s computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.`);
   // Its computer isn't there: said at once, not kept (a read wanted now is no use next week).
-  const asleep = `${boxName(away.peer)} isn't answering (it may be asleep, off or offline), so ${target.name}'s conversation can't be read now. Try again later.`;
+  const asleep = `${computerName(away.peer)} isn't answering (it may be asleep, off or offline), so ${target.name}'s conversation can't be read now. Try again later.`;
   if (awaySince(away.peer.key) !== null) return refused(asleep);
   let id: string;
   const sent = Date.now();

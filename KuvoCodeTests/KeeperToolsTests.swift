@@ -5,8 +5,8 @@ import Testing
 
 /// With Kuvo Code closed, this Mac's box goes on, and so do the agents on it: the keeper's tools
 /// (`KeeperTools`) answer what a machine's box answers without any app (agents writing to each
-/// other, wake-ups, a bot's job, the vault, the sandbox's way out), and only the browser says it
-/// needs Kuvo Code open.
+/// other, wake-ups, a bot's job, the vault, the sandbox's way out); the browser opens Kuvo Code
+/// (`KeeperOpensAppTests`).
 /// Over real HTTP, to a stand-in for this Mac's box on a loopback port of the test's own.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct KeeperToolsTests {
@@ -109,32 +109,6 @@ import Testing
         let panel = try await call(server, ["method": "tools/call", "params": ["name": "show_in_panel", "arguments": ["path": "/tmp"]]])
         #expect(panel["isError"] as? Bool == true)
         #expect(asked.requests("/kuvo/agent-tools").count == 6, "the side panel needs the app")
-    }
-
-    /// The browser can't work without the app: a call says Kuvo Code needs to be open, and the
-    /// box isn't asked.
-    @Test func theBrowserSaysKuvoCodeNeedsToBeOpen() async throws {
-        let asked = Asked()
-        let box = try await StubListener { request, body in
-            asked.note(request, body)
-            return StubWeb.Answer(status: 404)
-        }
-        let endpoint = box.endpoint
-        let tools = KeeperTools(record: { $0 == "serve.json" ? endpoint : nil })
-        defer {
-            tools.stop()
-            box.stop()
-        }
-        let server = try await tools.start().agents
-
-        let result = try await call(server, ["method": "tools/call", "params": [
-            "name": "browser_navigate", "arguments": ["url": "https://example.com"],
-            "_meta": ["ai.opencode/sessionID": "ses_bot"],
-        ]])
-        #expect(text(result) == KeeperTools.needsApp)
-        #expect(text(result).contains("Kuvo Code open"))
-        #expect(result["isError"] as? Bool == true)
-        #expect(asked.requests("/kuvo/agent-tools").isEmpty)
     }
 
     /// An agent whose command the sandbox stopped asks to run it outside, with Kuvo Code closed (#206):

@@ -23,7 +23,7 @@ import { offRelay } from "../letters/leave";
 import { IS_MAC } from "../home";
 import { sharedMachine } from "../setup/settle";
 import { readLink } from "../state";
-import { computerName } from "./across";
+import { computerName } from "../peers/computer-name";
 import { mailsFor } from "./parts";
 import { WORK_QUEUE } from "./store";
 import { readTold } from "./told";

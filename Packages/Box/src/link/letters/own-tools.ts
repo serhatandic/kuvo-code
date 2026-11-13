@@ -17,6 +17,7 @@ import { BOTS, SESSION_WAKES, WAKE_COMMAND } from "../home";
 import { wakesChanged } from "../areas/wakes";
 import type { Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
+import type { ShowToolName, WakeToolName } from "./tool-names";
 
 /** What a tool says back: its words, and whether it didn't do what was asked. */
 interface Said {
@@ -52,10 +53,6 @@ function botOf(session: string): { id: string; folder: string } | null {
 
 // Whether a session runs with the coding agents: its place is the agents' bridge.
 const onBridge = (place: SessionPlace | null | undefined, bridge: Target | null) => Boolean(place && bridge && place.target.port === bridge.port);
-
-/** The wake-up tools, by name. */
-export const WAKE_TOOLS = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up"] as const;
-export type WakeToolName = (typeof WAKE_TOOLS)[number];
 
 /** What an agent hears instead of a watch made without asking, in a conversation that asks before
  * commands: the same watch as a command, which asks the user with the check written out. */
@@ -158,10 +155,6 @@ export async function setJobTool(args: Record<string, unknown>, calling: Calling
   if (typeof kept !== "string") return refused("The box returned an unreadable job response. Check the job before trying again.");
   return said(kept ? `Kept. Kuvo Code shows "${kept}" under your name.` : "Kept: you have no job now.");
 }
-
-/** The tools that show something in the conversation or beside it, by name. */
-export const SHOW_TOOLS = ["show_in_panel", "show_file", "mark_final", "show_widget"] as const;
-export type ShowToolName = (typeof SHOW_TOOLS)[number];
 
 // A full path as given: from the root, with no "." or ".." in it.
 const isFullPath = (given: string) => given.startsWith("/") && !given.split("/").some(part => part === "." || part === "..");

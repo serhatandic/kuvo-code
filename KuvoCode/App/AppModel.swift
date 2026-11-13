@@ -925,6 +925,7 @@ final class AppModel {
         do {
             _ = try await browserTools.start()
             browserTools.owner = { [weak self] id in await self?.workspace.engineRunOwner(id) }
+            browserTools.ready = { [weak self] in await self?.workspace.firstLoad(within: 20) }
         } catch {
             log.error("Browser tools didn't start: \(error.localizedDescription, privacy: .public)")
         }
