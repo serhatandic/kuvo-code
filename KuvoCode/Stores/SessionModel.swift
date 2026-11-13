@@ -2020,7 +2020,7 @@ final class SessionModel {
             return
         }
         // (The app's own box's queues stream to `Workspace.followQueues`.)
-        guard queueFollow == nil, let box = box(), !BoxClient.streams(box.box) else { return }
+        guard queueFollow == nil, let box = box(), box.box != BoxClient.mac else { return }
         struct Listed: Decodable { var queues: [String: BoxQueue] }
         let id = id
         queueFollow = Task { [weak self] in

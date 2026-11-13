@@ -390,9 +390,9 @@ final class Moves {
 
     /// This Mac's box's moves, from now on, as they change (your machines', as below).
     func follow() async {
-        // (Only the app's own box streams them: one attached in place is read as a machine's is,
-        // as it connects and while something's moving.)
-        guard BoxClient.streams(BoxClient.thisMac) else { return }
+        // (Only the app's own box's are followed: one attached in place is read as a machine's is,
+        // as it connects and while something's moving, its server or not.)
+        guard BoxClient.thisMac == BoxClient.mac else { return }
         while !Task.isCancelled, app != nil {
             do {
                 for try await line in client(BoxClient.mac)?.follow("kuvo/moves/events") ?? AsyncThrowingStream { $0.finish() } {
@@ -507,7 +507,7 @@ final class Moves {
             }
         }
         show()
-        if !BoxClient.streams(box) { keepReading(box) }
+        if box != BoxClient.mac { keepReading(box) }
         // A machine whose moves started, went on or ended, as it told this Mac's box: read there.
         if box == BoxClient.mac {
             // (One of this Mac's own is read through its own list: each move once.)

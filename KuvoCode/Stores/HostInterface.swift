@@ -45,6 +45,10 @@ final class HostInterface {
     var appAnswers = true
     /// The open app's own, for the keeper's: where it answers, and its password.
     private var appHost: (url: URL, password: String)?
+    /// Answering only what only the open app can (a phone's ask of the Mac's own routes, the panel's
+    /// sign-ins): the open app's, for this Mac's own box moved into a home of its own, whose keys are
+    /// its helper's, never the app's to give or keep (#333 piece 6b, `AppModel.registerWithOwnBox`).
+    var answersOnlyApp = false
 
     /// The open app's (`{url, password}`), or that it has quit (`{}`).
     func useApp(_ given: [String: Any]) {
@@ -253,6 +257,7 @@ final class HostInterface {
         guard request.method == "POST" else { return .init(status: 405, headers: ["Allow": "POST"]) }
         let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
         let name = given["name"] as? String
+        if answersOnlyApp, !["/sites/signed-in", "/link/route"].contains(request.path) { return .init(status: 404) }
         switch request.path {
         case "/keys/names":
             let prefix = given["prefix"] as? String ?? "", suffix = given["suffix"] as? String ?? ""

@@ -330,9 +330,10 @@ final class Bots {
     /// connected (its connection ends this).
     func follow(_ box: String = BoxClient.thisMac) async {
         struct Line: Decodable { var bots: [ListedBot] }
-        // (Followed as it changes on the app's own box, which streams; read now and then on any
-        // other, the one attached in place too, which answers once a read.)
-        let onThisMac = BoxClient.streams(box)
+        // (Followed as it changes on a box that streams (the app's own, and the one attached in place
+        // while it's reached over its server: asked each round); read now and then on any other, which
+        // answers once a read.)
+        var onThisMac: Bool { BoxClient.streams(box) }
         // (A machine's box from before it had them: asked again only now and then.)
         var older = false
         while !Task.isCancelled {
