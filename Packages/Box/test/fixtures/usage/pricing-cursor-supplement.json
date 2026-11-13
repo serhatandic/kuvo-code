@@ -1,0 +1,21 @@
+{
+ "updated_at": "2026-11-01T00:00:00Z",
+ "pricing": {},
+ "fast_multipliers": {
+  "gpt-6": 2
+ },
+ "alias_rules": [
+  {
+   "pattern": "^claude-opus-5-thinking(-high|-max)?$",
+   "canonical": "claude-opus-5"
+  },
+  {
+   "pattern": "^gpt-6(-high|-extra-high)?-fast$",
+   "canonical": "gpt-6-fast"
+  },
+  {
+   "pattern": "^gpt-6(-high|-extra-high)$",
+   "canonical": "gpt-6"
+  }
+ ]
+}

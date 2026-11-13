@@ -106,7 +106,8 @@ export interface Day {
   date: string
   tokens: number
   cost: number
-  models: { model: string; tokens: number; cost: number }[]
+  /** `family`: the row it shows under, where it isn't its own name (Cursor's effort and speed variants: `Pricing.familyName`). */
+  models: { model: string; tokens: number; cost: number; family?: string }[]
   /** Models used that day that couldn't be priced (counted nowhere). */
   unknown?: string[]
   /** The models whose rates estimated some of that day's dollars for models that couldn't be priced (Codex's fallback). */

@@ -128,6 +128,26 @@ struct PlanLimitsTests {
         #expect(listed == ["panel:cursor", "Claude +claude on mac,hetzner", "Claude · Athas on hetzner"])
     }
 
+    /// Boxes from before rows, merged here as the box merges them: an account's `extras` are its
+    /// newest reading's that had no problem, and a reading without any says there are none now.
+    @Test func mergedExtrasAreTheNewestGoodReadings() throws {
+        func cursor(_ read: Double, extras: Bool, problem: Bool = false) -> String {
+            #"{"provider": "cursor", "service": "cursor", "agent": "cursor", "account": "default", "identity": "cccccccccccccccc", "checked": \#(read * 1000), "windows": []"#
+                + (extras ? #", "extras": [{"id": "on_demand", "name": "On-demand", "kind": "spent", "amount": 43, "unit": "usd"}]"# : "")
+                + (problem ? #", "problem": {"kind": "failed", "message": "x"}"# : "") + "}"
+        }
+        let capped = UsageListing.accounts([
+            .init(key: "mac", name: nil, accounts: try box(cursor(1_794_160_000, extras: true))),
+            .init(key: "dev", name: "dev", accounts: try box(cursor(1_794_164_000, extras: false))),
+        ])
+        #expect(capped[0].account.extras.isEmpty)
+        let failedSince = UsageListing.accounts([
+            .init(key: "mac", name: nil, accounts: try box(cursor(1_794_160_000, extras: true))),
+            .init(key: "dev", name: "dev", accounts: try box(cursor(1_794_164_000, extras: false, problem: true))),
+        ])
+        #expect(failedSince[0].account.extras.map(\.name) == ["On-demand"])
+    }
+
     @Test func twoAccountsOfOneProviderStayTwoRowsByTheirOwnNames() throws {
         let rows = UsageListing.accounts([
             .init(key: "mac", name: nil, accounts: try box(claude("aaaaaaaaaaaaaaaa", used: 0.4, read: 1_794_160_000))),

@@ -41,6 +41,7 @@ export const FEATURES = [
   "box.rehome",
   "box.serve",
   "box.uninstall",
+  "box.update",
   "branch",
   "browser",
   "btw",

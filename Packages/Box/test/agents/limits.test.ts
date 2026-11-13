@@ -5,7 +5,7 @@
 import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
@@ -511,11 +511,18 @@ describe("Codex", () => {
 const token = (claims: Record<string, unknown>) => `eyJhbGciOiJSUzI1NiJ9.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`
 
 describe("who each account is, the same from every computer", () => {
+  let recordWrites = 0
   /** Claude Code's own record of who it's signed in as, beside its sign-in (Linux). */
   function signedInAs(folder: string, token: string, account: string, organization: string) {
     mkdirSync(folder, { recursive: true })
     writeFileSync(join(folder, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt: clock.at + 86_400_000, scopes: ["user:inference", "user:profile"] } }))
-    writeFileSync(join(folder, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: account, emailAddress: "ada@example.com", organizationUuid: organization } }))
+    const record = join(folder, ".claude.json")
+    writeFileSync(record, JSON.stringify({ oauthAccount: { accountUuid: account, emailAddress: "ada@example.com", organizationUuid: organization } }))
+    // Each record gets a later file time, as Claude Code's would: the box rereads it only when its
+    // mtime or size changed, and Linux can give two same-size writes made close together one file
+    // time, leaving the old account's identity in place.
+    const at = new Date(clock.at + recordWrites++ * 60_000)
+    utimesSync(record, at, at)
   }
 
   test("one Claude login on two computers is one identity, another login another, and neither says who", async () => {

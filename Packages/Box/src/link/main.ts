@@ -104,7 +104,7 @@ import { keepKeyFiles } from "./keys";
 import { keepAwakeWhileWorking } from "./work/awake";
 import { runningServe, SERVE_FILE, SERVE_NEEDED, stopKeptServe } from "./serve-kept";
 import { uninstallCommand } from "./uninstall";
-import { agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
+import { type UpdateOptions, agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startOfferedUpdate, startUpdate, takeOffer, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
 import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
@@ -178,7 +178,7 @@ export { KEEP_FOR, SEEN_FILE, forgetPhones, phoneSeenLately } from "./compat/lea
 export { engineConnect, engineControl, toolRun } from "./areas/engine";
 export { botPersonalities, changePersonalities, mergePersonalities, personalitiesDocument, readPersonalities } from "./personalities/library";
 export { botVariable, keyFilesWait, syncKeyFiles } from "./keys";
-export { UPDATE_KEYS, agentsWorking, boxVersion, checkDrift, confirmUpdate, isUpdating, newerVersion, noteLauncher, noteOlderMacs, startUpdate, update, updateNight, updateStatus, updatesBlocked, verifyBoxes, versionOrder } from "./updates/update";
+export { UPDATE_KEYS, agentsWorking, boxVersion, checkDrift, confirmUpdate, isUpdating, newerVersion, noteLauncher, noteOlderMacs, offerDue, offerUpdate, offeredVersion, startUpdate, takeOffer, update, updateNight, updateStatus, updatesBlocked, verifyBoxes, versionOrder } from "./updates/update";
 export { FILE_LIMIT } from "./areas/file";
 export { firstMessageOf, jobInMemory, jobLine, keepJobs } from "./bots/jobs";
 export { listBots } from "./bots/list";
@@ -404,12 +404,14 @@ async function run(): Promise<void> {
   let lastWelcomed = Date.now();
   refreshOwn(readEngineFile).catch(() => {});
   // Updates: the new bridge, once one put it here, says it's well (after the relay's welcome, or
-  // three minutes); each night's window, one, when nothing runs (PROTOCOL.md, "Updates").
+  // three minutes); each night's window, one, when nothing runs; a release Kuvo Code here offered,
+  // at the first round nothing runs (PROTOCOL.md, "Updates").
   setTimeout(updateIsWell, 180_000);
   const nightly = () => {
     noteLauncher();
     noteOlderMacs();
     try { checkDrift(); } catch {}
+    startOfferedUpdate().catch(() => {});
     const night = updateNight();
     if (!night || updateState().night === night || !UPDATE_KEYS.length) return;
     startUpdate({})?.then(outcome => { if (outcome && outcome.result !== "busy") noteUpdate({ night }); });
@@ -1076,14 +1078,25 @@ if (main) {
     process.stdout.write(found ?? "");
   }
   else if (mode === "update") {
-    // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
-    // it's updated, the running bridge goes, for the keeper to start the new one.
+    // `update [--now] [--from <folder>]` (a release in a folder here, `boxes.json` and its pack), or
+    // `update --offered` (the one Kuvo Code here offered, `kuvo/box/update`, when it's due: nothing
+    // to do otherwise), and for a test's folder only, `--url <boxes.json> --key <public key>` (or
+    // `--key` alone, with `--from` or `--offered`). Once it's updated, the running bridge goes, for
+    // the keeper to start the new one.
     const args = process.argv.slice(3);
     const option = (name: string): string | undefined => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
-    const test = option("--url") && option("--key") && !REAL_BOX;
-    const outcome = await update({ now: args.includes("--now"), step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {}) });
-    noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
-    if (outcome.result === "updated") {
+    const from = option("--from");
+    const offered = args.includes("--offered");
+    const test = option("--key") && (option("--url") || from || offered) && !REAL_BOX ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {};
+    const step: UpdateOptions["step"] = running => noteUpdate({ running });
+    const outcome = offered
+      ? await takeOffer({ step, ...test })
+      : from && !path.isAbsolute(from)
+        ? { result: "failed" as const, message: "Say which folder the release is in, as a full path." }
+        : await update({ now: args.includes("--now"), from, step, ...test });
+    // (None due, or another process took it just before this one: nothing happened to note.)
+    if (outcome && !(offered && outcome.result === "busy")) noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
+    if (outcome?.result === "updated") {
       const pid = runningBridge();
       if (pid) process.kill(pid, "SIGTERM");
       // And the server kept for clients, which the keeper starts again, new (serve-kept.ts).
@@ -1094,7 +1107,7 @@ if (main) {
         await upgradeIntegrations().catch(() => {});
       }
     }
-    console.log(JSON.stringify(outcome));
+    console.log(JSON.stringify(outcome ?? { result: "current", message: "No offered release is due." }));
   }
   // The browser agents use here (PROTOCOL.md, "The browser on a machine"): `browser install [--now]
   // [--repair]` sets it up, as the keeper starts it (one at a time); `browser start [--now]

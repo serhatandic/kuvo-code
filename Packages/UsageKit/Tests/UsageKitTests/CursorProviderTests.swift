@@ -1,49 +1,17 @@
 import XCTest
 @testable import UsageKit
 
+/// Only Kuvo Code's own Cursor sign-in counts (the host's agent key): the Cursor app's own login
+/// (its state database, its Keychain items) is an outside one, and is never read (#631 piece D1).
 final class CursorAuthStoreTests: XCTestCase {
-    func testPrefersKeychainWhenSQLiteLooksFreeAndSubjectsDiffer() {
-        let sqliteToken = makeCursorJWT(sub: "google-oauth2|sqlite-user")
-        let keychainToken = makeCursorJWT(sub: "auth0|keychain-user")
-        let sqlite = KeyValueSQLite(values: [
-            CursorAuthStore.accessTokenKey: sqliteToken,
-            CursorAuthStore.refreshTokenKey: "sqlite-refresh",
-            CursorAuthStore.membershipTypeKey: "free"
-        ])
-        let keychain = ServiceKeychain(values: [
-            CursorAuthStore.keychainAccessTokenService: keychainToken,
-            CursorAuthStore.keychainRefreshTokenService: "keychain-refresh"
-        ])
-        let store = CursorAuthStore(sqlite: sqlite, keychain: keychain)
-
-        let state = store.loadAuthState()
-
-        XCTAssertEqual(state?.source, .keychain)
-        XCTAssertEqual(state?.accessToken, keychainToken)
-        XCTAssertEqual(state?.refreshToken, "keychain-refresh")
+    func testOnlyTheHostsCursorKeyIsASignIn() {
+        XCTAssertNil(CursorAuthStore(hostSecret: { nil }).loadAuthState())
+        XCTAssertNil(CursorAuthStore(hostSecret: { "  " }).loadAuthState())
+        let state = CursorAuthStore(hostSecret: { " agent-key " }).loadAuthState()
+        XCTAssertEqual(state?.source, .host)
+        XCTAssertEqual(state?.apiKey, "agent-key")
+        XCTAssertNil(state?.accessToken)
         XCTAssertNil(state?.membershipType)
-    }
-
-    func testLoadsEnterpriseMembershipTypeFromSQLite() {
-        let token = makeCursorJWT(sub: "google-oauth2|enterprise-user")
-        let store = CursorAuthStore(
-            sqlite: KeyValueSQLite(values: [
-                CursorAuthStore.accessTokenKey: token,
-                CursorAuthStore.membershipTypeKey: "Enterprise"
-            ]),
-            keychain: FakeKeychain()
-        )
-
-        XCTAssertEqual(store.loadAuthState()?.membershipType, "enterprise")
-    }
-
-    func testPersistsSQLiteAccessToken() throws {
-        let sqlite = KeyValueSQLite()
-        let store = CursorAuthStore(sqlite: sqlite, keychain: FakeKeychain())
-
-        try store.saveAccessToken("fresh-token", source: .sqlite)
-
-        XCTAssertEqual(sqlite.writtenValues[CursorAuthStore.accessTokenKey], "fresh-token")
     }
 }
 
@@ -323,34 +291,6 @@ final class CursorUsageMapperTests: XCTestCase {
 
 @MainActor
 final class CursorProviderTests: XCTestCase {
-    func testRotatedKeychainAccessTokenPersistsOffMainThread() async {
-        let keychain = ThreadRecordingKeychain(values: [
-            CursorAuthStore.keychainAccessTokenService: "expired",
-            CursorAuthStore.keychainRefreshTokenService: "refresh"
-        ])
-        let http = RoutingHTTPClient { request in
-            if request.url == CursorUsageClient.refreshURL {
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"access_token":"rotated"}"#.utf8)
-                )
-            }
-            return HTTPResponse(statusCode: 404, headers: [:], body: Data())
-        }
-        let provider = CursorProvider(
-            authStore: CursorAuthStore(
-                sqlite: KeyValueSQLite(values: [:]),
-                keychain: keychain
-            ),
-            usageClient: CursorUsageClient(http: http)
-        )
-
-        _ = await provider.refresh()
-
-        XCTAssertEqual(keychain.lastWriteWasMainThread, false)
-    }
-
     func testModelCategoryDescriptorsMatchDashboardAndKeepStableIdentifiers() throws {
         let descriptors = CursorProvider().widgetDescriptors
         XCTAssertEqual(Array(descriptors.prefix(4).map(\.id)), [
@@ -373,56 +313,6 @@ final class CursorProviderTests: XCTestCase {
         XCTAssertEqual(otherModels.title, "Other Models")
         XCTAssertEqual(otherModels.metricLabel, "Other Models")
         XCTAssertEqual(otherModels.limitResources.map(\.key), ["apiUsage"])
-    }
-
-    func testProTeamMembershipChangesBadgeWithoutChangingPrimaryTotal() async throws {
-        let accessToken = makeCursorJWT(sub: "google-oauth2|team-seat")
-        for planUsage: [String: Any] in [
-            ["limit": 2000, "totalSpend": 400, "totalPercentUsed": 20],
-            ["totalPercentUsed": 20],
-            ["totalPercentUsed": 20, "autoPercentUsed": 10, "apiPercentUsed": 30],
-            ["limit": 2000, "totalSpend": 400, "autoPercentUsed": 10, "apiPercentUsed": 30]
-        ] {
-            let body = try JSONSerialization.data(withJSONObject: ["enabled": true, "planUsage": planUsage])
-            let http = RoutingHTTPClient { request in
-                switch request.url {
-                case CursorUsageClient.usageURL:
-                    return HTTPResponse(statusCode: 200, headers: [:], body: body)
-                case CursorUsageClient.planURL:
-                    return HTTPResponse(statusCode: 200, headers: [:], body: Data(#"{"planInfo":{"planName":" Pro "}}"#.utf8))
-                default:
-                    return HTTPResponse(statusCode: 404, headers: [:], body: Data())
-                }
-            }
-            let directory = FileManager.default.temporaryDirectory
-                .appendingPathComponent("cursor-pro-team-\(UUID().uuidString)", isDirectory: true)
-            defer { try? FileManager.default.removeItem(at: directory) }
-            let provider = CursorProvider(
-                authStore: CursorAuthStore(
-                    sqlite: KeyValueSQLite(values: [
-                        CursorAuthStore.accessTokenKey: accessToken,
-                        CursorAuthStore.membershipTypeKey: "team"
-                    ]),
-                    keychain: FakeKeychain()
-                ),
-                usageClient: CursorUsageClient(http: http),
-                now: { Date(timeIntervalSince1970: 1_800_000_000) },
-                pricing: { TestPricing.bundled },
-                usageHistoryStore: CursorUsageHistoryStore(directory: directory)
-            )
-
-            let snapshot = await provider.refresh()
-
-            XCTAssertNil(snapshot.errorCategory)
-            XCTAssertEqual(snapshot.plan, "Team")
-            guard case .progress(_, let used, let limit, let format, _, _, _) =
-                snapshot.lines.first(where: { $0.label == "Total usage" }) else {
-                return XCTFail("Missing percent total for Pro team seat")
-            }
-            XCTAssertEqual(used, 20)
-            XCTAssertEqual(limit, 100)
-            XCTAssertEqual(format, .percent)
-        }
     }
 
     func testRefreshFetchesLiveCursorUsage() async {
@@ -474,11 +364,8 @@ final class CursorProviderTests: XCTestCase {
             return HTTPResponse(statusCode: 404, headers: [:], body: Data())
         }
         let provider = CursorProvider(
-            authStore: CursorAuthStore(
-                sqlite: KeyValueSQLite(values: [CursorAuthStore.accessTokenKey: accessToken]),
-                keychain: FakeKeychain()
-            ),
-            usageClient: CursorUsageClient(http: http),
+            authStore: cursorAgentStore(),
+            usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: cursorExchanging(accessToken, { try await http.send($0) }))),
             now: { Date(timeIntervalSince1970: 1_800_000_000) },
             usageHistoryStore: CursorUsageHistoryStore(directory: FileManager.default.temporaryDirectory
                 .appendingPathComponent("cursor-provider-tests-\(UUID().uuidString)", isDirectory: true))
@@ -516,9 +403,9 @@ private func dollarValue(_ lines: [MetricLine], _ label: String) -> Double? {
 
 // makeCursorJWT, KeyValueSQLite, and RoutingHTTPClient live in TestSupport.swift.
 
-/// A Mac where only a coding agent is signed in to Cursor (the host's API key), not the Cursor
-/// app: its key is exchanged for an access token, and the usage reads with it; a key that no
-/// longer works says to sign in again in the host. Nothing is written to Cursor's own places.
+/// Kuvo Code's own Cursor sign-in (the host's API key), for a box that doesn't read Cursor's
+/// itself yet (COMPAT): its key is exchanged for an access token, and the usage reads with it; a
+/// key that no longer works says to sign in again in the host.
 @MainActor
 final class CursorAgentSignInTests: XCTestCase {
     override func tearDown() {
@@ -526,9 +413,9 @@ final class CursorAgentSignInTests: XCTestCase {
         super.tearDown()
     }
 
-    private func provider(sqlite: KeyValueSQLite, keychain: FakeKeychain, _ handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse) -> CursorProvider {
+    private func provider(_ handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse) -> CursorProvider {
         CursorProvider(
-            authStore: CursorAuthStore(sqlite: sqlite, keychain: keychain),
+            authStore: CursorAuthStore(),
             usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: handler)),
             now: { Date(timeIntervalSince1970: 1_800_000_000) },
             pricing: { TestPricing.bundled },
@@ -540,9 +427,7 @@ final class CursorAgentSignInTests: XCTestCase {
     func testAnAgentsSignInReadsUsage() async throws {
         HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "agent-key", signedIn: true)])
         let token = makeCursorJWT()
-        let sqlite = KeyValueSQLite()
-        let keychain = FakeKeychain()
-        let provider = provider(sqlite: sqlite, keychain: keychain) { request in
+        let provider = provider { request in
             switch request.url {
             case CursorUsageClient.exchangeURL:
                 XCTAssertEqual(request.headers["Authorization"], "Bearer agent-key")
@@ -559,12 +444,11 @@ final class CursorAgentSignInTests: XCTestCase {
         let snapshot = await provider.refresh()
         XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(progress(snapshot.lines, "Total usage")?.used, 20)
-        XCTAssertTrue(sqlite.writtenValues.isEmpty, "nothing written to Cursor's own places")
     }
 
     func testAnAgentsSignInThatEndedSaysWhereToSignIn() async throws {
         HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "old-key", signedIn: true)])
-        let provider = provider(sqlite: KeyValueSQLite(), keychain: FakeKeychain()) { _ in
+        let provider = provider { _ in
             HTTPResponse(statusCode: 401, headers: [:], body: Data())
         }
         let snapshot = await provider.refresh()
@@ -575,7 +459,7 @@ final class CursorAgentSignInTests: XCTestCase {
 
     func testCursorNotAnsweringIsntASignInThatEnded() async throws {
         HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "agent-key", signedIn: true)])
-        let provider = provider(sqlite: KeyValueSQLite(), keychain: FakeKeychain()) { _ in
+        let provider = provider { _ in
             HTTPResponse(statusCode: 503, headers: [:], body: Data())
         }
         let snapshot = await provider.refresh()
@@ -584,7 +468,7 @@ final class CursorAgentSignInTests: XCTestCase {
 
     func testOfflineSaysToCheckTheConnection() async throws {
         HostAccounts.update([HostCredential(integrationID: HostCredential.cursorAgent, secret: "agent-key", signedIn: true)])
-        let provider = provider(sqlite: KeyValueSQLite(), keychain: FakeKeychain()) { _ in
+        let provider = provider { _ in
             throw URLError(.notConnectedToInternet)
         }
         let snapshot = await provider.refresh()

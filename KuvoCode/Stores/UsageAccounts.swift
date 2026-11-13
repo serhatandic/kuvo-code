@@ -47,7 +47,7 @@ final class UsageAccounts {
                 return HostCredential(integrationID: credential.integrationID, secret: secret,
                                       signedIn: Self.isSignIn(credential),
                                       accountID: credential.value.metadata?["accountID"]?.string)
-            } + [Self.cursorAgentKey()].compactMap { $0 })
+            } + [HostLimits.shared.covers("cursor") ? nil : Self.cursorAgentKey()].compactMap { $0 })
             engineProviders = Set(credentials.filter(\.active).compactMap {
                 Self.usageProvider(for: $0.integrationID, signedIn: Self.isSignIn($0))
             })
@@ -104,8 +104,10 @@ final class UsageAccounts {
     }
 
     /// Cursor's sign-in for the coding agents (the agents bridge's, yours or the first account
-    /// you added), for the panel to read Cursor's usage with when the Cursor app isn't signed in.
-    /// Read where the bridge keeps it, while it's good.
+    /// you added), for the panel to read Cursor's usage with. Read where the bridge keeps it, while
+    /// it's good, only while this Mac's box doesn't read Cursor's plan and history itself (it does
+    /// from #631 piece D1: `HostLimits.covers("cursor")`), with the panel's own Cursor reads.
+    /// COMPAT(0.7 cursor-box): the key for a box from before. Goes 3 months after 0.8.0.
     static func cursorAgentKey(in home: URL = OutsideAgents.home, now: Date = .now) -> HostCredential? {
         struct Saved: Decodable { var apiKey: String?; var apiKeyExpiresAtMs: Double? }
         let accounts = home.appending(path: "cursor/accounts")
