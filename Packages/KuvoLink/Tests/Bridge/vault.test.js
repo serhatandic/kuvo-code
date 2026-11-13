@@ -231,6 +231,21 @@ test("your Mac sets up a machine's vault over SSH, proving it's the Mac that set
   assert.equal((await fromMac("GET", `kuvo/vault/items/${items.GitHub.id}/values`, undefined, key)).value.values.password, SECRET);
 });
 
+test("whether a password is the one kept is told without giving it or noting it as shown, and only to a client", async () => {
+  const same = values => fromMac("POST", `kuvo/vault/items/${items.GitHub.id}/same`, { values }, key);
+  const shownBefore = (await fromMac("GET", "kuvo/vault/activity", undefined, key)).value.entries.filter(entry => entry.what === "shown").length;
+  assert.deepEqual((await same({ password: SECRET })).value, { same: true });
+  assert.deepEqual((await same({ password: "typed-anew" })).value, { same: false });
+  assert.deepEqual((await same({ password: SECRET, otp: "123456" })).value, { same: false }, "a value it doesn't keep isn't the same");
+  for (const values of [{}, { password: 1 }, null]) assert.equal((await same(values)).status, 400, JSON.stringify(values));
+  assert.equal((await fromMac("GET", `kuvo/vault/items/${items.GitHub.id}/same`, undefined, key)).status, 405);
+  assert.equal((await fromMac("POST", "kuvo/vault/items/item_none/same", { values: { password: SECRET } }, key)).status, 404);
+  assert.equal((await fromMac("POST", `kuvo/vault/items/${items.GitHub.id}/same`, { values: { password: SECRET } })).status, 403, "without the key");
+  assert.equal((await box.local("POST", `kuvo/vault/items/${items.GitHub.id}/same`, { values: { password: SECRET } })).status, 403, "from an agent's command");
+  const shownAfter = (await fromMac("GET", "kuvo/vault/activity", undefined, key)).value.entries.filter(entry => entry.what === "shown").length;
+  assert.equal(shownAfter, shownBefore, "nothing noted as shown");
+});
+
 test("nothing on the machine shows a value: not its files, not the box's answers to anything without a client's key", async () => {
   const disk = onDisk();
   for (const value of [SECRET, TOKEN, "MIGTAgEAMBMGByqGSM49", key]) assert.ok(!disk.includes(value), `${value.slice(0, 8)}… isn't on disk`);

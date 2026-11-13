@@ -173,9 +173,11 @@ final class MachineEngine {
         agents = OutsideAgents(machine: machine.id)
         catalog.outsideAgents = agents
         catalog.machine = machine.id
-        let box = BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))
+        // (This Mac's own box, moved into a home of its own: reached as its app, `OwnBoxHome`.)
+        let box = machine.isThisMac && OwnBoxHome.hasMoved ? OwnBoxHome.client : BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))
         catalog.box = box
-        config = EngineConfig(remote: BoxSettings(client: box))
+        // This Mac's own box, moved into a home of its own: its settings file there, to open.
+        config = EngineConfig(remote: BoxSettings(client: box), file: machine.isThisMac && OwnBoxHome.hasMoved ? OwnBoxHome.folder.map { EngineFolders(root: $0).configFile } : nil)
     }
 
     /// The machine as it's kept now: another address, or what it calls itself, learned.
@@ -1130,9 +1132,10 @@ final class Machines {
     /// next goes beside it, never over it.
     @ObservationIgnored private(set) var fileDidntRead: Bool
 
-    /// The list, in this Mac's box's folder: this writes it and the box only reads it, so the box can
-    /// say what your machines are with the app closed (`kuvo/machines`), and there's one list.
-    nonisolated static var file: URL { AppInfo.supportDirectory.appending(path: "box").appending(path: "machines.json") }
+    /// The list, in this Mac's box's folder (in the app's, or its home once it has moved,
+    /// `OwnBoxHome`): this writes it and the box only reads it, so the box can say what your machines
+    /// are with the app closed (`kuvo/machines`), and there's one list.
+    nonisolated static var file: URL { OwnBoxHome.file("machines.json", inSupport: "box/machines.json") }
     /// Where it was before it had a file, and where an older version keeps its own, which sees nothing
     /// of the file: what's here joins the file's. Never removed before the list is known to be safe.
     nonisolated private static let key = "machines"
@@ -1366,7 +1369,7 @@ final class Machines {
     }
 
     /// This Mac's own box, attached in place (`Machine.isThisMac`): first among them, never saved
-    /// (the list's file is in the app's own box's folder, which an attached app never makes).
+    /// (it's no machine of yours: the list is those its box meets).
     @discardableResult
     func attachHere() -> MachineEngine {
         if let engine = engines[SSHConnection.thisMac] { return engine }

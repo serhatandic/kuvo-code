@@ -28,6 +28,9 @@ enum BoxRelease {
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: link.path)
         try MachineBox.catalogJSON().write(to: bin.appending(path: "mcp-catalog.json"))
         try MachineBox.integrationsJSON().write(to: bin.appending(path: "integrations.json"))
+        // A Mac's box in a home of its own reads this one instead (#333): those that use its Mac's own
+        // apps too, which the app wrote into its folder before (`writeMacCatalog`).
+        try MachineBox.integrationsJSON(forMac: true, keysInBox: true).write(to: bin.appending(path: "integrations-mac.json"))
         // What a box makes its bots with and tells them.
         try BotWords.data.write(to: bin.appending(path: BotWords.fileName))
         try Data(MachineBrowserInstaller.helper.text.utf8).write(to: bin.appending(path: "kuvo-browser.js"))

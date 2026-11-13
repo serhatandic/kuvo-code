@@ -1,6 +1,7 @@
 import ClientVault
 import Foundation
 import LocalAuthentication
+import OpenCodeKit
 import Security
 import WebKit
 
@@ -45,9 +46,35 @@ enum Passwords {
         return found.sorted { $0.changed > $1.changed }.map(login)
     }
 
-    static func password(for login: Login) -> String? {
+    /// Its password, from this Mac's vault: in your Keychain, or once this Mac's box has moved into a
+    /// home of its own (its vault's values its helper's then, which the app never reads), as its box
+    /// gives it to its app (`kuvo/vault/items/<id>/values`, noted there as shown): the box attached in
+    /// place (`SSHConnection.thisMac`), its own.
+    static func password(for login: Login) async -> String? {
         guard !login.item.isEmpty else { return nil }
-        return VaultValues.values(login.item)?["password"]
+        guard OwnBoxHome.hasMoved else { return VaultValues.values(login.item)?["password"] }
+        struct Values: Decodable { var values: [String: String] }
+        return try? await Vaults.shared.ask(Values.self, "GET", VaultRoutes.values(login.item), on: SSHConnection.thisMac).values["password"]
+    }
+
+    /// Whether `password` is the one saved for `login`; nil when that can't be told (none saved, or
+    /// not read now). Once this Mac's box has moved, its box tells (`kuvo/vault/items/<id>/same`),
+    /// never giving the saved one, nor noting it as shown: nothing was.
+    static func matches(_ password: String, _ login: Login) async -> Bool? {
+        guard !login.item.isEmpty else { return nil }
+        guard OwnBoxHome.hasMoved else { return VaultValues.values(login.item)?["password"].map { $0 == password } }
+        struct Same: Decodable { var same: Bool }
+        return try? await Vaults.shared.ask(Same.self, "POST", VaultRoutes.same(login.item), body: ["values": ["password": password]], on: SSHConnection.thisMac).same
+    }
+
+    /// How a sign-in answered with `password` compares with the one saved for `login`
+    /// (`BrowserAsks.handling`): nil with none saved. Once this Mac's box has moved, its box compares
+    /// them (`matches`), so the saved one is never read just to compare it, and one it can't compare
+    /// now is `unknown`.
+    static func compared(_ password: String, _ login: Login?) async -> BrowserAsks.Saved? {
+        guard let login else { return nil }
+        guard OwnBoxHome.hasMoved else { return BrowserAsks.compared(password, with: await self.password(for: login)) }
+        return await matches(password, login).map { $0 ? .same : .other } ?? .unknown
     }
 
     /// Lets every agent sign in to `host` with the saved login for `account` on their own (or not),
@@ -322,7 +349,9 @@ final class PasswordCapture: NSObject, WKScriptMessageHandler {
         guard !Passwords.neverSites.contains(host) else { return }
         let account = (body["username"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let saved = Passwords.logins(for: host).first { $0.account == account }
-        if let saved, Passwords.password(for: saved) == password { return }
-        session.offerToSave(PendingLogin(host: host, account: account, password: password, isUpdate: saved != nil))
+        Task { [weak session] in
+            if let saved, await Passwords.matches(password, saved) == true { return }
+            session?.offerToSave(PendingLogin(host: host, account: account, password: password, isUpdate: saved != nil))
+        }
     }
 }

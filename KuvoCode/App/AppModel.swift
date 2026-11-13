@@ -414,6 +414,8 @@ final class AppModel {
         // (Attached in place, the app has no link of its own (the box here keeps its own), so it's
         // on no machine's bridge to leave.)
         Machines.linkKey = { [weak self] in self?.attached == nil ? self?.phoneLink.macKey : nil }
+        // This Mac's box, moved into a home of its own: its key, as it says (its keys are its own).
+        phoneLink.boxKey = { [weak self] in self?.attached?.box.flatMap { $0.kind == "mac" ? $0.key : nil } }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks
         phoneLink.workspace = workspace
@@ -741,6 +743,8 @@ final class AppModel {
         // What has no computer of its own is on this box from now on (`BoxClient.thisMac`), and
         // Settings' pages on this Mac go with it.
         didSet {
+            // (Whether this Mac's box has moved into a home of its own, looked at again.)
+            OwnBoxHome.recheck()
             BoxClient.thisMac = thisMacsBox.id
             settingsTabs.thisMac = thisMacsBox
         }

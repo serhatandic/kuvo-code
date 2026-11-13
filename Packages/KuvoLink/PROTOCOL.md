@@ -4917,6 +4917,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `box.app` | `kuvo/box/app` and `kuvo/box/app/open`: this Mac's app registering with a Mac's box in a home of its own, and opened by it for its agents' browser ("This Mac's box: this Mac's app") |
+| `box.appKeys` | `kuvo/box/proof` and `kuvo/box/kept-keys`: what this Mac's app asks of the keys a Mac's box in a home of its own holds ("This Mac's box: its keys, for its app"); `bin/integrations-mac.json` read there |
 | `box.helper` | `kuvo-link.js helper install [--load] [--app <bundle ID>] \| status`: the launch agent that starts Kuvo Code Box, a Mac's box's helper, at login ("This Mac's box: its helper"); `kuvo-start serve`; `serve` saying where it answers in `run/serve.json` |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
@@ -5456,6 +5457,43 @@ app's panel through it, with no Chromium of its own. A machine's box answers `40
   any more; it couldn't be opened (and why); it wasn't ready within 30 seconds; it never registered
   here (nothing to open). A call stopped while it waits stops waiting; the one that asked for the
   opening sees it through, for the others.
+
+#### This Mac's box: its keys, for its app
+
+`box.appKeys` (#333 piece 6a), behind the app's `movesOwnBox` (off). Once this Mac's box has moved
+into a home of its own, its keys are its helper's copies in your Keychain ("This Mac's box: its
+helper"), which the app can't read, and must never make anew: a key made by the app would be
+another Mac to every phone, machine and peer. So the app reads none of them, and asks the box for
+what it did with them. Both routes answer only Kuvo Code on this Mac (`x-kuvo-from: app` over the
+box's own server, to the password in `run/serve.json`), `403` to anyone else (a phone, or `box
+route`), and `409` on any other box. That password is in a file only you can read, which the sandbox
+keeps agents' commands from, as it keeps them from `run/host.json`, whose host interface gives the
+same keys (`link/identity`): what runs as you outside the sandbox can reach either, as it could the
+app's keeper's before the move.
+
+- **`POST kuvo/box/proof`**: this Mac's proof for one of your machines' vaults ("Vault"), signed with
+  the Mac's signing key: `{machine}` for its vault's key (`kuvo-vault-key\0<machine>\0<at>\0<nonce>`),
+  or `{machine, method, path, hash}` for one request (`kuvo-vault-request\0<machine>\0<at>\0<nonce>
+  \0<METHOD>\0<path>\0<hash>`, `hash` the body's SHA-256 in hex). It answers `{mac, at, nonce,
+  proof}`, as the app made them before: `mac` the Mac's public link key, `at` now (ms), a nonce of
+  its own. Its keys come from its link once it's on, else from its host (`link/identity`), never made
+  here; `503 {"message"}` while the Keychain can't give them. `400` for anything else asked.
+- **`kuvo/box/kept-keys?bot=<id>`**: for released Macs ("For released Macs", `0.7 bot-keys-keychain`), the keys of its own an earlier
+  Kuvo Code kept in this Mac's Keychain for a bot on one of your machines (`<variable>__<BOT>`), which
+  the app gives that machine as it connects: `GET` answers `{keys: {<variable>: <value>}}`; `DELETE
+  {names}` takes those away once the machine has them (`400` for a name `GET` doesn't list). `409`
+  for a bot that's this box's own (its keys are `kuvo/bots/<id>/keys`), `503 {"message"}` while the
+  Keychain can't be reached. Goes 3 months after 0.8.0.
+- **The app's other uses**, through the routes every client has: the vault's values it fills or
+  shows (`kuvo/vault/items/<id>/values`, noted `shown` in the vault's activity, as Kuvo Code on this
+  Mac), whether a password you signed in with is the saved one (`kuvo/vault/items/<id>/same`, which
+  neither gives nor notes it), and the integrations' keys a new machine starts with (`kuvo/keys`).
+- **What the app still writes there**, as it wrote them beside the box in its folder: your machines'
+  list (`machines.json`) and their bridges (`phone-link.json`), in the box's home; the box reads both
+  ("Machines").
+- **Its integrations' catalog** is the release's `bin/integrations-mac.json` (every integration,
+  those that use the Mac's own apps too, their keys named in `box/keys`), read instead of
+  `bin/integrations.json` there, where the app wrote the box's catalog into its folder before.
 
 #### Host interface
 
@@ -6198,6 +6236,9 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   `vault_run`, nor `browser_fill`. `PATCH kuvo/vault/items/<id>` with any of those (a value `null` takes it away) →
   `{item}`; `DELETE` → `{}`, with its values and grants.
 - `GET kuvo/vault/items/<id>/values` → `{values}`.
+- `POST kuvo/vault/items/<id>/same {values}` → `{same}` (`vault.same`): whether each value given is the
+  one kept, without giving them or noting anything (a password you signed in with, to offer to save it
+  or not).
 - `POST kuvo/vault/grants {item, who, how}` (`how: null` takes it away) → `{grants}`;
   `GET kuvo/vault/grants` → `{grants}`.
 - `POST kuvo/vault/pause {paused, bot?}` → the state: every agent's use, or one bot's (or, by its

@@ -168,7 +168,7 @@ export { NOTICE_LIMIT, noticeJSON, pushTo } from "./notices/notice";
 export { notePushed, PUSHED_FILE, readPushed, sendToPhones } from "./notices/push";
 export { LinkHost } from "./relay/host";
 export { followed } from "./follow";
-export { answerIntegrations, reconnectEverywhere, upgradeIntegrations } from "./areas/integrations";
+export { answerIntegrations, integrationCatalog, INTEGRATIONS_FILE, reconnectEverywhere, upgradeIntegrations } from "./areas/integrations";
 export { allWakes, holdArchived, listWakes, nextWake, readWakes, repeatText, sendWakes, wakeFolder, wakeOf } from "./areas/wakes";
 export { readRemovedWorktrees, readWorktrees } from "./areas/worktree-records";
 export { answerProjects, boxProjects, changeProjects, readProjects } from "./areas/projects";

@@ -603,10 +603,12 @@ final class Workspace {
 
     // MARK: Chats
 
-    /// Where chats run: conversations of no project, on this Mac, in a folder of their own.
+    /// Where chats run: conversations of no project, on this Mac, in a folder of their own. Once this
+    /// Mac's box has moved into a home of its own (`OwnBoxHome`), its chats are its own there
+    /// (`attachedChats`), and the app makes no folder for them in its own.
     static let chatsFolder: String = {
         let url = AppInfo.supportDirectory.appending(path: "Chats")
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        if !OwnBoxHome.hasMoved { try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
         return url.path
     }()
 

@@ -1,0 +1,303 @@
+import ClientDesign
+import CryptoKit
+import Foundation
+import KuvoLink
+import OpenCodeKit
+import Security
+import Testing
+@testable import KuvoCode
+
+/// This Mac's box, moved into a home of its own (#333 piece 6a, `movesOwnBox`): its keys are its
+/// helper's copies then, which the app never reads, and never makes anew (a key made by the app would
+/// be another Mac to every phone and machine), not even while a move of it is under way. What the
+/// app did with them, its box does for it, asked as Kuvo Code on this Mac over the box's own server;
+/// and what the app kept beside the box for it (your machines' list) goes in the box's home. The box
+/// is a stand-in answering where `run/serve.json` says, as its server does (its own side: the
+/// bridge's own-home-mac-keys.test.js); the Keychain is the tests' own, in memory.
+@MainActor
+@Suite(.serialized) struct OwnBoxKeysTests {
+    let home = AppInfo.testRoot.appending(path: "own-box-keys-\(UUID().uuidString)")
+    let service = "run.kuvo.code.tests.phone-link.\(UUID().uuidString)"
+    let file = AppInfo.testRoot.appending(path: "phone-link-\(UUID().uuidString).json")
+
+    init() {
+        TestEnvironment.prepare()
+        // (Made as the app's own box's, for every test after: before any moves here.)
+        _ = Workspace.chatsFolder
+        AppModel.hereHome = home
+    }
+
+    /// The box's home, as the app finds it.
+    private var box: URL { get throws { try #require(OwnBoxHome.folder) } }
+
+    private func write(_ text: String, at path: String) throws {
+        let file = try box.appending(path: path)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: file)
+    }
+
+    /// This Mac's box moved there: it says so (`box/kind`), and the app has the move turned on.
+    private func moved() throws {
+        try write("mac\n", at: "box/kind")
+        AppModel.movesOwnBox = true
+    }
+
+    private func done() {
+        AppModel.movesOwnBox = false
+        AppModel.hereHome = AppModel.defaultHereHome
+        Keychain.lockForTests(service, false)
+        Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service])
+        try? FileManager.default.removeItem(at: home)
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    private func items() -> Int {
+        var found: CFTypeRef?
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                    kSecMatchLimit as String: kSecMatchLimitAll, kSecReturnAttributes as String: true]
+        return Keychain.copyMatching(query, &found) == errSecSuccess ? (found as? [Any])?.count ?? 0 : 0
+    }
+
+    /// The keys missing from your Keychain while they're this Mac's box's (moved, or a move of it
+    /// under way or left part way, whether or not the app uses that box yet): none is made, and the
+    /// link says it has none, rather than be another Mac.
+    @Test func aMissingKeyIsNeverMadeWhileTheBoxHoldsThem() async throws {
+        defer { done() }
+        for (path, text) in [("updates/rehome/keychain.json", #"{"v":1,"state":"settled","app":"a","helper":"h","items":[]}"#),
+                             ("updates/rehome/journal.json", #"{"step":"clear"}"#),
+                             ("box/kind", "mac\n")] {
+            try write(text, at: path)
+            let link = PhoneLink(file: file, keychain: service)
+            link.hasMachines = { true }
+            #expect(link.macKey == nil, "\(path)")
+            #expect(await link.boxIdentity() == nil, "\(path)")
+            #expect(link.vaultProof(machine: "mini.local") == nil, "\(path)")
+            #expect(items() == 0, "none made: \(path)")
+            try FileManager.default.removeItem(at: box.appending(path: path))
+        }
+        // A move that finished going back leaves its journal done: the keys are the app's again.
+        try write(#"{"step":"done"}"#, at: "updates/rehome/journal.json")
+        let link = PhoneLink(file: file, keychain: service)
+        link.hasMachines = { true }
+        #expect(await link.boxIdentity() != nil)
+        #expect(link.macKey != nil)
+        #expect(items() == 3)
+    }
+
+    /// Once the box has moved, the app reads none of its keys (a locked Keychain would ask): this Mac's
+    /// key is the one its box says, and it signs nothing itself.
+    @Test func onceMovedTheAppReadsNoneOfTheBoxsKeys() async throws {
+        defer { done() }
+        // The keys as the app made them before the move.
+        let before = PhoneLink(file: file, keychain: service)
+        before.hasMachines = { true }
+        #expect(await before.boxIdentity() != nil)
+        #expect(items() == 3)
+
+        try moved()
+        Keychain.lockForTests(service, true)
+        let link = PhoneLink(file: file, keychain: service)
+        link.hasMachines = { true }
+        link.boxKey = { "the-boxs-own-key" }
+        #expect(link.macKey == "the-boxs-own-key")
+        #expect(link.vaultProof(machine: "mini.local") == nil)
+        #expect(link.vaultRequestProof(machine: "mini.local", method: "GET", path: "kuvo/vault", body: Data()) == nil)
+        #expect(await link.boxIdentity() == nil)
+        #expect(Keychain.promptsForTests(service) == 0, "never read")
+        Keychain.lockForTests(service, false)
+        #expect(items() == 3, "and none made")
+    }
+
+    /// A machine's vault takes this Mac's proof: once the box has moved, the box signs it, asked as Kuvo
+    /// Code on this Mac (its server's password, `x-kuvo-from: app`); a request's proof covers that
+    /// request's body. And a request to that box's own vault needs none: the app is its own client.
+    @Test func aMachinesVaultProofIsTheBoxsOnceMoved() async throws {
+        defer { done() }
+        try moved()
+        let standIn = try await StandInBox.start(at: box) { request in
+            guard request.method == "POST", request.path == "/kuvo/box/proof" else { return HTTPResponse(status: 404) }
+            let asked = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: String] ?? [:]
+            return .json(["mac": "mac-key", "at": 1_000, "nonce": "nonce-of-its-own", "proof": "signed:" + asked.keys.sorted().map { "\($0)=\(asked[$0]!)" }.joined(separator: ",")])
+        }
+        defer { standIn.stop() }
+        let app = AppModel()
+        let proof = try #require(await app.vaultProof(machine: "mini.local"))
+        #expect(proof["proof"] as? String == "signed:machine=mini.local")
+        #expect(proof["mac"] as? String == "mac-key")
+
+        let body = Data(#"{"paused":true}"#.utf8)
+        let hash = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        let header = try #require(await app.vaultRequestProof(machine: "mini.local", method: "post", path: "kuvo/vault/pause", body: body))
+        let sent = try #require(Data(base64URL: header).flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        #expect(sent["proof"] as? String == "signed:hash=\(hash),machine=mini.local,method=POST,path=kuvo/vault/pause")
+        #expect(sent["nonce"] as? String == "nonce-of-its-own")
+        #expect(standIn.asked.allSatisfy { $0.fromApp }, "as Kuvo Code on this Mac")
+        #expect(!BoxClient.needsVaultProof(SSHConnection.thisMac))
+        #expect(items() == 0, "no key of the app's made or read")
+    }
+
+    /// Keys an earlier Kuvo Code kept for a machine's bot go to that machine as it connects: once the
+    /// box has moved, from the box, which takes them away once the machine has them.
+    @Test func keysKeptForAMachinesBotComeFromTheBoxOnceMoved() async throws {
+        defer { done() }
+        try moved()
+        let app = AppModel()
+        app.bots.app = app
+        let look = BotLook(color: .sky, shape: .round, face: .happy)
+        app.bots.take([ListedBot(id: "bot_scout00001", session: "ses_scout", name: "bot_scout00001", look: look, folder: "/home/me/.kuvo-code/bots/bot_scout00001")], from: "box")
+        let service = try #require(BotKeys.services.first { Integrations.keys(of: $0.way).count == 1 })
+        let name = try #require(Integrations.keys(of: service.way).first?.name)
+        let variable = IntegrationKeys.variable(service.id, name, bot: "bot_scout00001")
+        let standIn = try await StandInBox.start(at: box) { request in
+            guard request.path == "/kuvo/box/kept-keys?bot=bot_scout00001" else { return HTTPResponse(status: 404) }
+            return request.method == "GET" ? .json(["keys": [variable: "tok_scout"]]) : .json([:])
+        }
+        defer { standIn.stop() }
+
+        nonisolated final class Asked: @unchecked Sendable { var puts: [(path: String, body: [String: Any]?)] = [] }
+        let asked = Asked()
+        await BotKeys.handOver(on: "box", app: app) { method, path, body in
+            asked.puts.append((path, body))
+            return (200, Data("{}".utf8))
+        }
+        #expect(asked.puts.map(\.path) == ["kuvo/bots/bot_scout00001/keys/\(service.id)"])
+        #expect((asked.puts.first?.body?["keys"] as? [String: String]) == [name: "tok_scout"])
+        let deleted = try #require(standIn.asked.first { $0.method == "DELETE" })
+        #expect((try JSONSerialization.jsonObject(with: deleted.body) as? [String: [String]]) == ["names": [variable]], "gone from the box once the machine has it")
+        #expect(standIn.asked.allSatisfy { $0.fromApp })
+    }
+
+    /// A saved password, once the box has moved: filled from the box's vault as Kuvo Code on this Mac
+    /// (noted there as shown), and compared there without being read or noted (a sign-in you made
+    /// with it isn't offered to be saved again).
+    @Test func savedPasswordsComeFromTheBoxOnceMoved() async throws {
+        defer { done() }
+        try moved()
+        let app = AppModel()
+        let before = Vaults.shared.client
+        Vaults.shared.client = { [weak app] box in app?.box(box) }
+        defer { Vaults.shared.client = before }
+        let standIn = try await StandInBox.start(at: box) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/kuvo/vault/items/item_gh/values"): return .json(["values": ["username": "me", "password": "kept-in-the-keychain"]])
+            case ("POST", "/kuvo/vault/items/item_gh/same"):
+                let given = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: [String: String]]
+                return .json(["same": given?["values"]?["password"] == "kept-in-the-keychain"])
+            default: return HTTPResponse(status: 404)
+            }
+        }
+        defer { standIn.stop() }
+        let login = Passwords.Login(host: "github.com", account: "me", item: "item_gh")
+        #expect(await Passwords.password(for: login) == "kept-in-the-keychain")
+        #expect(await Passwords.matches("kept-in-the-keychain", login) == true)
+        #expect(await Passwords.matches("typed-anew", login) == false)
+        // A sign-in answered with it is the saved one; one typed anew isn't (so it's saved).
+        let same = BrowserAsks.handling(password: "kept-in-the-keychain", saving: false, secure: true, saved: await Passwords.compared("kept-in-the-keychain", login))
+        #expect(!same.saves && !same.typedNow)
+        let anew = BrowserAsks.handling(password: "typed-anew", saving: false, secure: true, saved: await Passwords.compared("typed-anew", login))
+        #expect(anew.saves && anew.typedNow)
+        // One the box can't compare now (a vault locked meanwhile): never taken for typed, so agents
+        // aren't let use it without your Touch ID, and you're told it wasn't saved.
+        let unknown = Passwords.Login(host: "github.com", account: "me", item: "item_gone")
+        let cantTell = await Passwords.compared("filled-from-the-vault", unknown)
+        #expect(cantTell == .unknown)
+        #expect(!BrowserAsks.handling(password: "filled-from-the-vault", saving: true, secure: true, saved: cantTell).typedNow)
+        #expect(await BrowserAsks.keep(host: "github.com", account: "me", password: "filled-from-the-vault", saving: true, saved: cantTell, allowAgents: false)?.contains("wasn’t saved") == true)
+        #expect(standIn.asked.filter { $0.path.hasSuffix("/values") }.count == 1, "read only to fill it")
+        #expect(standIn.asked.allSatisfy { $0.fromApp })
+    }
+
+    /// A new machine starts with this Mac's settings and integrations' keys: once the box has moved,
+    /// its own, read through it (none from the app's Keychain), bots' own and Mac-only ones left out.
+    @Test func aNewMachineStartsWithTheBoxsSettingsAndKeysOnceMoved() async throws {
+        defer { done() }
+        try moved()
+        let macOnly = try #require(Integrations.macOnly.first)
+        let mine = IntegrationKeys.variable("github", "TOKEN")
+        let botsOwn = IntegrationKeys.variable("github", "TOKEN", bot: "bot_scout00001")
+        let stays = IntegrationKeys.variable(macOnly, "KEY")
+        let standIn = try await StandInBox.start(at: box) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/kuvo/config"): return .json(["compaction": ["auto": true], "shell": "/bin/zsh"])
+            case ("GET", "/kuvo/keys"): return .json(["keys": [mine, stays]])
+            case ("GET", "/kuvo/keys/\(mine)"): return .json(["value": "ghp_mine"])
+            case ("GET", "/kuvo/keys/\(stays)"): return .json(["value": "only-here"])
+            case ("GET", "/kuvo/keys/\(botsOwn)"): return .json(["value": "never-asked"])
+            default: return HTTPResponse(status: 404)
+            }
+        }
+        defer { standIn.stop() }
+        // One the app kept in its own Keychain before: never read for this box.
+        let kept = IntegrationKeys.variable("linear", "TOKEN")
+        #expect(IntegrationKeys.set("from-the-apps-keychain", for: kept))
+        defer { IntegrationKeys.set(nil, for: kept) }
+        let app = AppModel()
+        app.machines.attachHere()
+        defer { app.machines.detachHere() }
+        let seed = try await app.machineSeed()
+        #expect(seed.keys == [mine: "ghp_mine"])
+        #expect(seed.settings["compaction"] != nil)
+        #expect(seed.settings["shell"] == nil, "a shell on this Mac means nothing there")
+        #expect(standIn.asked.allSatisfy { $0.fromApp })
+    }
+
+    /// Your machines' list is the app's to write and the box's to read: once the box has moved, in its
+    /// home, where it reads it, and nothing in the app's own folder.
+    @Test func theMachinesListIsKeptInTheBoxsHomeOnceMoved() throws {
+        defer { done() }
+        try moved()
+        let inSupport = AppInfo.supportDirectory.appending(path: "box/machines.json")
+        let before = try? Data(contentsOf: inSupport)
+        let machines = Machines()
+        _ = machines.add("mini.test")
+        let kept = try box.appending(path: "machines.json")
+        let list = try JSONSerialization.jsonObject(with: Data(contentsOf: kept)) as? [[String: Any]]
+        #expect(list?.map { $0["destination"] as? String } == ["mini.test"])
+        #expect((try? Data(contentsOf: inSupport)) == before, "nothing written in the app's own folder")
+        #expect(Machines().list.map(\.id).contains("mini.test"), "read back from there")
+        machines.remove("mini.test", uninstall: false)
+    }
+}
+
+/// This Mac's box's own server, as the app reaches it once the box has moved: on this Mac, where
+/// `run/serve.json` says, to its password. What it was asked, and whether as Kuvo Code on this Mac.
+@MainActor
+private final class StandInBox {
+    struct Asked { var method: String; var path: String; var body: Data; var fromApp: Bool }
+    private(set) var asked: [Asked] = []
+    private var server: LoopbackServer?
+    /// What its record names as the box's server: a process of the test's own, named as one.
+    private var named: pid_t = 0
+
+    static func start(at box: URL, answer: @escaping (HTTPRequest) -> HTTPResponse) async throws -> StandInBox {
+        let stand = StandInBox()
+        let password = "serve-password-\(UUID().uuidString)"
+        let expected = "Basic " + Data("opencode:\(password)".utf8).base64EncodedString()
+        let server = LoopbackServer { [weak stand] request in
+            guard request.headers["authorization"] == expected else { return HTTPResponse(status: 401) }
+            stand?.asked.append(Asked(method: request.method, path: request.path, body: request.body, fromApp: request.headers["x-kuvo-from"] == "app"))
+            return answer(request)
+        }
+        stand.server = server
+        let port = try await server.start()
+        let record = box.appending(path: "run/serve.json")
+        try FileManager.default.createDirectory(at: record.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // (`/bin/sleep`, its first argument the server's name: started whole before this goes on.)
+        var pid: pid_t = 0
+        let argv: [UnsafeMutablePointer<CChar>?] = [strdup("kuvo-link.js serve"), strdup("3600"), nil]
+        defer { argv.forEach { free($0) } }
+        guard posix_spawn(&pid, "/bin/sleep", nil, nil, argv, nil) == 0 else { throw TestFailure("the stand-in server's process didn't start") }
+        stand.named = pid
+        try JSONSerialization.data(withJSONObject: ["pid": Int(pid), "port": Int(port), "password": password, "kept": false]).write(to: record)
+        return stand
+    }
+
+    func stop() {
+        server?.stop()
+        // (Its own process, by its PID.)
+        guard named > 0 else { return }
+        kill(named, SIGTERM)
+        waitpid(named, nil, 0)
+        named = 0
+    }
+}
