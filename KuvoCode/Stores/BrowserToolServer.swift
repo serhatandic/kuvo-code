@@ -13,6 +13,9 @@ final class BrowserToolServer {
     /// The session a caller works for, when it isn't one you see: an engine run in a session with
     /// the coding agents (Auto's, say) is that session's.
     var owner: ((String) async -> String?)?
+    /// Comes back once the app knows its conversations and bots (or has waited long enough): an
+    /// app the keeper just opened for a browser call (#211) gets it as it starts.
+    var ready: (() async -> Void)?
 
     init(agent: BrowserAgent) {
         self.agent = agent
@@ -119,6 +122,8 @@ final class BrowserToolServer {
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
+            // Whose it is and where it may read, once the app knows (a bot browses in its own tabs).
+            if BrowserTools.isBrowser(name), let ready { await ready() }
             // The engine names the session calling, so an ask goes to the right conversation; the
             // agents bridge, in a header.
             var caller = (params["_meta"] as? [String: Any])?["ai.opencode/sessionID"] as? String ?? session

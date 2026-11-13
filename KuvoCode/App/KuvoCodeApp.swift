@@ -105,6 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // This Mac's box, at work from launch: at login, in the background, without the window,
         // which goes as soon as it's there (it opens with the app); opening Kuvo Code brings it.
         model.startedAtLogin = Self.launchedAtLogin
+        // Open again after an update: the keeper may open it for an agent's browser again.
+        try? FileManager.default.removeItem(at: AppOpener.updateFile)
         Task { [model] in await model.start() }
         InBackground.shared.keepsWorking = { [weak model] in model?.keepsWorkingAfterQuit ?? false }
         // Relaunched after an update installed from the background, or opened hidden by the

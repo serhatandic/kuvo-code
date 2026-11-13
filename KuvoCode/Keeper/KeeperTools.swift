@@ -25,6 +25,8 @@ final class KeeperTools {
     /// Tool calls under way without the app, by client and request: one the client cancels stops
     /// (a message that waits for its answer stops waiting).
     private var calls: [String: Task<CallResult, Never>] = [:]
+    /// Browser calls waiting for the app to open, by client and request: whether the client gave up.
+    private var waitingForApp: [String: Bool] = [:]
     private struct CallResult: @unchecked Sendable { let value: [String: Any] }
 
     /// Opens the app for a browser call while it's closed.
@@ -83,20 +85,26 @@ final class KeeperTools {
         if let app, let answer = await forward(request, to: app) { return answer }
         // A browser call with the app closed: the app opened in the background, and the call
         // goes to it once it's there; what went wrong otherwise.
-        if app == nil, Self.opensApp(request) {
-            if let failed = await opener.open() { return await answerWithoutApp(request, failed: failed) }
+        if app == nil, let id = Self.browserCall(request) {
+            // One the client gives up on meanwhile isn't carried out once the app is there.
+            let key = Self.key(id, client: request.headers["mcp-session-id"])
+            waitingForApp[key] = false
+            let failed = await opener.open()
+            let stopped = waitingForApp.removeValue(forKey: key) == true
+            if stopped { return await answerWithoutApp(request, failed: "The call was stopped.") }
+            if let failed { return await answerWithoutApp(request, failed: failed) }
             if let app, let answer = await forward(request, to: app) { return answer }
         }
         return await answerWithoutApp(request)
     }
 
-    /// Whether `request` calls one of the browser's tools, which the app is opened for.
-    private static func opensApp(_ request: HTTPRequest) -> Bool {
+    /// The id of `request`'s call to one of the browser's tools, which the app is opened for.
+    private static func browserCall(_ request: HTTPRequest) -> Any? {
         guard request.method == "POST",
               let message = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
-              message["method"] as? String == "tools/call", message["id"] != nil,
-              let name = (message["params"] as? [String: Any])?["name"] as? String else { return false }
-        return BrowserTools.isBrowser(name)
+              message["method"] as? String == "tools/call", let id = message["id"],
+              let name = (message["params"] as? [String: Any])?["name"] as? String, BrowserTools.isBrowser(name) else { return nil }
+        return id
     }
 
     /// The call, to the open app's tools, as it came: nil when the app doesn't answer (it quit
@@ -152,7 +160,11 @@ final class KeeperTools {
         let client = request.headers["mcp-session-id"]
         // A notification has nothing to answer; a call the client gave up on stops.
         guard let id = message["id"] else {
-            if method == "notifications/cancelled", let asked = params["requestId"] { calls[Self.key(asked, client: client)]?.cancel() }
+            if method == "notifications/cancelled", let asked = params["requestId"] {
+                let key = Self.key(asked, client: client)
+                calls[key]?.cancel()
+                if waitingForApp[key] != nil { waitingForApp[key] = true }
+            }
             return .init(status: 202)
         }
         let result: [String: Any]

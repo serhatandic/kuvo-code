@@ -74,6 +74,28 @@ import Testing
         return try #require((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["result"] as? [String: Any])
     }
 
+    /// The client giving up on call `id` (MCP's `notifications/cancelled`).
+    private func cancel(_ server: OutsideAgents.ToolServer, id: Int) async throws {
+        var request = URLRequest(url: URL(string: server.url)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(server.token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": "notifications/cancelled", "params": ["requestId": id]] as [String: Any])
+        _ = try await session.data(for: request)
+    }
+
+    /// A call's answer, as the agent reads it.
+    struct Answer: Sendable, Equatable {
+        let text: String
+        let isError: Bool?
+    }
+
+    /// One browser call, its answer.
+    private func ask(_ server: OutsideAgents.ToolServer, _ name: String, id: Int = 1) async throws -> Answer {
+        let result = try await call(server, name, id: id)
+        return Answer(text: text(result), isError: result["isError"] as? Bool)
+    }
+
     private func text(_ result: [String: Any]) -> String {
         ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
     }
@@ -95,9 +117,9 @@ import Testing
         }
         let server = try await tools.start().agents
 
-        async let first = call(server, "browser_navigate", id: 1)
-        async let second = call(server, "browser_snapshot", id: 2)
-        async let third = call(server, "browser_click", id: 3)
+        async let first = ask(server, "browser_navigate", id: 1)
+        async let second = ask(server, "browser_snapshot", id: 2)
+        async let third = ask(server, "browser_click", id: 3)
         // All three wait on the opening; then the app says where its tools answer.
         var count = 0
         for await _ in waiting {
@@ -107,10 +129,10 @@ import Testing
         tools.use(["url": "http://127.0.0.1:\(app.port)/mcp", "token": "app-token"])
 
         let results = try await [first, second, third]
-        #expect(results.map(text) == ["The app did browser_navigate.", "The app did browser_snapshot.", "The app did browser_click."])
-        #expect(results.allSatisfy { $0["isError"] as? Bool == false })
+        #expect(results.map(\.text) == ["The app did browser_navigate.", "The app did browser_snapshot.", "The app did browser_click."])
+        #expect(results.allSatisfy { $0.isError == false })
         #expect(seen.opened == [place.app], "opened once, from where the keeper runs")
-        #expect(seen.calls.map(\.name).sorted() == ["browser_click", "browser_navigate", "browser_snapshot"])
+        #expect(seen.calls.compactMap(\.name).sorted() == ["browser_click", "browser_navigate", "browser_snapshot"])
         #expect(seen.calls.allSatisfy { $0.authorization == "Bearer app-token" })
 
         // Open now: the next call goes straight there.
@@ -119,7 +141,8 @@ import Testing
     }
 
     /// The app opened but never said where its tools answer: when the wait runs out, the call says
-    /// so, and the next call opens it again.
+    /// so, and for a while after, the next call says the same at once rather than opening it again
+    /// (an app that crashes as it opens isn't opened over and over).
     @Test func anAppThatIsntReadyInTimeIsSaidSo() async throws {
         let seen = Seen()
         let place = try appPlace()
@@ -133,14 +156,67 @@ import Testing
         }
         let server = try await tools.start().agents
 
-        async let result = call(server, "browser_navigate")
+        async let result = ask(server, "browser_navigate")
         for await _ in waiting { break }
         deadline.pass()
         let answer = try await result
-        #expect(text(answer) == AppOpener.notReady)
-        #expect(text(answer).contains("30 seconds"))
-        #expect(answer["isError"] as? Bool == true)
+        #expect(answer.text == AppOpener.notReady)
+        #expect(answer.text.contains("30 seconds"))
+        #expect(answer.isError == true)
         #expect(seen.opened == [place.app])
+
+        #expect(text(try await call(server, "browser_snapshot")) == AppOpener.notReady)
+        #expect(seen.opened == [place.app], "not opened again so soon")
+    }
+
+    /// The user stops the session while its browser call waits for the app: once the app is
+    /// there, the call isn't carried out.
+    @Test func aCallStoppedWhileWaitingIsntCarriedOut() async throws {
+        let seen = Seen()
+        let place = try appPlace()
+        let app = try await appTools(seen)
+        let deadline = deadline()
+        let opener = AppOpener(app: place.app, launch: { seen.open($0) }, deadline: deadline.wait)
+        let waiting = waits(opener)
+        let tools = KeeperTools(record: { _ in nil }, opener: opener)
+        defer {
+            tools.stop()
+            app.stop()
+            place.remove()
+        }
+        let server = try await tools.start().agents
+
+        async let result = ask(server, "browser_click", id: 7)
+        for await _ in waiting { break }
+        try await cancel(server, id: 7)
+        tools.use(["url": "http://127.0.0.1:\(app.port)/mcp", "token": "app-token"])
+        let answer = try await result
+        #expect(answer.isError == true)
+        #expect(seen.calls.isEmpty, "the app never carried it out")
+    }
+
+    /// An update of Kuvo Code is installing (the app noted it as it quit): the keeper doesn't open
+    /// the app over it, and the call goes on once Sparkle has opened it again.
+    @Test func anUpdateInstallingIsWaitedForNotOpenedOver() async throws {
+        let seen = Seen()
+        let place = try appPlace()
+        let app = try await appTools(seen)
+        let deadline = deadline()
+        let opener = AppOpener(app: place.app, launch: { seen.open($0) }, deadline: deadline.wait, updating: { true })
+        let waiting = waits(opener)
+        let tools = KeeperTools(record: { _ in nil }, opener: opener)
+        defer {
+            tools.stop()
+            app.stop()
+            place.remove()
+        }
+        let server = try await tools.start().agents
+
+        async let result = ask(server, "browser_navigate")
+        for await _ in waiting { break }
+        tools.use(["url": "http://127.0.0.1:\(app.port)/mcp", "token": "app-token"])
+        #expect(try await result.text == "The app did browser_navigate.")
+        #expect(seen.opened.isEmpty)
     }
 
     /// macOS refuses to open the app, or it isn't where the keeper was installed from any more:
@@ -148,13 +224,17 @@ import Testing
     @Test func anAppThatCantBeOpenedIsSaidSo() async throws {
         let seen = Seen()
         let place = try appPlace()
+        final class Clock { var now = Date(timeIntervalSince1970: 1_800_000_000) }
+        let clock = Clock()
+        let deadline = deadline()
+        let goneDeadline = self.deadline()
         let opener = AppOpener(app: place.app, launch: { app in
             seen.open(app)
             throw AppOpener.Refused("LSOpenURLsWithRole() failed with error -10810")
-        }, deadline: deadline().wait)
+        }, deadline: deadline.wait, now: { clock.now })
         let tools = KeeperTools(record: { _ in nil }, opener: opener)
         let gone = try appPlace(there: false)
-        let goneOpener = AppOpener(app: gone.app, launch: { seen.open($0) }, deadline: deadline().wait)
+        let goneOpener = AppOpener(app: gone.app, launch: { seen.open($0) }, deadline: goneDeadline.wait)
         let goneTools = KeeperTools(record: { _ in nil }, opener: goneOpener)
         defer {
             tools.stop()
@@ -168,7 +248,10 @@ import Testing
         #expect(text(refused) == AppOpener.couldntOpen("LSOpenURLsWithRole() failed with error -10810"))
         #expect(text(refused).contains("Ask the user to open Kuvo Code"))
         #expect(refused["isError"] as? Bool == true)
-        // Tried again for the next call, not stuck on the last.
+        // The next call says the same at once; a while later, it's tried again.
+        #expect(text(try await call(server, "browser_navigate")) == text(refused))
+        #expect(seen.opened == [place.app])
+        clock.now += AppOpener.rest
         _ = try await call(server, "browser_navigate")
         #expect(seen.opened == [place.app, place.app])
 
@@ -180,5 +263,11 @@ import Testing
         #expect(text(missing) == AppOpener.gone)
         #expect(missing["isError"] as? Bool == true)
         #expect(seen.opened.count == 2, "nothing opened when the app isn't there")
+    }
+
+    /// Whether Kuvo Code already runs as the app is told by its processes' arguments (the keeper
+    /// runs from the same executable with `--box`): read as the kernel keeps them.
+    @Test func aProcesssArgumentsAreReadAsItWasStarted() {
+        #expect(AppOpener.arguments(of: getpid()) == CommandLine.arguments)
     }
 }

@@ -201,7 +201,23 @@ final class Workspace {
     private(set) var deleting: Set<String> = [] {
         didSet { projectsChanged() }
     }
-    private(set) var isLoaded = false
+    private(set) var isLoaded = false {
+        didSet { if isLoaded { for waiter in loadWaiters.values { waiter.resume() }; loadWaiters = [:] } }
+    }
+    @ObservationIgnored private var loadWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    /// Once its conversations are first loaded from this Mac's engine, or `seconds` have passed.
+    func firstLoad(within seconds: Double) async {
+        guard !isLoaded else { return }
+        let id = UUID()
+        await withCheckedContinuation { continuation in
+            loadWaiters[id] = continuation
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(seconds))
+                self?.loadWaiters.removeValue(forKey: id)?.resume()
+            }
+        }
+    }
 
     /// Each open conversation's model, made the first time it's asked for: a cache, not what a
     /// view follows (views follow the model itself). Followed, keeping a new one would tell the
