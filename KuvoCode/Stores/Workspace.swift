@@ -752,12 +752,10 @@ final class Workspace {
         if listing != sessionLists[box] { sessionLists[box] = listing }
     }
 
-    /// Every session `box` lists in `folders` (a project's own, its worktrees', those removed before)
-    /// or filed under `project`, noted archived: Remove Project archived them all there.
-    private func noteArchived(on box: String, project: String, folders: [String]) {
+    /// The sessions `box`'s Remove Project `answer` names as archived, out of its lists at once.
+    private func noteArchived(on box: String, byRemoving answer: Data) {
         guard var listing = sessionLists[box] else { return }
-        let named = Set(folders.map(Self.onBox)), filed = Self.onBox(project)
-        for (id, facts) in listing.sessions where facts.project == filed || named.contains(facts.directory) { listing.noteArchived(id, true) }
+        listing.noteArchived(byRemoving: answer)
         if listing != sessionLists[box] { sessionLists[box] = listing }
     }
 
@@ -1137,8 +1135,6 @@ final class Workspace {
         let box = Self.box(of: directory)
         let sessions = projects.first { $0.directory == directory }?.sessions ?? []
         guard Self.keepsProjects(box), let client = boxes?(box) else { return await archiveHere(sessions, removing: directory) }
-        // Its worktrees' folders, as this Mac and its box know them before they're handed over.
-        let trees = worktrees.filter { $0.value.project == directory }.map(\.key) + boxWorktreeProjects.filter { $0.value == directory }.map(\.key)
         // Its worktrees as this Mac knows them are its box's too (handed over, if they weren't), so
         // their sessions are archived there with the rest.
         guard await takeWorktrees(from: box) != nil else {
@@ -1152,13 +1148,14 @@ final class Workspace {
         case 200:
             // All of them, there: so here too, as the engine has them now, and it's off the list.
             for session in sessions { noteArchivedThere(session.id) }
-            // Its worktrees' too, those this Mac didn't show under it yet among them.
-            noteArchived(on: box, project: directory, folders: [directory] + trees + removed)
+            // Every one its box archived, its worktrees' among them, as its box names them.
+            noteArchived(on: box, byRemoving: data)
             folders.removeAll { $0 == directory }
             UserDefaults.standard.set(folders, forKey: "projectFolders")
             await loadProjects(on: box)
             return 0
         case 409:
+            noteArchived(on: box, byRemoving: data)
             if box == BoxClient.mac { await refresh() }
             await loadProjects(on: box)
             return ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["kept"] as? Int) ?? 1
@@ -1188,7 +1185,6 @@ final class Workspace {
 
     /// A session its box archived: so here, and told, as one archived here is.
     private func noteArchivedThere(_ id: String) {
-        changeListing(of: id) { $0.noteArchived(id, true) }
         guard let index = sessions.firstIndex(where: { $0.id == id }), !Self.isArchived(sessions[index]) else { return }
         var metadata = sessions[index].metadata?.object ?? [:]
         metadata[Self.archivedKey] = .bool(true)

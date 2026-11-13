@@ -85,18 +85,23 @@ struct SessionListsTests {
         #expect(SessionLists.place(of: listing.facts(of: "ses_b")) == .chat)
         listing.forgetArchived("ses_b", false)
         #expect(SessionLists.place(of: listing.facts(of: "ses_b")) == nil)
-        // Archived and brought back at once: back, through its box's line for the archive, until
-        // its line for the bring-back.
-        listing.noteArchived("ses_a", false)
-        listing.noteArchived("ses_a", true)
-        listing.noteArchived("ses_a", false)
-        listing.take(try line(#"{"at":"e.5","sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":7,"archived":true}},"projects":{}}"#))
-        #expect(SessionLists.place(of: listing.facts(of: "ses_a")) == .project("/p"))
-        listing.take(try line(#"{"at":"e.6","sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":8}},"projects":{}}"#))
-        #expect(listing.noted.isEmpty && SessionLists.place(of: listing.facts(of: "ses_a")) == .project("/p"))
+        // One its box says isn't archived, archived and brought back at once: back, through a line
+        // about another session and its box's line for the archive, until its line for the bring-back.
+        listing.take(try line(#"{"at":"e.5","sessions":{"ses_c":{"kind":"chat","directory":"/c","created":1,"updated":7}},"projects":{}}"#))
+        listing.noteArchived("ses_c", true)
+        listing.noteArchived("ses_c", false)
+        listing.take(try line(#"{"at":"e.6","sessions":{"ses_b":{"kind":"chat","directory":"/c","created":1,"updated":8,"archived":true}},"projects":{}}"#))
+        listing.take(try line(#"{"at":"e.7","sessions":{"ses_c":{"kind":"chat","directory":"/c","created":1,"updated":9,"archived":true}},"projects":{}}"#))
+        #expect(SessionLists.place(of: listing.facts(of: "ses_c")) == .chat)
+        listing.take(try line(#"{"at":"e.8","sessions":{"ses_c":{"kind":"chat","directory":"/c","created":1,"updated":10}},"projects":{}}"#))
+        #expect(listing.noted.isEmpty && SessionLists.place(of: listing.facts(of: "ses_c")) == .chat)
+        // Remove Project's answer names what it archived: those, at once.
+        listing.noteArchived(byRemoving: Data(#"{"archived":1,"sessions":["ses_c"]}"#.utf8))
+        #expect(SessionLists.place(of: listing.facts(of: "ses_c")) == nil)
+        listing.noteArchived(byRemoving: Data(#"{"archived":1}"#.utf8))
         // One its box hasn't listed isn't noted.
         listing.noteArchived("ses_new", true)
-        #expect(listing.facts(of: "ses_new") == nil && listing.noted.isEmpty)
+        #expect(listing.facts(of: "ses_new") == nil && listing.noted["ses_new"] == nil)
     }
 
     /// A session a client just started shows at once, as its box's start answer says, until its list

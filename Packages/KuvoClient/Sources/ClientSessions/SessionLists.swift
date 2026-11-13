@@ -148,6 +148,13 @@ public enum SessionLists {
             noted[id] = archived
         }
 
+        /// The sessions its box's Remove Project answer names (`DELETE kuvo/projects`: those it
+        /// archived), noted archived, as above: out of the lists at once.
+        public mutating func noteArchived(byRemoving answer: Data) {
+            struct Answer: Decodable { var sessions: [String]? }
+            for id in (try? JSONDecoder().decode(Answer.self, from: answer))?.sessions ?? [] { noteArchived(id, true) }
+        }
+
         /// The note `noteArchived(id, archived)` made let go of, if it's still that one: the write it
         /// stood for was refused, so the box's word shows again.
         public mutating func forgetArchived(_ id: String, _ archived: Bool) {
@@ -167,8 +174,10 @@ public enum SessionLists {
                 for id in line.gone ?? [] { former[id] = sessions.removeValue(forKey: id) ?? former[id] }
             }
             for id in line.sessions.keys { former[id] = nil }
-            // A note goes once its box says the same, or lets the session go.
-            for (id, archived) in noted where sessions[id].map({ ($0.archived == true) == archived }) ?? true { noted[id] = nil }
+            // A note goes once its box says the same of it, or lets it go: a line about others says
+            // nothing new of it.
+            let named = line.full == true ? Set(noted.keys) : Set(line.sessions.keys).union(line.gone ?? [])
+            for (id, archived) in noted where named.contains(id) && (sessions[id].map { ($0.archived == true) == archived } ?? true) { noted[id] = nil }
             if former.count > 500 { former = [:] }
             projects = line.projects
             // (Its first line changes it either way: it's read now.)

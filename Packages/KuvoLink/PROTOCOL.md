@@ -1334,9 +1334,11 @@ to date (#679).
   case-insensitive, numbers by value); a project's sessions newest first. Archived is the box's
   `archived`, wherever the session was archived (here, on a phone, by Remove Project). A client
   shows a pin it just made at once, from the session it holds, and an archive (or a session
-  brought back) it just made from a note on its copy of the list, kept through lines until one
-  says the same, and dropped if the engine refuses the change. A move between computers (`away`)
-  is the client's to place, as it sees every computer's list.
+  brought back) it just made, or the sessions Remove Project's answer names, from a note on its
+  copy of the list. A note is kept through lines until one naming that session says the same
+  (or lets it go, or a whole line comes), and dropped if the engine refuses the change; one made
+  while another of the client's is still on its way is kept even where the list already agrees.
+  A move between computers (`away`) is the client's to place, as it sees every computer's list.
 - `Packages/KuvoLink/Vectors/session-lists.json` holds engine sessions and what the box knows
   beside them, the facts the box answers (`Packages/Box/test/session-lists.test.ts`), and the
   sidebar a client draws from them (KuvoClient's `SessionListsTests`): a client in another language
@@ -6144,7 +6146,8 @@ while a box is away goes there when it's back.
   other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on
   the engine and the coding agents' bridge, older ones included, then it's marked `removed`.
-  `200 {archived}`; `409 {message, archived, kept}` when some couldn't be archived (it stays
+  `200 {archived, sessions}` (`sessions`: the ids it archived, which a client's lists hide at
+  once); `409 {message, archived, kept, sessions}` when some couldn't be archived (it stays
   listed); `503 {"message"}` while its engine doesn't answer, the coding agents' bridge running
   or not (nothing is archived).
 - `GET kuvo/projects/events`: `application/x-ndjson`, the list now, then again each time it

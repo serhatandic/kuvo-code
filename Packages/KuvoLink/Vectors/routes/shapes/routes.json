@@ -103,7 +103,7 @@
    "send": "DELETE kuvo/projects",
    "status": 409,
    "type": "application/json",
-   "body": "{\"message\": \"One stays.\", \"archived\": 1, \"kept\": 1}",
+   "body": "{\"message\": \"One stays.\", \"archived\": 1, \"kept\": 1, \"sessions\": [\"ses_a\"]}",
    "matches": true
   },
   {
