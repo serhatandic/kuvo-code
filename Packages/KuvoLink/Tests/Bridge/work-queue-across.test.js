@@ -987,9 +987,10 @@ test("a Mac's request over SSH (`box route`, a process with no relay connection)
   assert.equal((await route("GET", "kuvo/work-queue/refs?refs=500")).body.refs["500"], null);
   assert.match((await tool("queue_show", { item: 500 }, "ses_lead")).text, /no item|isn't|There's no/i);
   // (Lab doesn't answer the read: as it last told it, without waiting out a real wait.)
+  const wait = link.queueForwardTiming.wait;
   link.queueForwardTiming.wait = 0;
   assert.equal((await route("GET", "kuvo/work-queue/items/500")).body.item.told, true);
-  link.queueForwardTiming.wait = 20_000;
+  link.queueForwardTiming.wait = wait;
   // Told again by lab (brought back there some other way): forgotten here.
   const deletedThere = path.join(queues, "deleted-there.json");
   const keptForUndo = fs.readFileSync(deletedThere, "utf8");
