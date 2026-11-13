@@ -9,8 +9,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import { plainName } from "../../shared/text";
 import { IS_MAC } from "../home";
+import { computerName } from "../peers/computer-name";
 import { readPeerAgents } from "../peers/directory";
 import { ownKey, peersOf, removedBoxes } from "../peers/known";
 import { awaySince, readReach } from "../peers/reach";
@@ -41,9 +41,6 @@ export const QUEUES_FEATURE = "work-queue.elsewhere";
 
 /** Whether the computer `key` takes the Work Queue's mail. */
 export const takesQueues = (key: string): boolean => (readPeerAgents()[key]?.features ?? []).includes(QUEUES_FEATURE);
-
-/** What a computer is called in the Work Queue: a machine by its name, a Mac by its own. */
-export const computerName = (peer: Pick<Peer, "kind" | "name" | "id">): string => (peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer");
 
 // ---- Telling ----
 

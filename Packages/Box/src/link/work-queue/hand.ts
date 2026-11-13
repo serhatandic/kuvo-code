@@ -22,7 +22,7 @@ import { readLink } from "../state";
 import { categories, categoryNamed, keepCategory } from "./categories";
 import { intoNext, linkSession } from "./ops";
 import {
-  allItems, changeQueues, FILE_NAME, filesOf, itemOf, MOST_FILE, MOST_ITEMS, noteHanded, OWNER, placeIn, Refusal, WORK_QUEUE, whoOf,
+  allItems, changeQueues, FILE_NAME, filesOf, itemOf, MOST_FILE, MOST_HANDED_FILES, MOST_ITEMS, noteHanded, OWNER, placeIn, Refusal, WORK_QUEUE, whoOf,
   type Book, type Item, type Who,
 } from "./store";
 import { mailsFor } from "./parts";
@@ -36,8 +36,6 @@ import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { Target } from "../../shared/records";
 
-/** The bytes of files an item may take to another computer, all of them. */
-export const MOST_HANDED_FILES = 4_000_000;
 /** How long a hand-off waits for the box it goes to: then it's given up, and said. */
 export const HAND_LIFE = 30 * 86_400_000;
 const HAND_ID = /^wqh_[A-Za-z0-9_-]{8,40}$/;

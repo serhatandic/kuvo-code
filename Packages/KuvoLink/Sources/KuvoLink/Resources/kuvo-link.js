@@ -12530,6 +12530,7 @@ var MOST_NOTE = 20000;
 var MOST_NOTES = 200;
 var MOST_FILE = 25000000;
 var MOST_FILES = 50;
+var MOST_HANDED_FILES = 4000000;
 var MOST_LINKS = 50;
 var MOST_EVENTS = 50;
 var MOST_HANDED = 20;
@@ -14479,6 +14480,9 @@ function noteSetupNow(now = Date.now(), { soon = 60000 } = {}) {
 import crypto34 from "node:crypto";
 import fs88 from "node:fs";
 import path88 from "node:path";
+
+// Packages/Box/src/link/peers/computer-name.ts
+var computerName = (peer) => peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer";
 
 // Packages/Box/src/link/work-queue/categories.ts
 import path60 from "node:path";
@@ -19841,7 +19845,6 @@ function ownComputerNames() {
   const names = IS_MAC ? [macLink.config?.name, "the mac", "this mac", "mac"] : [link?.id, link?.name, "this machine"];
   return [...names, "here", "this computer", HERE].filter((each) => typeof each === "string" && each.trim() !== "").map(folded2);
 }
-var computerName = (peer) => peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer";
 var namesOf = (peer, macs) => [peer.id, plainName(peer.name), computerName(peer), ...peer.kind === "mac" && macs === 1 ? ["the mac", "mac"] : []].filter((each) => typeof each === "string" && each.trim() !== "").map(folded2);
 var computersWords = (peers = peersOf(readLink())) => peers.length ? `Your other computers: ${peers.map(computerName).join(", ")}.` : "You have no other computers set up with Kuvo Code.";
 function computerOf(given, peers = peersOf(readLink())) {
@@ -22619,7 +22622,6 @@ function botOf2(session) {
   return null;
 }
 var onBridge2 = (place, bridge) => Boolean(place && bridge && place.target.port === bridge.port);
-var WAKE_TOOLS = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up"];
 var WATCH_AS_COMMAND = 'This conversation asks before running commands, and a watch runs its check by itself, so the user approves it first: start it with the shell command kuvo-wake watch <every> "<check>" "<what to do when it changes>" instead, which asks them.';
 function watchWentUnasked(rules, agents) {
   const all = rules ?? [];
@@ -22717,7 +22719,6 @@ async function setJobTool(args, calling, readEngine, bridge) {
     return refused2("The box returned an unreadable job response. Check the job before trying again.");
   return said2(kept ? `Kept. Kuvo Code shows "${kept}" under your name.` : "Kept: you have no job now.");
 }
-var SHOW_TOOLS = ["show_in_panel", "show_file", "mark_final", "show_widget"];
 var isFullPath = (given) => given.startsWith("/") && !given.split("/").some((part) => part === "." || part === "..");
 var home2 = (given) => given.replace(/^~(?=$|\/)/, os10.homedir());
 function shownWords(full, isFolder, inView) {
@@ -22778,6 +22779,10 @@ function showTool(name, args, calling, inView) {
   }
 }
 
+// Packages/Box/src/link/letters/tool-names.ts
+var WAKE_TOOLS = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up"];
+var SHOW_TOOLS = ["show_in_panel", "show_file", "mark_final", "show_widget"];
+
 // Packages/Box/src/link/letters/tools.ts
 var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits", ...WAKE_TOOLS, "set_job", ...SHOW_TOOLS];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
@@ -22835,7 +22840,7 @@ async function addressed(wanted, targets, here, caller, archivedOwn = false) {
   });
   if (place === null && /^ses_[A-Za-z0-9]{1,60}$/.test(wanted)) {
     const peer = boxOf(wanted);
-    return peer ? { session: wanted, name: rowsBox(wanted)?.row.title ?? "New session", kind: "session", machine: boxName(peer) } : null;
+    return peer ? { session: wanted, name: rowsBox(wanted)?.row.title ?? "New session", kind: "session", machine: computerName(peer) } : null;
   }
   if (!place || place.data.parentID || place.data.metadata?.kuvo?.seat)
     return null;
@@ -22968,7 +22973,7 @@ async function readOne2(args, caller, all, targets, place) {
     return refused3(later);
   if (!away.features.includes("letters-read"))
     return refused3(`${target.name}'s computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.`);
-  const asleep = `${boxName(away.peer)} isn't answering (it may be asleep, off or offline), so ${target.name}'s conversation can't be read now. Try again later.`;
+  const asleep = `${computerName(away.peer)} isn't answering (it may be asleep, off or offline), so ${target.name}'s conversation can't be read now. Try again later.`;
   if (awaySince(away.peer.key) !== null)
     return refused3(asleep);
   let id;
@@ -23138,7 +23143,6 @@ function takePart(sender, part) {
 }
 
 // Packages/Box/src/link/work-queue/hand.ts
-var MOST_HANDED_FILES = 4000000;
 var HAND_LIFE = 30 * 86400000;
 var HAND_ID = /^wqh_[A-Za-z0-9_-]{8,40}$/;
 var SEEN = path85.join(WORK_QUEUE, "handed.json");
@@ -23737,9 +23741,9 @@ async function takeAct(sender, given, reply, run, now = Date.now()) {
     return answer(value);
   }
   if (readTold3(sender.key)?.shared)
-    return answer({ status: 409, value: { message: `${here} doesn't take changes from ${computerName2(peer)}, a machine shared with other Macs: change it from ${here}.` } });
+    return answer({ status: 409, value: { message: `${here} doesn't take changes from ${computerName(peer)}, a machine shared with other Macs: change it from ${here}.` } });
   if (now - act.at > ACT_MEMORY || act.at - now > AHEAD)
-    return answer({ status: 409, value: { message: `${here}'s clock and ${computerName2(peer)}'s are too far apart to take it: check both computers' time.` } });
+    return answer({ status: 409, value: { message: `${here}'s clock and ${computerName(peer)}'s are too far apart to take it: check both computers' time.` } });
   const entry = { until: Math.max(now, act.at) + ACT_MEMORY, answer: null };
   did.set(key, entry);
   if (changes)
@@ -23775,7 +23779,6 @@ var actOf = (given) => {
 // Packages/Box/src/link/work-queue/across.ts
 var QUEUES_FEATURE = "work-queue.elsewhere";
 var takesQueues = (key) => (readPeerAgents()[key]?.features ?? []).includes(QUEUES_FEATURE);
-var computerName2 = (peer) => peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer";
 function numberingNow(link) {
   const primary = primaryOf(link);
   const own = link ? ownKey(link) : null;
@@ -23891,11 +23894,11 @@ function fittedMails(peer, telling, link, now) {
     const mails = mailsFor(peer, most === told.items.length ? telling.payload : { told: { ...told, items: told.items.slice(0, most) } }, link, now);
     if (mails) {
       if (most < told.items.length)
-        console.error(`Work Queue: ${told.items.length} items were too many to tell ${computerName2(peer)} at once: told the ${most} latest.`);
+        console.error(`Work Queue: ${told.items.length} items were too many to tell ${computerName(peer)} at once: told the ${most} latest.`);
       return mails;
     }
   }
-  console.error(`Work Queue: what this box tells ${computerName2(peer)} is too big to send, even cut to its 50 latest items.`);
+  console.error(`Work Queue: what this box tells ${computerName(peer)} is too big to send, even cut to its 50 latest items.`);
   return null;
 }
 function queuesBack(key) {
@@ -23994,7 +23997,7 @@ function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = fals
     const told = readTold3(peer.key);
     if (!told)
       continue;
-    const computer = { key: peer.key, name: computerName2(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} };
+    const computer = { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} };
     const away = awaySince(peer.key, reach);
     computers.push({ ...computer, at: told.at, ...away !== null ? { away } : {} });
     for (const item of told.items) {
@@ -24018,7 +24021,7 @@ function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = fals
 function itemElsewhere(ref, link = readLink(), { asTold = false, deleted = false } = {}) {
   let found = null;
   const peers = peersOf(link);
-  const computerOf = (peer) => ({ key: peer.key, name: computerName2(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} });
+  const computerOf = (peer) => ({ key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} });
   for (const peer of peers) {
     const told = readTold3(peer.key);
     const item = told?.items.find((each) => refNames(ref, each));
@@ -27427,7 +27430,6 @@ function callLife(call) {
     return ALLOW_LIFE;
   return NOTE_MEMORY;
 }
-var boxName = computerName;
 var verbOf = (tool) => tool === "stop_session" || tool === "stop_work" ? "stop" : tool === "compact_session" ? "summary" : tool === "answer_ask" ? "answer" : tool === "start_session" ? "start" : "list";
 var isOpenTool = (tool) => OPEN_TOOLS.includes(tool);
 var waitedFor = (tool) => tool === "list_sessions" || isOpenTool(tool);
@@ -27449,7 +27451,7 @@ function sendCall(host, id, file, call, { link, now, offline, peers, away }) {
     if (call.quiet || waitedFor(call.call.tool))
       return;
     const peer = peers.find((each) => each.key === call.peer);
-    return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? boxName(peer) : "another computer"} wasn't done: that computer wasn't back in time.${call.call.tool === "answer_ask" && call.call.args.decision === "allow" ? " An allow waits a day at most, as what it was for may have changed. Look at what it asks with list_sessions once it's back." : ""}`).catch(() => {});
+    return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? computerName(peer) : "another computer"} wasn't done: that computer wasn't back in time.${call.call.tool === "answer_ask" && call.call.args.decision === "allow" ? " An allow waits a day at most, as what it was for may have changed. Look at what it asks with list_sessions once it's back." : ""}`).catch(() => {});
   }
   const own = ownKey(link);
   const lives = homesOf(link).get(call.from) ?? movedOf(link).get(call.from);
@@ -27544,9 +27546,8 @@ function callRefused(call, why, sender) {
   if (call.quiet || call.wait === true || !isObject(call.call) || waitedFor(call.call.tool))
     return;
   const peer = peersOf(readLink()).find((each) => each.key === sender.key);
-  tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? boxName(peer) : "another computer"}: ${why}`).catch(() => {});
+  tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? computerName(peer) : "another computer"}: ${why}`).catch(() => {});
 }
-var AWAY = AWAY_WORDS;
 async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, most = CALL_WAIT, start }) {
   if (!(readPeerAgents()[peer.key]?.features ?? []).includes(isOpenTool(tool) || tool === "stop_work" ? START_FEATURE : CALLS_FEATURE))
     return { older: true };
@@ -27559,7 +27560,7 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
   if (awaySince(peer.key) !== null) {
     if (keep)
       leaveCall(peer.key, lead.session, call, { wait: false, quiet });
-    return { away: AWAY, kept: keep };
+    return { away: AWAY_WORDS, kept: keep };
   }
   const sent = Date.now();
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
@@ -27590,7 +27591,7 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
     return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string")
     return { answer: { text: answer.text, isError: answer.isError === true } };
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || went && !dropped || !unreachable };
+  return { away: unreachable ? AWAY_WORDS : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || went && !dropped || !unreachable };
 }
 async function awaitAnswer(id, peer, sent, place, { most, cut, every = 250 }) {
   const stop = new AbortController;
@@ -27638,7 +27639,7 @@ async function elsewhereTool(tool, lead, args, session, place) {
   const offline = `Your other computers can't be reached through the relay now: your ${verb} goes once ${HERE}'s back on it, and you'll hear how it went as a message.`;
   if (known) {
     const outcome = await callPeer(known, tool, { ...args, session }, lead, place, { keep: true });
-    const name = boxName(known);
+    const name = computerName(known);
     if ("answer" in outcome)
       return outcome.answer;
     if ("failed" in outcome)
@@ -27660,9 +27661,9 @@ async function elsewhereTool(tool, lead, args, session, place) {
     return answered.outcome.answer;
   if (outcomes.some((each) => ("offline" in each.outcome)))
     return { text: offline, isError: false };
-  const away = outcomes.filter((each) => ("away" in each.outcome)).map((each) => boxName(each.peer));
+  const away = outcomes.filter((each) => ("away" in each.outcome)).map((each) => computerName(each.peer));
   if (away.length)
-    return { text: `There's no session ${session} here, or on your other computers that answered. ${away.join(" and ")} ${away.length > 1 ? "aren't" : "isn't"} answering (${AWAY}): your ${verb} is kept for ${away.length > 1 ? "them" : "it"}, in case it's there, and you'll hear if it was.`, isError: false };
+    return { text: `There's no session ${session} here, or on your other computers that answered. ${away.join(" and ")} ${away.length > 1 ? "aren't" : "isn't"} answering (${AWAY_WORDS}): your ${verb} is kept for ${away.length > 1 ? "them" : "it"}, in case it's there, and you'll hear if it was.`, isError: false };
   return { text: `There's no session ${session} here or on your other computers. Use list_sessions to see yours.`, isError: true };
 }
 async function rowsEverywhere(lead, place, most = CALL_WAIT) {
@@ -27671,7 +27672,7 @@ async function rowsEverywhere(lead, place, most = CALL_WAIT) {
   const started = new Set(startedOn(lead.session));
   const asked = peersOf(readLink()).filter((peer) => (kept.has(peer.key) || started.has(peer.key)) && (told[peer.key]?.features ?? []).includes(CALLS_FEATURE));
   return (await Promise.all(asked.map(async (peer) => {
-    const name = boxName(peer);
+    const name = computerName(peer);
     const before = kept.get(peer.key);
     const outcome = await callPeer(peer, "list_sessions", {}, lead, place, { keep: false, most });
     let whole = false;
@@ -27686,7 +27687,7 @@ async function rowsEverywhere(lead, place, most = CALL_WAIT) {
     }
     if (!before)
       return null;
-    return { name, rows: before.rows, asOf: before.at, away: "away" in outcome ? outcome.away : ("offline" in outcome) ? "this computer is off the relay" : ("answer" in outcome) ? "its answer didn't come whole" : AWAY };
+    return { name, rows: before.rows, asOf: before.at, away: "away" in outcome ? outcome.away : ("offline" in outcome) ? "this computer is off the relay" : ("answer" in outcome) ? "its answer didn't come whole" : AWAY_WORDS };
   }))).filter((each) => each !== null);
 }
 var SESSION5 = /^ses_[A-Za-z0-9]{1,60}$/;
@@ -27762,7 +27763,7 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
       }
       const peer = peersOf(readLink()).find((each) => each.key === sender.key);
       const kept = readJournal(id);
-      const journal = kept ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start, made, at: now };
+      const journal = kept ?? { id, from, sender: sender.key, computer: peer ? computerName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start, made, at: now };
       if (!kept)
         keepJournal(journal);
       send(sender, { delivered: { id, ok: true } });
@@ -30883,7 +30884,7 @@ function failLetter(id, file, letter, { why, on, said = false, title }, now = Da
     };
     const listed = [...on ? [on] : [], ...Object.keys(told)].map(nameIn).find((name) => typeof name === "string");
     const name = plainName(title ?? listed ?? ownListed().find((each) => each.session === letter.to)?.name ?? "") || "that chat";
-    const computer = on && on === mine ? HERE : peer ? boxName(peer) : "another computer";
+    const computer = on && on === mine ? HERE : peer ? computerName(peer) : "another computer";
     const line = `Your message to ${name} on ${computer} wasn't delivered`;
     const text = `[Not delivered] ${line}${!why ? "." : said ? `: ${computer} said "${why}"` : `. ${why}`}`;
     writePrivate(path105.join(SENDING, `${noticeID(id)}.json`), JSON.stringify({
@@ -40627,7 +40628,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "59f6489eabe3";
+var BRIDGE_VERSION = "c3dc4ea3544e";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -43041,7 +43042,7 @@ async function run3(name, args, caller, targets, signal) {
         return item;
       });
       if (to.peer)
-        return said5(`Handing ${nameOf2(item)} to ${to.name} on ${computerName2(to.peer)}: it goes into its queue there, linked to it, as soon as that computer has it${awaySince(to.peer.key) !== null ? " (it isn't answering now: it goes once it's back)" : ""}, and stays in your view. Until then it's unchanged here.`);
+        return said5(`Handing ${nameOf2(item)} to ${to.name} on ${computerName(to.peer)}: it goes into its queue there, linked to it, as soon as that computer has it${awaySince(to.peer.key) !== null ? " (it isn't answering now: it goes once it's back)" : ""}, and stays in your view. Until then it's unchanged here.`);
       return said5(`Handed ${nameOf2(item)} to ${to.name}: it's in its queue now${to.owner.startsWith("ses_") ? ", linked to it, so it shows In progress while it works" : ""}, and stays in your view.`);
     }
     case "queue_remove": {
@@ -43141,7 +43142,7 @@ async function handTarget(given, caller, targets) {
     if (!peer)
       return null;
     if (!takesQueues(peer.key))
-      return { refused: `${name ?? session} is on ${computerName2(peer)}, which runs an older Kuvo Code: items can't be handed to it until it's updated. Ask that conversation to add it with queue_add.` };
+      return { refused: `${name ?? session} is on ${computerName(peer)}, which runs an older Kuvo Code: items can't be handed to it until it's updated. Ask that conversation to add it with queue_add.` };
     return { owner: session, name: name ?? peerName(session) ?? session, peer };
   };
   if (/^ses_[A-Za-z0-9]{1,60}$/.test(to)) {
