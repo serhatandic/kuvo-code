@@ -21,7 +21,8 @@ let root: string
 let bin: string
 const path = process.env.PATH
 const keychain = ClaudeAgent.keychain
-// Each agent's program check (`maintenance`), put back after.
+// Each agent's program check (`maintenance`), put back after: every kind of agent this file makes
+// that has one (Cursor's has none).
 const checks = [ClaudeAgent, CodexAgent, GrokAgent].map((kind) => [kind.prototype, kind.prototype.maintenance] as const)
 
 beforeAll(() => {
