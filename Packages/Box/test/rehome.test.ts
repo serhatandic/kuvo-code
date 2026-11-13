@@ -2,11 +2,11 @@ import "./safety"
 import { afterAll, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { BRIDGE_VERSION } from "../src/link/version"
-import { rehomeReady } from "../src/link/rehome/move"
+import { askRehome, rehomeReady } from "../src/link/rehome/move"
 import { rehomeStatus } from "../src/link/rehome/state"
 
 // Moving this Mac's box out of its app's folder into a home of its own (#333 piece 2a,
@@ -129,7 +129,7 @@ function snapshot(folder: string, leave: (relative: string) => boolean = () => f
 // (The move's own folder, apart.)
 const boxOnly = (relative: string) => relative === "updates/rehome"
 
-const POINTS_BACK = ["after-plan", "after-install", "after-clone", "after-rewrite", "after-check", "in-place", "after-place", "after-fix"]
+const POINTS_BACK = ["after-plan", "after-install", "after-clone", "after-rewrite", "after-check", "in-place", "in-merge", "after-place", "after-fix"]
 const POINTS_FORWARD = ["in-clear", "after-clear"]
 
 // A clean move, to hold the others to.
@@ -248,7 +248,7 @@ test.if(mac)("a box its Mac removed from ~/.kuvo-code is set aside first, and pu
   expect(existsSync(join(w.K, "trash", "t1", "f"))).toBe(true)
 }, 60_000)
 
-test.if(mac)("a second resume waits for the one under way, then finds it finished", async () => {
+test.if(mac)("a second resume waits for the lock the first holds, then finishes the move itself: back, as it stopped before clearing", async () => {
   const w = world()
   expect(move(w, { KUVO_TEST_REHOME_STOP: "in-place" }).signal).toBe("SIGKILL")
   // One holds the lock (a resume, by its command line), as a keeper's would.
@@ -275,7 +275,7 @@ test.if(mac)("a second resume waits for the one under way, then finds it finishe
   expect(readdirSync(w.K)).toEqual(["updates"])
 }, 60_000)
 
-test.if(mac)("a move back brings the box back into the app's folder as it is now, sessions made since too", () => {
+test.if(mac)("a move back brings the box back into the app's folder as it is now, sessions made since too", async () => {
   const w = world()
   const before = snapshot(w.S)
   expect(move(w).status).toBe(0)
@@ -299,8 +299,11 @@ test.if(mac)("a move back brings the box back into the app's folder as it is now
   expect(readdirSync(w.K)).toEqual(["updates"])
   expect(readdirSync(join(w.K, "updates"))).toEqual(["rehome"])
   expect(here(w)).toMatchObject({ use: "own", verdict: "free" })
-  // And it moves again.
+  // It moves again only on Move Now: never by itself, undoing your Move Back.
   put(join(w.S, "box", "run", "served.json"), JSON.stringify({ app: APP_VERSION, bridge: BRIDGE_VERSION, at: 2 }))
+  expect(await rehomeReady(w.K, w.S, { busy: async () => false })).toMatchObject({ ready: false, why: "It was moved back: it moves again only on Move Now." })
+  expect(askRehome(w.K, "now")).toBeNull()
+  expect(await rehomeReady(w.K, w.S, { busy: async () => false })).toMatchObject({ ready: true, how: "move" })
   expect(move(w).said).toMatchObject({ result: "done" })
 }, 60_000)
 
@@ -385,4 +388,114 @@ test.if(!mac)("a machine's box is in its home already: rehome refuses, saying so
   }
   expect(JSON.parse(run(["--ready"]).stdout.trim())).toMatchObject({ ready: false, why: "This machine's box is in its own home already: there's nothing to move." })
   expect(readdirSync(join(home, ".kuvo-code"))).toEqual([])
+}, 60_000)
+
+test.if(mac)("a move back that stops part way goes back to the box moved, or on to the box back, as a move does", () => {
+  for (const [point, ends] of [["in-place", "moved"], ["in-merge", "moved"], ["in-clear", "back"]] as const) {
+    const w = world()
+    expect(move(w).status).toBe(0)
+    // (The app made one of its files again meanwhile: what goes back merges with it.)
+    put(join(w.S, "box", "machines.json"), "[\"the app's\"]")
+    const moved = { K: snapshot(w.K, boxOnly), S: snapshot(w.S) }
+    const stopped = rehome(w, ["--back"], { KUVO_TEST_REHOME_STOP: point })
+    expect(stopped.signal, `${point}: ${JSON.stringify(stopped.said)}`).toBe("SIGKILL")
+    expect(here(w)).toMatchObject({ verdict: "moving", use: "wait" })
+    const resumed = rehome(w, ["--resume"])
+    if (ends === "moved") {
+      expect(resumed.said).toMatchObject({ result: "failed", status: { state: "done", way: "move", failed: { step: "place" } } })
+      expect(snapshot(w.K, boxOnly)).toEqual(moved.K)
+      expect(snapshot(w.S)).toEqual(moved.S)
+    } else {
+      expect(resumed.said).toMatchObject({ result: "back", status: { state: "back" } })
+      expect(readdirSync(w.K)).toEqual(["updates"])
+      // The box's own list keeps its name; the one the app made meanwhile is kept beside it.
+      expect(readFileSync(join(w.S, "box", "machines.json"), "utf8")).toBe("[]")
+      expect(readFileSync(join(w.S, "box", "machines 2.json"), "utf8")).toBe("[\"the app's\"]")
+      expect(here(w)).toMatchObject({ use: "own" })
+    }
+  }
+}, 60_000)
+
+test.if(mac)("going back, stopped part way itself, goes back again from the start: the app's folder as it was", () => {
+  const w = world()
+  const before = snapshot(w.S)
+  expect(move(w, { KUVO_TEST_REHOME_STOP: "after-place" }).signal).toBe("SIGKILL")
+  expect(rehome(w, ["--resume"], { KUVO_TEST_REHOME_STOP: "in-undo" }).signal).toBe("SIGKILL")
+  expect(here(w)).toMatchObject({ verdict: "moving" })
+  expect(rehome(w, ["--resume"]).said).toMatchObject({ result: "failed", status: { state: "failed", tries: 1 } })
+  expect(snapshot(w.S)).toEqual(before)
+  expect(readdirSync(w.K)).toEqual(["updates"])
+}, 60_000)
+
+test.if(mac)("a move that can't finish clearing says it's stuck, starts nothing, and carries on once it can", () => {
+  const w = world()
+  // (Where it keeps the originals can't be written.)
+  mkdirSync(join(w.K, "updates", "rehome", "kept"), { recursive: true, mode: 0o700 })
+  chmodSync(join(w.K, "updates", "rehome", "kept"), 0o500)
+  const stuck = move(w)
+  expect(stuck.status).toBe(3)
+  expect(stuck.said).toMatchObject({ result: "stuck", status: { state: "clearing", step: "clear", failed: { step: "clear" } } })
+  expect(here(w)).toMatchObject({ verdict: "moving", use: "wait" })
+  chmodSync(join(w.K, "updates", "rehome", "kept"), 0o700)
+  const resumed = rehome(w, ["--resume"])
+  expect(resumed.status).toBe(0)
+  expect(resumed.said).toMatchObject({ result: "done" })
+  expect(snapshot(w.K, boxOnly)).toEqual(cleanResult().K)
+}, 60_000)
+
+test.if(mac)("a journal that can't be read is a move under way that no one finishes by guessing", async () => {
+  const w = world()
+  put(join(w.K, "updates", "rehome", "journal.json"), "")
+  expect(here(w)).toMatchObject({ verdict: "moving", use: "wait" })
+  const resumed = rehome(w, ["--resume"])
+  expect([resumed.status, resumed.said?.result]).toEqual([3, "stuck"])
+  expect(move(w).said).toMatchObject({ result: "stuck" })
+  expect(await rehomeReady(w.K, w.S, { busy: async () => false })).toMatchObject({ ready: false })
+  expect(readdirSync(w.S)).toContain("box")
+}, 60_000)
+
+test.if(mac)("it's ready with the box running, as the keeper asks before it stops it: the box's running is the keeper's to stop", async () => {
+  const w = world()
+  const engine = Bun.spawn(["/bin/sh", "-c", "read line", "opencode"], { stdin: "pipe" })
+  try {
+    put(join(w.S, "box", "run", "engine.json"), JSON.stringify({ pid: engine.pid, port: 1 }))
+    expect(await rehomeReady(w.K, w.S, { busy: async () => false })).toMatchObject({ ready: true, how: "move" })
+    expect(await rehomeReady(w.K, w.S, { busy: async () => true })).toMatchObject({ ready: false, why: "It moves when nothing's running." })
+  } finally {
+    engine.stdin.end()
+    await engine.exited
+  }
+  // What keeps it from moving at all isn't waiting for a quiet moment: never overdue for it.
+  const two = world(v => {
+    put(join(v.K, "run", "setup-card.json"), JSON.stringify({ self: { key: "m", name: "Mini", kind: "machine" } }))
+    put(join(v.K, "bin", "kuvo-start"), "")
+  })
+  expect(await rehomeReady(two.K, two.S, { busy: async () => false })).toMatchObject({ ready: false, status: { state: null, waitingSince: null } })
+}, 60_000)
+
+test.if(mac)("Move Back refused for good is answered once: the keeper isn't sent to stop the box for it again", async () => {
+  const w = world()
+  expect(move(w).status).toBe(0)
+  expect(askRehome(w.K, "back")).toBeNull()
+  // The app made a box of its own in its folder again.
+  put(join(w.S, "box", "run", "link.json"), "{}")
+  const ready = await rehomeReady(w.K, null)
+  expect(ready).toMatchObject({ ready: false, why: "Kuvo Code has a box of its own in its folder again: this one can't move back beside it.", status: { asked: null, state: "done" } })
+  expect(await rehomeReady(w.K, null)).toMatchObject({ ready: false, why: "This Mac's box has moved." })
+}, 60_000)
+
+test.if(mac)("a copy of the app that isn't the real one never reads or asks the real ~/.kuvo-code's move", () => {
+  const home = join(root, "demo")
+  const S = join(home, "Library", "Application Support", "run.kuvo.code.demo")
+  mkdirSync(join(S, "box"), { recursive: true })
+  const ask = (request: unknown) => {
+    const asked = spawnSync(process.execPath, [MAIN, "box", "route"], {
+      cwd: home, encoding: "utf8", timeout: 60_000, input: JSON.stringify(request),
+      env: { ...clean, HOME: home, TMPDIR: tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: join(S, "box"), KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: join(S, "opencode", "config") },
+    })
+    return JSON.parse(asked.stdout.trim().split("\n").pop()!)
+  }
+  expect(JSON.parse(ask({ method: "GET", path: "kuvo/box/rehome" }).body)).toMatchObject({ state: null, from: null })
+  expect(ask({ method: "POST", path: "kuvo/box/rehome", body: { now: true } }).status).toBe(409)
+  expect(existsSync(join(home, ".kuvo-code"))).toBe(false)
 }, 60_000)

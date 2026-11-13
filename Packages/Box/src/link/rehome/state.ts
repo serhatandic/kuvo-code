@@ -62,25 +62,29 @@ export function noteRecord(home: string, change: Partial<RehomeRecord>): RehomeR
 /** How the move stands, as `kuvo/box/rehome` says it (the journal's step while one's under way). */
 export function rehomeStatus(home: string, now = Date.now()): RehomeStatus {
   const kept = readRecord(home);
-  const journal = readJournal(home);
-  const underWay = journal && journal.step !== "done";
+  let journal: Journal | null = null;
+  let unreadable = false;
+  try { journal = readJournal(home); } catch { unreadable = true; }
+  const underWay = journal !== null && journal.step !== "done" ? journal : null;
   const waitingSince = typeof kept.waitingSince === "number" ? kept.waitingSince : null;
-  const state = underWay ? (forwardOnly(journal.step) ? "clearing" : "moving") : kept.state ?? null;
+  // (A record left saying it moves, with no journal: it stopped as it went back.)
+  const recorded = kept.state === "moving" ? "failed" : kept.state ?? null;
+  const state = unreadable ? "moving" : underWay ? (forwardOnly(underWay.step) ? "clearing" : "moving") : recorded;
   return {
     state,
-    way: underWay ? journal.way : kept.way ?? null,
-    step: underWay ? journal.step : null,
+    way: underWay ? underWay.way : kept.way ?? null,
+    step: underWay ? underWay.step : null,
     tries: typeof kept.tries === "number" ? kept.tries : 0,
     nextTry: typeof kept.nextTry === "number" ? kept.nextTry : null,
     waitingSince,
     overdue: state === "waiting" && waitingSince !== null && now - waitingSince >= OVERDUE_AFTER,
-    failed: kept.failed ?? null,
+    failed: unreadable ? { at: now, step: null, message: new UnreadableJournal().message } : kept.failed ?? null,
     movedAt: typeof kept.movedAt === "number" ? kept.movedAt : null,
     keptUntil: typeof kept.keptUntil === "number" ? kept.keptUntil : null,
     owed: Array.isArray(kept.owed) ? kept.owed : [],
     asked: kept.asked ?? null,
-    from: kept.from ?? (underWay ? journal.from : null),
-    to: kept.to ?? (underWay ? journal.to : null),
+    from: kept.from ?? underWay?.from ?? null,
+    to: kept.to ?? underWay?.to ?? null,
   };
 }
 
@@ -124,24 +128,50 @@ export interface Journal {
 const journalFile = (home: string) => path.join(rehomeFolder(home), "journal.json");
 const actsFile = (home: string) => path.join(rehomeFolder(home), "journal.acts");
 
+/** The journal, or null for none: one that's there but can't be read (cut short by a power cut, say)
+ * throws, never read as none, since a move may be under way. */
 export function readJournal(home: string): Journal | null {
-  try {
-    const kept = JSON.parse(fs.readFileSync(journalFile(home), "utf8"));
-    return isObject(kept) && kept.v === 1 && typeof kept.step === "string" ? kept as unknown as Journal : null;
-  } catch {
-    return null;
+  let text: string;
+  try { text = fs.readFileSync(journalFile(home), "utf8"); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new UnreadableJournal();
+  }
+  let kept: unknown;
+  try { kept = JSON.parse(text); } catch { throw new UnreadableJournal(); }
+  if (!isObject(kept) || kept.v !== 1 || typeof kept.step !== "string") throw new UnreadableJournal();
+  return kept as unknown as Journal;
+}
+
+/** A journal that's there but can't be read: a move may be under way, which no one can finish. */
+export class UnreadableJournal extends Error {
+  constructor() {
+    super("The move's journal can't be read: nothing is done until someone looks at it (updates/rehome/journal.json).");
   }
 }
 
-/** Whether a move is under way in `home` (a journal not done): what `here` says first. */
+/** Whether a move is under way in `home` (a journal not done, or one that can't be read): what
+ * `here` says first. */
 export const moveUnderWay = (home: string): boolean => {
-  const journal = readJournal(home);
-  return journal !== null && journal.step !== "done";
+  try {
+    const journal = readJournal(home);
+    return journal !== null && journal.step !== "done";
+  } catch {
+    return true;
+  }
 };
 
-/** The journal written whole, synced before anything it says is done. */
+/** The journal written whole, synced (its file, then its folder) before anything it says is done. */
 export function writeJournal(home: string, journal: Journal): void {
-  writePrivate(journalFile(home), JSON.stringify(journal, null, 1));
+  const file = journalFile(home);
+  const temporary = `${file}.${process.pid}.tmp`;
+  const fd = fs.openSync(temporary, "w", 0o600);
+  try {
+    fs.writeSync(fd, JSON.stringify(journal, null, 1));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(temporary, file);
   syncFolder(rehomeFolder(home));
 }
 

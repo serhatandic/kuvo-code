@@ -23,7 +23,7 @@ import { setKeepsAwake } from "../work/settings";
 import { NO_REWRITE, pathMap, type Rewriter } from "./rewrite";
 import {
   AFTER_A_FAILURE, KEPT_FOR, MOST_TRIES, forgetJournal, forwardOnly, giveLock, holdsLock, journalAct, noteRecord, readActs, readJournal,
-  readRecord, rehomeFolder, rehomeStatus, stepIndex, takeLock, writeJournal, type Act, type Journal, type Placement,
+  moveUnderWay, readRecord, rehomeFolder, rehomeStatus, stepIndex, takeLock, writeJournal, type Act, type Journal, type Placement,
 } from "./state";
 
 /** What's beside the box in its app's folder that moves into its home, by the name it has there
@@ -44,6 +44,8 @@ export const PROCESS_RECORD = /^(keeper\..*|serve\.json|served\.json|host\.json|
  * so a move waits for the upgrades a newer app runs as its box starts. */
 export const SERVED_FILE = "served.json";
 
+/** What a move back says with nothing moved. */
+const NOT_MOVED = "This Mac's box hasn't moved: there's nothing to move back.";
 /** What a box that's in its own home says to a move: a machine's, on Linux. */
 export const NOTHING_TO_MOVE = "This machine's box is in its own home already: there's nothing to move.";
 
@@ -81,8 +83,9 @@ export function runningIn(run: string, { keeper = true } = {}): string[] {
 
 // Disks
 
-const ran = (command: string, args: string[]) => {
-  const result = spawnSync(command, args, { encoding: "utf8", timeout: 120_000 });
+// (`timeout` undefined for none: a clone of a big box takes as long as it takes.)
+const ran = (command: string, args: string[], timeout: number | undefined = 120_000) => {
+  const result = spawnSync(command, args, { encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024 });
   return { status: result.status, output: `${result.stdout ?? ""}`, errors: `${result.stderr ?? ""}` };
 };
 /** The nearest folder of `file` that's there. */
@@ -174,7 +177,7 @@ export function planBack({ appFolder, home }: Folders, merged: { source: string;
 }
 
 /** Why the move can't go ahead now, or null: checked as it's planned, before anything changes. */
-export function moveRefusal({ appFolder, home }: Folders, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = NO_REWRITE }: { appVersion: string | null; release: string | null | undefined; bridgeVersion?: string; rewriter?: Rewriter }): string | null {
+export function moveRefusal({ appFolder, home }: Folders, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = NO_REWRITE, running: checkRunning = true }: { appVersion: string | null; release: string | null | undefined; bridgeVersion?: string; rewriter?: Rewriter; running?: boolean }): string | null {
   if (process.platform !== "darwin") return NOTHING_TO_MOVE;
   const box = path.join(appFolder, "box");
   const state = readRecord(home);
@@ -186,7 +189,8 @@ export function moveRefusal({ appFolder, home }: Folders, { appVersion, release,
   if (!isObject(served) || served.bridge !== bridgeVersion || (appVersion !== null && served.app !== appVersion)) {
     return "This Mac's box hasn't started since Kuvo Code updated: it moves once it has.";
   }
-  const running = runningIn(path.join(box, "run"), { keeper: false });
+  // (Asked whether it's ready, the box runs: the keeper stops it before it moves.)
+  const running = checkRunning ? runningIn(path.join(box, "run"), { keeper: false }) : [];
   if (running.length) return `Something is running in this Mac's box (${running.join(", ")}): it moves once that's stopped.`;
   // (Asked whether it's ready, the files may not be said yet.)
   if (release !== undefined && (!release || !exists(path.join(release, "bin", "kuvo-start")) || !exists(path.join(release, "bin", "kuvo-link.js")))) {
@@ -210,11 +214,11 @@ export function moveRefusal({ appFolder, home }: Folders, { appVersion, release,
 }
 
 /** Why a move back can't go ahead now, or null. */
-export function backRefusal({ appFolder, home }: Folders): string | null {
+export function backRefusal({ appFolder, home }: Folders, { running: checkRunning = true } = {}): string | null {
   if (process.platform !== "darwin") return NOTHING_TO_MOVE;
   const state = readRecord(home);
-  if (state.state !== "done" || state.way !== "move") return "This Mac's box hasn't moved: there's nothing to move back.";
-  const running = runningIn(path.join(home, "run"));
+  if (state.state !== "done" || state.way !== "move") return NOT_MOVED;
+  const running = checkRunning ? runningIn(path.join(home, "run")) : [];
   if (running.length) return `Something is running in this Mac's box (${running.join(", ")}): it moves back once that's stopped.`;
   const old = path.join(appFolder, "box", "run");
   if (["setup-card.json", "link.json"].some(file => exists(path.join(old, file))) || runningIn(old).length) return "Kuvo Code has a box of its own in its folder again: this one can't move back beside it.";
@@ -257,21 +261,29 @@ function freeName(file: string): string {
 }
 
 /** What's staged at `from`, put at `to`: renamed whole where nothing's there, else merged entry by
- * entry (a name in both keeps both). Each rename journaled with where it came from (`source`). */
-function place(home: string, from: string, to: string, source: string, merged = false): void {
-  if (!exists(to)) return rename(home, from, to, { source, merged });
-  const here = fs.lstatSync(from), there = fs.lstatSync(to);
-  if (here.isDirectory() && there.isDirectory()) {
-    for (const name of listOf(from).sort()) place(home, path.join(from, name), path.join(to, name), path.join(source, name), true);
+ * entry, a name in both keeping both: the one that was there keeps its name, or, where what's put
+ * there `wins` (a move back: the box's live file over one the app made meanwhile), the one put
+ * there. Each rename journaled with where it came from (`source`). */
+function place(home: string, from: string, to: string, source: string, wins: boolean, merged = false): void {
+  if (exists(to) && fs.lstatSync(from).isDirectory() && fs.lstatSync(to).isDirectory()) {
+    for (const name of listOf(from).sort()) place(home, path.join(from, name), path.join(to, name), path.join(source, name), wins, true);
     return;
   }
-  rename(home, from, freeName(to), { source, merged: true });
+  const clash = exists(to);
+  if (!clash) rename(home, from, to, { source, merged });
+  else if (!wins) rename(home, from, freeName(to), { source, merged: true });
+  else {
+    rename(home, to, freeName(to));
+    rename(home, from, to, { source, merged: true });
+  }
+  // (Part way through merging one folder into another.)
+  if (merged || clash) stopPoint("in-merge");
 }
 
 /** `from` cloned to `to` (`cp -c`: APFS clones, links as links; a socket isn't a file and stays);
  * `installed` files copied, from wherever they are. */
 function clone(from: string, to: string, installed = false): void {
-  const result = ran("/bin/cp", [installed ? "-RPp" : "-cRPp", from, to]);
+  const result = ran("/bin/cp", [installed ? "-RPp" : "-cRPp", from, to], undefined);
   if (result.status !== 0) throw new Error(`${from} couldn't be cloned: ${result.errors.trim().slice(0, 300)}`);
 }
 
@@ -301,24 +313,28 @@ function cloneAll(journal: Journal): void {
   }
 }
 
-/** The box's own files in its new home, after what was cloned: its kind (written last, on a move;
- * taken out of what goes back), and Keep This Mac Awake off as the app had it. */
+/** The box's own files, after what was cloned: never its kind (written last, on a move; taken out of
+ * what goes back), nor on a move back the files its keys were written to from your Keychain, which
+ * the app writes for itself in its folder (`KUVO_KEYS`). */
 function settleBoxFiles(journal: Journal): void {
   const { appFolder, home } = foldersOf(journal);
   const box = journal.placements.find(each => each.to === (journal.way === "move" ? path.join(home, "box") : path.join(appFolder, "box", "box")));
-  if (box && exists(box.staged)) fs.rmSync(path.join(box.staged, "kind"), { force: true });
-  if (journal.way === "move" && journal.keepsAwakeOff && box && exists(box.staged)) setKeepsAwake(false, path.join(box.staged, "work.json"));
+  if (!box || !exists(box.staged)) return;
+  fs.rmSync(path.join(box.staged, "kind"), { force: true });
+  if (journal.way === "back") for (const name of ["keys", "bot-keys"]) fs.rmSync(path.join(box.staged, name), { recursive: true, force: true });
 }
 
 /** Undoes every act journaled, last first (each only where it was done), then the staging folder:
- * the old box as it was. Done again from the start if it's cut short. */
+ * the old box as it was. Done again from the start if it's cut short (the journal goes after). */
 function undo(journal: Journal): void {
   const home = homeOf(journal);
+  let undone = 0;
   for (const act of readActs(home).reverse()) {
     if (act.act === "rename") {
       if (exists(act.to) && !exists(act.from)) {
         fs.mkdirSync(path.dirname(act.from), { recursive: true, mode: 0o700 });
         fs.renameSync(act.to, act.from);
+        if (++undone === 1) stopPoint("in-undo");
       }
     } else if (act.folder) {
       try { fs.rmdirSync(act.path); } catch {}
@@ -327,7 +343,6 @@ function undo(journal: Journal): void {
     }
   }
   fs.rmSync(staging(home), { recursive: true, force: true });
-  forgetJournal(home);
 }
 
 /** Where a move back's folders are, by the journal: the app's (`from` on a move) and the box's home. */
@@ -337,7 +352,7 @@ const foldersOf = (journal: Journal): Folders => (journal.way === "move" ? { app
 const homeOf = (journal: Journal) => foldersOf(journal).home;
 
 function stepTo(journal: Journal, step: RehomeStep): void {
-  if (!holdsLock(homeOf(journal))) throw new Error("Another move took its lock.");
+  if (!holdsLock(homeOf(journal))) throw new LockLost("Another move took its lock.");
   journal.step = step;
   writeJournal(homeOf(journal), journal);
 }
@@ -398,15 +413,16 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
     for (const placement of journal.placements) {
       if (!exists(placement.staged)) continue;
       madeFolder(home, path.dirname(placement.to), keptLike(journal));
-      place(home, placement.staged, placement.to, placement.from);
+      place(home, placement.staged, placement.to, placement.from, journal.way === "back");
       if (++placed === 1) stopPoint("in-place");
     }
     if (journal.way === "move") {
       // Its kind, last of the box's own files: a Mac's, in a home of its own.
       const box = path.join(home, "box");
       madeFolder(home, box);
-      if (journal.keepsAwakeOff && !exists(path.join(box, "work.json"))) {
-        journalAct(home, { act: "made", path: path.join(box, "work.json") });
+      // (Keep This Mac Awake off, as the app had it: in the clone, or a file of its own.)
+      if (journal.keepsAwakeOff) {
+        if (!exists(path.join(box, "work.json"))) journalAct(home, { act: "made", path: path.join(box, "work.json") });
         setKeepsAwake(false, path.join(box, "work.json"));
       }
       journalAct(home, { act: "made", path: path.join(box, "kind") });
@@ -419,8 +435,14 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
     rewriter.outside(map, undo => journalAct(home, undo));
     stopPoint("after-fix");
   }
-  // From here it only goes forward.
+  // From here it only goes forward: nothing may have started meanwhile in what it clears (it would
+  // have written there, into what's only kept).
   if (at("clear")) {
+    if (stepIndex(journal.step) < stepIndex("clear")) {
+      const run = journal.way === "move" ? path.join(journal.from, "box", "run") : path.join(home, "run");
+      const running = runningIn(run, { keeper: journal.way === "back" });
+      if (running.length) throw new Error(`Something started in the box as it moved (${running.join(", ")}), so it went back.`);
+    }
     stepTo(journal, "clear");
     const root = journal.way === "move" ? journal.from : home;
     let cleared = 0;
@@ -471,32 +493,28 @@ function failed(journal: Journal, error: unknown, now = Date.now()): string {
   const message = error instanceof Error ? error.message : String(error);
   const record = readRecord(home);
   // A move back that didn't: the box stays moved, as it was (Move Back tried again by asking again).
-  if (journal.way === "back") {
-    noteRecord(home, { state: "done", way: "move", failed: { at: now, step, message }, asked: null });
-    return message;
-  }
-  noteRecord(home, {
-    state: "failed",
-    way: journal.way,
-    tries: (record.tries ?? 0) + 1,
-    nextTry: now + AFTER_A_FAILURE,
-    failed: { at: now, step, message },
-    asked: null,
-  });
+  if (journal.way === "back") noteRecord(home, { state: "done", way: "move", failed: { at: now, step, message }, asked: null });
+  else noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + 1, nextTry: now + AFTER_A_FAILURE, failed: { at: now, step, message }, asked: null });
+  // (Then the journal: stopped before, it's undone again, which changes nothing.)
+  forgetJournal(home);
   return message;
 }
 
 // The command
 
-/** What `rehome` says it did, as one JSON line. */
+/** What `rehome` says it did, as one JSON line, and what the keeper does then: `done` (moved), `back`
+ * (moved back) and `nothing` (nothing to finish): start what's there; `refused` and `failed` (it went
+ * back, or never began): start the box where it was; `stuck` (it stopped past the point it goes
+ * back from: `--resume` carries it on) and `waits` (another move holds the lock): start nothing. */
 export interface RehomeOutcome {
-  result: "done" | "back" | "refused" | "failed" | "nothing" | "waits";
+  result: "done" | "back" | "refused" | "failed" | "stuck" | "nothing" | "waits";
   message?: string;
   status: RehomeStatus;
 }
 
-/** What a move or a move back is given: its folders, the app's version and the box's files to put
- * in its new home, whether Keep This Mac Awake was off in the app, and its rewriter. */
+/** What a move or a move back is given: the app's version and the box's files to put in its new
+ * home, whether Keep This Mac Awake was off in the app, its rewriter, and what it says while it
+ * waits for the lock. */
 export interface MoveOptions {
   appVersion?: string | null;
   release?: string | null;
@@ -505,8 +523,14 @@ export interface MoveOptions {
   waiting?: () => void;
 }
 
+/** Another took the move's lock from this one (it took this one for gone): this one stops where it
+ * is, undoing nothing, for that one to finish. */
+class LockLost extends Error {}
+
+const WAITS = "Another move is under way.";
+
 async function locked(home: string, waiting: () => void, work: () => RehomeOutcome): Promise<RehomeOutcome> {
-  if (!(await takeLock(home, { waiting }))) return { result: "waits", message: "Another move is under way.", status: rehomeStatus(home) };
+  if (!(await takeLock(home, { waiting }))) return { result: "waits", message: WAITS, status: rehomeStatus(home) };
   try {
     return work();
   } finally {
@@ -514,23 +538,41 @@ async function locked(home: string, waiting: () => void, work: () => RehomeOutco
   }
 }
 
+/** Its steps carried on from where the journal is: what a failure comes to. Before the old place is
+ * cleared, it goes back; from then on, it says it's stuck (and why, in `state.json`), for `--resume`. */
+function carried(journal: Journal, rewriter: Rewriter): RehomeOutcome {
+  const home = homeOf(journal);
+  try {
+    carryOn(journal, rewriter);
+  } catch (error) {
+    if (error instanceof LockLost) return { result: "waits", message: WAITS, status: rehomeStatus(home) };
+    if (!forwardOnly(journal.step)) return { result: "failed", message: failed(journal, error), status: rehomeStatus(home) };
+    const message = error instanceof Error ? error.message : String(error);
+    noteRecord(home, { failed: { at: Date.now(), step: journal.step, message } });
+    return { result: "stuck", message, status: rehomeStatus(home) };
+  }
+  return { result: journal.way === "move" ? "done" : "back", status: rehomeStatus(home) };
+}
+
 /** One that stopped part way, finished: back before it cleared the old place, forward after. */
 function resumed(home: string, rewriter: Rewriter): RehomeOutcome | null {
-  const journal = readJournal(home);
+  let journal: Journal | null;
+  try { journal = readJournal(home); } catch (error) {
+    return { result: "stuck", message: (error as Error).message, status: rehomeStatus(home) };
+  }
   if (!journal || journal.step === "done") return null;
   if (!forwardOnly(journal.step)) {
     const message = failed(journal, new Error(`It stopped part way (${journal.step}), so it went back.`));
     return { result: "failed", message, status: rehomeStatus(home) };
   }
-  carryOn(journal, rewriter);
-  return { result: journal.way === "move" ? "done" : "back", status: rehomeStatus(home) };
+  return carried(journal, rewriter);
 }
 
 /** `rehome`: this Mac's box moved into `home`, from the app's folder around `appBox`. */
 export async function rehome(folders: Folders, options: MoveOptions = {}): Promise<RehomeOutcome> {
   const { home } = folders;
   const rewriter = options.rewriter ?? NO_REWRITE;
-  if (process.platform !== "darwin") return { result: "refused", message: moveRefusal(folders, { appVersion: null, release: null })!, status: rehomeStatus(home) };
+  if (process.platform !== "darwin") return { result: "refused", message: NOTHING_TO_MOVE, status: rehomeStatus(home) };
   return locked(home, options.waiting ?? (() => {}), () => {
     const earlier = resumed(home, rewriter);
     if (earlier) return earlier;
@@ -542,12 +584,11 @@ export async function rehome(folders: Folders, options: MoveOptions = {}): Promi
       if (record.state !== "done") noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + 1, nextTry: now + AFTER_A_FAILURE, failed: { at: now, step: "plan", message: refusal }, asked: null });
       return { result: "refused", message: refusal, status: rehomeStatus(home) };
     }
-    const journal: Journal = {
+    return run({
       v: 1, way: "move", began: now, step: "plan", from: folders.appFolder, to: home,
       ...planMove(folders, release!), kept: path.join(rehomeFolder(home), "kept", stamp(now)),
       ...(options.keepsAwakeOff ? { keepsAwakeOff: true } : {}),
-    };
-    return run(journal, rewriter);
+    }, rewriter);
   });
 }
 
@@ -558,16 +599,19 @@ export async function rehomeBack(home: string, options: MoveOptions = {}): Promi
     const earlier = resumed(home, rewriter);
     if (earlier) return earlier;
     const record = readRecord(home);
-    const appFolder = typeof record.from === "string" ? record.from : "";
-    const refusal = process.platform !== "darwin" || !appFolder ? backRefusal({ appFolder: appFolder || home, home }) ?? "This Mac's box hasn't moved: there's nothing to move back." : backRefusal({ appFolder, home });
-    if (refusal) return { result: "refused", message: refusal, status: rehomeStatus(home) };
+    const appFolder = typeof record.from === "string" ? record.from : null;
+    const refusal = backRefusal({ appFolder: appFolder ?? home, home });
     const now = Date.now();
-    const journal: Journal = {
+    if (refusal || !appFolder) {
+      // (Move Back asked: answered, for the keeper not to ask again until it's asked again.)
+      if (record.state === "done" && record.way === "move") noteRecord(home, { failed: { at: now, step: "plan", message: refusal! }, asked: null });
+      return { result: "refused", message: refusal ?? NOT_MOVED, status: rehomeStatus(home) };
+    }
+    return run({
       v: 1, way: "back", began: now, step: "plan", from: home, to: appFolder,
       ...planBack({ appFolder, home }, record.merged), kept: path.join(rehomeFolder(home), "kept", `${stamp(now)}-back`),
       ...(record.kept?.length ? { keptBefore: record.kept[record.kept.length - 1] } : {}),
-    };
-    return run(journal, rewriter);
+    }, rewriter);
   });
 }
 
@@ -578,18 +622,13 @@ function run(journal: Journal, rewriter: Rewriter): RehomeOutcome {
   writeJournal(home, journal);
   noteRecord(home, { state: "moving", way: journal.way, from: foldersOf(journal).appFolder, to: home });
   stopPoint("after-plan");
-  try {
-    carryOn(journal, rewriter);
-  } catch (error) {
-    if (forwardOnly(journal.step)) throw error;
-    const message = failed(journal, error);
-    return { result: "failed", message, status: rehomeStatus(home) };
-  }
-  return { result: journal.way === "move" ? "done" : "back", status: rehomeStatus(home) };
+  return carried(journal, rewriter);
 }
 
-/** `rehome --resume`: a move that stopped part way finished, back or forward (nothing without one). */
+/** `rehome --resume`: a move that stopped part way finished, back or forward (nothing without one,
+ * and nothing made for it). */
 export async function rehomeResume(home: string, options: MoveOptions = {}): Promise<RehomeOutcome> {
+  if (!moveUnderWay(home)) return { result: "nothing", status: rehomeStatus(home) };
   return locked(home, options.waiting ?? (() => {}), () => resumed(home, options.rewriter ?? NO_REWRITE) ?? { result: "nothing", status: rehomeStatus(home) });
 }
 
@@ -601,27 +640,38 @@ export interface Readiness {
   status: RehomeStatus;
 }
 
-/** Whether the keeper should run the move now (#333 §3.1, §3.5): one under way first; then Move Back
- * or Move Now asked; else at a quiet moment (nothing working, nothing waiting on you), its tries
- * and their next time as `state.json` says. A move waiting three days for a quiet moment says it's
- * overdue there, for a client to offer Move Now. */
+/** Whether the keeper should run the move now, with the box running as it is (#333 §3.1, §3.5): one
+ * under way first; then Move Back asked; then whatever keeps it from moving at all (each refusal but
+ * the box running, which the keeper stops first); then Move Now asked; else at a quiet moment
+ * (nothing working, nothing waiting on you), its tries and their next time as `state.json` says.
+ * Only then does it wait (`waiting`), and three days of that is overdue, for a client to offer
+ * Move Now. Moved back, it moves again only on Move Now. */
 export async function rehomeReady(home: string, appFolder: string | null, { appVersion = null, release, now = Date.now(), busy }: { appVersion?: string | null; release?: string; now?: number; busy?: () => Promise<boolean> } = {}): Promise<Readiness> {
   clearKept(home, now);
   const say = (ready: boolean, how: Readiness["how"], why?: string): Readiness => ({ ready, how, ...(why ? { why } : {}), status: rehomeStatus(home, now) });
-  if (readJournal(home) && readJournal(home)!.step !== "done") return say(true, "resume");
+  let journal: Journal | null;
+  try { journal = readJournal(home); } catch (error) { return say(false, null, (error as Error).message); }
+  if (journal && journal.step !== "done") return say(true, "resume");
   if (process.platform !== "darwin") return say(false, null, NOTHING_TO_MOVE);
   const record = readRecord(home);
-  if (record.asked === "back") return say(record.state === "done" && record.way === "move", "back");
-  if (record.state === "done" && record.way === "move") return say(false, null, "This Mac's box has moved.");
-  // (The first time it's asked: waiting from now.)
-  if (record.state == null || record.state === "back") noteRecord(home, { state: "waiting", waitingSince: now });
-  else if (record.waitingSince == null) noteRecord(home, { waitingSince: now });
+  const moved = record.state === "done" && record.way === "move";
+  if (record.asked === "back") {
+    const refusal = moved && typeof record.from === "string" ? backRefusal({ appFolder: record.from, home }, { running: false }) : NOT_MOVED;
+    if (!refusal) return say(true, "back");
+    noteRecord(home, { failed: { at: now, step: "plan", message: refusal }, asked: null });
+    return say(false, null, refusal);
+  }
+  if (moved) return say(false, null, "This Mac's box has moved.");
+  if (record.state === "back" && record.asked !== "now") return say(false, null, "It was moved back: it moves again only on Move Now.");
+  if (!appFolder) return say(false, null, "Only the app's own box, in its folder, moves.");
+  const refusal = moveRefusal({ appFolder, home }, { appVersion, release, running: false });
+  if (refusal) return say(false, null, refusal);
   if (record.asked === "now") return say(true, "move");
   if ((record.tries ?? 0) >= MOST_TRIES) return say(false, null, "It didn't move after three tries: it waits for Move Now.");
   if (record.nextTry && record.nextTry > now) return say(false, null, "It tries again later.");
-  if (!appFolder) return say(false, null, "Only the app's own box, in its folder, moves.");
-  const refusal = moveRefusal({ appFolder, home }, { appVersion, release });
-  if (refusal) return say(false, null, refusal);
+  // (The first time it's only waiting for a quiet moment: waiting from now.)
+  if (record.state == null || record.state === "back") noteRecord(home, { state: "waiting", waitingSince: now });
+  else if (record.waitingSince == null) noteRecord(home, { waitingSince: now });
   const working = busy ? await busy() : (await agentsWorking().catch(() => null)) !== false || readAsks().length > 0;
   if (working) return say(false, null, "It moves when nothing's running.");
   return say(true, "move");
@@ -640,7 +690,7 @@ export function askRehome(home: string, ask: "now" | "back"): string | null {
   if (process.platform !== "darwin") return NOTHING_TO_MOVE;
   const record = readRecord(home);
   const moved = record.state === "done" && record.way === "move";
-  if (ask === "back" && !moved) return "This Mac's box hasn't moved: there's nothing to move back.";
+  if (ask === "back" && !moved) return NOT_MOVED;
   if (ask === "now" && moved) return "This Mac's box has moved already.";
   noteRecord(home, { asked: ask });
   return null;

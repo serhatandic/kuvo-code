@@ -5,7 +5,7 @@
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import type { RehomeStatus } from "../../shared/routes/box";
-import { APP_FOLDER, K, REAL_BOX, homeFolder } from "../home";
+import { APP_FOLDER, K, homeFolder } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { askRehome } from "./move";
 import { rehomeStatus } from "./state";
@@ -18,7 +18,8 @@ export function rehomeHome(): string | null {
   if (!APP_FOLDER) return K;
   const root = process.env.KUVO_MACHINE_ROOT;
   if (root && !root.includes("/") && root !== "." && root !== "..") return path.join(homeFolder(), root);
-  return REAL_BOX ? path.join(homeFolder(), ".kuvo-code") : null;
+  // (The real app's folder alone, by its own name: a demo or test copy's is `run.kuvo.code.<…>`.)
+  return path.basename(APP_FOLDER) === "run.kuvo.code" ? path.join(homeFolder(), ".kuvo-code") : null;
 }
 
 const NOTHING_YET: RehomeStatus = {

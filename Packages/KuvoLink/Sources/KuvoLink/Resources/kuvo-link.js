@@ -13321,43 +13321,80 @@ function noteRecord(home, change) {
 }
 function rehomeStatus(home, now = Date.now()) {
   const kept = readRecord(home);
-  const journal = readJournal(home);
-  const underWay = journal && journal.step !== "done";
+  let journal = null;
+  let unreadable = false;
+  try {
+    journal = readJournal(home);
+  } catch {
+    unreadable = true;
+  }
+  const underWay = journal !== null && journal.step !== "done" ? journal : null;
   const waitingSince = typeof kept.waitingSince === "number" ? kept.waitingSince : null;
-  const state = underWay ? forwardOnly(journal.step) ? "clearing" : "moving" : kept.state ?? null;
+  const recorded = kept.state === "moving" ? "failed" : kept.state ?? null;
+  const state = unreadable ? "moving" : underWay ? forwardOnly(underWay.step) ? "clearing" : "moving" : recorded;
   return {
     state,
-    way: underWay ? journal.way : kept.way ?? null,
-    step: underWay ? journal.step : null,
+    way: underWay ? underWay.way : kept.way ?? null,
+    step: underWay ? underWay.step : null,
     tries: typeof kept.tries === "number" ? kept.tries : 0,
     nextTry: typeof kept.nextTry === "number" ? kept.nextTry : null,
     waitingSince,
     overdue: state === "waiting" && waitingSince !== null && now - waitingSince >= OVERDUE_AFTER,
-    failed: kept.failed ?? null,
+    failed: unreadable ? { at: now, step: null, message: new UnreadableJournal().message } : kept.failed ?? null,
     movedAt: typeof kept.movedAt === "number" ? kept.movedAt : null,
     keptUntil: typeof kept.keptUntil === "number" ? kept.keptUntil : null,
     owed: Array.isArray(kept.owed) ? kept.owed : [],
     asked: kept.asked ?? null,
-    from: kept.from ?? (underWay ? journal.from : null),
-    to: kept.to ?? (underWay ? journal.to : null)
+    from: kept.from ?? underWay?.from ?? null,
+    to: kept.to ?? underWay?.to ?? null
   };
 }
 var journalFile = (home) => path57.join(rehomeFolder(home), "journal.json");
 var actsFile = (home) => path57.join(rehomeFolder(home), "journal.acts");
 function readJournal(home) {
+  let text;
   try {
-    const kept = JSON.parse(fs55.readFileSync(journalFile(home), "utf8"));
-    return isObject(kept) && kept.v === 1 && typeof kept.step === "string" ? kept : null;
+    text = fs55.readFileSync(journalFile(home), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return null;
+    throw new UnreadableJournal;
+  }
+  let kept;
+  try {
+    kept = JSON.parse(text);
   } catch {
-    return null;
+    throw new UnreadableJournal;
+  }
+  if (!isObject(kept) || kept.v !== 1 || typeof kept.step !== "string")
+    throw new UnreadableJournal;
+  return kept;
+}
+
+class UnreadableJournal extends Error {
+  constructor() {
+    super("The move's journal can't be read: nothing is done until someone looks at it (updates/rehome/journal.json).");
   }
 }
 var moveUnderWay = (home) => {
-  const journal = readJournal(home);
-  return journal !== null && journal.step !== "done";
+  try {
+    const journal = readJournal(home);
+    return journal !== null && journal.step !== "done";
+  } catch {
+    return true;
+  }
 };
 function writeJournal(home, journal) {
-  writePrivate(journalFile(home), JSON.stringify(journal, null, 1));
+  const file = journalFile(home);
+  const temporary = `${file}.${process.pid}.tmp`;
+  const fd = fs55.openSync(temporary, "w", 384);
+  try {
+    fs55.writeSync(fd, JSON.stringify(journal, null, 1));
+    fs55.fsyncSync(fd);
+  } finally {
+    fs55.closeSync(fd);
+  }
+  fs55.renameSync(temporary, file);
   syncFolder(rehomeFolder(home));
 }
 function forgetJournal(home) {
@@ -38872,7 +38909,7 @@ import fs124 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "9baaf632261d";
+var BRIDGE_VERSION = "1aac4518a711";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -38904,6 +38941,7 @@ var BESIDE = [
 var APP_ATTACHMENTS = "Attachments";
 var PROCESS_RECORD = /^(keeper\..*|serve\.json|served\.json|host\.json|engine\.json|bridge\.json|link\.(pid|version|needed)|box\.(pid|lock)|.*\.pid|.*\.lock|\.updating|socket\.key|\.system-asking|engine-(output|stopped)|engine\.retry|agents-stopped|update-(trial|restore))$/;
 var SERVED_FILE = "served.json";
+var NOT_MOVED = "This Mac's box hasn't moved: there's nothing to move back.";
 var NOTHING_TO_MOVE = "This machine's box is in its own home already: there's nothing to move.";
 var exists2 = (file) => {
   try {
@@ -38948,8 +38986,8 @@ function runningIn(run, { keeper = true } = {}) {
     return pid !== null && processRuns(pid, name);
   }).map(([, , what]) => what);
 }
-var ran2 = (command, args) => {
-  const result = spawnSync9(command, args, { encoding: "utf8", timeout: 120000 });
+var ran2 = (command, args, timeout = 120000) => {
+  const result = spawnSync9(command, args, { encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024 });
   return { status: result.status, output: `${result.stdout ?? ""}`, errors: `${result.stderr ?? ""}` };
 };
 var nearest = (file) => {
@@ -39042,7 +39080,7 @@ function planBack({ appFolder, home }, merged = []) {
   const clearing = [...sources.filter((each) => !sources.some((other) => inside4(each, other))), path126.join(home, "bin")].filter(exists2);
   return { placements, clearing };
 }
-function moveRefusal({ appFolder, home }, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = NO_REWRITE }) {
+function moveRefusal({ appFolder, home }, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = NO_REWRITE, running: checkRunning = true }) {
   if (process.platform !== "darwin")
     return NOTHING_TO_MOVE;
   const box = path126.join(appFolder, "box");
@@ -39056,7 +39094,7 @@ function moveRefusal({ appFolder, home }, { appVersion, release, bridgeVersion =
   if (!isObject(served) || served.bridge !== bridgeVersion || appVersion !== null && served.app !== appVersion) {
     return "This Mac's box hasn't started since Kuvo Code updated: it moves once it has.";
   }
-  const running = runningIn(path126.join(box, "run"), { keeper: false });
+  const running = checkRunning ? runningIn(path126.join(box, "run"), { keeper: false }) : [];
   if (running.length)
     return `Something is running in this Mac's box (${running.join(", ")}): it moves once that's stopped.`;
   if (release !== undefined && (!release || !exists2(path126.join(release, "bin", "kuvo-start")) || !exists2(path126.join(release, "bin", "kuvo-link.js")))) {
@@ -39078,13 +39116,13 @@ function moveRefusal({ appFolder, home }, { appVersion, release, bridgeVersion =
   const plan = planMove({ appFolder, home }, release ?? path126.join(home, "bin"));
   return rewriter.refuses(plan.placements, pathMap(plan.placements));
 }
-function backRefusal({ appFolder, home }) {
+function backRefusal({ appFolder, home }, { running: checkRunning = true } = {}) {
   if (process.platform !== "darwin")
     return NOTHING_TO_MOVE;
   const state = readRecord(home);
   if (state.state !== "done" || state.way !== "move")
-    return "This Mac's box hasn't moved: there's nothing to move back.";
-  const running = runningIn(path126.join(home, "run"));
+    return NOT_MOVED;
+  const running = checkRunning ? runningIn(path126.join(home, "run")) : [];
   if (running.length)
     return `Something is running in this Mac's box (${running.join(", ")}): it moves back once that's stopped.`;
   const old = path126.join(appFolder, "box", "run");
@@ -39122,19 +39160,26 @@ function freeName(file) {
     if (!exists2(`${base} ${n}${extension}`))
       return `${base} ${n}${extension}`;
 }
-function place2(home, from, to, source, merged = false) {
-  if (!exists2(to))
-    return rename(home, from, to, { source, merged });
-  const here = fs124.lstatSync(from), there = fs124.lstatSync(to);
-  if (here.isDirectory() && there.isDirectory()) {
+function place2(home, from, to, source, wins, merged = false) {
+  if (exists2(to) && fs124.lstatSync(from).isDirectory() && fs124.lstatSync(to).isDirectory()) {
     for (const name of listOf(from).sort())
-      place2(home, path126.join(from, name), path126.join(to, name), path126.join(source, name), true);
+      place2(home, path126.join(from, name), path126.join(to, name), path126.join(source, name), wins, true);
     return;
   }
-  rename(home, from, freeName(to), { source, merged: true });
+  const clash = exists2(to);
+  if (!clash)
+    rename(home, from, to, { source, merged });
+  else if (!wins)
+    rename(home, from, freeName(to), { source, merged: true });
+  else {
+    rename(home, to, freeName(to));
+    rename(home, from, to, { source, merged: true });
+  }
+  if (merged || clash)
+    stopPoint("in-merge");
 }
 function clone(from, to, installed = false) {
-  const result = ran2("/bin/cp", [installed ? "-RPp" : "-cRPp", from, to]);
+  const result = ran2("/bin/cp", [installed ? "-RPp" : "-cRPp", from, to], undefined);
   if (result.status !== 0)
     throw new Error(`${from} couldn't be cloned: ${result.errors.trim().slice(0, 300)}`);
 }
@@ -39167,18 +39212,23 @@ function cloneAll(journal) {
 function settleBoxFiles(journal) {
   const { appFolder, home } = foldersOf2(journal);
   const box = journal.placements.find((each) => each.to === (journal.way === "move" ? path126.join(home, "box") : path126.join(appFolder, "box", "box")));
-  if (box && exists2(box.staged))
-    fs124.rmSync(path126.join(box.staged, "kind"), { force: true });
-  if (journal.way === "move" && journal.keepsAwakeOff && box && exists2(box.staged))
-    setKeepsAwake(false, path126.join(box.staged, "work.json"));
+  if (!box || !exists2(box.staged))
+    return;
+  fs124.rmSync(path126.join(box.staged, "kind"), { force: true });
+  if (journal.way === "back")
+    for (const name of ["keys", "bot-keys"])
+      fs124.rmSync(path126.join(box.staged, name), { recursive: true, force: true });
 }
 function undo(journal) {
   const home = homeOf(journal);
+  let undone = 0;
   for (const act of readActs(home).reverse()) {
     if (act.act === "rename") {
       if (exists2(act.to) && !exists2(act.from)) {
         fs124.mkdirSync(path126.dirname(act.from), { recursive: true, mode: 448 });
         fs124.renameSync(act.to, act.from);
+        if (++undone === 1)
+          stopPoint("in-undo");
       }
     } else if (act.folder) {
       try {
@@ -39189,13 +39239,12 @@ function undo(journal) {
     }
   }
   fs124.rmSync(staging(home), { recursive: true, force: true });
-  forgetJournal(home);
 }
 var foldersOf2 = (journal) => journal.way === "move" ? { appFolder: journal.from, home: journal.to } : { appFolder: journal.to, home: journal.from };
 var homeOf = (journal) => foldersOf2(journal).home;
 function stepTo(journal, step) {
   if (!holdsLock(homeOf(journal)))
-    throw new Error("Another move took its lock.");
+    throw new LockLost("Another move took its lock.");
   journal.step = step;
   writeJournal(homeOf(journal), journal);
 }
@@ -39252,15 +39301,16 @@ function carryOn2(journal, rewriter) {
       if (!exists2(placement.staged))
         continue;
       madeFolder(home, path126.dirname(placement.to), keptLike(journal));
-      place2(home, placement.staged, placement.to, placement.from);
+      place2(home, placement.staged, placement.to, placement.from, journal.way === "back");
       if (++placed === 1)
         stopPoint("in-place");
     }
     if (journal.way === "move") {
       const box = path126.join(home, "box");
       madeFolder(home, box);
-      if (journal.keepsAwakeOff && !exists2(path126.join(box, "work.json"))) {
-        journalAct(home, { act: "made", path: path126.join(box, "work.json") });
+      if (journal.keepsAwakeOff) {
+        if (!exists2(path126.join(box, "work.json")))
+          journalAct(home, { act: "made", path: path126.join(box, "work.json") });
         setKeepsAwake(false, path126.join(box, "work.json"));
       }
       journalAct(home, { act: "made", path: path126.join(box, "kind") });
@@ -39275,6 +39325,12 @@ function carryOn2(journal, rewriter) {
     stopPoint("after-fix");
   }
   if (at("clear")) {
+    if (stepIndex(journal.step) < stepIndex("clear")) {
+      const run = journal.way === "move" ? path126.join(journal.from, "box", "run") : path126.join(home, "run");
+      const running = runningIn(run, { keeper: journal.way === "back" });
+      if (running.length)
+        throw new Error(`Something started in the box as it moved (${running.join(", ")}), so it went back.`);
+    }
     stepTo(journal, "clear");
     const root = journal.way === "move" ? journal.from : home;
     let cleared = 0;
@@ -39320,45 +39376,61 @@ function failed2(journal, error, now = Date.now()) {
   undo(journal);
   const message = error instanceof Error ? error.message : String(error);
   const record = readRecord(home);
-  if (journal.way === "back") {
+  if (journal.way === "back")
     noteRecord(home, { state: "done", way: "move", failed: { at: now, step, message }, asked: null });
-    return message;
-  }
-  noteRecord(home, {
-    state: "failed",
-    way: journal.way,
-    tries: (record.tries ?? 0) + 1,
-    nextTry: now + AFTER_A_FAILURE,
-    failed: { at: now, step, message },
-    asked: null
-  });
+  else
+    noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + 1, nextTry: now + AFTER_A_FAILURE, failed: { at: now, step, message }, asked: null });
+  forgetJournal(home);
   return message;
 }
+
+class LockLost extends Error {
+}
+var WAITS = "Another move is under way.";
 async function locked2(home, waiting, work) {
   if (!await takeLock(home, { waiting }))
-    return { result: "waits", message: "Another move is under way.", status: rehomeStatus(home) };
+    return { result: "waits", message: WAITS, status: rehomeStatus(home) };
   try {
     return work();
   } finally {
     giveLock(home);
   }
 }
+function carried(journal, rewriter) {
+  const home = homeOf(journal);
+  try {
+    carryOn2(journal, rewriter);
+  } catch (error) {
+    if (error instanceof LockLost)
+      return { result: "waits", message: WAITS, status: rehomeStatus(home) };
+    if (!forwardOnly(journal.step))
+      return { result: "failed", message: failed2(journal, error), status: rehomeStatus(home) };
+    const message = error instanceof Error ? error.message : String(error);
+    noteRecord(home, { failed: { at: Date.now(), step: journal.step, message } });
+    return { result: "stuck", message, status: rehomeStatus(home) };
+  }
+  return { result: journal.way === "move" ? "done" : "back", status: rehomeStatus(home) };
+}
 function resumed(home, rewriter) {
-  const journal = readJournal(home);
+  let journal;
+  try {
+    journal = readJournal(home);
+  } catch (error) {
+    return { result: "stuck", message: error.message, status: rehomeStatus(home) };
+  }
   if (!journal || journal.step === "done")
     return null;
   if (!forwardOnly(journal.step)) {
     const message = failed2(journal, new Error(`It stopped part way (${journal.step}), so it went back.`));
     return { result: "failed", message, status: rehomeStatus(home) };
   }
-  carryOn2(journal, rewriter);
-  return { result: journal.way === "move" ? "done" : "back", status: rehomeStatus(home) };
+  return carried(journal, rewriter);
 }
 async function rehome(folders, options = {}) {
   const { home } = folders;
   const rewriter = options.rewriter ?? NO_REWRITE;
   if (process.platform !== "darwin")
-    return { result: "refused", message: moveRefusal(folders, { appVersion: null, release: null }), status: rehomeStatus(home) };
+    return { result: "refused", message: NOTHING_TO_MOVE, status: rehomeStatus(home) };
   return locked2(home, options.waiting ?? (() => {}), () => {
     const earlier = resumed(home, rewriter);
     if (earlier)
@@ -39372,7 +39444,7 @@ async function rehome(folders, options = {}) {
         noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + 1, nextTry: now + AFTER_A_FAILURE, failed: { at: now, step: "plan", message: refusal }, asked: null });
       return { result: "refused", message: refusal, status: rehomeStatus(home) };
     }
-    const journal = {
+    return run3({
       v: 1,
       way: "move",
       began: now,
@@ -39382,8 +39454,7 @@ async function rehome(folders, options = {}) {
       ...planMove(folders, release),
       kept: path126.join(rehomeFolder(home), "kept", stamp4(now)),
       ...options.keepsAwakeOff ? { keepsAwakeOff: true } : {}
-    };
-    return run3(journal, rewriter);
+    }, rewriter);
   });
 }
 async function rehomeBack(home, options = {}) {
@@ -39393,12 +39464,15 @@ async function rehomeBack(home, options = {}) {
     if (earlier)
       return earlier;
     const record = readRecord(home);
-    const appFolder = typeof record.from === "string" ? record.from : "";
-    const refusal = process.platform !== "darwin" || !appFolder ? backRefusal({ appFolder: appFolder || home, home }) ?? "This Mac's box hasn't moved: there's nothing to move back." : backRefusal({ appFolder, home });
-    if (refusal)
-      return { result: "refused", message: refusal, status: rehomeStatus(home) };
+    const appFolder = typeof record.from === "string" ? record.from : null;
+    const refusal = backRefusal({ appFolder: appFolder ?? home, home });
     const now = Date.now();
-    const journal = {
+    if (refusal || !appFolder) {
+      if (record.state === "done" && record.way === "move")
+        noteRecord(home, { failed: { at: now, step: "plan", message: refusal }, asked: null });
+      return { result: "refused", message: refusal ?? NOT_MOVED, status: rehomeStatus(home) };
+    }
+    return run3({
       v: 1,
       way: "back",
       began: now,
@@ -39408,8 +39482,7 @@ async function rehomeBack(home, options = {}) {
       ...planBack({ appFolder, home }, record.merged),
       kept: path126.join(rehomeFolder(home), "kept", `${stamp4(now)}-back`),
       ...record.kept?.length ? { keptBefore: record.kept[record.kept.length - 1] } : {}
-    };
-    return run3(journal, rewriter);
+    }, rewriter);
   });
 }
 function run3(journal, rewriter) {
@@ -39418,46 +39491,54 @@ function run3(journal, rewriter) {
   writeJournal(home, journal);
   noteRecord(home, { state: "moving", way: journal.way, from: foldersOf2(journal).appFolder, to: home });
   stopPoint("after-plan");
-  try {
-    carryOn2(journal, rewriter);
-  } catch (error) {
-    if (forwardOnly(journal.step))
-      throw error;
-    const message = failed2(journal, error);
-    return { result: "failed", message, status: rehomeStatus(home) };
-  }
-  return { result: journal.way === "move" ? "done" : "back", status: rehomeStatus(home) };
+  return carried(journal, rewriter);
 }
 async function rehomeResume(home, options = {}) {
+  if (!moveUnderWay(home))
+    return { result: "nothing", status: rehomeStatus(home) };
   return locked2(home, options.waiting ?? (() => {}), () => resumed(home, options.rewriter ?? NO_REWRITE) ?? { result: "nothing", status: rehomeStatus(home) });
 }
 async function rehomeReady(home, appFolder, { appVersion = null, release, now = Date.now(), busy } = {}) {
   clearKept(home, now);
   const say = (ready, how, why) => ({ ready, how, ...why ? { why } : {}, status: rehomeStatus(home, now) });
-  if (readJournal(home) && readJournal(home).step !== "done")
+  let journal;
+  try {
+    journal = readJournal(home);
+  } catch (error) {
+    return say(false, null, error.message);
+  }
+  if (journal && journal.step !== "done")
     return say(true, "resume");
   if (process.platform !== "darwin")
     return say(false, null, NOTHING_TO_MOVE);
   const record = readRecord(home);
-  if (record.asked === "back")
-    return say(record.state === "done" && record.way === "move", "back");
-  if (record.state === "done" && record.way === "move")
+  const moved = record.state === "done" && record.way === "move";
+  if (record.asked === "back") {
+    const refusal = moved && typeof record.from === "string" ? backRefusal({ appFolder: record.from, home }, { running: false }) : NOT_MOVED;
+    if (!refusal)
+      return say(true, "back");
+    noteRecord(home, { failed: { at: now, step: "plan", message: refusal }, asked: null });
+    return say(false, null, refusal);
+  }
+  if (moved)
     return say(false, null, "This Mac's box has moved.");
-  if (record.state == null || record.state === "back")
-    noteRecord(home, { state: "waiting", waitingSince: now });
-  else if (record.waitingSince == null)
-    noteRecord(home, { waitingSince: now });
+  if (record.state === "back" && record.asked !== "now")
+    return say(false, null, "It was moved back: it moves again only on Move Now.");
+  if (!appFolder)
+    return say(false, null, "Only the app's own box, in its folder, moves.");
+  const refusal = moveRefusal({ appFolder, home }, { appVersion, release, running: false });
+  if (refusal)
+    return say(false, null, refusal);
   if (record.asked === "now")
     return say(true, "move");
   if ((record.tries ?? 0) >= MOST_TRIES)
     return say(false, null, "It didn't move after three tries: it waits for Move Now.");
   if (record.nextTry && record.nextTry > now)
     return say(false, null, "It tries again later.");
-  if (!appFolder)
-    return say(false, null, "Only the app's own box, in its folder, moves.");
-  const refusal = moveRefusal({ appFolder, home }, { appVersion, release });
-  if (refusal)
-    return say(false, null, refusal);
+  if (record.state == null || record.state === "back")
+    noteRecord(home, { state: "waiting", waitingSince: now });
+  else if (record.waitingSince == null)
+    noteRecord(home, { waitingSince: now });
   const working = busy ? await busy() : await agentsWorking().catch(() => null) !== false || readAsks().length > 0;
   if (working)
     return say(false, null, "It moves when nothing's running.");
@@ -39478,7 +39559,7 @@ function askRehome(home, ask) {
   const record = readRecord(home);
   const moved = record.state === "done" && record.way === "move";
   if (ask === "back" && !moved)
-    return "This Mac's box hasn't moved: there's nothing to move back.";
+    return NOT_MOVED;
   if (ask === "now" && moved)
     return "This Mac's box has moved already.";
   noteRecord(home, { asked: ask });
@@ -39503,8 +39584,10 @@ function appFolderOf(appBox, home) {
 }
 
 // Packages/Box/src/link/rehome/command.ts
+var EXIT = { done: 0, back: 0, nothing: 0, refused: 1, failed: 1, stuck: 3, waits: 4 };
 var USAGE = "Usage: kuvo-link.js rehome <root> [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent";
 async function rehomeCommand(root, args) {
+  delete process.env.KUVO_BOX;
   const option = (name) => args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined;
   const say = (value) => console.log(JSON.stringify(value));
   const waiting = () => console.error("Another move is under way: this one waits for it.");
@@ -39547,10 +39630,10 @@ async function rehomeCommand(root, args) {
     }
     const outcome = args.includes("--resume") ? await rehomeResume(home, { waiting }) : args.includes("--back") ? await rehomeBack(home, { waiting }) : await rehome(folders(), { appVersion: process.env.KUVO_APP_VERSION || null, release: option("--release") ?? null, keepsAwakeOff: option("--keeps-awake") === "off", waiting });
     say(outcome);
-    return outcome.result === "refused" || outcome.result === "failed" || outcome.result === "waits" ? 1 : 0;
+    return EXIT[outcome.result];
   } catch (error) {
-    say({ result: "failed", message: error instanceof Error ? error.message : String(error), status: rehomeStatus(home) });
-    return 1;
+    say({ result: "stuck", message: error instanceof Error ? error.message : String(error), status: rehomeStatus(home) });
+    return EXIT.stuck;
   }
 }
 
@@ -45743,7 +45826,7 @@ function rehomeHome() {
   const root = process.env.KUVO_MACHINE_ROOT;
   if (root && !root.includes("/") && root !== "." && root !== "..")
     return path147.join(homeFolder(), root);
-  return REAL_BOX ? path147.join(homeFolder(), ".kuvo-code") : null;
+  return path147.basename(APP_FOLDER) === "run.kuvo.code" ? path147.join(homeFolder(), ".kuvo-code") : null;
 }
 var NOTHING_YET = {
   state: null,
