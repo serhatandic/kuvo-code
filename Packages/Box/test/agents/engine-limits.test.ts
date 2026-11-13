@@ -5,7 +5,7 @@
 import "../safety"
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { ENGINE_SERVICES, EngineAccounts, engineEndpoints } from "../../src/agents/engine-limits"
-import { Limits, limitsRoutes, type AccountLimits } from "../../src/agents/limits"
+import { BOX_ONLY_SERVICES, Limits, limitsRoutes, type AccountLimits } from "../../src/agents/limits"
 
 const real = { ...engineEndpoints }
 const NOW = Date.parse("2026-11-08T20:00:00.000Z")
@@ -40,7 +40,7 @@ const credential = (integrationID: string, value: Record<string, unknown>, activ
 async function stated(credentials: unknown[]) {
   const engine = new EngineAccounts(async () => ({ data: credentials }))
   const limits = new Limits(() => engine.accounts(), undefined, () => NOW, () => engine.refresh())
-  limits.alsoServices = ENGINE_SERVICES
+  limits.alsoServices = [...ENGINE_SERVICES, ...BOX_ONLY_SERVICES]
   return ((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data as { accounts: AccountLimits[]; services: string[] }
 }
 
@@ -61,7 +61,8 @@ test("each sign-in in Settings › Accounts is a row of its own, read with that 
     // Not the active one: never read.
     credential("anthropic", { type: "api", key: "sk-old" }, false),
   ])
-  expect(services.sort()).toEqual(["codex", "copilot", "grok", "opencode", "openrouter", "zai"])
+  // (Antigravity's too, with none signed in: only boxes read it, so a client's card of it takes only theirs.)
+  expect(services.sort()).toEqual(["antigravity", "codex", "copilot", "grok", "opencode", "openrouter", "zai"])
   const by = Object.fromEntries(accounts.map((each) => [each.provider, each]))
   expect(Object.keys(by)).toEqual(["openai", "github-copilot", "openrouter", "zai-coding-plan", "opencode-go"])
 

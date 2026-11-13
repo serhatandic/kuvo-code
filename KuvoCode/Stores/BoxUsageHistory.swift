@@ -27,7 +27,7 @@ final class BoxUsageHistory {
     init() {
         HostHistory.shared.refresh = { [weak self] in self?.refresh() }
         HostHistory.shared.setCodexFallback = { [weak self] model in await self?.setCodexFallback(model) ?? .unreachable }
-        HostHistory.shared.update(days: HostHistory.shared.days, covered: services.union(["antigravity"]), answered: false)
+        HostHistory.shared.update(days: HostHistory.shared.days, covered: services, answered: false)
         // Another time zone: other days.
         zoneObserver = NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.read() }
@@ -149,7 +149,7 @@ final class BoxUsageHistory {
             self.services = services
             UserDefaults.standard.set(services.sorted(), forKey: Self.servicesKey)
         }
-        HostHistory.shared.update(days: days, covered: services.union(["antigravity"]))
+        HostHistory.shared.update(days: days, covered: services)
         if !services.contains("codex") { HostHistory.shared.update(codexFallback: nil) }
     }
 
