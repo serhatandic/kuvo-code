@@ -2,6 +2,7 @@ import ClientDesign
 import ClientSessions
 import ClientText
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -449,7 +450,19 @@ import Testing
         engine.on("GET", "/api/provider", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek"]]])
         let catalog = Catalog()
         catalog.api = engine.api
+        // Its box, saying that model runs there (`kuvo/models/offered`), as "Who reads it" offers.
+        let offered = #"{"models":[{"providerID":"deepseek","id":"v4.1-flash","name":"DeepSeek V4.1 Flash"}],"known":{"engine":true,"agents":true}}"#
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
+                continuation.finish()
+            }
+        })
         await catalog.refresh()
+        _ = catalog.offered
+        try await until { catalog.offeredSaid != nil }
         #expect(catalog.reviewReaders.map(\.name) == ["DeepSeek V4.1 Flash"])
         let model = try session(directory: repository.path)
         model.reviewCatalog = { catalog }

@@ -276,7 +276,7 @@ extension ComposerFieldTests {
         engine.on("GET", "/api/agent", json: ["location": location, "data": []])
         engine.on("GET", "/api/command", json: ["location": location, "data": []])
         catalog.api = engine.api
-        await catalog.refresh()
+        try await offeringFlash()
         #expect(catalog.reviewReaders.count == 1)
         try await until { editing == "composer" }
         let field = try #require(field)
@@ -457,6 +457,23 @@ extension ComposerFieldTests {
         #expect(model.draftFiles.count == 1)
     }
 
+    /// The composer's models read, with its box saying what runs there (`kuvo/models/offered`): the
+    /// engine's one model, DeepSeek V4.1 Flash. Once it has said.
+    private func offeringFlash() async throws {
+        let offered = #"{"models":[{"providerID":"deepseek","id":"v4.1-flash","name":"DeepSeek V4.1 Flash"}],"known":{"engine":true,"agents":true}}"#
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
+                continuation.finish()
+            }
+        })
+        await catalog.refresh()
+        _ = catalog.offered
+        try await until { catalog.offeredSaid != nil }
+    }
+
     /// The model picker's popover, once it shows.
     private var popover: NSWindow? {
         NSApp.windows.first { $0.isVisible && String(describing: Swift.type(of: $0)).contains("Popover") }
@@ -485,19 +502,8 @@ extension ComposerFieldTests {
         engine.on("GET", "/api/agent", json: ["location": location, "data": []])
         engine.on("GET", "/api/command", json: ["location": location, "data": []])
         catalog.api = engine.api
-        // Its box, saying what runs there: the one model the engine lists, not the retired one.
-        let offered = #"{"models":[{"providerID":"deepseek","id":"v4.1-flash","name":"DeepSeek V4.1 Flash"}],"known":{"engine":true,"agents":true}}"#
-        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
-            AsyncThrowingStream { continuation in
-                let answered = request.path.hasPrefix("kuvo/models/offered")
-                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
-                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
-                continuation.finish()
-            }
-        })
-        await catalog.refresh()
-        _ = catalog.offered
-        try await until { catalog.offeredSaid != nil }
+        // (Not the retired one: its box says only the engine's one model runs.)
+        try await offeringFlash()
         look.model = ModelRef(id: "v3-retired", providerID: "deepseek")
         try await until { editing == "composer" }
         let field = try #require(field)
