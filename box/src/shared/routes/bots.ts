@@ -2,7 +2,7 @@
 // made, changed, deleted, brought here from another computer and told what it is now, and its keys
 // of its own ("Bots' own keys").
 
-import { bool, type Infer, list, map, NOTHING, nullable, number, object, type RouteShape, string, words } from "../shape";
+import { any, bool, type Infer, list, literal, map, NOTHING, nullable, number, object, type RouteShape, string, words } from "../shape";
 import { LIMITS } from "./work";
 
 /** How a bot looks: its colour, shape and face, by their names (`kuvo/bots/templates`' `looks`). */
@@ -42,8 +42,19 @@ export const BOT = object({
   "limits?": LIMITS,
   "allowed?": list(words("makeProject", "cloneProject")),
 });
-/** The bots that live here, the first made first. */
-export const BOTS = object({ bots: list(BOT) });
+/** A change to a bot (or its delete) that lives on another of your computers, held here until that
+ * computer answers ("Held for another computer"): the bot, that computer by its key (empty for one this box
+ * doesn't know now, as the client named it: a machine you removed) and by its name here, the change as `PATCH kuvo/bots/<id>` takes it (each field the last given) or a delete, and
+ * since when it's held (ms). */
+export const HELD_EDIT = object({ bot: string, box: string, computer: string, "change?": map(any), "delete?": literal(true), since: number });
+/** What another computer refused of an edit held here for it, lately (a day): the bot, that
+ * computer, the words to show, and when (ms). */
+export const REFUSED_EDIT = object({ bot: string, box: string, computer: string, message: string, at: number });
+/** The bots that live here, the first made first; and the edits held here for bots on your other
+ * computers, and what those refused lately (`bots.held`). */
+export const BOTS = object({ bots: list(BOT), "held?": list(HELD_EDIT), "refused?": list(REFUSED_EDIT) });
+/** An edit held here for the computer its bot lives on. */
+export const HELD = object({ held: HELD_EDIT });
 
 /** What New Bot offers here: its templates (a template's `personality` left out when it has
  * none), the personalities a bot can have (Kuvo Code's own, then yours, `custom`), the looks it
@@ -94,6 +105,8 @@ export type ChangedBot = Infer<typeof CHANGED>;
 export type BotKeys = Infer<typeof BOT_KEYS>;
 export type BotKeyValues = Infer<typeof BOT_KEY_VALUES>;
 export type BotKeyKept = Infer<typeof BOT_KEY_KEPT>;
+export type HeldEdit = Infer<typeof HELD_EDIT>;
+export type RefusedEdit = Infer<typeof REFUSED_EDIT>;
 
 export const BOT_ROUTES: RouteShape[] = [
   { route: "GET kuvo/bots", answers: { 200: BOTS } },
@@ -101,8 +114,8 @@ export const BOT_ROUTES: RouteShape[] = [
   { route: "GET kuvo/bots/templates", answers: { 200: TEMPLATES } },
   { route: "POST kuvo/bots/retell", answers: { 200: NOTHING } },
   { route: "POST kuvo/bots/keys/refresh", answers: { 200: NOTHING } },
-  { route: "PATCH kuvo/bots/:id", answers: { 200: CHANGED } },
-  { route: "DELETE kuvo/bots/:id", answers: { 200: NOTHING } },
+  { route: "PATCH kuvo/bots/:id", answers: { 200: CHANGED, 202: HELD } },
+  { route: "DELETE kuvo/bots/:id", answers: { 200: NOTHING, 202: HELD } },
   { route: "POST kuvo/bots/:id/arrived", answers: { 200: CHANGED } },
   { route: "GET kuvo/bots/:id/keys", answers: { 200: BOT_KEYS } },
   { route: "DELETE kuvo/bots/:id/keys", answers: { 200: NOTHING } },

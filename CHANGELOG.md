@@ -6,6 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Changes you make to a bot while its machine is away are kept by your Mac's background service rather than the app, so they reach the machine once it's back, also while Kuvo Code's window is closed; a change made on the machine meanwhile isn't undone by an older one that waited.
 - Your computers now decide usage alerts where they read the account, even with Kuvo Code closed. Your devices avoid repeat alerts using the same notification settings across your own computers, and your iPhone stays quiet when your Mac already showed an alert while its phone delivery was waiting. Devin alerts are unavailable because Devin has no sign-in in Kuvo Code’s background service; Usage settings now says so.
 
 - When a conversation's model can't run (its account needs a sign-in or a key, its coding agent isn't installed, or the model is gone), what Send says comes from the computer the conversation is on, in the same words on your Mac and your iPhone. It names the account and the model, but no longer the computer or a Settings page.

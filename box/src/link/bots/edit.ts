@@ -20,6 +20,7 @@ import { fitsLook, signInRefusal } from "./make";
 import { tellBot, toldNow } from "./tell";
 import { noteWorkChanged } from "../work/changes";
 import { limitsFrom } from "../work/limits";
+import { noteEdited } from "./edited";
 import { WORK_ACTIONS } from "../work/asks";
 import type { Target } from "../../shared/records";
 import type { BotLook } from "../../shared/routes/bots";
@@ -64,6 +65,9 @@ function onto(now: BotDescription | null, before: BotDescription, after: BotDesc
  * each checked here (`personality` null for none). */
 export type BotChange = Pick<GivenBot, "name" | "look" | "personality" | "job" | "model"> & { work?: unknown };
 
+/** The fields of a change whose times are noted (`noteEdited`). */
+const EDITED_FIELDS = ["name", "look", "personality", "job", "model", "work"];
+
 /** What `changeBot` answers: the bot as it is after the change, or why not. */
 export type ChangedAnswer = JSONAnswer<ChangedBot | { message: string }>;
 
@@ -80,8 +84,9 @@ interface BridgeGroups {
 // `PATCH kuvo/bots/<id>`, as the Mac's: a bot that lives here changed as Edit Bot changes it (its
 // name, look, personality or model), in its description and in its conversation, which is told as
 // the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
-// change in as it next connects (Bots.takeIn).
-export async function changeBot(id: string, given: BotChange | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal): Promise<ChangedAnswer> {
+// change in as it next connects (Bots.takeIn). `at`: when it was made (an edit another computer held,
+// as of when you made each field), noted for each field it names (`noteEdited`).
+export async function changeBot(id: string, given: BotChange | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal, at: number | Record<string, number> = Date.now()): Promise<ChangedAnswer> {
   const no = (status: OtherStatus, message: string): ChangedAnswer => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");
@@ -169,6 +174,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     }
     noteBotsChanged();
     noteWorkChanged(id);
+    noteEdited(id, ["work"], at);
     return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } satisfies ChangedBot };
   }
   let target: Target | null | undefined;
@@ -203,6 +209,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
     noteBotsChanged();
     if (limitsChanged) noteWorkChanged(id);
   }
+  noteEdited(id, EDITED_FIELDS.filter(field => field in given), at);
   return { status: 200, value: { bot: listBots(machine).find(each => each.id === id) ?? null } satisfies ChangedBot };
 }
 

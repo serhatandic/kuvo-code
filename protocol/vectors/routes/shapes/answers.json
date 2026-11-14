@@ -2322,6 +2322,33 @@
          }
         }
        }
+      },
+      "held?": {
+       "list": {
+        "object": {
+         "bot": "string",
+         "box": "string",
+         "computer": "string",
+         "change?": {
+          "map": "any"
+         },
+         "delete?": {
+          "literal": true
+         },
+         "since": "number"
+        }
+       }
+      },
+      "refused?": {
+       "list": {
+        "object": {
+         "bot": "string",
+         "box": "string",
+         "computer": "string",
+         "message": "string",
+         "at": "number"
+        }
+       }
       }
      }
     }
@@ -2763,6 +2790,24 @@
        ]
       }
      }
+    },
+    "202": {
+     "object": {
+      "held": {
+       "object": {
+        "bot": "string",
+        "box": "string",
+        "computer": "string",
+        "change?": {
+         "map": "any"
+        },
+        "delete?": {
+         "literal": true
+        },
+        "since": "number"
+       }
+      }
+     }
     }
    }
   },
@@ -2771,6 +2816,24 @@
    "answers": {
     "200": {
      "object": {}
+    },
+    "202": {
+     "object": {
+      "held": {
+       "object": {
+        "bot": "string",
+        "box": "string",
+        "computer": "string",
+        "change?": {
+         "map": "any"
+        },
+        "delete?": {
+         "literal": true
+        },
+        "since": "number"
+       }
+      }
+     }
     }
    }
   },
@@ -3063,6 +3126,9 @@
            },
            {
             "literal": "bots.events"
+           },
+           {
+            "literal": "bots.held"
            },
            {
             "literal": "bots.job"
@@ -3582,6 +3648,9 @@
            },
            {
             "literal": "bots.events"
+           },
+           {
+            "literal": "bots.held"
            },
            {
             "literal": "bots.job"
