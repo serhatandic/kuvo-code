@@ -25347,9 +25347,10 @@ function keeperOf(bot, on, link = readLink()) {
     return null;
   return peers.find((peer) => peer.key === on || peer.kind === "machine" && peer.id === on) ?? null;
 }
+var shownName2 = (peer) => peer.kind === "machine" && plainName(peer.name) || computerName(peer);
 var nameOf4 = (held, link) => {
   const peer = held.to ? peersOf(link).find((each) => each.key === held.to) : null;
-  return peer ? computerName(peer) : held.on || "another computer";
+  return peer ? shownName2(peer) : held.on || "another computer";
 };
 var viewOf = (held, link) => ({
   bot: held.bot,
@@ -25415,7 +25416,7 @@ function holdEdit(bot, given, on, now = Date.now()) {
     locked(LOCK13, () => {
       const before = readHeld(bot, link);
       if (before?.delete && checked) {
-        answer = no(404, `That bot is deleted: it goes from ${keeper ? computerName(keeper) : named} once it’s back.`);
+        answer = no(404, `That bot is deleted: it goes from ${keeper ? shownName2(keeper) : named} once it’s back.`);
         return;
       }
       const held = {
@@ -40802,7 +40803,7 @@ import fs131 from "node:fs";
 import path136 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b82674ef54a7";
+var BRIDGE_VERSION = "85de12265f28";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

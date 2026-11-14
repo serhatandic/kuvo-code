@@ -125,9 +125,12 @@ export function keeperOf(bot: string, on: string | null | undefined, link: LinkS
   return peers.find(peer => peer.key === on || (peer.kind === "machine" && peer.id === on)) ?? null;
 }
 
+// A computer as a client shows it: a machine by its name (its id on its Mac is how SSH reaches it).
+const shownName = (peer: Peer): string => (peer.kind === "machine" && plainName(peer.name)) || computerName(peer);
+
 const nameOf = (held: Pick<Held, "to" | "on">, link: LinkState | null): string => {
   const peer = held.to ? peersOf(link).find(each => each.key === held.to) : null;
-  return peer ? computerName(peer) : held.on || "another computer";
+  return peer ? shownName(peer) : held.on || "another computer";
 };
 
 const viewOf = (held: Held, link: LinkState | null): HeldEdit => ({
@@ -198,7 +201,7 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
     locked(LOCK, () => {
       const before = readHeld(bot, link);
       if (before?.delete && checked) {
-        answer = no(404, `That bot is deleted: it goes from ${keeper ? computerName(keeper) : named} once it’s back.`);
+        answer = no(404, `That bot is deleted: it goes from ${keeper ? shownName(keeper) : named} once it’s back.`);
         return;
       }
       const held: Held = {
