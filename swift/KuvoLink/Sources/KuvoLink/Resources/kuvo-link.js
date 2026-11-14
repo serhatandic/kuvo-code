@@ -1,6 +1,6 @@
-// Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
+// Built from box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
-// Packages/Box/src/link/main.ts
+// box/src/link/main.ts
 import { spawn as spawn17 } from "node:child_process";
 import crypto57 from "node:crypto";
 import fs168 from "node:fs";
@@ -8,7 +8,7 @@ import os22 from "node:os";
 import path173 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
-// Packages/Box/src/shared/text.ts
+// box/src/shared/text.ts
 import crypto from "node:crypto";
 var AGENTS_TEXT_BYTES = 200000;
 var oneLine = (text, limit) => Array.from(String(text).replace(/[\t\r\n]/g, " ")).slice(0, limit).join("");
@@ -43,7 +43,7 @@ function outsideShown(pattern, home) {
 var cut = (text, count) => text.length <= count ? text : text.slice(0, count - 1) + "…";
 var quote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
 
-// Packages/Box/src/shared/wait.ts
+// box/src/shared/wait.ts
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 var pause = (ms, signal) => new Promise((resolve) => {
   if (signal?.aborted)
@@ -60,12 +60,12 @@ var pause = (ms, signal) => new Promise((resolve) => {
 });
 var soon = (run, ms) => setTimeout(run, ms).unref?.();
 
-// Packages/Box/src/shared/hang.ts
+// box/src/shared/hang.ts
 import fs2 from "node:fs";
 import net from "node:net";
 import path2 from "node:path";
 
-// Packages/Box/src/shared/platform.ts
+// box/src/shared/platform.ts
 import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -339,7 +339,7 @@ async function processUse(pid, proc = "/proc") {
   return table === null ? null : macUse(table, pid);
 }
 
-// Packages/Box/src/shared/hang.ts
+// box/src/shared/hang.ts
 var LOOK_EVERY = 30000;
 var ANSWER_WITHIN = 20000;
 var HUNG_AFTER = 600000;
@@ -502,13 +502,13 @@ class HangWatch {
 }
 var isBridge = (command) => command.includes("kuvo-agents");
 
-// Packages/Box/src/link/areas/asks.ts
+// box/src/link/areas/asks.ts
 import fs6 from "node:fs";
 import net2 from "node:net";
 import os3 from "node:os";
 import path5 from "node:path";
 
-// Packages/Box/src/shared/json.ts
+// box/src/shared/json.ts
 function sortedJSON(value) {
   if (Array.isArray(value))
     return `[${value.map(sortedJSON).join(",")}]`;
@@ -528,16 +528,16 @@ var parsed = (body) => {
 };
 var sameJSON = (a, b) => sortedJSON(a ?? null) === sortedJSON(b ?? null);
 
-// Packages/Box/src/link/engine/client.ts
+// box/src/link/engine/client.ts
 import fs5 from "node:fs";
 
-// Packages/Box/src/link/home.ts
+// box/src/link/home.ts
 import crypto2 from "node:crypto";
 import fs4 from "node:fs";
 import os2 from "node:os";
 import path4 from "node:path";
 
-// Packages/Box/src/shared/account.ts
+// box/src/shared/account.ts
 import { spawnSync } from "node:child_process";
 import fs3 from "node:fs";
 import os from "node:os";
@@ -580,7 +580,7 @@ function accountName() {
   return accountEntry().name;
 }
 
-// Packages/Box/src/link/home.ts
+// box/src/link/home.ts
 var K = process.env.KUVO_HOME || path4.join(homeFolder(), ".kuvo-code");
 var KIND_FILE = path4.join(K, "box", "kind");
 function recordedKind(file = KIND_FILE) {
@@ -714,7 +714,7 @@ var scriptIs = (file) => {
   SCRIPT = file;
 };
 
-// Packages/Box/src/link/engine/client.ts
+// box/src/link/engine/client.ts
 var readEngineFile = () => JSON.parse(fs5.readFileSync(ENGINE_FILE, "utf8"));
 var readBridgeFile = () => JSON.parse(fs5.readFileSync(BRIDGE_FILE, "utf8"));
 function bridgeTarget() {
@@ -791,7 +791,7 @@ async function fetched(url, most, timeout) {
   return data;
 }
 
-// Packages/Box/src/link/areas/asks.ts
+// box/src/link/areas/asks.ts
 var ASKS_FILE = path5.join(RUN, "browser-asks.json");
 var BROWSER_SOCKET = path5.join(RUN, "browser.sock");
 var BROWSER_PID = path5.join(RUN, "browser.pid");
@@ -973,16 +973,16 @@ async function* askAnswerRoute(context, answering) {
   return yield* json(await answerAsk(ask.id, answer) ? 200 : 503, {});
 }
 
-// Packages/Box/src/link/work/asks.ts
+// box/src/link/work/asks.ts
 import crypto41 from "node:crypto";
 import fs109 from "node:fs";
 import path112 from "node:path";
 
-// Packages/Box/src/link/bots/here.ts
+// box/src/link/bots/here.ts
 import fs8 from "node:fs";
 import path7 from "node:path";
 
-// Packages/Box/src/shared/files.ts
+// box/src/shared/files.ts
 import crypto3 from "node:crypto";
 import fs7 from "node:fs";
 import path6 from "node:path";
@@ -1102,7 +1102,7 @@ async function lockedWhile(lock, work, { stale = 1e4, wait = 3000 } = {}) {
       turns.delete(lock);
   }
 }
-// Packages/Box/src/link/bots/here.ts
+// box/src/link/bots/here.ts
 var DESCRIPTION = 1;
 function botHere(id) {
   if (typeof id !== "string" || !/^bot_[A-Za-z0-9]+$/.test(id))
@@ -1145,7 +1145,7 @@ function changeDescription(folder, change) {
   });
 }
 
-// Packages/Box/src/shared/limits.ts
+// box/src/shared/limits.ts
 function resetsIn(text, now = Date.now()) {
   const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
   if (!found)
@@ -1180,7 +1180,7 @@ function isLimit(text) {
   return Boolean(text && /\b429\b|rate.?limit|usage limit|limit (?:was |has been )?reached|reached (?:its|your|the) (?:usage )?limit|quota|too many requests|resets? in|try again in|overloaded|capacity/i.test(text));
 }
 
-// Packages/Box/src/link/work/plan-limits.ts
+// box/src/link/work/plan-limits.ts
 var AGENT_NAMES = { claude: "Claude Code", codex: "Codex", cursor: "Cursor", grok: "Grok", antigravity: "Antigravity" };
 var ENGINE_NAMES = { codex: "ChatGPT", grok: "SuperGrok", copilot: "GitHub Copilot", openrouter: "OpenRouter", zai: "Z.ai", ollama: "Ollama", opencode: "OpenCode Go" };
 function amount(value, unit) {
@@ -1289,7 +1289,7 @@ async function planLimitsTool(bridge, signal) {
   }
 }
 
-// Packages/Box/src/link/work/plan-reset.ts
+// box/src/link/work/plan-reset.ts
 var said = (text) => ({ text, isError: false });
 var refused = (text) => ({ text, isError: true });
 var why = (error) => String(error?.message ?? error);
@@ -1388,11 +1388,11 @@ async function useResetTool(bridge, args, asker, ask, signal) {
   }
 }
 
-// Packages/Box/src/link/peers/directory.ts
+// box/src/link/peers/directory.ts
 import fs13 from "node:fs";
 import path11 from "node:path";
 
-// Packages/Box/src/link/crypto/keys.ts
+// box/src/link/crypto/keys.ts
 import crypto4 from "node:crypto";
 var PKCS8 = Buffer.from("302e020100300506032b656e04220420", "hex");
 var SPKI = Buffer.from("302a300506032b656e032100", "hex");
@@ -1404,7 +1404,7 @@ var publicOf = (raw) => crypto4.createPublicKey(privateKey(raw)).export({ format
 var dh = (raw, remote) => crypto4.diffieHellman({ privateKey: privateKey(raw), publicKey: publicKey(remote) });
 var addressOf = (secret) => crypto4.createHash("sha256").update("kuvo-link address v1").update(secret).digest().subarray(0, 16);
 
-// Packages/Box/src/link/crypto/noise.ts
+// box/src/link/crypto/noise.ts
 import crypto5 from "node:crypto";
 var sha256 = (data) => crypto5.createHash("sha256").update(data).digest();
 var hmac = (key, data) => crypto5.createHmac("sha256", key).update(data).digest();
@@ -1571,13 +1571,13 @@ function openOneWay(message, s, rs, prologue = MAIL_PROLOGUE) {
   return { payload: state.decryptAndHash(message.subarray(32)), following: state.split()[0] };
 }
 
-// Packages/Box/src/link/documents/format.ts
+// box/src/link/documents/format.ts
 import crypto6 from "node:crypto";
 
-// Packages/Box/src/shared/documents.ts
+// box/src/shared/documents.ts
 var DOC_KINDS = ["peers", "phones", "personalities"];
 
-// Packages/Box/src/link/documents/format.ts
+// box/src/link/documents/format.ts
 var DOC_SIGNED = Buffer.from("kuvo-link doc v1\x00");
 var MOST_DOC = 512 * 1024;
 var DOC_PART = 40000;
@@ -1656,11 +1656,11 @@ function held(envelope) {
 }
 var docKey = (origin, kind) => `${origin} ${kind}`;
 
-// Packages/Box/src/link/peers/known.ts
+// box/src/link/peers/known.ts
 import fs12 from "node:fs";
 import path10 from "node:path";
 
-// Packages/Box/src/link/moves/records.ts
+// box/src/link/moves/records.ts
 import fs9 from "node:fs";
 import path8 from "node:path";
 var MOVES = path8.join(RUN, "moves");
@@ -1822,7 +1822,7 @@ function switchedHere(now = Date.now()) {
   }
 }
 
-// Packages/Box/src/link/relay/dropped.ts
+// box/src/link/relay/dropped.ts
 import { randomBytes } from "node:crypto";
 import fs10 from "node:fs";
 var FENCE = Buffer.from("kuvo-fence:");
@@ -1870,7 +1870,7 @@ function noteDropped(to) {
     } catch {}
 }
 
-// Packages/Box/src/link/relay/frames.ts
+// box/src/link/relay/frames.ts
 var Frame = { handshake1: 1, handshake2: 2, transport: 3, close: 4, mail: 5 };
 var MAX_MESSAGE = 65535 - 16;
 var relayHello = (secret) => Buffer.concat([Buffer.from([1]), secret]);
@@ -1939,7 +1939,7 @@ function pieces(head, body, end) {
   return out.map(([h, b]) => encodeMessage(h, b));
 }
 
-// Packages/Box/src/link/setup/record.ts
+// box/src/link/setup/record.ts
 import crypto7 from "node:crypto";
 var SETUP_ID = /^set_[A-Za-z0-9_-]{22}$/;
 var STATIC_KEY = /^[A-Za-z0-9_-]{43}$/;
@@ -1989,7 +1989,7 @@ function startsFromOthers(link) {
   return { value, default: main ? "off" : "on" };
 }
 
-// Packages/Box/src/link/state.ts
+// box/src/link/state.ts
 import fs11 from "node:fs";
 import path9 from "node:path";
 var MAC_OVERLAY = ["key", "secret", "sign", "relay", "name"];
@@ -2038,7 +2038,7 @@ function updateLink(change) {
   });
 }
 
-// Packages/Box/src/link/peers/known.ts
+// box/src/link/peers/known.ts
 var KEY = /^[A-Za-z0-9_-]{43}$/;
 var ADDRESS = /^[A-Za-z0-9_-]{22}$/;
 var macsOf = (link) => [...new Set([...Array.isArray(link?.macs) ? link.macs : [], ...typeof link?.mac === "string" ? [link.mac] : []])];
@@ -2236,7 +2236,7 @@ function mailFor(peer, payload, link) {
 }
 var MAX_MAIL = 65600 - 17;
 
-// Packages/Box/src/shared/shape.ts
+// box/src/shared/shape.ts
 var string = "string";
 var number = "number";
 var bool = "bool";
@@ -2251,7 +2251,7 @@ var nullable = (shape) => oneOf(shape, "null");
 var NOTHING = object({});
 var BYTES = "bytes";
 
-// Packages/Box/src/shared/routes/projects.ts
+// box/src/shared/routes/projects.ts
 var PROJECT = object({
   directory: string,
   "name?": string,
@@ -2268,7 +2268,7 @@ var PROJECT_ROUTES = [
   { route: "DELETE kuvo/projects", answers: { 200: object({ archived: number, sessions: list(string) }), 409: object({ message: string, archived: number, kept: number, sessions: list(string) }) } }
 ];
 
-// Packages/Box/src/shared/routes/work.ts
+// box/src/shared/routes/work.ts
 var LIMITS = object({ "atOnce?": number, "perDay?": number, "depth?": number, "tokensPerDay?": number });
 var WORKS_FOR = object({ bot: string, name: string });
 var ANSWER = object({
@@ -2439,7 +2439,7 @@ var WORK_ROUTES = [
   { route: "POST kuvo/projects/new", answers: { 201: object({ project: PROJECT, text: string }), 400: REFUSED, 403: object({ message: string, needs: string }), 409: REFUSED, 502: REFUSED } }
 ];
 
-// Packages/Box/src/shared/routes/bots.ts
+// box/src/shared/routes/bots.ts
 var LOOKS = {
   colors: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
   shapes: ["round", "squircle", "pebble", "gem", "bloom"],
@@ -2491,7 +2491,7 @@ var BOT_KEYS2 = object({
 var BOT_KEY_VALUES = object({ keys: map(string) });
 var BOT_KEY_KEPT = object({ integration: string, own: bool, shared: bool });
 
-// Packages/Box/src/link/peers/directory.ts
+// box/src/link/peers/directory.ts
 var PEER_AGENTS_FILE = path11.join(RUN, "peer-agents.json");
 var MAC_AGENTS_FILE = path11.join(RUN, "mac-agents.json");
 var AGENTS_FILE = path11.join(RUN, "agents.json");
@@ -2609,7 +2609,7 @@ function composeAgents(own, ownID, peers, told, moved = new Map) {
   return { machine: ownID ?? null, agents };
 }
 
-// Packages/Box/src/link/peers/naming.ts
+// box/src/link/peers/naming.ts
 function messageBlock(start, end, headings) {
   const find = (text) => {
     const body = text.replace(/\s+$/u, "");
@@ -2775,7 +2775,7 @@ function namedAgents(own, peers, told, moved = new Map) {
   return agents;
 }
 
-// Packages/Box/src/link/messages/parts.ts
+// box/src/link/messages/parts.ts
 var KEYWORD_HEADING = "The user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:";
 var GOAL_HEADING = "The user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:";
 var KEYWORD_BLOCK = messageBlock("<sent-with>", "</sent-with>", [KEYWORD_HEADING, GOAL_HEADING]);
@@ -3012,13 +3012,13 @@ function fieldsOf(given) {
   };
 }
 
-// Packages/Box/src/link/engine/queue.ts
+// box/src/link/engine/queue.ts
 import crypto9 from "node:crypto";
 import fs16 from "node:fs";
 import path14 from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Packages/Box/src/link/engine/carrying.ts
+// box/src/link/engine/carrying.ts
 import fs14 from "node:fs";
 import path12 from "node:path";
 var FOLDER = path12.join(RUN, "carrying");
@@ -3067,7 +3067,7 @@ function endCarry(id) {
     fs14.rmSync(path12.join(FOLDER, id), { force: true });
 }
 
-// Packages/Box/src/shared/summaries.ts
+// box/src/shared/summaries.ts
 var asRows = (messages) => Array.isArray(messages) ? messages : [];
 var between = new Set(["synthetic", "system", "model-switched", "agent-switched", "shell"]);
 var asked2 = (row) => row?.type === "compaction" && row.reason === "manual";
@@ -3127,7 +3127,7 @@ function lastTurn(messages) {
 }
 var lastTurnEnd = (messages) => pastSummaries(asRows(messages)).find((row) => row?.type === "idle");
 
-// Packages/Box/src/link/engine/sessions.ts
+// box/src/link/engine/sessions.ts
 import crypto8 from "node:crypto";
 var isHiddenRun = (session) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat || session?.metadata?.kuvo?.reviewPart);
 var lastMessage = { time: 0, counter: 0 };
@@ -3138,7 +3138,7 @@ function messageID(now = Date.now()) {
   return `msg_${time}${Array.from(crypto8.randomBytes(14), (byte) => alphabet[byte % alphabet.length]).join("")}`;
 }
 
-// Packages/Box/src/shared/queues.ts
+// box/src/shared/queues.ts
 import fs15 from "node:fs";
 import path13 from "node:path";
 var queueFiles = (run) => ({
@@ -3265,7 +3265,7 @@ function keepWaiting(files, session, message, { from, words, kept: keptText } = 
   return kept;
 }
 
-// Packages/Box/src/link/engine/queue.ts
+// box/src/link/engine/queue.ts
 var FILES = queueFiles(RUN);
 var QUEUES_FILE = FILES.file;
 var WAITING_DIR = FILES.waiting;
@@ -3907,7 +3907,7 @@ async function scanQueues(target, found) {
   }
 }
 
-// Packages/Box/src/link/letters/letter.ts
+// box/src/link/letters/letter.ts
 import path15 from "node:path";
 var OUTBOX = path15.join(RUN, "outbox");
 var SENDING = path15.join(OUTBOX, "sending");
@@ -3967,16 +3967,16 @@ async function placeOfSessionPatiently(session, targets) {
 }
 var letterTries = new Map;
 
-// Packages/Box/src/link/letters/outbox.ts
+// box/src/link/letters/outbox.ts
 import crypto40 from "node:crypto";
 import fs108 from "node:fs";
 import path111 from "node:path";
 
-// Packages/Box/src/link/peers/agents.ts
+// box/src/link/peers/agents.ts
 import fs107 from "node:fs";
 import path110 from "node:path";
 
-// Packages/Box/src/shared/features.ts
+// box/src/shared/features.ts
 var FEATURES = [
   "accounts.credentials",
   "accounts.ended",
@@ -4129,7 +4129,7 @@ var FEATURES = [
   "worktrees.where"
 ];
 
-// Packages/Box/src/shared/routes/mac.ts
+// box/src/shared/routes/mac.ts
 var MAC_FEATURES = [
   "accounts.ended",
   "hosts",
@@ -4151,11 +4151,11 @@ var MACHINES = object({
   hosts: list(string)
 });
 
-// Packages/Box/src/link/areas/projects.ts
+// box/src/link/areas/projects.ts
 import fs106 from "node:fs";
 import path109 from "node:path";
 
-// Packages/Box/src/shared/session-notes.ts
+// box/src/shared/session-notes.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto10 from "node:crypto";
 import fs17 from "node:fs";
@@ -4298,7 +4298,7 @@ function withNotes(metadata, kuvo, top = {}) {
   return { ...notes, kuvo: own };
 }
 
-// Packages/Box/src/link/engine/notes.ts
+// box/src/link/engine/notes.ts
 import path17 from "node:path";
 var NOTES_LOCKS = path17.join(RUN, "notes");
 var OLD_LOCK = path17.join(RUN, "work", ".notes.lock");
@@ -4319,7 +4319,7 @@ function notesPlace(target) {
 var rewriteOn = (target, id, change, signal) => rewriteSession(notesPlace(target), id, change, signal);
 var inTurnOn = (target, id, work, signal) => inTurn(placeName(target), id, work, across, signal);
 
-// Packages/Box/src/link/fence/policy.ts
+// box/src/link/fence/policy.ts
 import fs18 from "node:fs";
 import os4 from "node:os";
 import path18 from "node:path";
@@ -5127,12 +5127,12 @@ function followLinks(where, loose = false) {
 }
 var escapeRegex = (text) => text.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&");
 
-// Packages/Box/src/link/bots/tell.ts
+// box/src/link/bots/tell.ts
 import crypto39 from "node:crypto";
 import fs105 from "node:fs";
 import path108 from "node:path";
 
-// Packages/Box/src/link/areas/config.ts
+// box/src/link/areas/config.ts
 import fs19 from "node:fs";
 import path19 from "node:path";
 var CONFIG_FILE = IS_MAC ? path19.join(ENGINE_CONFIG, "opencode", "opencode.json") : path19.join(BOX, "opencode.json");
@@ -5294,7 +5294,7 @@ function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
   locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
 }
 
-// Packages/Box/src/link/personalities/library.ts
+// box/src/link/personalities/library.ts
 import fs20 from "node:fs";
 import path20 from "node:path";
 var PERSONALITIES_FILE = path20.join(BOTS, "personalities.json");
@@ -5385,7 +5385,7 @@ function botPersonalities(kit, library = readPersonalities()) {
   return [...presets, ...fromKit, ...library.personalities.map((each) => ({ id: each.id, name: each.name, description: each.description, custom: true, instruction: told(each) }))];
 }
 
-// Packages/Box/src/link/work/former-asks.ts
+// box/src/link/work/former-asks.ts
 var same = (a, b) => a.action === b.action && a.resource === b.resource && a.effect === b.effect;
 var PROGRAMS = [
   "useradd",
@@ -5551,20 +5551,20 @@ var FORMER = [...ALWAYS_ASK_RULES, ...PUBLISH_ASK_RULES, ...FORMER_ASK_RULES];
 var withoutFormerAsks = (rules, kept = []) => rules.filter((rule) => !FORMER.some((each) => same(each, rule)) || kept.some((each) => same(each, rule)));
 var hasFormerAsks = (rules, kept = []) => rules.some((rule) => FORMER.some((each) => same(each, rule)) && !kept.some((each) => same(each, rule)));
 
-// Packages/Box/src/link/work/approval.ts
+// box/src/link/work/approval.ts
 import path26 from "node:path";
 
-// Packages/Box/src/link/work/sandbox.ts
+// box/src/link/work/sandbox.ts
 import path25 from "node:path";
 
-// Packages/Box/src/link/fence/state.ts
+// box/src/link/fence/state.ts
 import { spawnSync as spawnSync3 } from "node:child_process";
 import crypto12 from "node:crypto";
 import fs24 from "node:fs";
 import os5 from "node:os";
 import path24 from "node:path";
 
-// Packages/Box/src/link/fence/allowed.ts
+// box/src/link/fence/allowed.ts
 import crypto11 from "node:crypto";
 import fs21 from "node:fs";
 import path21 from "node:path";
@@ -5779,11 +5779,11 @@ async function writeRuleWouldBe(where) {
   }
 }
 
-// Packages/Box/src/link/fence/landlock.ts
+// box/src/link/fence/landlock.ts
 import { spawn as spawn2, spawnSync as spawnSync2 } from "node:child_process";
 import fs22 from "node:fs";
 
-// Packages/Box/src/link/fence/finished.ts
+// box/src/link/fence/finished.ts
 var LOAD = new Set(["ETIMEDOUT", "EAGAIN", "ENOMEM", "EMFILE", "ENFILE"]);
 function didntFinish(run) {
   if (run.status !== null)
@@ -5794,7 +5794,7 @@ function didntFinish(run) {
   return run.signal === "SIGKILL";
 }
 
-// Packages/Box/src/link/fence/landlock.ts
+// box/src/link/fence/landlock.ts
 function landlockPolicy(policy) {
   return JSON.stringify({
     hidden: [...policy.kuvo, ...policy.secrets],
@@ -6248,7 +6248,7 @@ process.stderr.write(shell + ": can't run (" + errno() + ")\n");
 process.exit(127);
 `;
 
-// Packages/Box/src/link/fence/lookalike.ts
+// box/src/link/fence/lookalike.ts
 import fs23 from "node:fs";
 import path22 from "node:path";
 function alikeName(name) {
@@ -6267,7 +6267,7 @@ function lookalikesOf(file) {
   }
 }
 
-// Packages/Box/src/link/fence/seatbelt.ts
+// box/src/link/fence/seatbelt.ts
 import path23 from "node:path";
 var AGENT_FOLDERS = 4;
 var quote2 = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
@@ -6400,7 +6400,7 @@ function seatbeltProfile(policy, options) {
 `;
 }
 
-// Packages/Box/src/link/fence/files.ts
+// box/src/link/fence/files.ts
 var sh = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 var wakeLines = (places) => [
   `own=$F/none w_bot=`,
@@ -6877,7 +6877,7 @@ function agentsNote(platform, tmuxFits = true, gitKept = false) {
 `);
 }
 
-// Packages/Box/src/link/fence/state.ts
+// box/src/link/fence/state.ts
 var CHECK = "POST kuvo/sandbox/check";
 var RESTART = "POST kuvo/engine/restart";
 var FOLDER2 = realish(path24.join(RUN, "fence"));
@@ -7454,7 +7454,7 @@ function keepFence(every = (round) => {
 }
 var fenceFiles = { folder: FOLDER2, plugin: PLUGIN, launcher: places.launcher, version: VERSION };
 
-// Packages/Box/src/link/work/sandbox.ts
+// box/src/link/work/sandbox.ts
 function sandboxOn(agents = false) {
   return sandboxGap(agents) === null;
 }
@@ -7469,7 +7469,7 @@ function sandboxGap(agents = false) {
   return agents && !agentsInSandbox() ? "agents" : null;
 }
 
-// Packages/Box/src/link/work/approval.ts
+// box/src/link/work/approval.ts
 var APPROVALS = ["askFirst", "acceptEdits", "auto", "fullAccess"];
 var isApproval = (value) => APPROVALS.includes(value);
 var RANK = { askFirst: 0, acceptEdits: 1, auto: 2, fullAccess: 3 };
@@ -7610,7 +7610,7 @@ function approvalOf(session, where = {}, since = approvalsSince(), byDefault) {
   return { approval: guessed, stored: false, applied: null, effective: approval, ...held ? { held } : {}, ...pending ? { pending } : {} };
 }
 
-// Packages/Box/src/link/bots/jobs.ts
+// box/src/link/bots/jobs.ts
 import fs25 from "node:fs";
 import path27 from "node:path";
 var JOB_FILE = "job.json";
@@ -7788,7 +7788,7 @@ function detailsBeyond(job, details) {
 `));
 }
 
-// Packages/Box/src/link/bots/kit.ts
+// box/src/link/bots/kit.ts
 import fs26 from "node:fs";
 import os6 from "node:os";
 import path28 from "node:path";
@@ -7898,15 +7898,15 @@ ${kit.identityNote}`);
   return part ? text.replace("⟦jobPart⟧", () => part) : text.replace(/(\n\n)?⟦jobPart⟧/, "");
 }
 
-// Packages/Box/src/link/areas/wakes.ts
+// box/src/link/areas/wakes.ts
 import { execFile as execFile10 } from "node:child_process";
 import fs104 from "node:fs";
 import path107 from "node:path";
 
-// Packages/Box/src/link/follow.ts
+// box/src/link/follow.ts
 import fs28 from "node:fs";
 
-// Packages/Box/src/shared/watch.ts
+// box/src/shared/watch.ts
 import fs27 from "node:fs";
 var WATCH_LOOKS_AGAIN = [250, 1000];
 var watching = new Set;
@@ -7944,7 +7944,7 @@ function watchFolder(folder, changed, { recursive = false, missed = () => change
   return watcher;
 }
 
-// Packages/Box/src/link/follow.ts
+// box/src/link/follow.ts
 function watchFolders(folders, changed, { recursive = true, missed = changed } = {}) {
   let whole = folders.length > 0;
   const watchers = [];
@@ -8065,23 +8065,23 @@ async function* followedLive(read, listen, signal, { look = () => "", every = 15
 }
 var WATCH_SETTLES = [250, 1000, 5000];
 
-// Packages/Box/src/link/notices/news.ts
+// box/src/link/notices/news.ts
 import os12 from "node:os";
 import path106 from "node:path";
 
-// Packages/Box/src/link/work/autopilot.ts
+// box/src/link/work/autopilot.ts
 import fs103 from "node:fs";
 import path105 from "node:path";
 
-// Packages/Box/src/link/work/goals.ts
+// box/src/link/work/goals.ts
 import crypto38 from "node:crypto";
 import fs102 from "node:fs";
 import path104 from "node:path";
 
-// Packages/Box/src/shared/goals.ts
+// box/src/shared/goals.ts
 var PAUSED_BY_YOU = "You paused it.";
 
-// Packages/Box/src/link/work/clock.ts
+// box/src/link/work/clock.ts
 function zone2() {
   const name = process.env.KUVO_TZ;
   if (!name)
@@ -8160,12 +8160,12 @@ function timeGiven(value) {
   return Number.isFinite(at) ? at : null;
 }
 
-// Packages/Box/src/link/work/awake.ts
+// box/src/link/work/awake.ts
 import { execFileSync as execFileSync2, spawn as spawn3 } from "node:child_process";
 import fs30 from "node:fs";
 import path30 from "node:path";
 
-// Packages/Box/src/link/work/settings.ts
+// box/src/link/work/settings.ts
 import fs29 from "node:fs";
 import path29 from "node:path";
 var WORK_SETTINGS_FILE = path29.join(BOX, "work.json");
@@ -8242,7 +8242,7 @@ function workSettings(file = WORK_SETTINGS_FILE, awake) {
   return { projectsFolder: folder, ...suggested ? { suggested } : {}, ...awake ? { keepsAwake: keepsAwakeSetting(file), awakeNow: awake.now } : {} };
 }
 
-// Packages/Box/src/link/work/awake.ts
+// box/src/link/work/awake.ts
 var held2 = null;
 var keepsAwake = () => IS_MAC && process.platform === "darwin";
 function keepAwake(on) {
@@ -8378,7 +8378,7 @@ function keepAwakeWhileWorking(busy, every = 1e4) {
   looking.unref?.();
 }
 
-// Packages/Box/src/link/work/changes.ts
+// box/src/link/work/changes.ts
 import fs31 from "node:fs";
 import path31 from "node:path";
 var WORK_FOLDER = path31.join(RUN, "work");
@@ -8406,7 +8406,7 @@ function noteWorkChanged(bot, file = WORK_CHANGES) {
     tell();
 }
 
-// Packages/Box/src/link/work/apps.ts
+// box/src/link/work/apps.ts
 import { execFile as execFile2 } from "node:child_process";
 import crypto13 from "node:crypto";
 import fs32 from "node:fs";
@@ -8703,12 +8703,12 @@ function linuxIcon(icon, folders, home) {
   return (big ?? sized.sort((a, b) => b.width - a.width)[0]).file;
 }
 
-// Packages/Box/src/link/work/projects.ts
+// box/src/link/work/projects.ts
 import { execFile as execFile5 } from "node:child_process";
 import fs34 from "node:fs";
 import path34 from "node:path";
 
-// Packages/Box/src/shared/git.ts
+// box/src/shared/git.ts
 import { execFile as execFile3, spawnSync as spawnSync4 } from "node:child_process";
 import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, promises as fsp, readSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -8984,7 +8984,7 @@ async function askedArgsLater(args, cwd) {
   return [...lead, ...EVERY, ...watcher, ...withOptions(rest, false) ?? rest];
 }
 
-// Packages/Box/src/link/git.ts
+// box/src/link/git.ts
 import { execFile as execFile4, spawn as spawn4, spawnSync as spawnSync5 } from "node:child_process";
 var GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 var BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
@@ -9057,7 +9057,7 @@ function sizeLater(folder) {
   });
 }
 
-// Packages/Box/src/link/work/found-folders.ts
+// box/src/link/work/found-folders.ts
 import fs33 from "node:fs";
 import path33 from "node:path";
 var FOUND_FILE2 = path33.join(BOX, "found-folders.json");
@@ -9118,7 +9118,7 @@ function realPath(file) {
   }
 }
 
-// Packages/Box/src/link/work/projects.ts
+// box/src/link/work/projects.ts
 function folderName(name) {
   const folded = name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 60).replace(/[-.]+$/, "");
   return folded || null;
@@ -9224,16 +9224,16 @@ function madeWords(made, here) {
   return `Made ${name} at ${shownPath(made.project.directory)}, ${what}, on ${here}. It's in the sidebar; start sessions in it with start_session (project: "${name}").`;
 }
 
-// Packages/Box/src/link/work/background.ts
+// box/src/link/work/background.ts
 import fs43 from "node:fs";
 import path45 from "node:path";
 
-// Packages/Box/src/link/areas/engine.ts
+// box/src/link/areas/engine.ts
 import { spawn as spawn6 } from "node:child_process";
 import fs38 from "node:fs";
 import path38 from "node:path";
 
-// Packages/Box/src/link/server/paths.ts
+// box/src/link/server/paths.ts
 var SOCKETS = [/^api\/pty\/[^/?]+\/connect(\?|$)/];
 var REQUEST_HEADERS = ["content-type", "accept", "x-opencode-directory", "last-event-id"];
 var RESPONSE_HEADERS = ["content-type", "cache-control"];
@@ -9287,7 +9287,7 @@ var signInReturn = (url) => {
   return match && Number(match[2]) <= 65535 ? match[1] : null;
 };
 
-// Packages/Box/src/link/compat/leave-running.ts
+// box/src/link/compat/leave-running.ts
 import fs35 from "node:fs";
 import path35 from "node:path";
 var SEEN_FILE = path35.join(RUN, "link.seen");
@@ -9321,14 +9321,14 @@ function phoneSeenLately(file = SEEN_FILE, now = Date.now()) {
   }
 }
 
-// Packages/Box/src/link/updates/update.ts
+// box/src/link/updates/update.ts
 import { spawn as spawn5, spawnSync as spawnSync6 } from "node:child_process";
 import crypto14 from "node:crypto";
 import fs37 from "node:fs";
 import os7 from "node:os";
 import path37 from "node:path";
 
-// Packages/Box/src/shared/night.ts
+// box/src/shared/night.ts
 function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
   let parts;
   try {
@@ -9340,7 +9340,7 @@ function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
   return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
 }
 
-// Packages/Box/src/shared/updating.ts
+// box/src/shared/updating.ts
 import fs36 from "node:fs";
 import path36 from "node:path";
 function updateUnderWay(run) {
@@ -9360,7 +9360,7 @@ function updateUnderWay(run) {
   }
 }
 
-// Packages/Box/src/link/updates/update.ts
+// box/src/link/updates/update.ts
 var UPDATE_KEYS = ["iLSFoygG8wg+r2yj+/qnoMHpZIhPKRNLlf9vpEKmx0A="];
 var UPDATE_URL = "https://github.com/serhatandic/kuvo-code/releases/latest/download/boxes.json";
 var UPDATE_STATE = path37.join(RUN, "update.json");
@@ -10086,7 +10086,7 @@ async function* boxUpdateRoute({ request, json }) {
   return yield* json(202, updateStatus());
 }
 
-// Packages/Box/src/link/areas/engine.ts
+// box/src/link/areas/engine.ts
 var engineDown = () => {
   if (fs38.existsSync(path38.join(RUN, "stopped")))
     return "The engine isn't running.";
@@ -10262,7 +10262,7 @@ async function* signInReturnRoute(context) {
   return yield* loadSignInReturn(request.body, signal);
 }
 
-// Packages/Box/src/link/work/services.ts
+// box/src/link/work/services.ts
 import { execFile as execFile6 } from "node:child_process";
 import fs39 from "node:fs";
 import path39 from "node:path";
@@ -10351,23 +10351,23 @@ async function fromProc(groups, proc) {
   return found;
 }
 
-// Packages/Box/src/link/work/tree.ts
+// box/src/link/work/tree.ts
 import path44 from "node:path";
 
-// Packages/Box/src/link/notices/told.ts
+// box/src/link/notices/told.ts
 import path43 from "node:path";
 
-// Packages/Box/src/link/keeper.ts
+// box/src/link/keeper.ts
 import { spawn as spawn7 } from "node:child_process";
 import fs42 from "node:fs";
 import path42 from "node:path";
 
-// Packages/Box/src/link/vault/store.ts
+// box/src/link/vault/store.ts
 import crypto16 from "node:crypto";
 import fs41 from "node:fs";
 import path41 from "node:path";
 
-// Packages/Box/src/shared/routes/vault.ts
+// box/src/shared/routes/vault.ts
 var ITEM_KINDS = ["login", "key", "file", "note"];
 var GRANT_HOWS = ["own", "ask"];
 var VAULT_ITEM = object({
@@ -10443,7 +10443,7 @@ var VAULT_TOOL_LIST = object({ tools: list(any) });
 var VAULT_TOOL = object({ text: string, isError: bool });
 var VAULT_FILL = object({ item: object({ id: string, name: string }), "username?": string, values: map(string) });
 
-// Packages/Box/src/link/host-interface.ts
+// box/src/link/host-interface.ts
 import crypto15 from "node:crypto";
 import fs40 from "node:fs";
 import path40 from "node:path";
@@ -10601,7 +10601,7 @@ async function linkHost(call, body) {
   }
 }
 
-// Packages/Box/src/link/vault/gate.ts
+// box/src/link/vault/gate.ts
 var agentsUseVault = () => {
   if (process.env.KUVO_VAULT_AGENTS === "1" && !REAL_BOX)
     return true;
@@ -10616,7 +10616,7 @@ var agentsWaitForOlder = () => {
 };
 var AGENTS_LATER = "The user's vault isn't open to agents on this computer yet: its items, keys, files and notes can't be used here. To sign in, call browser_sign_in without an item: a sign-in the user lets you use on this site fills on its own, or else they sign in. For anything else, ask the user in the chat.";
 
-// Packages/Box/src/link/vault/store.ts
+// box/src/link/vault/store.ts
 var VAULT_FOLDER = path41.join(BOX, "vault");
 var ITEMS = path41.join(VAULT_FOLDER, "items.json");
 var GRANTS = path41.join(VAULT_FOLDER, "grants.json");
@@ -11103,7 +11103,7 @@ function vaultState() {
   };
 }
 
-// Packages/Box/src/link/keeper.ts
+// box/src/link/keeper.ts
 var isBridge2 = (pid) => pid !== process.pid && processRuns(pid, "kuvo-link.js");
 var needed = (link) => Boolean(link && ((link.phones ?? []).length || link.pairing && Date.now() < link.pairing.expires || peersOf(link).length)) || isMade();
 function noLongerNeeded() {
@@ -11154,7 +11154,7 @@ function startBridge() {
   child.unref();
 }
 
-// Packages/Box/src/link/notices/told.ts
+// box/src/link/notices/told.ts
 var TOLD_FOLDER = path43.join(RUN, "notices");
 var TOLD_FILE = path43.join(TOLD_FOLDER, "told.json");
 var TOLD_LOCK = path43.join(TOLD_FOLDER, "told.lock");
@@ -11238,7 +11238,7 @@ function watchSentByAgents(tell, { every = 3000, now = Date.now } = {}) {
   };
 }
 
-// Packages/Box/src/link/work/tree.ts
+// box/src/link/work/tree.ts
 function botOfConversation(session) {
   if (!session)
     return null;
@@ -11492,7 +11492,7 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
 }
 var placeWords = (work) => work.project ? `in ${work.project}` : work.folder === CHATS ? "in the chats" : `in ${path44.basename(work.folder) || work.folder}`;
 
-// Packages/Box/src/link/work/background.ts
+// box/src/link/work/background.ts
 var WORK_BACKGROUND = path45.join(WORK_FOLDER, "background.json");
 var WORK_STOPPED = path45.join(WORK_FOLDER, "stopped.json");
 var LOCK5 = path45.join(WORK_FOLDER, ".background.lock");
@@ -11800,12 +11800,12 @@ async function stopWork(target, session, holds = false) {
   return state;
 }
 
-// Packages/Box/src/link/work/wakes.ts
+// box/src/link/work/wakes.ts
 import crypto19 from "node:crypto";
 import fs47 from "node:fs";
 import path49 from "node:path";
 
-// Packages/Box/src/link/work/oversight.ts
+// box/src/link/work/oversight.ts
 import crypto17 from "node:crypto";
 import fs44 from "node:fs";
 import path46 from "node:path";
@@ -11842,7 +11842,7 @@ function noteOversightBy(caller, data, kind) {
     noteOversight(bot, data.id, kind);
 }
 
-// Packages/Box/src/link/work/awaited.ts
+// box/src/link/work/awaited.ts
 import crypto18 from "node:crypto";
 import fs45 from "node:fs";
 import path47 from "node:path";
@@ -11906,7 +11906,7 @@ function forgetOld(now = Date.now()) {
   }
 }
 
-// Packages/Box/src/link/work/unanswering.ts
+// box/src/link/work/unanswering.ts
 import fs46 from "node:fs";
 import path48 from "node:path";
 var UNANSWERING2 = path48.join(WORK_FOLDER, "unanswering.json");
@@ -12038,7 +12038,7 @@ async function followUnanswering(source, event, file = UNANSWERING2, now = Date.
     await answeredOn(source, { providerID: model.providerID, id: model.id }, file, now);
 }
 
-// Packages/Box/src/link/work/wakes.ts
+// box/src/link/work/wakes.ts
 var WORK_WAKES = path49.join(WORK_FOLDER, "wakes.json");
 var WORK_TOLD = path49.join(WORK_FOLDER, "told.json");
 var LOCK6 = path49.join(WORK_FOLDER, ".wakes.lock");
@@ -12803,7 +12803,7 @@ ${starter}`;
   } });
 }
 
-// Packages/Box/src/link/work/stopping.ts
+// box/src/link/work/stopping.ts
 async function leadWaitingOn(target, data, known, signal) {
   const starter = startedByOf(data);
   if (!starter || !wakesOf(data).includes("finished") || isArchived(data) || readStopped()[data.id] !== undefined)
@@ -12829,17 +12829,17 @@ async function stopConversation(target, data) {
   return state;
 }
 
-// Packages/Box/src/link/letters/calls.ts
+// box/src/link/letters/calls.ts
 import crypto37 from "node:crypto";
 import fs101 from "node:fs";
 import path103 from "node:path";
 
-// Packages/Box/src/link/work/elsewhere.ts
+// box/src/link/work/elsewhere.ts
 import crypto20 from "node:crypto";
 import fs50 from "node:fs";
 import path52 from "node:path";
 
-// Packages/Box/src/link/peers/reach.ts
+// box/src/link/peers/reach.ts
 import fs48 from "node:fs";
 import path50 from "node:path";
 var PEER_REACH = path50.join(RUN, "peer-reach.json");
@@ -12900,7 +12900,7 @@ function noteHeard(key) {
 var awaySince = (key, reach = readReach()) => reach[key] ?? null;
 var lastFoundAway = (key, checked = readReach(PEER_CHECKED)) => checked[key] ?? null;
 
-// Packages/Box/src/link/work/homes.ts
+// box/src/link/work/homes.ts
 import fs49 from "node:fs";
 import path51 from "node:path";
 var WORK_HOMES = path51.join(WORK_FOLDER, "homes.json");
@@ -12985,7 +12985,7 @@ async function forgetOldHomes(now = Date.now(), places = peerPlaces) {
   });
 }
 
-// Packages/Box/src/link/work/elsewhere.ts
+// box/src/link/work/elsewhere.ts
 var ELSEWHERE = path52.join(WORK_FOLDER, "elsewhere");
 var PUSHED = path52.join(WORK_FOLDER, "pushed.json");
 var LOCK9 = path52.join(WORK_FOLDER, ".elsewhere.lock");
@@ -13271,21 +13271,21 @@ function rowsBack() {
 }
 var idOf2 = (leads) => "rws_" + crypto20.createHash("sha256").update(JSON.stringify(leads)).digest("base64url").slice(0, 22);
 
-// Packages/Box/src/link/work-queue/numbers.ts
+// box/src/link/work-queue/numbers.ts
 import crypto22 from "node:crypto";
 import fs53 from "node:fs";
 import path55 from "node:path";
 
-// Packages/Box/src/link/work-queue/told.ts
+// box/src/link/work-queue/told.ts
 import fs52 from "node:fs";
 import path54 from "node:path";
 
-// Packages/Box/src/link/work-queue/store.ts
+// box/src/link/work-queue/store.ts
 import crypto21 from "node:crypto";
 import fs51 from "node:fs";
 import path53 from "node:path";
 
-// Packages/Box/src/link/work-queue/sources.ts
+// box/src/link/work-queue/sources.ts
 var GITHUB_HOST = "github.com";
 var OWNER = "[A-Za-z0-9](?:[A-Za-z0-9_-]{0,38})";
 var REPO = "[A-Za-z0-9_.-]{1,100}";
@@ -13312,7 +13312,7 @@ var sourceKeyOf = (source) => {
 };
 var sameSource = (a, b) => sourceKeyOf(a) === sourceKeyOf(b) || a.id !== undefined && a.id === b.id;
 
-// Packages/Box/src/link/work-queue/store.ts
+// box/src/link/work-queue/store.ts
 var WORK_QUEUE = path53.join(RUN, "work-queue");
 var QUEUES = path53.join(WORK_QUEUE, "queues");
 var FILES2 = path53.join(WORK_QUEUE, "files");
@@ -13633,7 +13633,7 @@ function noteHanded(item, from, to, at) {
   item.handed = [...item.handed ?? [], { from, to, at }].slice(-MOST_HANDED);
 }
 
-// Packages/Box/src/link/work-queue/told.ts
+// box/src/link/work-queue/told.ts
 var TOLD = path54.join(WORK_QUEUE, "peers");
 var MOST_TOLD = 1500;
 var MOST_TOLD_DONE = 100;
@@ -13782,7 +13782,7 @@ var forgetTold = (key) => {
     fs52.rmSync(fileOf3(key), { force: true });
 };
 
-// Packages/Box/src/link/work-queue/numbers.ts
+// box/src/link/work-queue/numbers.ts
 var NUMBERS_FILE = path55.join(WORK_QUEUE, "numbers.json");
 var BLOCK = 50;
 var LOW = 15;
@@ -14317,7 +14317,7 @@ function blockArrived(give, primary, options = {}) {
   return true;
 }
 
-// Packages/Box/src/link/documents/changed.ts
+// box/src/link/documents/changed.ts
 import fs54 from "node:fs";
 import path56 from "node:path";
 var DOCS_CHANGED = path56.join(RUN, "docs.changed");
@@ -14342,15 +14342,15 @@ function docsNoted() {
   }
 }
 
-// Packages/Box/src/link/setup/card.ts
+// box/src/link/setup/card.ts
 import fs57 from "node:fs";
 import path59 from "node:path";
 
-// Packages/Box/src/link/setup/judge.ts
+// box/src/link/setup/judge.ts
 import fs56 from "node:fs";
 import path58 from "node:path";
 
-// Packages/Box/src/link/rehome/state.ts
+// box/src/link/rehome/state.ts
 import fs55 from "node:fs";
 import path57 from "node:path";
 var rehomeFolder = (home) => path57.join(home, "updates", "rehome");
@@ -14567,13 +14567,13 @@ function giveLock(home) {
     fs55.rmSync(lockFolder(home), { recursive: true, force: true });
 }
 
-// Packages/Box/src/link/documents/work.ts
+// box/src/link/documents/work.ts
 import crypto25 from "node:crypto";
 
-// Packages/Box/src/link/phones.ts
+// box/src/link/phones.ts
 import crypto23 from "node:crypto";
 
-// Packages/Box/src/link/setup/settle.ts
+// box/src/link/setup/settle.ts
 var macsNamed = (doc) => (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).filter((box) => isObject(box) && box.kind === "mac" && typeof box.key === "string").map((box) => box.key);
 function sharedMachine(link) {
   if (IS_MAC || !link)
@@ -14629,7 +14629,7 @@ function noteConflict(link, doc) {
   setup.conflict = { primary: said.primary, epoch: said.epoch };
 }
 
-// Packages/Box/src/link/setup/main-only.ts
+// box/src/link/setup/main-only.ts
 function mainElsewhere(link) {
   const setup = link?.setup;
   if (!setup || setup.role !== "member" || typeof setup.primary !== "string")
@@ -14660,7 +14660,7 @@ function memberHosts(link) {
   return { hosts: hosts.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0) };
 }
 
-// Packages/Box/src/link/phones.ts
+// box/src/link/phones.ts
 function authorizePhone(key, hello, address) {
   const encoded = key.toString("base64url");
   if (!hello?.pair)
@@ -14809,7 +14809,7 @@ function pairingLink(link) {
 }
 var phoneDocs = (link) => Object.values(link?.docs ?? {}).map(held).filter((doc) => doc?.kind === "phones");
 
-// Packages/Box/src/link/documents/parts.ts
+// box/src/link/documents/parts.ts
 import crypto24 from "node:crypto";
 var fitsPart = (part, most) => isObject(part) && typeof part.whole === "string" && Number.isInteger(part.i) && Number.isInteger(part.of) && part.of >= 2 && part.of <= most && part.i >= 0 && part.i < part.of && typeof part.d === "string" && part.d.length <= DOC_PART && typeof part.s === "string";
 function assemble(parts, from, part, most = MOST_PARTS) {
@@ -14834,7 +14834,7 @@ function assemble(parts, from, part, most = MOST_PARTS) {
   return { d, s: pending.s };
 }
 
-// Packages/Box/src/link/documents/work.ts
+// box/src/link/documents/work.ts
 function takesFrom(link, origin, kind) {
   const macs = macsOf(link).map((mac) => macSign(link, mac)).filter(Boolean);
   const setup = followedSetup(link);
@@ -15143,7 +15143,7 @@ function currentDigest() {
   return have;
 }
 
-// Packages/Box/src/link/setup/held.ts
+// box/src/link/setup/held.ts
 function heldBy(link, now = Date.now()) {
   if (!IS_MAC || !link)
     return [];
@@ -15162,7 +15162,7 @@ function heldBy(link, now = Date.now()) {
   }).map((peer) => peer.key);
 }
 
-// Packages/Box/src/link/setup/view.ts
+// box/src/link/setup/view.ts
 function setupView(link) {
   const setup = followedSetup(link);
   const own = link ? ownKey(link) : null;
@@ -15190,7 +15190,7 @@ function setupView(link) {
   };
 }
 
-// Packages/Box/src/link/setup/judge.ts
+// box/src/link/setup/judge.ts
 var MOST_BOXES = 8;
 var words3 = (value, most = 100) => plainName(value).slice(0, most);
 var key = (value) => typeof value === "string" && KEY.test(value) ? value : null;
@@ -15402,7 +15402,7 @@ function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder(), engi
 }
 var ATTACHED_FILE = "app-attached.json";
 
-// Packages/Box/src/link/setup/card.ts
+// box/src/link/setup/card.ts
 var SETUP_CARD = path59.join(RUN, "setup-card.json");
 function cardNow() {
   const link = readLink();
@@ -15437,7 +15437,7 @@ function writeCard() {
   written2 = text;
 }
 
-// Packages/Box/src/link/setup/lead.ts
+// box/src/link/setup/lead.ts
 function leadsNow(link, now = Date.now()) {
   if (!IS_MAC)
     return !macsOf(link).length && "self" in rankedPrimary(link, undefined, now);
@@ -15497,15 +15497,15 @@ function noteSetupNow(now = Date.now(), { soon = 60000 } = {}) {
   } catch {}
 }
 
-// Packages/Box/src/link/work-queue/across.ts
+// box/src/link/work-queue/across.ts
 import crypto33 from "node:crypto";
 import fs89 from "node:fs";
 import path89 from "node:path";
 
-// Packages/Box/src/link/peers/computer-name.ts
+// box/src/link/peers/computer-name.ts
 var computerName = (peer) => peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer";
 
-// Packages/Box/src/link/work-queue/categories.ts
+// box/src/link/work-queue/categories.ts
 import path60 from "node:path";
 var CATEGORIES_FILE = path60.join(WORK_QUEUE, "categories.json");
 var LOCK12 = path60.join(WORK_QUEUE, ".categories.lock");
@@ -15662,12 +15662,12 @@ function takePrimaryCategories(given, used) {
   });
 }
 
-// Packages/Box/src/link/work-queue/hand.ts
+// box/src/link/work-queue/hand.ts
 import crypto31 from "node:crypto";
 import fs86 from "node:fs";
 import path86 from "node:path";
 
-// Packages/Box/src/link/letters/conversation.ts
+// box/src/link/letters/conversation.ts
 var READ_LIMIT = 24000;
 var READ_BY_MAIL = 20000;
 function conversationMarkdown(title, messages, agent) {
@@ -15831,7 +15831,7 @@ async function readConversation(target, session, data, name, signal) {
   return conversationMarkdown(name, messages, name);
 }
 
-// Packages/Box/src/link/letters/leave.ts
+// box/src/link/letters/leave.ts
 import crypto26 from "node:crypto";
 import fs58 from "node:fs";
 import path61 from "node:path";
@@ -15885,7 +15885,7 @@ async function letterAnswer(id, signal, { most = LETTER_WAIT, step = 2000, cut }
   return null;
 }
 
-// Packages/Box/src/link/letters/limits.ts
+// box/src/link/letters/limits.ts
 import fs59 from "node:fs";
 import path62 from "node:path";
 var LIMITS2 = {
@@ -15978,11 +15978,11 @@ function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
   }, file);
 }
 
-// Packages/Box/src/link/letters/start.ts
+// box/src/link/letters/start.ts
 import fs72 from "node:fs";
 import path72 from "node:path";
 
-// Packages/Box/src/link/engine/chats.ts
+// box/src/link/engine/chats.ts
 import fs60 from "node:fs";
 var chatsReal = null;
 function isChatsFolder(directory) {
@@ -16044,11 +16044,11 @@ function markChatOn(target, type, data, signal) {
   return markChat(target, id, signal);
 }
 
-// Packages/Box/src/link/areas/worktree-records.ts
+// box/src/link/areas/worktree-records.ts
 import fs62 from "node:fs";
 import path64 from "node:path";
 
-// Packages/Box/src/link/work/project-trees.ts
+// box/src/link/work/project-trees.ts
 import fs61 from "node:fs";
 import path63 from "node:path";
 var fsp2 = fs61.promises;
@@ -16213,7 +16213,7 @@ async function lookForTrees() {
   } catch {}
 }
 
-// Packages/Box/src/link/areas/worktree-records.ts
+// box/src/link/areas/worktree-records.ts
 var WORKTREES_FILE = path64.join(K, "box", "worktrees.json");
 var BRANCH_PREFIX_FILE = path64.join(K, "box", "git.json");
 function readWorktrees() {
@@ -16287,12 +16287,12 @@ function updateWorktrees(change, gone, restorable = (list) => list, handOver) {
 }
 var worktreeFollowers = new Set;
 
-// Packages/Box/src/link/areas/worktrees.ts
+// box/src/link/areas/worktrees.ts
 import { spawnSync as spawnSync7 } from "node:child_process";
 import fs64 from "node:fs";
 import path65 from "node:path";
 
-// Packages/Box/src/link/areas/git-words.ts
+// box/src/link/areas/git-words.ts
 import fs63 from "node:fs";
 var GIT_SETTINGS = {
   branchPrefix: ["branch_prefix"],
@@ -16388,7 +16388,7 @@ function moveGitSettings(given, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile 
   });
 }
 
-// Packages/Box/src/link/areas/worktrees.ts
+// box/src/link/areas/worktrees.ts
 function freeBranch(folder, name) {
   for (let suffix = 1;suffix <= 20; suffix++) {
     const candidate = suffix === 1 ? name : `${name}-${suffix}`;
@@ -16955,10 +16955,10 @@ async function* worktreesRoute(context) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/letters/take.ts
+// box/src/link/letters/take.ts
 import fs65 from "node:fs";
 
-// Packages/Box/src/link/letters/note.ts
+// box/src/link/letters/note.ts
 function noteOf(value) {
   if (!isObject(value) || typeof value.from !== "string" || !value.from.trim() || typeof value.words !== "string")
     return null;
@@ -16971,7 +16971,7 @@ function noteOf(value) {
 }
 var deliverNote = (target, session, id, text, note) => sendInto(target, session, { id, text, delivery: note.delivery, ...note.line !== undefined ? { metadata: boxNote(note.from, note.line) } : {} }, { from: note.from, words: note.words });
 
-// Packages/Box/src/link/letters/take.ts
+// box/src/link/letters/take.ts
 var endedAfter = (messages, id) => messages.some((message) => message.id > id && message.type === "idle");
 function answerAfter(messages, id) {
   const replies = [];
@@ -17200,7 +17200,7 @@ async function readFor(sender, letter, { send, targets, answer = () => {}, now =
   answer({ from: letter.to, to: letter.from, text: words, answers: id, peer: sender.key, read: {} });
 }
 
-// Packages/Box/src/link/work/limits.ts
+// box/src/link/work/limits.ts
 var NAMES = ["atOnce", "perDay", "depth", "tokensPerDay"];
 function limitsFrom(given) {
   if (!isObject(given))
@@ -17232,11 +17232,11 @@ function pastLimit(limits, { depth, working, started, tokens }) {
   return null;
 }
 
-// Packages/Box/src/link/work/model-rule.ts
+// box/src/link/work/model-rule.ts
 import fs66 from "node:fs";
 import path66 from "node:path";
 
-// Packages/Box/src/shared/subagents.ts
+// box/src/shared/subagents.ts
 var SUBAGENT_MODEL = ["subagent_model"];
 var ENGINE_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"]);
 var ENGINE_SUBAGENTS = ["general", "explore"];
@@ -17271,7 +17271,7 @@ function subagentLayer(settings) {
   return Object.keys(layer).length ? { agents: layer } : {};
 }
 
-// Packages/Box/src/link/work/model-rule.ts
+// box/src/link/work/model-rule.ts
 var ASK_WAIT = 5000;
 var PLANS = {
   openai: { name: "ChatGPT", agent: "Codex", provider: "codex-cli", hidden: (method) => method.startsWith("chatgpt") },
@@ -17610,7 +17610,7 @@ function startingModel(wanted, lists) {
   return first ? { model: { providerID: first.providerID, id: first.id }, why: "first" } : null;
 }
 
-// Packages/Box/src/link/work/models.ts
+// box/src/link/work/models.ts
 function modelsIn2(listed, target, agents, ready) {
   const models = [];
   for (const each of Array.isArray(listed) ? listed : []) {
@@ -17737,18 +17737,18 @@ function pickModel(given, effort, from, where = HERE) {
   return { model, variant: effort };
 }
 
-// Packages/Box/src/link/areas/approval.ts
+// box/src/link/areas/approval.ts
 import fs71 from "node:fs";
 import path71 from "node:path";
 
-// Packages/Box/src/link/work/reviewer.ts
+// box/src/link/work/reviewer.ts
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 import { execFile as execFile7 } from "node:child_process";
 import dns from "node:dns/promises";
 import fs68 from "node:fs";
 import path68 from "node:path";
 
-// Packages/Box/src/link/work/policy.ts
+// box/src/link/work/policy.ts
 import fs67 from "node:fs";
 import path67 from "node:path";
 function readLine(line, redirects = false) {
@@ -17911,7 +17911,7 @@ function allowRefusal(action, resources, folders, rules, ruleFor, seen, { sandbo
   return null;
 }
 
-// Packages/Box/src/link/work/reviewer.ts
+// box/src/link/work/reviewer.ts
 var MOST_SCRIPT = 24 * 1024;
 var MOST_FETCHED = 96 * 1024;
 var MOST_SAID = 12 * 1024;
@@ -19227,7 +19227,7 @@ function forgetFetched(fetched) {
     } catch {}
 }
 
-// Packages/Box/src/link/work/reviewing.ts
+// box/src/link/work/reviewing.ts
 import fs69 from "node:fs";
 import path69 from "node:path";
 var ownEngine = () => {
@@ -19768,7 +19768,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
   return verdict;
 }
 
-// Packages/Box/src/link/work/full.ts
+// box/src/link/work/full.ts
 import fs70 from "node:fs";
 import path70 from "node:path";
 var FULL_ACCESS_FOLDER = path70.join(RUN, "fence", "full");
@@ -19814,7 +19814,7 @@ async function noteFullAccessAtWork(target, list) {
     await noteFullAccess(session).catch(() => {});
 }
 
-// Packages/Box/src/link/areas/approval.ts
+// box/src/link/areas/approval.ts
 var SESSION_APPROVAL_ROUTE = /^kuvo\/sessions\/([^/]+)\/approval$/;
 var SESSION_DECISIONS_ROUTE = /^kuvo\/sessions\/([^/]+)\/decisions$/;
 var found2 = (target, data, agents) => ({ target, data, agents, bot: Boolean(botOfConversation(data.id) || worksFor(data)) });
@@ -20181,7 +20181,7 @@ async function* approvalRoute(context) {
   return yield* json(200, shown(at));
 }
 
-// Packages/Box/src/link/letters/start.ts
+// box/src/link/letters/start.ts
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
@@ -20682,7 +20682,7 @@ function startedWords(outcome, waits) {
 ${answer}` : "It hasn't answered yet; it may still write back with send_message.") + warned, isError: false };
 }
 
-// Packages/Box/src/link/notices/sentence.ts
+// box/src/link/notices/sentence.ts
 var plain2 = (text) => String(text ?? "").replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "").replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1").replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
 var SENTENCE_LONGEST = 160;
 var ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|incl|Mr|Mrs|Ms|Dr|Fig)\.$/i;
@@ -20749,7 +20749,7 @@ var reasonLine = (reason, longest = 120) => {
   return line ? cut(line, longest) : "";
 };
 
-// Packages/Box/src/link/notices/notify.ts
+// box/src/link/notices/notify.ts
 var NOTIFY_LIMITS = { hour: 3, day: 12, apart: 2 * 60000, boxHour: 10 };
 var HOUR = 60 * 60000;
 var DAY2 = 24 * HOUR;
@@ -20798,7 +20798,7 @@ function notifyUserTool(caller, args, now = Date.now(), telling = tellingNow) {
   return { text: `Sent to the user: “${sentence}”`, isError: false };
 }
 
-// Packages/Box/src/link/vault/who.ts
+// box/src/link/vault/who.ts
 import path73 from "node:path";
 async function sessionAt(targets, id) {
   for (const target of targets) {
@@ -20919,7 +20919,7 @@ function grantFor(item, caller, grants = readGrants()) {
   return how;
 }
 
-// Packages/Box/src/link/work/tools.ts
+// box/src/link/work/tools.ts
 import fs73 from "node:fs";
 import path74 from "node:path";
 var onBridge = (target) => {
@@ -21247,7 +21247,7 @@ async function finishGoalTool(caller, args, targets) {
   return bot ? answered2(await finishGoal(bot.bot, args, () => targets)) : refused2(ONLY_BOTS);
 }
 
-// Packages/Box/src/link/letters/start-call.ts
+// box/src/link/letters/start-call.ts
 import fs74 from "node:fs";
 import path75 from "node:path";
 var START_FIELDS = ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait", "review"];
@@ -21731,21 +21731,21 @@ function noteLineHomes(homes, line, at = Date.now()) {
       noteHomes([session], key, at);
 }
 
-// Packages/Box/src/link/letters/own-tools.ts
+// box/src/link/letters/own-tools.ts
 import { execFile as execFile9 } from "node:child_process";
 import fs85 from "node:fs";
 import os10 from "node:os";
 import path85 from "node:path";
 
-// Packages/Box/src/link/bots/edit.ts
+// box/src/link/bots/edit.ts
 import fs84 from "node:fs";
 import path84 from "node:path";
 
-// Packages/Box/src/link/areas/carry.ts
+// box/src/link/areas/carry.ts
 import fs79 from "node:fs";
 import path80 from "node:path";
 
-// Packages/Box/src/link/engine/conversations.ts
+// box/src/link/engine/conversations.ts
 async function everySession(target) {
   const all = [];
   let page = await engineGet(target, "api/session?limit=100&order=desc");
@@ -21774,35 +21774,35 @@ async function conversationOf3(target, id) {
   return messages;
 }
 
-// Packages/Box/src/link/work-queue/moves.ts
+// box/src/link/work-queue/moves.ts
 import fs78 from "node:fs";
 import path79 from "node:path";
 
-// Packages/Box/src/link/work-queue/ops.ts
+// box/src/link/work-queue/ops.ts
 import fs77 from "node:fs";
 import os9 from "node:os";
 import path78 from "node:path";
 import crypto28 from "node:crypto";
 
-// Packages/Box/src/link/work-queue/github.ts
+// box/src/link/work-queue/github.ts
 import path77 from "node:path";
 import fs76 from "node:fs";
 
-// Packages/Box/src/link/github/graphql.ts
+// box/src/link/github/graphql.ts
 import { execFile as execFile8, spawn as spawn8 } from "node:child_process";
 import crypto27 from "node:crypto";
 import fs75 from "node:fs";
 import os8 from "node:os";
 import path76 from "node:path";
 
-// Packages/Box/src/link/once.ts
+// box/src/link/once.ts
 var answersOnce = false;
 function answerOnce() {
   answersOnce = true;
 }
 var answeringOnce = () => answersOnce;
 
-// Packages/Box/src/link/github/graphql.ts
+// box/src/link/github/graphql.ts
 var HOLD = 3 * 60000;
 var BACK_OFF = 5 * 60000;
 var PER_QUERY = 50;
@@ -22121,7 +22121,7 @@ async function readOne(reader, ask, query, valueOf, now = Date.now) {
   }
 }
 
-// Packages/Box/src/link/work-queue/github.ts
+// box/src/link/work-queue/github.ts
 var SEEN_FILE2 = path77.join(WORK_QUEUE, "seen.json");
 var DONE_STATES = new Set(["completed", "not_planned", "merged", "closed"]);
 var STRUCK = new Set(["not_planned", "closed"]);
@@ -22275,7 +22275,7 @@ async function readIssue(at) {
 var canonicalOf = (at, read) => issueAt(read.url) ?? at;
 var sourceOf = (at, read) => ({ kind: read.kind, ref: refText(canonicalOf(at, read)), url: read.url, host: at.host, id: read.id });
 
-// Packages/Box/src/link/work-queue/view.ts
+// box/src/link/work-queue/view.ts
 async function factsOf(targets, signal) {
   const [all, working] = await Promise.all([workSessions(targets, signal, { archived: true }).catch(() => []), atWorkNow(targets, signal).catch(() => new Set)]);
   return { all, working };
@@ -22392,7 +22392,7 @@ function agoWords(at, now = Date.now()) {
 }
 var nameOf2 = (item) => item.source ? `${item.source.ref} "${seenOf(item.source)?.value?.title ?? item.title}"` : item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (${item.id}, no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
 
-// Packages/Box/src/link/work-queue/ops.ts
+// box/src/link/work-queue/ops.ts
 var LINKS_EACH = 3;
 var MOST_PROGRESS_NOTE = 300;
 var refuse = (words) => {
@@ -22806,7 +22806,7 @@ function handItem(book, item, to, who, now) {
   item.updated = { at: now, by: who };
 }
 
-// Packages/Box/src/link/work-queue/moves.ts
+// box/src/link/work-queue/moves.ts
 function packWorkQueues(owners) {
   const items = owners.flatMap((owner) => OWNER2.test(owner) ? readQueueSettingAside(owner).items : readKeptQueue(owner)?.items ?? []);
   if (!items.length)
@@ -22899,7 +22899,7 @@ function carryWorkQueue(from, to) {
   }, undefined, { onItsOwn: true });
 }
 
-// Packages/Box/src/link/areas/carry.ts
+// box/src/link/areas/carry.ts
 var promptFiles = (payload) => (Array.isArray(payload?.files) ? payload.files : []).map((file) => {
   const name = typeof file?.name === "string" ? { name: file.name } : {};
   const uri = file?.source?.uri ?? file?.uri;
@@ -23134,7 +23134,7 @@ async function* carryRoute(context, toAgents) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/areas/agents-down.ts
+// box/src/link/areas/agents-down.ts
 import fs80 from "node:fs";
 import path81 from "node:path";
 function agentsDown() {
@@ -23148,7 +23148,7 @@ function agentsDown() {
   return null;
 }
 
-// Packages/Box/src/link/server/naming.ts
+// box/src/link/server/naming.ts
 import fs81 from "node:fs";
 async function namedIn(body, session, naming) {
   if (!naming)
@@ -23211,7 +23211,7 @@ function nameMissing(text, agents) {
   return false;
 }
 
-// Packages/Box/src/link/areas/groups.ts
+// box/src/link/areas/groups.ts
 var GROUP_ROUTE = /^kuvo\/groups(?:\/(events|joinable|grp_[a-z0-9]+(?:\/(?:events|stop|keep-going|viewed|undo|start))?))?$/;
 async function askGroups(target, method, route, body, signal) {
   const response = await fetch(`http://127.0.0.1:${target.port}/api/kuvo/groups${route}`, {
@@ -23272,7 +23272,7 @@ async function* groupsRoute(context) {
   return yield* forwardGroups(target, route, request, signal);
 }
 
-// Packages/Box/src/link/keys.ts
+// box/src/link/keys.ts
 import fs82 from "node:fs";
 import path82 from "node:path";
 var STORED_KEY = /^KUVO_KEY_[A-Z0-9_]+$/;
@@ -23406,7 +23406,7 @@ function keepKeyFiles(every = 12 * 3600000, retry = 60000) {
   keeping.unref?.();
 }
 
-// Packages/Box/src/link/bots/make.ts
+// box/src/link/bots/make.ts
 import crypto29 from "node:crypto";
 import fs83 from "node:fs";
 import path83 from "node:path";
@@ -23565,7 +23565,7 @@ async function makeOnce(given, readEngine, readBridge, machine) {
   return { status: 201, value: { bot, firstMessage: firstMessage ?? null } };
 }
 
-// Packages/Box/src/link/bots/edit.ts
+// box/src/link/bots/edit.ts
 function keepAllowed(changed, now, names) {
   if (names)
     return changed;
@@ -23899,7 +23899,7 @@ async function deleteBot(id, readEngine, readBridge) {
   return { status: 200, value: {} };
 }
 
-// Packages/Box/src/link/letters/own-tools.ts
+// box/src/link/letters/own-tools.ts
 var said3 = (text) => ({ text, isError: false });
 var refused3 = (text) => ({ text, isError: true });
 var isSeat = (place) => {
@@ -24072,11 +24072,11 @@ function showTool(name, args, calling, inView) {
   }
 }
 
-// Packages/Box/src/link/letters/tool-names.ts
+// box/src/link/letters/tool-names.ts
 var WAKE_TOOLS = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up"];
 var SHOW_TOOLS = ["show_in_panel", "show_file", "mark_final", "show_widget"];
 
-// Packages/Box/src/link/letters/tools.ts
+// box/src/link/letters/tools.ts
 var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits", "use_limit_reset", ...WAKE_TOOLS, "set_job", ...SHOW_TOOLS];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
 var said4 = (text) => ({ text, isError: false });
@@ -24403,7 +24403,7 @@ async function agentTool(name, args, session, place) {
   }
 }
 
-// Packages/Box/src/link/work-queue/parts.ts
+// box/src/link/work-queue/parts.ts
 import crypto30 from "node:crypto";
 var MOST_PARTS2 = 200;
 function mailsFor(peer, payload, link, now = Date.now()) {
@@ -24439,7 +24439,7 @@ function takePart(sender, part) {
   }
 }
 
-// Packages/Box/src/link/work-queue/hand.ts
+// box/src/link/work-queue/hand.ts
 var HAND_LIFE = 30 * 86400000;
 var HAND_ID = /^wqh_[A-Za-z0-9_-]{8,40}$/;
 var SEEN = path86.join(WORK_QUEUE, "handed.json");
@@ -24735,7 +24735,7 @@ function elsewhereOf2(session, link = readLink()) {
   return boxOf(session, link);
 }
 
-// Packages/Box/src/link/work-queue/acts.ts
+// box/src/link/work-queue/acts.ts
 import fs87 from "node:fs";
 import path87 from "node:path";
 var GITHUB_WAIT = 3000;
@@ -24836,7 +24836,7 @@ async function actForPeer(act, targets) {
 }
 var MOST_FORWARDED_FILE = MOST_HANDED_FILES;
 
-// Packages/Box/src/link/work-queue/forward.ts
+// box/src/link/work-queue/forward.ts
 import crypto32 from "node:crypto";
 import fs88 from "node:fs";
 import path88 from "node:path";
@@ -25073,7 +25073,7 @@ var actOf = (given) => {
   return { id: given.id, method, item: given.item, ...action ? { action } : {}, ...action === "file" ? { name } : {}, ...isObject(given.body) ? { body: given.body } : {}, at: given.at };
 };
 
-// Packages/Box/src/link/work-queue/across.ts
+// box/src/link/work-queue/across.ts
 var QUEUES_FEATURE = "work-queue.elsewhere";
 var takesQueues = (key) => (readPeerAgents()[key]?.features ?? []).includes(QUEUES_FEATURE);
 function numberingNow(link) {
@@ -25391,10 +25391,10 @@ function changedThere(key, action, item, now = Date.now()) {
 var asAway = (item, away) => away === null || !item.inProgress && !item.sessions.some((each) => each.working) ? item : { ...item, inProgress: false, sessions: item.sessions.map((each) => ({ ...each, working: false })) };
 var newer = (a, aAt, b, bAt) => a.updated.at > b.updated.at || a.updated.at === b.updated.at && aAt > bAt;
 
-// Packages/Box/src/link/notices/hold.ts
+// box/src/link/notices/hold.ts
 import path91 from "node:path";
 
-// Packages/Box/src/agents/usage/notices.ts
+// box/src/agents/usage/notices.ts
 var NOTICE_CATCHUP_MS = 10 * 60000;
 function currentNotice(notice, now) {
   return notice.at <= now && now - notice.at < NOTICE_CATCHUP_MS && (notice.resetsAt === undefined || notice.resetsAt > now);
@@ -25448,7 +25448,7 @@ function takeNotices(given) {
   return given.slice(-100).filter((n) => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service !== "devin" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)) && (n.forwarder === undefined || typeof n.forwarder === "string" && n.forwarder.length <= 200) && [n.accountName, n.windowName].every((name) => name === undefined || typeof name === "string" && name.length <= 200));
 }
 
-// Packages/Box/src/link/notices/usage-delivery.ts
+// box/src/link/notices/usage-delivery.ts
 import path90 from "node:path";
 var keptFor2 = 24 * 60 * 60000;
 
@@ -25514,7 +25514,7 @@ function finishUsage(notice) {
     journal.mark(key);
 }
 
-// Packages/Box/src/link/notices/hold.ts
+// box/src/link/notices/hold.ts
 var ASK_HOLD = 30000;
 var NEWS_HOLD = 60000;
 var LONGEST_LEASE = 60000;
@@ -25684,7 +25684,7 @@ class NoticeHold {
   }
 }
 
-// Packages/Box/src/link/peers/seats.ts
+// box/src/link/peers/seats.ts
 import crypto34 from "node:crypto";
 import fs90 from "node:fs";
 import os11 from "node:os";
@@ -25959,26 +25959,26 @@ async function watchSeats(host, signal) {
   }
 }
 
-// Packages/Box/src/link/moves/move.ts
+// box/src/link/moves/move.ts
 import crypto36 from "node:crypto";
 import fs100 from "node:fs";
 import path102 from "node:path";
 
-// Packages/Box/src/link/areas/bot-keys.ts
+// box/src/link/areas/bot-keys.ts
 import fs96 from "node:fs";
 import path98 from "node:path";
 
-// Packages/Box/src/link/areas/integrations.ts
+// box/src/link/areas/integrations.ts
 import { spawn as spawn9 } from "node:child_process";
 import fs95 from "node:fs";
 import path97 from "node:path";
 
-// Packages/Box/src/link/browser/sites.ts
+// box/src/link/browser/sites.ts
 import fs93 from "node:fs";
 import { createRequire } from "node:module";
 import path95 from "node:path";
 
-// Packages/Box/src/link/browser/history.ts
+// box/src/link/browser/history.ts
 import fs91 from "node:fs";
 import path93 from "node:path";
 var BROWSER_FOLDER = path93.join(K, "browser");
@@ -26164,7 +26164,7 @@ function mergeHistory(from, folder = BROWSER_FOLDER) {
   });
 }
 
-// Packages/Box/src/link/browser/keeper-client.ts
+// box/src/link/browser/keeper-client.ts
 import fs92 from "node:fs";
 import net3 from "node:net";
 import path94 from "node:path";
@@ -26260,7 +26260,7 @@ async function withKeeper(work, { run = RUN, wait = 1e4, key = socketKey } = {})
   }
 }
 
-// Packages/Box/src/link/browser/sites.ts
+// box/src/link/browser/sites.ts
 function cookieFile(folder = BROWSER_FOLDER) {
   const found = ["Network/Cookies", "Cookies"].map((name) => path95.join(folder, "profile", "Default", name)).filter((file) => fs93.existsSync(file));
   return found.sort((a, b) => fs93.statSync(b).mtimeMs - fs93.statSync(a).mtimeMs)[0] ?? null;
@@ -26473,11 +26473,11 @@ async function siteSignInsHere(entries, folder = BROWSER_FOLDER, run = RUN) {
   return Object.fromEntries(named.map((each) => [each.id, signedIn(cookies, each.signInCookie)]));
 }
 
-// Packages/Box/src/link/areas/mcp-catalog.ts
+// box/src/link/areas/mcp-catalog.ts
 import fs94 from "node:fs";
 import path96 from "node:path";
 
-// Packages/Box/src/shared/routes/settings.ts
+// box/src/shared/routes/settings.ts
 var CONFIG = map(any);
 var CONFIG_APPLIED = object({
   made: list(object({ path: list(string), value: any })),
@@ -26504,7 +26504,7 @@ var KEY2 = object({ value: string });
 var CLAUDE_CODE_IMPORT = object({ name: string, description: string, path: list(string), settings: map(string), imported: bool });
 var CLAUDE_CODE = object({ agents: list(CLAUDE_CODE_IMPORT), commands: list(CLAUDE_CODE_IMPORT) });
 
-// Packages/Box/src/link/areas/mcp-catalog.ts
+// box/src/link/areas/mcp-catalog.ts
 var accessOf = (server) => {
   const access = server.access ?? "open";
   return MCP_ACCESS.includes(access) ? access : null;
@@ -26547,7 +26547,7 @@ function addFromCatalog(id, file = CONFIG_FILE, catalog = CATALOG_FILE, lock = C
   return changeSettings([{ path: [...SERVERS, id], value: { codemode: false, ...server.settings } }], file, lock);
 }
 
-// Packages/Box/src/link/areas/integrations.ts
+// box/src/link/areas/integrations.ts
 var MAC_INTEGRATIONS = path97.join(K, "bin", "integrations-mac.json");
 var INTEGRATIONS_FILE = OWN_HOME_MAC && fs95.existsSync(MAC_INTEGRATIONS) ? MAC_INTEGRATIONS : path97.join(K, "bin", "integrations.json");
 function integrationCatalog(file = INTEGRATIONS_FILE) {
@@ -26935,7 +26935,7 @@ async function* integrationsRoute(context) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/areas/bot-keys.ts
+// box/src/link/areas/bot-keys.ts
 var BOT_KEY_FOLDER = APP_KEY_FILES;
 var botKeyFolder = () => BOT_KEY_FOLDER ?? `${shownRoot}/box/bot-keys`;
 var botKeyed = (catalog) => catalog.filter((entry) => ["token", "package"].includes(entry.way) && entry.settings && Object.keys(entry.variables ?? {}).length && Object.values(entry.variables).every((variable) => typeof variable === "string" && STORED_KEY.test(variable)));
@@ -27160,7 +27160,7 @@ async function* botKeysRoute(context) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/moves/bundle.ts
+// box/src/link/moves/bundle.ts
 import { spawn as spawn10 } from "node:child_process";
 import crypto35 from "node:crypto";
 import fs97 from "node:fs";
@@ -27463,7 +27463,7 @@ async function groupAction(bridge, group, action) {
   return answer.value?.data ?? null;
 }
 
-// Packages/Box/src/shared/carry.ts
+// box/src/shared/carry.ts
 var CARRIED_AGENTS = new Set(["claude-code", "codex-cli"]);
 var AGENT_NAMES2 = {
   "claude-code": "Claude Code",
@@ -27473,7 +27473,7 @@ var AGENT_NAMES2 = {
   antigravity: "Antigravity"
 };
 
-// Packages/Box/src/link/moves/elsewhere.ts
+// box/src/link/moves/elsewhere.ts
 import fs98 from "node:fs";
 import path100 from "node:path";
 var FILE2 = path100.join(MOVES, "elsewhere.json");
@@ -27584,7 +27584,7 @@ function movesElsewhere(peers = peersOf(readLink()), now = Date.now()) {
   return Object.entries(readSaid()).filter((entry) => keys.has(entry[0]) && fresh(entry[1], now)).map(([box, one]) => ({ box, moves: one.moves.filter((move) => move.from !== own && move.to !== own) })).filter((one) => one.moves.length > 0).sort((one, other) => one.box.localeCompare(other.box));
 }
 
-// Packages/Box/src/link/moves/left.ts
+// box/src/link/moves/left.ts
 import fs99 from "node:fs";
 import path101 from "node:path";
 var KEEP_LEFT = 7 * 24 * 3600000;
@@ -27643,7 +27643,7 @@ function removeTrashed(trash) {
   } catch {}
 }
 
-// Packages/Box/src/link/moves/move.ts
+// box/src/link/moves/move.ts
 var PART_BYTES = 30000;
 var IN_FLIGHT = 16;
 var PART_AGAIN = 20000;
@@ -29276,7 +29276,7 @@ function watchMoves(host, signal) {
   }, { once: true });
 }
 
-// Packages/Box/src/link/mac/peers.ts
+// box/src/link/mac/peers.ts
 function macAttendPeers(body, given) {
   const host = macLink.host;
   const link = readLink();
@@ -29373,7 +29373,7 @@ function macLetterAnswer(id, signal, most = LETTER_WAIT, cut) {
   });
 }
 
-// Packages/Box/src/link/letters/calls.ts
+// box/src/link/letters/calls.ts
 var CALL_TOOLS = ["list_sessions", "stop_session", "compact_session", "answer_ask", "start_session", "list_models", "list_projects", "stop_work"];
 var isCallTool = (name) => CALL_TOOLS.includes(name);
 var CALLS_FEATURE = "work.elsewhere";
@@ -29815,7 +29815,7 @@ function callsBack(key) {
     outboxSoon.send();
 }
 
-// Packages/Box/src/link/work/stop.ts
+// box/src/link/work/stop.ts
 async function stopBotWork(bot, targets, signal, { tell = true } = {}) {
   const work = ofBot(bot, await workSessions(targets, signal));
   const [working, turns] = await Promise.all([atWorkNow(targets, signal), workingNow(targets, signal)]);
@@ -29851,7 +29851,7 @@ async function stopBotWork(bot, targets, signal, { tell = true } = {}) {
   return stopped;
 }
 
-// Packages/Box/src/link/work/goals.ts
+// box/src/link/work/goals.ts
 var GOALS_FILE = path104.join(WORK_FOLDER, "goals.json");
 var LOCK13 = path104.join(WORK_FOLDER, ".goals.lock");
 var HERE_FILE = path104.join(WORK_FOLDER, "here.json");
@@ -31182,7 +31182,7 @@ async function watchGoals(tell, targets, { signal, every = 30000, here } = {}) {
   }
 }
 
-// Packages/Box/src/link/work/autopilot.ts
+// box/src/link/work/autopilot.ts
 var DECIDED_FILE = path105.join(WORK_FOLDER, "decided.json");
 var SHARED = "global";
 var AUTOPILOT_ENTRY = "kuvo.autopilot";
@@ -31417,7 +31417,7 @@ async function decidedByYou(target, conversation, id, choice, file = DECIDED_FIL
   return { decided: decidedIn(conversation, file) };
 }
 
-// Packages/Box/src/link/notices/mask.ts
+// box/src/link/notices/mask.ts
 var SHOWN_LENGTH = 4000;
 var HASH_NAMES = "commit|sha|sha1|sha256|sha512|md5|rev|revision|hash|ref|head|onto|checksum|digest|etag|integrity|fingerprint|cache[ _.-]?key|public[ _.-]?key|object|oid|tree|parent|blob|base|id|uuid|tag|build|version|release";
 var eitherCase = (word) => [...word].map((letter) => /[a-z]/i.test(letter) ? `[${letter.toLowerCase()}${letter.toUpperCase()}]` : letter).join("");
@@ -31534,7 +31534,7 @@ function masked(text) {
 }
 var showsAll = (text) => [...text].length <= SHOWN_LENGTH && masked(text) === text;
 
-// Packages/Box/src/link/notices/news.ts
+// box/src/link/notices/news.ts
 function describePermission(request, home) {
   const what = { edit: "edit files", write: "edit files", patch: "edit files", shell: "run a command", bash: "run a command", read: "read a file", external_directory: "work outside the project", webfetch: "open a web page" }[request.action] ?? request.action;
   const shown = (Array.isArray(request.resources) ? request.resources : []).filter((each) => each !== "*").map((each) => home !== undefined && request.action === "external_directory" ? outsideShown(String(each), home) : each);
@@ -31786,7 +31786,7 @@ function groupNotice(event) {
   return null;
 }
 
-// Packages/Box/src/link/work/answers.ts
+// box/src/link/work/answers.ts
 var matches = (pattern, resource) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*").replace(/\?/g, ".")}$`).test(resource);
 function ruleFor(rules, action, resource) {
   let effect = "allow";
@@ -31970,7 +31970,7 @@ function answersOn(metadata) {
   return Array.isArray(answers) ? answers.filter((each) => isObject(each) && typeof each.ask === "string" && typeof each.decision === "string") : [];
 }
 
-// Packages/Box/src/link/areas/wakes.ts
+// box/src/link/areas/wakes.ts
 var WAKE_MARKER = "[Wake-up] ";
 function repeatText(text) {
   if (text === "weekdays")
@@ -32376,7 +32376,7 @@ async function* sessionWakesRoute(context, wakes) {
   return yield* answerWakes(session, wakes[2], request, readEngine, bridge, signal);
 }
 
-// Packages/Box/src/link/bots/list.ts
+// box/src/link/bots/list.ts
 function listBots(machine) {
   const bots = [];
   for (const id of listOf(BOTS)) {
@@ -32413,7 +32413,7 @@ function listBots(machine) {
   return bots.sort((a, b) => a.created.localeCompare(b.created)).map((entry) => entry.bot);
 }
 
-// Packages/Box/src/link/bots/tell.ts
+// box/src/link/bots/tell.ts
 var TOLD_FILE2 = "told.json";
 var toldDigest = (text) => crypto39.createHash("sha256").update(text).digest("hex");
 function toldOf2(folder) {
@@ -32603,7 +32603,7 @@ async function repairRules(target, here, sessionID) {
   return Boolean(done) && readable;
 }
 
-// Packages/Box/src/link/areas/projects.ts
+// box/src/link/areas/projects.ts
 var PROJECTS_FILE = path109.join(K, "box", "projects.json");
 var PROJECTS_LOCK = PROJECTS_FILE + ".lock";
 function readProjects(file = PROJECTS_FILE) {
@@ -32942,7 +32942,7 @@ linkedFollowers.add(() => {
     tell();
 });
 
-// Packages/Box/src/link/peers/agents.ts
+// box/src/link/peers/agents.ts
 function forgetMacsAgents(mac, link) {
   const keep = new Set(peersOf(link).map((peer) => peer.key));
   locked(PEER_LOCK, () => {
@@ -33074,7 +33074,7 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
   }
 }
 
-// Packages/Box/src/link/letters/outbox.ts
+// box/src/link/letters/outbox.ts
 var introducing = new Map;
 var INTRODUCING_FOR = 60000;
 var notesWaiting = new Map;
@@ -33582,7 +33582,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
   return Promise.all(telling);
 }
 
-// Packages/Box/src/link/work/asks.ts
+// box/src/link/work/asks.ts
 var WORK_ASKS2 = path112.join(WORK_FOLDER, "asks.json");
 var LOCK14 = path112.join(WORK_FOLDER, ".asks.lock");
 var WORK_ACTIONS = ["makeProject", "cloneProject", "resetLimits"];
@@ -33828,7 +33828,7 @@ async function watchWorkAsks(tell, { signal, every = 2000, read = workAsks, answ
   }
 }
 
-// Packages/Box/src/link/areas/box-keys.ts
+// box/src/link/areas/box-keys.ts
 import fs110 from "node:fs";
 import path113 from "node:path";
 async function answerKeys(method, route, body) {
@@ -33878,7 +33878,7 @@ function setBoxKey(name, value) {
   });
 }
 
-// Packages/Box/src/link/glance/github.ts
+// box/src/link/glance/github.ts
 import path114 from "node:path";
 var GITHUB_FILE = path114.join(RUN, "glance", "github.json");
 var FRESH = 60000;
@@ -33962,7 +33962,7 @@ async function readPulls(asks, now = Date.now) {
   return found;
 }
 
-// Packages/Box/src/link/areas/skills.ts
+// box/src/link/areas/skills.ts
 import crypto42 from "node:crypto";
 import fs111 from "node:fs";
 import path115 from "node:path";
@@ -34358,11 +34358,11 @@ async function* skillsRoute(context) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/compat/adopt-settings.ts
+// box/src/link/compat/adopt-settings.ts
 import fs113 from "node:fs";
 import path117 from "node:path";
 
-// Packages/Box/src/link/compat/launch-lock.ts
+// box/src/link/compat/launch-lock.ts
 import { spawnSync as spawnSync8 } from "node:child_process";
 import fs112 from "node:fs";
 import path116 from "node:path";
@@ -34513,7 +34513,7 @@ function launchLocked(work, { stale = 300000, wait = 330000 } = {}) {
   }
 }
 
-// Packages/Box/src/link/compat/adopt-settings.ts
+// box/src/link/compat/adopt-settings.ts
 var GLOBAL_FILE = path117.join(K, "config", "opencode", "opencode.json");
 var MAC_SETTINGS = path117.join(K, "keys", "settings.json");
 var MAC_KEYS = path117.join(K, "keys");
@@ -34581,7 +34581,7 @@ function adoptBox(seed) {
   }));
 }
 
-// Packages/Box/src/link/personalities/take.ts
+// box/src/link/personalities/take.ts
 import crypto43 from "node:crypto";
 async function takePersonalities(given, readEngine = readEngineFile, readBridge = readBridgeFile, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
   const changed = meetPersonalities(given, file, lock);
@@ -34685,7 +34685,7 @@ function answerPersonalities(method, id, body, file = PERSONALITIES_FILE, lock =
   return [405, {}];
 }
 
-// Packages/Box/src/link/documents/exchange.ts
+// box/src/link/documents/exchange.ts
 var docParts = new Map;
 function sendDocs(host, link, sends) {
   if (!host || !link?.key)
@@ -34752,7 +34752,7 @@ function macDocsChanged() {
     } catch {}
 }
 
-// Packages/Box/src/link/engine/compatibility.ts
+// box/src/link/engine/compatibility.ts
 import fs114 from "node:fs";
 import path118 from "node:path";
 var COMPATIBILITY_FILE = path118.join(RUN, "compatibility.json");
@@ -34885,7 +34885,7 @@ function engineConfigContent(content) {
   return JSON.stringify({ ...given, instructions: [...new Set([...instructions, SANDBOX_NOTE])] });
 }
 
-// Packages/Box/src/link/engine/defaults.ts
+// box/src/link/engine/defaults.ts
 import path119 from "node:path";
 var DEFAULTS_PLUGIN = path119.join(ENGINE_CONFIG || path119.join(K, "config"), "opencode", "plugins", "kuvo-defaults.js");
 function keptFolders() {
@@ -34968,7 +34968,7 @@ function keepEngineDefaults() {
   }, 60000).unref?.();
 }
 
-// Packages/Box/src/link/notices/usage.ts
+// box/src/link/notices/usage.ts
 var wording = {
   underTenPercent: ["Almost Out", "Under 10% usage remaining for this window."],
   healthyToClose: ["Cutting It Close", "Projected to finish close to your limit."],
@@ -34999,11 +34999,11 @@ async function catchUpUsage(signal, revision, read, apply) {
   apply(answer.data);
 }
 
-// Packages/Box/src/link/areas/accounts.ts
+// box/src/link/areas/accounts.ts
 import fs116 from "node:fs";
 import path121 from "node:path";
 
-// Packages/Box/src/link/engine/models.ts
+// box/src/link/engine/models.ts
 import fs115 from "node:fs";
 import path120 from "node:path";
 var MODELS_DUE_FILE = path120.join(RUN, "models-due.json");
@@ -35210,7 +35210,7 @@ function settleDueModels(engine, file = MODELS_DUE_FILE) {
 }
 var modelsDue = (file = MODELS_DUE_FILE) => fs115.existsSync(file);
 
-// Packages/Box/src/link/areas/accounts.ts
+// box/src/link/areas/accounts.ts
 var ENDED_SIGN_INS_FILE = path121.join(RUN, "ended-sign-ins.json");
 function readEndedSignIns() {
   try {
@@ -35358,7 +35358,7 @@ async function* credentialsRoute(context) {
   return;
 }
 
-// Packages/Box/src/link/server/attached.ts
+// box/src/link/server/attached.ts
 import crypto44 from "node:crypto";
 import fs117 from "node:fs";
 import path122 from "node:path";
@@ -35547,7 +35547,7 @@ async function stillShown(places, ids) {
   return shown;
 }
 
-// Packages/Box/src/link/work/backups.ts
+// box/src/link/work/backups.ts
 import { execFile as execFile11, spawn as spawn11 } from "node:child_process";
 import crypto45 from "node:crypto";
 import fs118 from "node:fs";
@@ -35932,18 +35932,18 @@ async function restoreInto(gitDir, top, store, backup, remade) {
   return { remade, branches: branches.map(({ name, as }) => ({ name, as })), stashes: stashed, ...missed.length ? { missed } : {} };
 }
 
-// Packages/Box/src/link/glance/asked.ts
+// box/src/link/glance/asked.ts
 import fs121 from "node:fs";
 import path125 from "node:path";
 
-// Packages/Box/src/link/fence/outside.ts
+// box/src/link/fence/outside.ts
 import { spawn as spawn13 } from "node:child_process";
 import crypto46 from "node:crypto";
 import fs120 from "node:fs";
 import os13 from "node:os";
 import path124 from "node:path";
 
-// Packages/Box/src/link/notices/asking.ts
+// box/src/link/notices/asking.ts
 var PATIENCE = 15 * 60000;
 function askBook(prefix, no) {
   const open = new Map;
@@ -36033,7 +36033,7 @@ function askBook(prefix, no) {
   };
 }
 
-// Packages/Box/src/link/run-command.ts
+// box/src/link/run-command.ts
 import { spawn as spawn12 } from "node:child_process";
 import fs119 from "node:fs";
 var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
@@ -36148,7 +36148,7 @@ function runCommand(command, folder, env, timeout, signal, name = String(Math.ra
   });
 }
 
-// Packages/Box/src/link/fence/outside.ts
+// box/src/link/fence/outside.ts
 var book = askBook("sq_", { answer: "no", unanswered: true });
 var listSandboxAsks = book.list;
 var onSandboxAsksChanged = book.onChanged;
@@ -36454,7 +36454,7 @@ async function callSandboxTool(name, args, caller, signal) {
   return failed(`There's no sandbox tool “${oneLine(name, 40)}”.`);
 }
 
-// Packages/Box/src/link/vault/asks.ts
+// box/src/link/vault/asks.ts
 var book2 = askBook("q_", { answer: "no" });
 var onAsksChanged = book2.onChanged;
 var listAsks = book2.list;
@@ -36483,7 +36483,7 @@ function watchVaultAsks(tell, answered = () => {}, after = 2000) {
   return book2.watch(vaultAskNotice, tell, answered, after);
 }
 
-// Packages/Box/src/link/glance/asked.ts
+// box/src/link/glance/asked.ts
 var ASKS_FILE2 = path125.join(RUN, "glance", "asks.json");
 var ASKED2 = new Set(["permission.asked", "form.created"]);
 var ANSWERED3 = new Set(["permission.replied", "permission.rejected", "form.replied", "form.cancelled"]);
@@ -36606,11 +36606,11 @@ function forgetAsks() {
   } catch {}
 }
 
-// Packages/Box/src/link/lists/sessions.ts
+// box/src/link/lists/sessions.ts
 import fs122 from "node:fs";
 import path127 from "node:path";
 
-// Packages/Box/src/link/lists/rule.ts
+// box/src/link/lists/rule.ts
 import path126 from "node:path";
 var folderOf4 = (session) => session.location?.directory ?? session.directory ?? "";
 var kuvoOf = (session) => isObject(session.metadata?.kuvo) ? session.metadata.kuvo : {};
@@ -36689,7 +36689,7 @@ function listedProjects(sessions, place) {
   return projects;
 }
 
-// Packages/Box/src/link/lists/sessions.ts
+// box/src/link/lists/sessions.ts
 var LIST_ROUTE = /^kuvo\/sessions\/list(\/events)?$/;
 var LIST_FILE = path127.join(RUN, "lists", "sessions.json");
 var GONE_KEPT = 2000;
@@ -37285,17 +37285,17 @@ async function* listRoute(context, match) {
   }
 }
 
-// Packages/Box/src/link/glance/pulls.ts
+// box/src/link/glance/pulls.ts
 import fs125 from "node:fs";
 import path130 from "node:path";
 
-// Packages/Box/src/link/areas/changes.ts
+// box/src/link/areas/changes.ts
 import { execFile as execFile12, execFileSync as execFileSync3, spawn as spawn14 } from "node:child_process";
 import fs124 from "node:fs";
 import os14 from "node:os";
 import path129 from "node:path";
 
-// Packages/Box/src/link/areas/file.ts
+// box/src/link/areas/file.ts
 import fs123 from "node:fs";
 import path128 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -37359,7 +37359,7 @@ async function* fileAt(requestPath, json) {
   }
 }
 
-// Packages/Box/src/link/areas/changes.ts
+// box/src/link/areas/changes.ts
 var EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
@@ -38314,7 +38314,7 @@ async function* changesRoute(context) {
   return yield* json(404, {});
 }
 
-// Packages/Box/src/link/glance/pulls.ts
+// box/src/link/glance/pulls.ts
 var PULLS_FILE = path130.join(K, "box", "pulls.json");
 var KEPT6 = 500;
 function pullAt(url) {
@@ -38409,7 +38409,7 @@ function pullCatcher(target) {
   };
 }
 
-// Packages/Box/src/link/engine/watch.ts
+// box/src/link/engine/watch.ts
 function isArchiving(event) {
   const metadata = event.data?.metadata;
   return !metadata || metadata["kuvo.archived"] === true || metadata.kuvo?.archived === true;
@@ -38741,13 +38741,13 @@ async function atWork3(target) {
   return Array.isArray(active) ? active : Object.keys(active);
 }
 
-// Packages/Box/src/link/browser/install.ts
+// box/src/link/browser/install.ts
 import { execFileSync as execFileSync4, spawn as spawn15 } from "node:child_process";
 import crypto48 from "node:crypto";
 import fs127 from "node:fs";
 import os15 from "node:os";
 import path132 from "node:path";
-// Packages/Box/src/link/browser/linux.json
+// box/src/link/browser/linux.json
 var linux_default = {
   chromium: {
     version: "155.0.8059.79",
@@ -40161,7 +40161,7 @@ var linux_default = {
     ]
   }
 };
-// Packages/Box/src/link/browser/mac.json
+// box/src/link/browser/mac.json
 var mac_default = {
   chromium: {
     version: "155.0.8059.79",
@@ -40178,10 +40178,10 @@ var mac_default = {
   }
 };
 
-// Packages/Box/src/link/browser/rpm.ts
+// box/src/link/browser/rpm.ts
 import zlib from "node:zlib";
 
-// Packages/Box/src/link/browser/xz.ts
+// box/src/link/browser/xz.ts
 import crypto47 from "node:crypto";
 var MAGIC = [253, 55, 122, 88, 90, 0];
 var LZMA2 = 33;
@@ -40623,7 +40623,7 @@ function unxz(input, most = 512 * 1024 * 1024) {
   return Buffer.from(out.buffer.buffer, out.buffer.byteOffset, out.length);
 }
 
-// Packages/Box/src/link/browser/rpm.ts
+// box/src/link/browser/rpm.ts
 var HEADER_MAGIC = Buffer.from([142, 173, 232, 1]);
 var PAYLOAD_FORMAT = 1124;
 var PAYLOAD_COMPRESSOR = 1125;
@@ -40718,7 +40718,7 @@ function cpioEntries(archive) {
   return entries;
 }
 
-// Packages/Box/src/link/browser/zip.ts
+// box/src/link/browser/zip.ts
 import fs126 from "node:fs";
 import path131 from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -40928,7 +40928,7 @@ async function unzip(file, root) {
   }
 }
 
-// Packages/Box/src/link/browser/install.ts
+// box/src/link/browser/install.ts
 var PINNED = { linux: linux_default, darwin: mac_default };
 var BROWSER = () => path132.join(K, "browser");
 var CURRENT = () => path132.join(BROWSER(), "current");
@@ -41555,12 +41555,12 @@ async function* browserRoute(context) {
   return yield* json(405, {});
 }
 
-// Packages/Box/src/link/browser/from-app.ts
+// box/src/link/browser/from-app.ts
 import { execFileSync as execFileSync5 } from "node:child_process";
 import fs129 from "node:fs";
 import path134 from "node:path";
 
-// Packages/Box/src/shared/routes/browser.ts
+// box/src/shared/routes/browser.ts
 var SEARCH_ENGINES = [
   { id: "google", title: "Google", url: "https://www.google.com/search?q=%s" },
   { id: "duckDuckGo", title: "DuckDuckGo", url: "https://duckduckgo.com/?q=%s" },
@@ -41582,7 +41582,7 @@ var BROWSER_SETTINGS = object({
   never: list(string)
 });
 
-// Packages/Box/src/link/browser/settings.ts
+// box/src/link/browser/settings.ts
 import fs128 from "node:fs";
 import path133 from "node:path";
 var settingsFile = (folder) => path133.join(folder, "settings.json");
@@ -41655,7 +41655,7 @@ function changeBrowserSettings(change, folder = BROWSER_FOLDER) {
   return null;
 }
 
-// Packages/Box/src/link/browser/from-app.ts
+// box/src/link/browser/from-app.ts
 var FROM_2001 = 978307200;
 var markFile = (folder) => path134.join(folder, "app-data-read");
 function thisMacsAppFolder() {
@@ -41751,24 +41751,24 @@ function takeInAppBrowserData(appFolder, folder = BROWSER_FOLDER) {
   writePrivate(markFile(folder), JSON.stringify(took));
 }
 
-// Packages/Box/src/link/rehome/command.ts
+// box/src/link/rehome/command.ts
 import path143 from "node:path";
 
-// Packages/Box/src/link/rehome/move.ts
+// box/src/link/rehome/move.ts
 import { spawnSync as spawnSync10 } from "node:child_process";
 import fs136 from "node:fs";
 import path142 from "node:path";
 
-// Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d84127625c6b";
+// box/src/link/version.ts
+var BRIDGE_VERSION = "40a1e444dcb8";
 
-// Packages/Box/src/link/rehome/outside.ts
+// box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
 import fs130 from "node:fs";
 import os16 from "node:os";
 import path136 from "node:path";
 
-// Packages/Box/src/link/rehome/paths.ts
+// box/src/link/rehome/paths.ts
 import { createHash as createHash2 } from "node:crypto";
 import path135 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
@@ -41892,7 +41892,7 @@ function claudeSlug(folder) {
 var claudeKeychainService = (folder) => `Claude Code-credentials-${createHash2("sha256").update(folder.normalize("NFC")).digest("hex").slice(0, 8)}`;
 var grokSessionsName = (folder) => encodeURIComponent(folder);
 
-// Packages/Box/src/link/rehome/outside.ts
+// box/src/link/rehome/outside.ts
 var ASIDE = ".before-kuvo-move";
 var exists2 = (file) => {
   try {
@@ -42211,11 +42211,11 @@ function claudeAccounts(agents) {
   return [path136.join(agents, "claude", "console"), ...listOf4(path136.join(agents, "claude", "accounts")).map((name) => path136.join(agents, "claude", "accounts", name))].filter(isFolder2);
 }
 
-// Packages/Box/src/link/rehome/rewrite.ts
+// box/src/link/rehome/rewrite.ts
 import fs135 from "node:fs";
 import path141 from "node:path";
 
-// Packages/Box/src/shared/engines.ts
+// box/src/shared/engines.ts
 import fs131 from "node:fs";
 import path137 from "node:path";
 function byNumbers(a, b) {
@@ -42252,13 +42252,13 @@ function keeperEngine(root) {
   return named && there.includes(named) ? named : there.at(-1) ?? null;
 }
 
-// Packages/Box/src/link/rehome/engine-check.ts
+// box/src/link/rehome/engine-check.ts
 import { spawn as spawn16 } from "node:child_process";
 import crypto49 from "node:crypto";
 import fs133 from "node:fs";
 import path139 from "node:path";
 
-// Packages/Box/src/link/rehome/database.ts
+// box/src/link/rehome/database.ts
 import fs132 from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import path138 from "node:path";
@@ -42657,7 +42657,7 @@ function quietCopy(file, to) {
   }
 }
 
-// Packages/Box/src/link/rehome/engine-check.ts
+// box/src/link/rehome/engine-check.ts
 var START_LIMIT = 120000;
 var ANSWER_LIMIT = 60000;
 var SAMPLE = 25;
@@ -42776,7 +42776,7 @@ async function checkWithEngine({ engine, data, scratch, lost }) {
   }
 }
 
-// Packages/Box/src/link/rehome/own.ts
+// box/src/link/rehome/own.ts
 import { createHash as createHash3 } from "node:crypto";
 import fs134 from "node:fs";
 import path140 from "node:path";
@@ -43127,7 +43127,7 @@ function namedElsewhere(placements, way, home, map, most = 50) {
   }
   return found;
 }
-// Packages/Box/src/link/rehome/rewrite.ts
+// box/src/link/rehome/rewrite.ts
 function placementOf(move, name) {
   return move.placements.find((each) => !each.installed && path141.relative(move.home, homeSide(each, move.way)) === name);
 }
@@ -43349,7 +43349,7 @@ var PATH_REWRITER = {
   }
 };
 
-// Packages/Box/src/link/rehome/move.ts
+// box/src/link/rehome/move.ts
 var BESIDE = [
   ["data", "opencode/data"],
   ["config", "opencode/config"],
@@ -44250,7 +44250,7 @@ function appFolderOf(appBox, home) {
   return path142.dirname(path142.resolve(appBox));
 }
 
-// Packages/Box/src/link/rehome/command.ts
+// box/src/link/rehome/command.ts
 var EXIT = { done: 0, back: 0, nothing: 0, refused: 1, failed: 1, stuck: 3, waits: 4 };
 var USAGE = "Usage: kuvo-link.js rehome <root> [--new] [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent | --new --check | --failed <why>";
 async function rehomeCommand(root, args) {
@@ -44335,15 +44335,15 @@ async function rehomeCommand(root, args) {
   }
 }
 
-// Packages/Box/src/link/mac/link.ts
+// box/src/link/mac/link.ts
 import fs138 from "node:fs";
 import path145 from "node:path";
 
-// Packages/Box/src/link/mac/machines.ts
+// box/src/link/mac/machines.ts
 import fs137 from "node:fs";
 import path144 from "node:path";
 
-// Packages/Box/src/link/mac/app-route.ts
+// box/src/link/mac/app-route.ts
 async function appAnswer(request, phone, signal) {
   const host = openAppHost();
   if (!host)
@@ -44388,7 +44388,7 @@ async function* passedOn(response, signal) {
   }
 }
 
-// Packages/Box/src/link/mac/machines.ts
+// box/src/link/mac/machines.ts
 var LIST_FILE2 = path144.join(K, "machines.json");
 var PHONE_LINK_FILE = path144.join(APP_FOLDER ?? K, "phone-link.json");
 var HEARD_LATELY = 30 * 60000;
@@ -44531,7 +44531,7 @@ async function* machinesRoute(request, phone, signal, route, timing = TIMING) {
   yield* answer3(503, { message: `${notOpen()}. Open it there, then try again.` });
 }
 
-// Packages/Box/src/link/mac/link.ts
+// box/src/link/mac/link.ts
 function macNeeded(link, now = Date.now()) {
   const config = macLink.config;
   if (!config)
@@ -44675,13 +44675,13 @@ function stopMacLink() {
   macLink.wake?.();
 }
 
-// Packages/Box/src/link/mac/notices.ts
+// box/src/link/mac/notices.ts
 import fs139 from "node:fs";
 
-// Packages/Box/src/link/notices/push.ts
+// box/src/link/notices/push.ts
 import path146 from "node:path";
 
-// Packages/Box/src/link/notices/notice.ts
+// box/src/link/notices/notice.ts
 var NOTICE_LIMIT = 2500;
 function noticeJSON(notice) {
   const value = { t: "notify", title: cut(masked(String(notice.title ?? "")), 200), category: notice.category, thread: String(notice.thread ?? ""), data: notice.data ?? {} };
@@ -44701,7 +44701,7 @@ function pushTo(phone, json, hostKey) {
   return relayPush(Buffer.from(phone.address, "base64url"), mail);
 }
 
-// Packages/Box/src/link/notices/push.ts
+// box/src/link/notices/push.ts
 function sendToPhones(host, link, notice) {
   const usage = notice.category === "usage" && !!notice.data?.notice;
   const phones = (link?.phones ?? []).filter((phone) => typeof phone.address === "string" && phone.address !== "");
@@ -44753,7 +44753,7 @@ function notePushed(address, status, now = Date.now(), link = readLink()) {
   } catch {}
 }
 
-// Packages/Box/src/link/mac/notices.ts
+// box/src/link/mac/notices.ts
 function macNoticeHold(clock = {}) {
   let held = [];
   try {
@@ -44789,12 +44789,12 @@ function macTell(notice) {
   return macLink.hold.tell(notice);
 }
 
-// Packages/Box/src/link/mac/relay.ts
+// box/src/link/mac/relay.ts
 import fs165 from "node:fs";
 import os20 from "node:os";
 import path169 from "node:path";
 
-// Packages/Box/src/link/peers/mail.ts
+// box/src/link/peers/mail.ts
 var answeringAsk = null;
 var asksFrom = new Map;
 function peerMail(sender, payload, host, places = () => ({ targets: [], bridge: true })) {
@@ -44888,7 +44888,7 @@ function heardFromMac(mac, payload, now = Date.now()) {
     writeAgents(changed);
 }
 
-// Packages/Box/src/link/relay/connection.ts
+// box/src/link/relay/connection.ts
 function fromRelay(host, message, self) {
   if (message.address.equals(self)) {
     if (message.kind === "deliver")
@@ -44975,7 +44975,7 @@ function connectOnce(relay, secret, host, onWelcome = () => {}) {
   });
 }
 
-// Packages/Box/src/link/relay/host.ts
+// box/src/link/relay/host.ts
 var requestOf = (head, body) => ({
   method: typeof head.m === "string" ? head.m : "GET",
   path: typeof head.p === "string" ? head.p : "",
@@ -45197,7 +45197,7 @@ class LinkHost {
   }
 }
 
-// Packages/Box/src/link/areas/agent-tools.ts
+// box/src/link/areas/agent-tools.ts
 var ADDRESS2 = /^ses_[A-Za-z0-9]{1,60}$/;
 async function* agentToolsRoute(context) {
   const { request, readEngine, bridge, signal, json } = context;
@@ -45234,7 +45234,7 @@ async function* startRoute(context) {
   return yield* json(200, outcome.started);
 }
 
-// Packages/Box/src/link/areas/session-move.ts
+// box/src/link/areas/session-move.ts
 import fs140 from "node:fs";
 import path147 from "node:path";
 var SESSION_MOVE_ROUTE = /^kuvo\/sessions\/([^/]+)\/move$/;
@@ -45313,7 +45313,7 @@ async function* sessionFoldersRoute(context) {
   return yield* json(200, { session: id });
 }
 
-// Packages/Box/src/link/areas/found.ts
+// box/src/link/areas/found.ts
 import { readFileSync } from "node:fs";
 var readFrom = () => process.env.KUVO_DEMO_OPENCODE_AUTH || opencodeAuthFile();
 function readOpencode(file) {
@@ -45416,7 +45416,7 @@ async function* foundRoute(context) {
   return yield* json(used.status, used.status === 200 ? {} : { message: used.message });
 }
 
-// Packages/Box/src/link/areas/search.ts
+// box/src/link/areas/search.ts
 import fs141 from "node:fs";
 import path148 from "node:path";
 var MOST3 = 50;
@@ -45682,11 +45682,11 @@ function snippet(text, at, length) {
   return (start > blockStart ? "…" : "") + words + (end < letters.length ? "…" : "");
 }
 
-// Packages/Box/src/link/areas/setup.ts
+// box/src/link/areas/setup.ts
 import fs142 from "node:fs";
 import path149 from "node:path";
 
-// Packages/Box/src/link/server/sent-once.ts
+// box/src/link/server/sent-once.ts
 var BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
 var SENDING_PATIENCE = { ms: 120000 };
 async function collected(pieces) {
@@ -45770,7 +45770,7 @@ function forgetOld2(at) {
   }
 }
 
-// Packages/Box/src/link/server/forward.ts
+// box/src/link/server/forward.ts
 var AGENTS = "kuvo/agents/";
 function withPartsIn(body) {
   let prompt;
@@ -45986,7 +45986,7 @@ async function* engineRoute(context) {
   return yield* forward(engine, request.path, request, signal, allowed, namingHere(readEngine));
 }
 
-// Packages/Box/src/link/areas/setup.ts
+// box/src/link/areas/setup.ts
 var followers = new Set;
 onLinkWritten(() => {
   for (const tell of followers)
@@ -46044,7 +46044,7 @@ async function* memberComputersRoute(context) {
   return yield* json(503, { message: "This computer can't list your computers yet. Try again in a moment." });
 }
 
-// Packages/Box/src/link/areas/attention.ts
+// box/src/link/areas/attention.ts
 async function* appNoticeRoute(context) {
   const { request, route, hold, json } = context;
   if (!IS_MAC || !request.fromApp || !hold)
@@ -46081,7 +46081,7 @@ async function* attentionRoute(context) {
   return yield* json(200, { for: given.seconds });
 }
 
-// Packages/Box/src/link/areas/bots.ts
+// box/src/link/areas/bots.ts
 async function* botTemplatesRoute(context) {
   const { request, signal, readEngine, info, json } = context;
   if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
@@ -46151,7 +46151,7 @@ async function* botsRoute(context) {
   return;
 }
 
-// Packages/Box/src/link/areas/claude-code.ts
+// box/src/link/areas/claude-code.ts
 import fs143 from "node:fs";
 import path150 from "node:path";
 var BUILT_IN_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"]);
@@ -46366,7 +46366,7 @@ async function* claudeCodeRoute({ request, readEngine, json }) {
   return yield* json(200, await claudeCodeList(folder, settings ?? {}, await otherCommands(engine, settings ?? {})));
 }
 
-// Packages/Box/src/link/areas/folders.ts
+// box/src/link/areas/folders.ts
 import fs144 from "node:fs";
 import path151 from "node:path";
 var byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
@@ -46505,7 +46505,7 @@ async function* foldersRoute(context) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/areas/artifacts.ts
+// box/src/link/areas/artifacts.ts
 var ARTIFACT_ROUTE = /^kuvo\/artifacts(?:\/(?:events|timeline(?:\/events)?|storage(?:\/clear)?|art_[0-9a-f]{24}(?:\/(?:pin|restore|versions\/\d+(?:\/changes)?))?))?$/;
 async function* forwardArtifacts(target, route, request, signal) {
   const method = request.method.toUpperCase();
@@ -46547,12 +46547,12 @@ async function* artifactsRoute(context) {
   return yield* forwardArtifacts(target, route, request, signal);
 }
 
-// Packages/Box/src/link/areas/info.ts
+// box/src/link/areas/info.ts
 import fs146 from "node:fs";
 import os17 from "node:os";
 import path153 from "node:path";
 
-// Packages/Box/src/shared/bundle.ts
+// box/src/shared/bundle.ts
 import fs145 from "node:fs";
 var BUILT = /\/\/ Built from Packages\/Box\/src\/agents ([0-9a-f]{16,64})\s*(?:\n|$)/g;
 function buildOf(text) {
@@ -46580,7 +46580,7 @@ function bundleBuild(file) {
   }
 }
 
-// Packages/Box/src/link/rehome/route.ts
+// box/src/link/rehome/route.ts
 import path152 from "node:path";
 function rehomeHome() {
   if (!APP_FOLDER)
@@ -46625,7 +46625,7 @@ async function* rehomeRoute({ request, json }) {
   return yield* refused ? json(409, { message: refused }) : json(200, rehomeStatus(home));
 }
 
-// Packages/Box/src/link/areas/info.ts
+// box/src/link/areas/info.ts
 async function* infoRoute(context) {
   const { readEngine, bridge, info } = context;
   let engine = {};
@@ -46719,7 +46719,7 @@ function pieces2(engine, engineRuns) {
   };
 }
 
-// Packages/Box/src/link/areas/named.ts
+// box/src/link/areas/named.ts
 async function* namedRoute(context) {
   const { request, readEngine, json } = context;
   if (request.method.toUpperCase() !== "GET")
@@ -46733,7 +46733,7 @@ async function namedNow(readEngine) {
   return namedAgents(own, peersOf(link), readPeerAgents(), movedOf(link));
 }
 
-// Packages/Box/src/link/areas/notices.ts
+// box/src/link/areas/notices.ts
 var lately = () => ({ telling: tellingNow(), ...toldLately() });
 async function* noticesRoute(context) {
   const { request, route, signal, json } = context;
@@ -46745,7 +46745,7 @@ async function* noticesRoute(context) {
   return yield* followed(lately, toldFollowers, signal, { folders: [TOLD_FOLDER], recursive: false });
 }
 
-// Packages/Box/src/link/areas/personalities.ts
+// box/src/link/areas/personalities.ts
 import path154 from "node:path";
 async function* personalityEventsRoute(context) {
   const { request, signal, json } = context;
@@ -46780,7 +46780,7 @@ async function* personalityRoute(context, personality) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/areas/phones.ts
+// box/src/link/areas/phones.ts
 async function* phonesRoute(context) {
   const { phone, json } = context;
   const link = readLink();
@@ -46834,7 +46834,7 @@ async function* pairingRoute(context) {
   return yield* json(200, { link: pairingLink({ ...link, pairing: link[slot] }), ends: Math.floor(link[slot].expires / 1000) });
 }
 
-// Packages/Box/src/link/areas/messages.ts
+// box/src/link/areas/messages.ts
 var SEND_ROUTE = /^kuvo\/sessions\/([^/]+)\/send$/;
 var PARTS_ROUTE = "kuvo/messages/parts";
 var PARTS_MOST = 500;
@@ -46937,7 +46937,7 @@ async function* partsRoute(context) {
   return yield* json(200, { parts: texts.map(partsOf) });
 }
 
-// Packages/Box/src/link/areas/queue.ts
+// box/src/link/areas/queue.ts
 var QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add|events))?|queue\/([^/]+)(?:\/(now))?))$/;
 var ITEMS_WAIT = 2000;
 async function queueShown(session, targets) {
@@ -47116,13 +47116,13 @@ async function* added({ json }, target, session, given, written, words) {
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }
 
-// Packages/Box/src/link/areas/session-asks.ts
+// box/src/link/areas/session-asks.ts
 import fs148 from "node:fs";
 
-// Packages/Box/src/link/areas/glance.ts
+// box/src/link/areas/glance.ts
 import fs147 from "node:fs";
 
-// Packages/Box/src/link/work/accounts.ts
+// box/src/link/work/accounts.ts
 var ASK_WAIT2 = 5000;
 async function accountsOn(target, signal) {
   const wait = AbortSignal.timeout(ASK_WAIT2);
@@ -47152,7 +47152,7 @@ async function workAccounts(sessions, signal) {
   return accounts;
 }
 
-// Packages/Box/src/link/areas/glance.ts
+// box/src/link/areas/glance.ts
 var GLANCE_ROUTE = /^kuvo\/sessions\/glance(\/events)?$/;
 var GLANCE_MOST = 200;
 var repositories = new Map;
@@ -47335,7 +47335,7 @@ async function* glanceRoute(context, match) {
   }
 }
 
-// Packages/Box/src/link/areas/session-asks.ts
+// box/src/link/areas/session-asks.ts
 var SESSION_ASKS_ROUTE = /^kuvo\/sessions\/([^/]+)\/asks(?:\/([^/]+))?$/;
 var text5 = (value) => typeof value === "string" ? value : null;
 var strings = (value) => Array.isArray(value) ? value.filter((each) => typeof each === "string") : [];
@@ -47637,7 +47637,7 @@ async function* sessionAsksRoute(context, match) {
   return yield* json(200, {});
 }
 
-// Packages/Box/src/link/areas/mentions.ts
+// box/src/link/areas/mentions.ts
 import path155 from "node:path";
 var MENTIONS_ROUTE = /^kuvo\/sessions\/([^/]+)\/mentions$/;
 var MENTIONS_SHOWN = 8;
@@ -47792,7 +47792,7 @@ async function* mentionsRoute(context, match) {
   return yield* json(200, { mentions });
 }
 
-// Packages/Box/src/link/work/model-words.ts
+// box/src/link/work/model-words.ts
 function article(word) {
   const first = word.toLowerCase()[0];
   if (/^[A-Z][A-Z]/.test(word))
@@ -47829,7 +47829,7 @@ function readiness(model, state, known) {
   }
 }
 
-// Packages/Box/src/link/areas/session-models.ts
+// box/src/link/areas/session-models.ts
 var SESSION_MODELS_ROUTE = "kuvo/sessions/models";
 async function sessionModels(ids, engine, bridge, signal) {
   const targets = [engine, bridge].filter((each) => each !== null);
@@ -47901,7 +47901,7 @@ async function* sessionModelsRoute(context) {
   }
 }
 
-// Packages/Box/src/link/areas/models-offered.ts
+// box/src/link/areas/models-offered.ts
 import fs149 from "node:fs";
 import path156 from "node:path";
 var MODELS_OFFERED_ROUTE = "kuvo/models/offered";
@@ -47954,7 +47954,7 @@ function offeredAnswer(lists, wanted) {
   };
 }
 
-// Packages/Box/src/link/areas/read-all.ts
+// box/src/link/areas/read-all.ts
 var READ_ALL_ROUTE = "kuvo/sessions/read";
 var PAGES = 15;
 var AT_ONCE = 8;
@@ -48021,14 +48021,14 @@ async function* readAllRoute({ request, readEngine, bridge, signal, json }) {
   return yield* json(200, { read: counts.reduce((sum, count) => sum + (count ?? 0), 0) });
 }
 
-// Packages/Box/src/link/areas/work-queue.ts
+// box/src/link/areas/work-queue.ts
 import fs156 from "node:fs";
 import path162 from "node:path";
 
-// Packages/Box/src/link/areas/vault.ts
+// box/src/link/areas/vault.ts
 import crypto54 from "node:crypto";
 
-// Packages/Box/src/link/vault/activity.ts
+// box/src/link/vault/activity.ts
 import fs150 from "node:fs";
 import path157 from "node:path";
 var ACTIVITY = path157.join(VAULT_FOLDER, "activity.jsonl");
@@ -48081,7 +48081,7 @@ function readActivity({ item, bot, session, before, limit = 100 } = {}, now = Da
   return readLines().filter((entry) => now - entry.at < KEPT_DAYS * DAY5).filter((entry) => (!item || entry.item === item) && (!bot || entry.bot === bot) && (!session || entry.session === session) && (!before || entry.at < before)).sort((a, b) => b.at - a.at).slice(0, Math.max(1, Math.min(500, limit)));
 }
 
-// Packages/Box/src/link/vault/use.ts
+// box/src/link/vault/use.ts
 import os18 from "node:os";
 var AUTOPILOT_HOW = "autopilot";
 var tell2 = () => false;
@@ -48175,7 +48175,7 @@ function tripwire(item, caller, site) {
 }
 var noteUse = (item, caller, use, how) => note3({ what: "used", ...itemOf2(item), ...whoOf3(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
 
-// Packages/Box/src/link/vault/fill.ts
+// box/src/link/vault/fill.ts
 var refused6 = (status, message) => ({ status, value: { message } });
 function pageSite(origin) {
   if (typeof origin !== "string")
@@ -48236,18 +48236,18 @@ async function fill(given, caller, signal) {
   return { status: 200, value: { item: { id: item.id, name: item.name }, ...item.username ? { username: item.username } : {}, values: filled } };
 }
 
-// Packages/Box/src/link/vault/holder.ts
+// box/src/link/vault/holder.ts
 import crypto52 from "node:crypto";
 import fs153 from "node:fs";
 import net5 from "node:net";
 import path160 from "node:path";
 
-// Packages/Box/src/link/vault/ssh.ts
+// box/src/link/vault/ssh.ts
 import crypto51 from "node:crypto";
 import fs152 from "node:fs";
 import path159 from "node:path";
 
-// Packages/Box/src/link/vault/ssh-agent.ts
+// box/src/link/vault/ssh-agent.ts
 import crypto50 from "node:crypto";
 import fs151 from "node:fs";
 import net4 from "node:net";
@@ -48529,7 +48529,7 @@ function serveAgent(socket, source) {
   return server;
 }
 
-// Packages/Box/src/link/vault/ssh.ts
+// box/src/link/vault/ssh.ts
 var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_key");
 var sumOf2 = (text) => crypto51.createHash("sha256").update(text).digest("hex").slice(0, 32);
 var REFUSED_FOR = 30000;
@@ -48750,7 +48750,7 @@ function keepSshAgents(watch = watchFolder) {
   return stop;
 }
 
-// Packages/Box/src/link/vault/holder.ts
+// box/src/link/vault/holder.ts
 var VAULT_SOCKET = path160.join(RUN, "vault.sock");
 var holding4 = false;
 var holdsVault = () => holding4;
@@ -48964,13 +48964,13 @@ function askHolder(request, signal) {
   });
 }
 
-// Packages/Box/src/link/vault/tools.ts
+// box/src/link/vault/tools.ts
 import crypto53 from "node:crypto";
 import fs154 from "node:fs";
 import os19 from "node:os";
 import path161 from "node:path";
 
-// Packages/Box/src/link/vault/mask.ts
+// box/src/link/vault/mask.ts
 var SHORTEST = 4;
 var SHORTEST_PART = 8;
 var escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -49026,7 +49026,7 @@ function maskValues(text, hidden) {
   return masked;
 }
 
-// Packages/Box/src/link/vault/tools.ts
+// box/src/link/vault/tools.ts
 var failed3 = (text) => ({ text, isError: true });
 var VAULT_TOOLS = [
   {
@@ -49257,7 +49257,7 @@ async function callTool(name, args, caller, signal) {
   }
 }
 
-// Packages/Box/src/link/areas/vault.ts
+// box/src/link/areas/vault.ts
 var NOT_OPEN = "This computer's vault isn't open: Kuvo Code's link here isn't running. Try again in a moment.";
 var CLIENTS_ONLY = "Only Kuvo Code on your Mac or iPhone can do this.";
 var NOT_CALLING = "Only a conversation's own tool call can use the vault, and this one isn't running in it.";
@@ -49563,7 +49563,7 @@ async function* answerVault(context) {
   return yield* json(404, { message: `There's no ${oneLine(route, 80)}.` });
 }
 
-// Packages/Box/src/link/work-queue/import.ts
+// box/src/link/work-queue/import.ts
 import fs155 from "node:fs";
 var MOST_SKIPPED_SAID = 40;
 function titleOf(text) {
@@ -49811,7 +49811,7 @@ function importWords(outcome, skipped, names) {
   ].filter(Boolean).join(" ");
 }
 
-// Packages/Box/src/link/work-queue/tools.ts
+// box/src/link/work-queue/tools.ts
 var said6 = (text) => ({ text, isError: false });
 var refused7 = (text) => ({ text, isError: true });
 var ITEM = { type: ["string", "integer"], description: "Like #243 or gh:owner/repo#12." };
@@ -50336,7 +50336,7 @@ Handed: ${item.handed.map((each) => `${title(each.from)} → ${title(each.to)} $
 `);
 }
 
-// Packages/Box/src/link/areas/work-queue.ts
+// box/src/link/areas/work-queue.ts
 var WORK_QUEUE_ROUTE = /^kuvo\/work-queue(?:\/(tools|events|refs|categories|import|items\/([^/]+)(?:\/(move|restore|files\/([^/]+)))?))?$/;
 var YOU2 = { user: true };
 var ALL = "all";
@@ -50600,7 +50600,7 @@ async function* followView(owner, targets, signal, glance = false) {
   }
 }
 
-// Packages/Box/src/link/areas/plugins.ts
+// box/src/link/areas/plugins.ts
 var testNpm = IN_TEST_FOLDER ? process.env.KUVO_TEST_NPM : undefined;
 var NPM = testNpm ?? "https://registry.npmjs.org";
 var NPM_SPEC = /^((?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*)(?:@([^\s@/]+))?$/;
@@ -50651,7 +50651,7 @@ async function* pluginSearchRoute(context) {
   }
 }
 
-// Packages/Box/src/link/areas/programs.ts
+// box/src/link/areas/programs.ts
 import fs157 from "node:fs";
 import path163 from "node:path";
 function findProgram(requestPath, PATH = process.env.PATH ?? "") {
@@ -50683,7 +50683,7 @@ async function* programsRoute(context) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/areas/backups.ts
+// box/src/link/areas/backups.ts
 import fs158 from "node:fs";
 import path164 from "node:path";
 function folderAt2(value) {
@@ -50722,7 +50722,7 @@ async function* backupsRoute(context) {
   }
 }
 
-// Packages/Box/src/link/areas/autopilot.ts
+// box/src/link/areas/autopilot.ts
 var SESSION_AUTOPILOT_ROUTE = /^kuvo\/sessions\/([^/]+)\/autopilot(\/asked)?$/;
 async function find2(id, targets) {
   for (const target of targets) {
@@ -50798,11 +50798,11 @@ async function* autopilotRoute(context) {
   return yield* json(200, shown3(at.data));
 }
 
-// Packages/Box/src/link/areas/typed.ts
+// box/src/link/areas/typed.ts
 import fs159 from "node:fs";
 import path165 from "node:path";
 
-// Packages/Box/src/link/typed/words.ts
+// box/src/link/typed/words.ts
 var SPACE = "\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
 var SPACE_ONE = new RegExp(`^[${SPACE}]$`);
 var SPACE_ENDS = new RegExp(`^[${SPACE}]+|[${SPACE}]+$`, "g");
@@ -51228,7 +51228,7 @@ function reviewUnfinished(command) {
   return null;
 }
 
-// Packages/Box/src/link/typed/decide.ts
+// box/src/link/typed/decide.ts
 var SUBAGENT_GOAL = "A subagent’s conversation can’t have a goal of its own. Set it in the conversation it works for.";
 var GOALS_NOT_RUNNING = "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.";
 var KEYWORD_UNAVAILABLE = "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.";
@@ -51344,7 +51344,7 @@ function decideKeyword(keyword, rest, written, facts) {
   }
 }
 
-// Packages/Box/src/link/areas/typed.ts
+// box/src/link/areas/typed.ts
 var TYPED_ROUTE = /^kuvo\/sessions\/([^/]+)\/typed$/;
 function keywordsOffered(session, bridge) {
   if (session.parentID)
@@ -51642,7 +51642,7 @@ async function* typedAnswer(context, match) {
   return yield* json(200, { ...answer, ...action, ...agent ? { agent } : {} });
 }
 
-// Packages/Box/src/link/areas/sandbox.ts
+// box/src/link/areas/sandbox.ts
 var NOT_OPEN2 = "This computer's box isn't running its own process: try again in a moment.";
 var NOT_CALLING2 = "Only a conversation's own tool call can ask, and this one isn't running in it.";
 var NOT_ON = "Commands aren't in the sandbox on this computer now, so there's nothing to ask: run the command with your shell tool.";
@@ -51809,7 +51809,7 @@ async function* sandboxRoute(context) {
   return yield* json(404, {});
 }
 
-// Packages/Box/src/link/areas/providers.ts
+// box/src/link/areas/providers.ts
 async function providerModels(body, signal) {
   const given = typeof body?.url === "string" ? body.url.trim() : "";
   let base;
@@ -51864,7 +51864,7 @@ async function* providerModelsRoute(context) {
   return yield* json(status, value);
 }
 
-// Packages/Box/src/link/areas/sign-in.ts
+// box/src/link/areas/sign-in.ts
 var SIGN_IN_METHODS_ROUTE = "kuvo/sign-in/methods";
 var SIGN_IN_STATUS_ROUTE = "kuvo/sign-in/status";
 var SIGN_IN_ACCOUNTS_ROUTE = "kuvo/sign-in/accounts";
@@ -52005,7 +52005,7 @@ async function* signInRoute(context) {
   }
 }
 
-// Packages/Box/src/link/areas/apply.ts
+// box/src/link/areas/apply.ts
 import fs160 from "node:fs";
 var BUILT_IN_AGENTS2 = ["build", "plan", "general", "explore", "compaction", "title", "summary"];
 var isRules = (keys) => ["permissions", "policies"].includes(keys[keys.length - 1]);
@@ -52116,7 +52116,7 @@ function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, options = {
   });
 }
 
-// Packages/Box/src/link/areas/settings.ts
+// box/src/link/areas/settings.ts
 var FOLLOW_WAIT = 5000;
 async function followSettings2({ readEngine, bridge }) {
   subagentsFollow();
@@ -52180,7 +52180,7 @@ async function* settingsRoute(context) {
   return yield* json(404, {});
 }
 
-// Packages/Box/src/link/areas/moves.ts
+// box/src/link/areas/moves.ts
 var KINDS4 = ["bot", "chat", "group"];
 var movesNow = () => {
   const peers = peersOf(readLink());
@@ -52238,7 +52238,7 @@ async function* movePlacesRoute(context) {
   return yield* json(200, places);
 }
 
-// Packages/Box/src/link/areas/work.ts
+// box/src/link/areas/work.ts
 import fs161 from "node:fs";
 var WORK_ROUTE = /^kuvo\/(?:work(?:\/events|\/oversight(?:\/events)?|\/background(?:\/events)?)?|bots\/([^/]+)\/stop-all)$/;
 var WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
@@ -52447,7 +52447,7 @@ async function* appIconRoute(context) {
   yield { body: bytes };
 }
 
-// Packages/Box/src/link/mac/routes.ts
+// box/src/link/mac/routes.ts
 import fs162 from "node:fs";
 import path166 from "node:path";
 var macPhones = () => {
@@ -52657,7 +52657,7 @@ async function* linkRoute(context) {
   return yield* macLinkRoute(route, request, signal);
 }
 
-// Packages/Box/src/link/mac/app.ts
+// box/src/link/mac/app.ts
 import fs163 from "node:fs";
 import path167 from "node:path";
 var APP_FILE = () => path167.join(RUN, "app.json");
@@ -52949,7 +52949,7 @@ async function* appOpenRoute({ request, json, signal }) {
   return yield* said === null ? json(200, appStatus()) : json(503, { message: said });
 }
 
-// Packages/Box/src/link/mac/app-keys.ts
+// box/src/link/mac/app-keys.ts
 import crypto55 from "node:crypto";
 var ONLY_APP = "Only Kuvo Code on this Mac can ask for that.";
 var ONLY_OWN_HOME = "Only a Mac's box in a home of its own does this for its app.";
@@ -53034,7 +53034,7 @@ async function* keptKeysRoute({ request, json }) {
   }
 }
 
-// Packages/Box/src/link/serve-kept.ts
+// box/src/link/serve-kept.ts
 import fs164 from "node:fs";
 import path168 from "node:path";
 var SERVE_NEEDED = () => path168.join(RUN, "serve.needed");
@@ -53080,7 +53080,7 @@ async function* serveRoute({ request, json }) {
   return yield* json(200, { needed: fs164.existsSync(SERVE_NEEDED()), serving: running !== null });
 }
 
-// Packages/Box/src/link/browser/routes.ts
+// box/src/link/browser/routes.ts
 var BROWSER_DATA_ROUTE = /^kuvo\/browser\/(?:(history|sites)(?:\/([^/]+))?|(icons)\/([^/]+)|(settings))$/;
 function part(text) {
   try {
@@ -53135,7 +53135,7 @@ async function* browserDataRoute(context, match) {
   return yield* json(200, { sites: site === null ? [] : sites.filter((each) => each.site !== site) });
 }
 
-// Packages/Box/src/link/server/router.ts
+// box/src/link/server/router.ts
 var ROUTES = [
   { when: (route) => route === "kuvo/info", answer: infoRoute },
   { when: (route) => route === "kuvo/vault" || route.startsWith("kuvo/vault/"), answer: vaultRoute },
@@ -53255,7 +53255,7 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
   };
 }
 
-// Packages/Box/src/link/mac/relay.ts
+// box/src/link/mac/relay.ts
 var MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
 var macAppAnswers = (route) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`));
 var boxAnswers = (route) => route === "kuvo/engine/restart" && keeperRuns2();
@@ -53368,7 +53368,7 @@ async function runMacLink() {
   setLinkStatus("off");
 }
 
-// Packages/Box/src/link/server/serve.ts
+// box/src/link/server/serve.ts
 import crypto56 from "node:crypto";
 import http from "node:http";
 import os21 from "node:os";
@@ -53435,7 +53435,7 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os21.
   });
 }
 
-// Packages/Box/src/link/uninstall.ts
+// box/src/link/uninstall.ts
 import { spawnSync as spawnSync11 } from "node:child_process";
 import fs166 from "node:fs";
 import path170 from "node:path";
@@ -53612,7 +53612,7 @@ function uninstallCommand(args) {
   return finished ? 0 : 1;
 }
 
-// Packages/Box/src/link/helper.ts
+// box/src/link/helper.ts
 import { spawnSync as spawnSync12 } from "node:child_process";
 import fs167 from "node:fs";
 import path171 from "node:path";
@@ -53751,7 +53751,7 @@ function helperCommand(args) {
   return 0;
 }
 
-// Packages/Box/src/link/areas/group-settings.ts
+// box/src/link/areas/group-settings.ts
 function rulesHere() {
   if (!ownsSettings())
     return null;
@@ -53823,7 +53823,7 @@ function keepGroupSettings(bridge = bridgeTarget, every = (round) => {
     }
   });
 }
-// Packages/Box/src/link/places.ts
+// box/src/link/places.ts
 import path172 from "node:path";
 function boxPlaces() {
   return {
@@ -53863,7 +53863,7 @@ function boxPlaces() {
   };
 }
 
-// Packages/Box/src/link/main.ts
+// box/src/link/main.ts
 scriptIs(fileURLToPath4(import.meta.url));
 onDocsChanged(macDocsChanged);
 onLinkWritten((link) => {

@@ -1,5 +1,5 @@
-// kuvo-browser 7444ec990e32aa90
-// Built from Packages/Box/src/browser by scripts/build-browser.sh: change those, then run it. Never edit this file.
+// kuvo-browser a7345a9b1e4ddedf
+// Built from box/src/browser by scripts/build-browser.sh: change those, then run it. Never edit this file.
 // Kuvo Code's browser on a machine: a Chromium kept running there, which the agent browses with
 // and the app shows live in its panel. The engine's own runtime runs it, so the machine needs
 // nothing else:
@@ -13,7 +13,7 @@
 // each, and keeps which page is in use, so the agent and the app follow each other. It stops
 // Chromium after a while with nobody connected.
 //
-// scripts/build-browser.sh builds this into KuvoCode/Resources/kuvo-browser.js, the file every box
+// scripts/build-browser.sh builds this into swift/KuvoCode/Resources/kuvo-browser.js, the file every box
 // runs: with the scripts it runs in pages (page.ts), the agent's tools (tools.ts) and what agents are
 // told of them (instructions.ts) filled in below, and the keeper's version (KEEPER).
 
@@ -85,7 +85,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 // branch bumps it by hand. The keeper of the file that's in place now replaces a different one
 // that's running (its pages close, its sign-ins stay); a process whose file has been replaced since
 // it started never replaces one (`replacesKeeper`).
-const KEEPER = "249bdfa16c03";
+const KEEPER = "3f58e442c111";
 // COMPAT(0.7 keeper-number): what a keeper says it is to processes from before KEEPER was a hash. Goes 3 months after 0.8.0.
 // Those compare numbers, raised by hand to 50, and replace a keeper whose number is lower than
 // theirs: every keeper since says 51, so none of them replaces it.
