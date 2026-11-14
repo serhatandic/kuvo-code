@@ -40,7 +40,7 @@ jobs:
           key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Packages/Box/bun.lock') }}
 
       # The same Bun as build-box.sh's BUN_VERSION builds the same bytes on any system.
-      - name: Check the box's types, and that its link, the agents bridge and its routes' shapes are built from it
+      - name: Check the box's types, and that its link, the agents bridge, the browser's tools and its routes' shapes are built from it
         working-directory: Packages/Box
         env:
           BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0"
@@ -50,6 +50,7 @@ jobs:
           ../../scripts/build-box.sh --check
           ../../scripts/route-shapes.sh --check
           ../../scripts/build-agents.sh --check
+          ../../scripts/build-browser.sh --check
 
       - name: Check What's New is what CHANGELOG.md says
         run: |

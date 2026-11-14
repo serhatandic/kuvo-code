@@ -1,0 +1,11 @@
+const element = find(index);
+if (!element) return missing(index);
+if (element.localName !== 'select') return `[${index}] isn't a list to select from.`;
+const view = viewOf(element);
+const wanted = option.toLowerCase();
+const match = Array.from(element.options).find((item) => item.text.trim().toLowerCase() === wanted || item.value.toLowerCase() === wanted);
+if (!match) return `No option “${option}” in [${index}]. Options: ` + Array.from(element.options).map((item) => item.text.trim()).join(', ');
+element.value = match.value;
+element.dispatchEvent(new view.Event('input', { bubbles: true, composed: true }));
+element.dispatchEvent(new view.Event('change', { bubbles: true }));
+return 'ok';

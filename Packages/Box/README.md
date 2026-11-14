@@ -1,15 +1,18 @@
 # The box
 
 What runs on each of your computers beside the engine, the same on this Mac and on a Linux machine.
-It's two programs of ours, built from this one TypeScript package:
+It's programs of ours, built from this one package:
 
 - **the link** (`src/link`), built to `Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js`,
   which the Mac app puts on each machine and runs as this Mac's own box (`kuvo-link.js serve`): the
   relay, phones and peers, signed documents, mail, notices, updates, and the box's own routes;
 - **the agents bridge** (`src/agents`), built to `KuvoCode/Resources/kuvo-agents.js`, which the
-  app ships and each box runs with the engine's Bun: the coding agents, group chats and goals.
+  app ships and each box runs with the engine's Bun: the coding agents, group chats and goals;
+- **the browser's keeper and tools** (`src/browser`), built to `KuvoCode/Resources/kuvo-browser.js`,
+  which each box runs with the engine's Bun: the browser agents use there, its live view, and the
+  agents' browser tools.
 
-They stay two processes. The link has to stay up while the engine or the agents bridge is down. It
+The link and the agents bridge stay two processes. The link has to stay up while the engine or the agents bridge is down. It
 runs the box's self-update, which replaces the agents bridge's files. And an older Mac starts the
 agents bridge itself. What they say to each other is to be defined once, in `src/shared`.
 
@@ -25,7 +28,11 @@ file, and CI fails when the file isn't what the sources build, byte for byte (`b
 what it built in its place. After changing `src/agents` (or `src/shared`), run `scripts/build-agents.sh` and commit
 `kuvo-agents.js`; its last line names what it was built from (those folders and this package's
 `package.json` and lockfile, so a change to either needs it rebuilt too), which CI checks
-(`build-agents.sh --check`). `bun run build` runs both.
+(`build-agents.sh --check`). `bun run build` runs both. After changing `src/browser` (the
+browser's keeper and the agents' browser tools), run `scripts/build-browser.sh` and commit
+`KuvoCode/Resources/kuvo-browser.js`; CI and the box's suite fail when it isn't what the sources
+build, byte for byte (`build-browser.sh --check`). Never bump its keeper's version (`KEEPER`): the
+script writes a hash of the source in its place.
 
 `bun install --frozen-lockfile` here, then `bun run check` type-checks the link with Node's types
 (it must run on Node too) and the agents bridge with Bun's (`src/agents/tsconfig.json`, and

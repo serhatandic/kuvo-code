@@ -121,7 +121,7 @@ SOFTWARE.
 
 browser-use 0.4.2
 https://github.com/browser-use/browser-use
-KuvoCode/Resources/buildDomTree.js, unchanged.
+Packages/Box/src/browser/buildDomTree.js, unchanged.
 
 MIT License
 

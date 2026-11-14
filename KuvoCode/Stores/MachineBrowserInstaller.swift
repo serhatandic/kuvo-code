@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 import Foundation
 import OpenCodeKit
 
@@ -47,43 +46,21 @@ nonisolated enum MachineBrowserInstaller {
 // MARK: - The helper
 
 extension MachineBrowserInstaller {
-    /// `kuvo-browser.js` as it goes to a machine: the browsing scripts and tools the panel's
-    /// browser uses, filled in. Its first line names its contents, to tell whether a machine has it.
-    @MainActor static let helper: (text: String, hash: String) = {
+    /// `kuvo-browser.js` as it goes to a machine, as the box's sources build it
+    /// (`scripts/build-browser.sh`). Its first line names its contents, to tell whether a machine
+    /// has it: `// kuvo-browser <hash>`.
+    static let helper: (text: String, hash: String) = {
+        let mark = "// kuvo-browser "
         guard let url = Bundle.main.url(forResource: "kuvo-browser", withExtension: "js"),
-              let template = try? String(contentsOf: url, encoding: .utf8) else { return ("", "") }
-        let config: [String: Any] = [
-            "scripts": [
-                "snapshot": BrowserAgent.snapshotScript,
-                "handlers": BrowserAgent.handlersScript,
-                "find": BrowserAgent.findElement,
-                "click": BrowserAgent.clickScript,
-                "type": BrowserAgent.typeScript,
-                "select": BrowserAgent.selectScript,
-                "press": BrowserAgent.pressScript,
-                "fieldKind": BrowserAgent.fieldKindScript,
-                "fileInput": BrowserAgent.fileInputScript,
-                "rect": BrowserAgent.rectScript,
-                "fill": BrowserAgent.fillScript,
-                "mask": BrowserAgent.maskScript,
-                "printMask": BrowserAgent.printMaskScript,
-                "unmask": BrowserAgent.unmaskScript,
-                "printUnmask": BrowserAgent.printUnmaskScript,
-            ],
-            "tools": BrowserTools.definitions,
-            "instructions": BrowserTools.instructions(machine: true, vault: false),
-            "vaultInstructions": BrowserTools.vaultInstructions,
-            "version": AppInfo.version,
-        ]
-        let json = (try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        let marker = #"/*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", version: "dev" }"#
-        let body = template.replacingOccurrences(of: marker, with: json)
-        let hash = SHA256.hash(data: Data(body.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-        return ("// kuvo-browser \(hash)\n" + body, hash)
+              let text = try? String(contentsOf: url, encoding: .utf8),
+              let first = text.split(separator: "\n", maxSplits: 1).first, first.hasPrefix(mark) else { return ("", "") }
+        return (text, String(first.dropFirst(mark.count)))
     }()
 
     /// Puts the helper on the machine, unless it has this one already.
     static func installHelper(_ helper: (text: String, hash: String), on connection: SSHConnection) async throws {
+        // (None in the app: never an empty file over the machine's.)
+        guard !helper.hash.isEmpty else { throw MachineBrowserError.browser("This copy of Kuvo Code is missing its browser helper (kuvo-browser.js).") }
         let first = try await connection.run("head -n 1 \"\(helperPath)\" 2>/dev/null || true")
         guard first.trimmingCharacters(in: .whitespacesAndNewlines) != "// kuvo-browser \(helper.hash)" else { return }
         let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-browser-\(UUID().uuidString).js")
