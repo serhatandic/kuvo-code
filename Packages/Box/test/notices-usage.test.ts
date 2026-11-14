@@ -5,7 +5,7 @@ import { newNotice, initialState, noticeAccountName } from "../src/agents/usage/
 import { usageNotices, usageSnapshot, catchUpUsage } from "../src/link/notices/usage"
 import { readTold, toldLately } from "../src/link/notices/told"
 import { NoticeHold } from "../src/link/notices/hold"
-import { mkdtempSync, writeFileSync, unlinkSync, rmSync } from "node:fs"
+import { mkdtempSync, writeFileSync, readFileSync, unlinkSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { newKey, publicOf } from "../src/link/crypto/keys"
@@ -193,3 +193,17 @@ test("a newer usage-notices event invalidates an in-flight catch-up", async () =
   expect(delivered).toEqual([fresh.id])
 })
 
+test("box phone receipts clamp future dates before keeping them for one day", () => {
+  const folder = mkdtempSync(join(tmpdir(), "usage-journal-clock-"))
+  try {
+    const file = join(folder, "delivery.json")
+    let now = 1700000000000
+    writeFileSync(file, JSON.stringify({future:now+2*86400000}))
+    const journal = new UsageDeliveryJournal(file, () => now)
+    journal.mark("new")
+    expect(JSON.parse(readFileSync(file,"utf8")).future).toBe(now)
+    now += 86400001
+    journal.mark("later")
+    expect(JSON.parse(readFileSync(file,"utf8"))).toEqual({later:now})
+  } finally { rmSync(folder,{recursive:true,force:true}) }
+})

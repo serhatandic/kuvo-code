@@ -10,7 +10,7 @@ const keptFor = 24 * 60 * 60_000;
  * Dirty marks stay in memory and are retried on the next read/change. */
 export class UsageDeliveryJournal {
   private dirty: Record<string, number> = {};
-  constructor(private file: string) {}
+  constructor(private file: string, private now: () => number = Date.now) {}
   private read(): Record<string, number> {
     try {
       const value = JSON.parse(textOf(this.file) ?? "{}");
@@ -23,7 +23,9 @@ export class UsageDeliveryJournal {
     try {
       locked(this.file + ".lock", () => {
         const ids = { ...this.read(), ...this.dirty };
-        writePrivate(this.file, JSON.stringify(Object.fromEntries(Object.entries(ids).filter(([, at]) => Date.now() - at < keptFor))));
+        const now = this.now();
+        const current = Object.entries(ids).map(([key, at]) => [key, Math.min(at, now)] as const).filter(([, at]) => now - at < keptFor);
+        writePrivate(this.file, JSON.stringify(Object.fromEntries(current)));
         this.dirty = {};
       });
     } catch {}
@@ -34,7 +36,7 @@ export class UsageDeliveryJournal {
     return marked;
   }
   mark(key: string): void {
-    this.dirty[key] = Date.now();
+    this.dirty[key] = this.now();
     this.flush();
   }
 }
