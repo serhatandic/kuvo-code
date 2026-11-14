@@ -21,6 +21,12 @@ sources() {
 stamp="// Built from Packages/Box/src/agents $(sources)"
 
 if [ "${1:-}" = "--check" ]; then
+  # (Its old place, in the retired Mac app's Resources, which a branch from before the move can
+  # bring back: the app would bundle it twice, and its build, the box release's, fail.)
+  if [ -e swift/KuvoCode/Resources/kuvo-agents.js ]; then
+    echo "swift/KuvoCode/Resources/kuvo-agents.js is back: the bundle is box/dist/kuvo-agents.js now. git rm the old one." >&2
+    exit 1
+  fi
   [ "$(tail -n 1 box/dist/kuvo-agents.js)" = "$stamp" ] && exit 0
   echo "box/dist/kuvo-agents.js isn't built from box/src/agents as it is: run ./scripts/build-agents.sh and commit it." >&2
   exit 1

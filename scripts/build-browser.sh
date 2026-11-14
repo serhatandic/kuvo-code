@@ -24,6 +24,12 @@ fi
 real_app_guard "scripts/build-browser.sh" "$BUN"
 
 if [ "${1:-}" = "--check" ]; then
+  # (Its old place, in the retired Mac app's Resources, which a branch from before the move can
+  # bring back: the app would bundle it twice, and its build, the box release's, fail.)
+  if [ -e swift/KuvoCode/Resources/kuvo-browser.js ]; then
+    echo "swift/KuvoCode/Resources/kuvo-browser.js is back: the bundle is box/dist/kuvo-browser.js now. git rm the old one." >&2
+    exit 1
+  fi
   BUN_BE_BUN=1 "$BUN" scripts/build-browser.ts "$PWD" --check
 else
   BUN_BE_BUN=1 "$BUN" scripts/build-browser.ts "$PWD"
