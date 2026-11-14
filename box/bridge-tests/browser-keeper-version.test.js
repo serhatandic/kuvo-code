@@ -17,7 +17,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
-const built = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const built = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 const KEEPER = /^const KEEPER = "([0-9a-f]{12})";$/m.exec(fs.readFileSync(built, "utf8"))?.[1];
 
 /** A box's folder (short: the keeper's socket is in it), with a keeper on its socket that says

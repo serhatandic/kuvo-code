@@ -15,7 +15,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 const bun = testBun();
-const agentsJS = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const agentsJS = fileURLToPath(new URL("../dist/kuvo-agents.js", import.meta.url));
 const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 
 // Its turn: each prompt says which question to ask. Answered, it says what it heard, and ends.

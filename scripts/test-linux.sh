@@ -83,7 +83,7 @@ unzip -q -j "$tools/$uv" "uv-$UV_VERSION.data/scripts/uv" "uv-$UV_VERSION.data/s
 printf '#!/bin/sh\nexec node "$(dirname "$0")/../pnpm/bin/pnpm.mjs" "$@"\n' > "$send/tools/bin/pnpm"
 chmod +x "$send/tools/bin/pnpm" "$send/tools/bin/uv" "$send/tools/bin/uvx"
 (cd "$root" && COPYFILE_DISABLE=1 tar --no-xattrs --exclude node_modules --exclude .build -czf "$send/code.tgz" \
-    swift/KuvoLink protocol box swift/OpenCodeKit/Sources swift/KuvoCode/Resources)
+    swift/KuvoLink protocol box swift/OpenCodeKit/Sources)
 COPYFILE_DISABLE=1 tar --no-xattrs -czf "$send/tools.tgz" -C "$send" tools
 
 run=.kuvo-code-test/linux-$(date +%Y%m%d-%H%M%S)-$$

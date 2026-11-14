@@ -3,7 +3,7 @@
 // turn. The turn under way ends on the bridge it began on, which then makes way, and the next turn
 // runs on the new one; on a box with no quiet moment, new turns wait (kept) once it has waited long
 // enough, and run on the new one. Nothing sent is lost or run twice. The box says meanwhile which
-// build each runs (`kuvo/info`'s `pieces`). The real bridge (swift/KuvoCode/Resources/kuvo-agents.js, on
+// build each runs (`kuvo/info`'s `pieces`). The real bridge (box/dist/kuvo-agents.js, on
 // Bun) and the real link, a stand-in `codex app-server` whose turns wait to be let go, and what
 // keeps a machine's bridge running (its launch starts it again from what's there as it ends).
 import "./test-safety.js";
@@ -20,7 +20,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 const bun = testBun();
-const built = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const built = fileURLToPath(new URL("../dist/kuvo-agents.js", import.meta.url));
 const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 
 // Its turns: each says in the log which bridge started it (its parent), and one whose words say

@@ -1277,7 +1277,7 @@ test("a client follows a queue: a line now, and one when it changes (another pro
 
 test("every agent kind gets the tools through its tool server: a machine's kuvo-browser.js lists them, tells agents of them, and passes calls on", async () => {
   write(path.join(home, "bin", "kuvo-link.js"), fs.readFileSync(script));
-  const browser = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+  const browser = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
   const mcp = spawn(process.execPath, [browser, "mcp"], { env: { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home }, stdio: ["pipe", "pipe", "ignore"] });
   atEnd(() => mcp.kill());
   const answers = new Map();

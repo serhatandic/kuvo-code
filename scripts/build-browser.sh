@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the browser's keeper and the agents' browser tools (box/src/browser) into
-# swift/KuvoCode/Resources/kuvo-browser.js, the one file every box runs for them (the app puts it in a box's
+# box/dist/kuvo-browser.js, the one file every box runs for them (the app puts it in a box's
 # release, and on a machine an older box runs) with the engine's Bun (scripts/build-browser.ts says
 # how). Run it after changing anything in box/src/browser, and commit the result. `--check`
 # builds it again and says whether that's what's here, byte for byte, as CI checks: so a change made

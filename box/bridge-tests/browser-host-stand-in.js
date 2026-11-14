@@ -1,4 +1,4 @@
-// The browser's keeper on a machine (swift/KuvoCode/Resources/kuvo-browser.js `host`), the real one, with
+// The browser's keeper on a machine (box/dist/kuvo-browser.js `host`), the real one, with
 // Chrome as a stand-in that speaks its DevTools protocol over the keeper's pipe, as Chrome does: a
 // test hears what the keeper asks Chrome, sends Chrome's events, and connects clients (the Mac's
 // live view, or the agent's tools) on the keeper's socket. One keeper per test file.
@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
-const keeper = path.resolve(import.meta.dirname, "../../swift/KuvoCode/Resources/kuvo-browser.js");
+const keeper = path.resolve(import.meta.dirname, "../dist/kuvo-browser.js");
 
 /** Messages as they come, and a way to wait for one that fits. */
 export class Heard {

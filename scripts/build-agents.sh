@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the agents bridge (box/src/agents) into swift/KuvoCode/Resources/kuvo-agents.js, the
+# Builds the agents bridge (box/src/agents) into box/dist/kuvo-agents.js, the
 # one file the app ships and runs with the engine's Bun. Run it after changing anything in
 # box/src/agents or src/shared, and commit the result. The agents' SDKs aren't in it: the
 # bridge downloads each one the first time it's needed. Its last line names what it was built from
@@ -21,8 +21,8 @@ sources() {
 stamp="// Built from Packages/Box/src/agents $(sources)"
 
 if [ "${1:-}" = "--check" ]; then
-  [ "$(tail -n 1 swift/KuvoCode/Resources/kuvo-agents.js)" = "$stamp" ] && exit 0
-  echo "swift/KuvoCode/Resources/kuvo-agents.js isn't built from box/src/agents as it is: run ./scripts/build-agents.sh and commit it." >&2
+  [ "$(tail -n 1 box/dist/kuvo-agents.js)" = "$stamp" ] && exit 0
+  echo "box/dist/kuvo-agents.js isn't built from box/src/agents as it is: run ./scripts/build-agents.sh and commit it." >&2
   exit 1
 fi
 
@@ -37,6 +37,6 @@ if [ -z "${BUN:-}" ]; then
 fi
 real_app_guard "scripts/build-agents.sh" "$BUN"
 
-BUN_BE_BUN=1 "$BUN" build box/src/agents/main.ts --target=bun --outfile swift/KuvoCode/Resources/kuvo-agents.js
-echo "$stamp" >>swift/KuvoCode/Resources/kuvo-agents.js
-echo "Built swift/KuvoCode/Resources/kuvo-agents.js"
+BUN_BE_BUN=1 "$BUN" build box/src/agents/main.ts --target=bun --outfile box/dist/kuvo-agents.js
+echo "$stamp" >>box/dist/kuvo-agents.js
+echo "Built box/dist/kuvo-agents.js"

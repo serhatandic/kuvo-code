@@ -134,7 +134,7 @@ atEnd(() => { agentsProcess?.kill(); browserProcess?.kill(); realBridge?.process
 // The coding agents' bridge as the app ships it (`kuvo-agents.js`), run by Bun (bun-for-tests.js), with its group chats in this box's folders: for what it alone decides (a group chat's
 // shapes and rules). One a scenario, as the box's folders are.
 let realBridge;
-const bundled = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const bundled = fileURLToPath(new URL("../dist/kuvo-agents.js", import.meta.url));
 async function startRealBridge() {
   const password = crypto.randomBytes(12).toString("hex");
   const bun = testBun();

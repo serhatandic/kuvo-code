@@ -21,7 +21,7 @@ import { standInClaude } from "./claude-stand-in.js";
 import { relayStandIn } from "./relay-stand-in.js";
 
 const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
-const bridgeScript = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const bridgeScript = fileURLToPath(new URL("../dist/kuvo-agents.js", import.meta.url));
 const bun = testBun();
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-move-lanes-")));
 removeAtEnd(support);

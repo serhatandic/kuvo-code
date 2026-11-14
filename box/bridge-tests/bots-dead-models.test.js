@@ -24,7 +24,7 @@ const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-dead-mo
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
 const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
-const tool = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const tool = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
 fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url), path.join(home, "bin", "kuvo-link.js"));
 

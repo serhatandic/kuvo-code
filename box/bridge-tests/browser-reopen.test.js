@@ -1,4 +1,4 @@
-// The browser's keeper on a machine (swift/KuvoCode/Resources/kuvo-browser.js) stops Chrome after a while
+// The browser's keeper on a machine (box/dist/kuvo-browser.js) stops Chrome after a while
 // with nobody using it, and as it next starts: opens the pages that were open again, each still the
 // conversation's that worked in it last, so its agent goes on there rather than in a new tab; and
 // clears what the box left for it of a site whose data was removed while Chrome was stopped. Chrome

@@ -1,4 +1,4 @@
-// What an agent on a machine is given by the browser's tools (swift/KuvoCode/Resources/kuvo-browser.js
+// What an agent on a machine is given by the browser's tools (box/dist/kuvo-browser.js
 // `mcp`, as the engine starts them), now that the box builds that file from its sources
 // (box/src/browser, scripts/build-browser.sh): the same tools, schemas and instructions,
 // byte for byte, as when the app filled them in (browser-tools-before.json), with the vault closed
@@ -20,7 +20,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd } from "./at-end.js";
 
-const script = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const script = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 const keptFile = fileURLToPath(new URL("./browser-tools-before.json", import.meta.url));
 let kept = JSON.parse(fs.readFileSync(keptFile, "utf8"));
 

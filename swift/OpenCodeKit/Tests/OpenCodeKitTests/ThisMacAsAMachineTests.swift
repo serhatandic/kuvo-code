@@ -90,7 +90,7 @@ struct ThisMacAsAMachineTests {
         let engine = box.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
 
         // The box's own code beside it.
-        for (name, file) in [("kuvo-link.js", "swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js"), ("kuvo-agents.js", "swift/KuvoCode/Resources/kuvo-agents.js")] {
+        for (name, file) in [("kuvo-link.js", "swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js"), ("kuvo-agents.js", "box/dist/kuvo-agents.js")] {
             let to = box.appending(path: "bin/\(name)")
             try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: Self.repository.appending(path: file), to: to)
