@@ -14,7 +14,8 @@ import { LinkDirectory, PeerPost, peerRoutes, type PeerParts } from "../../src/a
 import type { Clock } from "../../src/agents/groups/peer"
 import { Limits, LimitsProblem, limitsRoutes, type LimitedAccount, type LimitsSource } from "../../src/agents/limits"
 import { LimitsPeers, PEER_AWAY, TELL_AGAIN, type LimitsMail } from "../../src/agents/limits-peers"
-import type { LimitRow } from "../../src/agents/limits-rows"
+import { limitRows, type LimitRow } from "../../src/agents/limits-rows"
+import { subscribe } from "../../src/agents/events"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-limits-peers-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -172,9 +173,13 @@ class Box {
     await this.meet(others)
   }
 
-  /** Its link says who your other computers are (`PUT /api/kuvo/peers`): its peers, and `also`, the boxes they know that it doesn't. */
-  async meet(others: Box[], also: Box[] = []) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
+  /**
+   * Its link says who your other computers are (`PUT /api/kuvo/peers`): its peers, and `also`, the
+   * boxes they know that it doesn't; `apart`, those of its peers that aren't your own computers (a
+   * machine Macs of two setups share).
+   */
+  async meet(others: Box[], also: Box[] = [], apart: Box[] = []) {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true, ...(apart.includes(box) ? { apart: true } : {}) })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
   }
 
   async route(method = "GET", rest: string[] = []) {
@@ -473,7 +478,7 @@ describe("plan limits across your computers", () => {
     expect(await post("gaveup", { to: "key-other", mail: { kind: "work", work: { task: "gt_1" } } })).toBe(404)
   })
 
-  test("two Macs that share a machine aren't each other's peers, yet each lists the other's accounts, and an account both are signed in to is read once", async () => {
+  test("two Macs that share a machine aren't each other's peers, yet each lists the other's accounts; an account both are signed in to is read by each (#701: a reading from a box that isn't yours, told without its spend, never stands in for your own)", async () => {
     const studio = new Box("key-studio", "Studio", relay, [claude(maker, "studio", "anthropic:work|org"), claude(maker, "studio", "anthropic:studio|org", "claude-code@studio01")])
     const air = new Box("key-air", "Air", relay, [claude(maker, "air", "anthropic:work|org")])
     const shared = new Box("key-shared", "shared", relay, [])
@@ -485,7 +490,7 @@ describe("plan limits across your computers", () => {
     await relay.settled()
     await air.limits.tick()
     await relay.settled()
-    expect(maker.reads.map((read) => `${read.box} ${read.who}`)).toEqual(["studio anthropic:work|org", "studio anthropic:studio|org"])
+    expect(maker.reads.map((read) => `${read.box} ${read.who}`)).toEqual(["studio anthropic:work|org", "studio anthropic:studio|org", "air anthropic:work|org"])
     // Each has the whole list: the Studio-only account on the Air, both Macs on the work account's row.
     for (const box of [studio, air, shared]) {
       expect(box.rows().map((row) => row.boxes.map((each) => each.name).sort().join(",")).sort()).toEqual(["Air,Studio", "Studio"])
@@ -611,5 +616,70 @@ describe("plan limits across your computers", () => {
     pass(TELL_AGAIN)
     await mac.limits.tick()
     expect(relay.sent.filter((each) => each.from === "key-mac" && each.to === "key-hetzner").length).toBe(told + 1)
+  })
+})
+
+describe("whose computers see what's yours alone (#701, the separate review)", () => {
+  /** An account with credits left (as OpenRouter's is): what only your own computers are told. */
+  const credits = (): LimitedAccount => ({ provider: "openrouter", service: "openrouter", limits: { every: 600_000, identity: () => "key:sk-or-test", read: async () => ({ windows: [], balance: { left: 7.7, limit: 50, unit: "usd" as const } }) } })
+  const balance = (box: Box) => box.rows().find((row) => row.service === "openrouter")?.balance
+
+  test("what your own machine last told is kept whole through a restart: shown as it was once the link says it's yours, and as a box that isn't yours before", async () => {
+    const mac = new Box("key-mac", "MacBook Pro", relay, [])
+    const hetzner = new Box("key-hetzner", "hetzner", relay, [credits()])
+    await mac.meet([hetzner])
+    await hetzner.meet([mac])
+    await hetzner.limits.tick()
+    await relay.settled()
+    expect(balance(mac)).toEqual({ left: 7.7, limit: 50, unit: "usd" })
+    // The Mac's bridge restarts while hetzner is off (it tells nothing now).
+    relay.off.add("key-hetzner")
+    mac.start()
+    expect(balance(mac)).toBeUndefined()
+    expect(mac.rows().find((row) => row.service === "openrouter")).toBeDefined()
+    // Clients hear it as the link says (what they read before was as a box that isn't yours).
+    const heard: any[] = []
+    const stop = subscribe((event) => event.type === "kuvo.limits.updated" && heard.push(event.data))
+    await mac.meet([hetzner])
+    stop()
+    expect(balance(mac)).toEqual({ left: 7.7, limit: 50, unit: "usd" })
+    expect(heard.at(-1)?.rows.find((row: LimitRow) => row.service === "openrouter")?.balance).toEqual({ left: 7.7, limit: 50, unit: "usd" })
+  })
+
+  test("a machine that stops being one of your own computers, then is again: its spend is hidden, then asked for and shown at once", async () => {
+    const mac = new Box("key-mac", "MacBook Pro", relay, [])
+    const hetzner = new Box("key-hetzner", "hetzner", relay, [credits()])
+    await mac.meet([hetzner])
+    await hetzner.meet([mac])
+    await hetzner.limits.tick()
+    await relay.settled()
+    expect(balance(mac)).toEqual({ left: 7.7, limit: 50, unit: "usd" })
+    // Another setup's Mac sets it up too: the Mac's link says it isn't yours now.
+    await mac.meet([hetzner], [], [hetzner])
+    await relay.settled()
+    expect(balance(mac)).toBeUndefined()
+    // That Mac lets it go, a while later: yours again, and it's asked, and tells all of it now (not in ten minutes).
+    pass(2 * MINUTE)
+    await mac.meet([hetzner])
+    await relay.settled()
+    expect(balance(mac)).toEqual({ left: 7.7, limit: 50, unit: "usd" })
+  })
+
+  test("an account's spend and extras come from your own computers' reading, though a box that isn't yours read it later", () => {
+    const account = (checked: number, extras?: any[]) => ({ provider: "claude-code", service: "claude" as const, identity: "aaaaaaaaaaaaaaaa", windows: [{ id: "five_hour", used: 0.5, minutes: 300, read: checked, source: "usage" as const }], checked, ...(extras ? { extras } : {}) })
+    const capped = { id: "extra_usage", name: "Extra Usage", kind: "capped", amount: 12.4, limit: 50, unit: "usd" }
+    const resets = { id: "resets", name: "Rate Limit Resets", kind: "resets", count: 2, usable: true }
+    const [row] = limitRows([
+      { key: "key-mac", name: "MacBook Pro", here: true, away: false, accounts: [account(time - 60_000, [capped, resets]) as any] },
+      { key: "key-shared", name: "shared", here: false, away: false, vouched: true, accounts: [account(time, [{ ...resets, count: 1 }]) as any] },
+    ])
+    expect(row!.extras?.map((extra) => extra.kind)).toEqual(["capped", "resets"])
+    expect(row!.windows[0]!.read).toBe(time)
+    // None of yours read it without a problem: the other's reading, as it was told.
+    const [only] = limitRows([
+      { key: "key-mac", name: "MacBook Pro", here: true, away: false, accounts: [{ provider: "claude-code", service: "claude", identity: "aaaaaaaaaaaaaaaa", windows: [] } as any] },
+      { key: "key-shared", name: "shared", here: false, away: false, vouched: true, accounts: [account(time, [{ ...resets, count: 1 }]) as any] },
+    ])
+    expect(only!.extras?.map((extra) => extra.kind)).toEqual(["resets"])
   })
 })

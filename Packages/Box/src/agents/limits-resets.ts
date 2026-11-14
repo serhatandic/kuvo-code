@@ -7,9 +7,11 @@
 // crash, a lost answer or a failure, it goes as the same request, and its maker answers that it's
 // done rather than spending another. It runs on the computer that holds the account's sign-in: a box
 // without one (a Mac's Claude token can only run Claude) passes it to the peer of yours that has
-// one (`{"seat": {"kind": "reset"}}`, only between your own computers), and answers when that one
-// does. Whether agents may use an account's resets without asking (Always Allow) is kept here too,
-// with the account, on the box whose sign-in spends them.
+// one (`{"seat": {"kind": "reset"}}`, only between your own computers: never a box a peer vouches
+// for, nor through a machine two people's Macs share, nor a box of another setup), and answers when
+// that one does. Whether agents may use an account's resets without asking (Always Allow) is kept
+// here too, with the account, on the box whose sign-in spends them, and told only to your own
+// computers.
 
 import { randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
@@ -90,11 +92,14 @@ interface Saved {
   /**
    * Whether agents may use an account's resets without asking, by account (its row,
    * `<service>#<identity>`): the latest decision, and when (ms), here or on another of your
-   * computers. A decision older than the one kept never takes its place.
+   * computers. A decision older than the one kept never takes its place. `from`: the box it came
+   * from (`""` decided here); none in a journal from before this, as if from a peer unknown.
    */
-  allowed?: Record<string, { on: boolean; at: number }>
+  allowed?: Record<string, Decision>
   /** The account each slot here (by provider) was last seen signed in to. */
   seen?: Record<string, string>
+  /** This box was last seen as a machine Macs of two setups share (what was decided before went then). */
+  shared?: boolean
 }
 
 /** How a spend went here or there: `already`, its maker said this same request was done before; `message`, said in place of the outcome's own words. */
@@ -102,6 +107,9 @@ type Result = { outcome: ResetOutcome; until?: number; already?: true; message?:
 
 /** Said of an agent's reset under Always Allow that's off for its account now. */
 const NOT_ALLOWED = "Always Allow is off for this account now: nothing was used. Ask the user first."
+
+/** Said of an agent's reset under Always Allow while this box's link hasn't said who your computers are yet. */
+const NOT_YET = "This computer can't tell yet whether Always Allow holds here: nothing was used. Ask the user first, or try again in a moment."
 
 /** A new confirmation joins a row's open spend this long after it was asked; later, that one is settled first and the new one goes as its own. */
 const JOIN_FOR = 10 * 60_000
@@ -123,6 +131,18 @@ const KEEP_FOR = 30 * 24 * 60 * MINUTE
 /** How long an answer waits for the account to be read again after a reset. */
 const READ_AFTER = 8_000
 
+/** An Always Allow decision kept: `from`, the box it was told by (`""` decided here, absent where a journal from before this doesn't say). */
+interface Decision {
+  on: boolean
+  at: number
+  from?: string
+}
+
+/** Said, on the asking computer, of a box that isn't one of yours now asked to spend a reset. */
+const NOT_YOURS = "The computer with its sign-in isn't one of yours now, so it doesn't use your resets: nothing was used."
+/** The same, of a spend it had already begun for that computer while it was: as it went there, never spent again. */
+const NOT_YOURS_OPEN = "The computer with its sign-in isn't one of yours now, so it can't be asked again from here. An earlier try may have gone through: nothing more was used."
+
 /** A refusal, in words, with the status a route answers it with. */
 export interface ResetRefusal {
   status: 404 | 409 | 503
@@ -141,8 +161,10 @@ export interface ResetDone {
 export class LimitResets {
   private confirms = new Map<string, { row: string; at: number; via?: string; provider?: string }>()
   private spends: Spend[] = []
-  private allowed = new Map<string, { on: boolean; at: number }>()
+  private allowed = new Map<string, Decision>()
   private seen = new Map<string, string>()
+  /** Whether this box was last seen as a shared machine (journal: `shared`). */
+  private sharedSeen = false
   private waiting = new Map<string, (answer: NonNullable<ResetMail["answer"]>) => void>()
   /** Spends under way here, by id: asked again meanwhile, the same one is waited for. */
   private running = new Map<string, Promise<Result>>()
@@ -158,6 +180,37 @@ export class LimitResets {
   ) {
     this.load()
     limits.resets = this
+    directory?.listen(() => this.directorySaid())
+  }
+
+  /**
+   * The link said who your computers are. This box just became a machine Macs of two setups share:
+   * every decision kept here goes (here, on its own page, or told by a Mac, a journal from before
+   * this too), once, so agents here ask again rather than go on under one person's Always Allow.
+   * Else a decision a peer told is forgotten once the link names that peer as not one of yours
+   * (never for one merely missing from what it says now), and one from a journal from before this,
+   * whose box isn't known, once any peer says it's a shared machine. Forgotten is kept as off, as of when it
+   * was decided, so an older word never brings it back.
+   */
+  private directorySaid() {
+    const directory = this.directory
+    if (!directory?.told) return
+    const shared = directory.sharedHere === true
+    const becameShared = shared && !this.sharedSeen
+    let changed = shared !== this.sharedSeen
+    this.sharedSeen = shared
+    // (One kept from before this, whose box isn't known, may have come from a shared machine.)
+    const sharedPeer = directory.peerBoxes().some((box) => directory.isSharedPeer?.(box.key) === true)
+    for (const [row, decided] of [...this.allowed]) {
+      if (!decided.on && decided.from === "") continue
+      const apart = decided.from === undefined ? sharedPeer : decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false
+      if (!becameShared && !apart) continue
+      this.allowed.set(row, { on: false, at: decided.at, from: "" })
+      changed = true
+    }
+    if (!changed) return
+    this.save()
+    this.changedSoon()
   }
 
   /**
@@ -168,7 +221,16 @@ export class LimitResets {
     const live = this.limits.liveRow(provider)
     if (live === undefined) return false
     this.saw(provider, live)
-    return this.allowed.get(live)?.on === true
+    return this.allowedNow(live)
+  }
+
+  /**
+   * Whether Always Allow holds for this account here now: never before the link has said who your
+   * computers are (whether this box became a shared machine meanwhile isn't known yet).
+   */
+  private allowedNow(rowID: string): boolean {
+    if (this.directory && !this.directory.told) return false
+    return this.allowed.get(rowID)?.on === true
   }
 
   /**
@@ -191,24 +253,29 @@ export class LimitResets {
    */
   private decideHere(rowID: string, on: boolean) {
     const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1)
-    this.decide(rowID, on, at)
+    this.decide(rowID, on, at, "")
     for (const box of this.yours()) this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true)
   }
 
-  /** Your other computers (never a box a peer only vouches for). */
+  /** Your other computers (never a box a peer only vouches for, a machine two people's Macs share, or a box of another setup). */
   private yours() {
     const own = this.directory?.own()?.key
-    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true)
+    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.isYours(box.key))
+  }
+
+  /** Whether a box is one of your own computers (`LimitsDirectory.isYours`). */
+  private isYours(key: string) {
+    return this.directory?.isYours?.(key) === true
   }
 
   /**
    * A decision for an account, kept unless a later one is; of two at once, an off (Always Allow
    * turned off is never lost to an on stamped the same); whether it was taken.
    */
-  private decide(rowID: string, on: boolean, at: number): boolean {
+  private decide(rowID: string, on: boolean, at: number, from: string): boolean {
     const kept = this.allowed.get(rowID)
     if (kept && (kept.at > at || (kept.at === at && on && !kept.on))) return false
-    this.allowed.set(rowID, { on, at })
+    this.allowed.set(rowID, { on, at, from })
     this.save()
     this.changedSoon()
     return true
@@ -371,10 +438,27 @@ export class LimitResets {
     return this.spends.findLast((each) => each.row === rowID && each.state === "sending" && (via ? each.via === via : !each.via) && this.now() - each.at < UNSETTLED_FOR)
   }
 
-  /** A peer's reset mail: only from one of your own computers. */
+  /** A peer's reset mail: only from one of your own computers (another owner's, through a machine you share, never spends yours). */
   take(from: string, mail: unknown) {
     if (!isResetMail(mail)) return
-    if (this.directory && this.directory.isPeer?.(from) !== true) return
+    // (An answer to a spend this box passed to that very box is taken, whatever the link says of it
+    // now: it says how that spend went there.)
+    const passedThere = !!mail.answer && typeof mail.answer.id === "string" && this.spends.some((each) => each.id === mail.answer!.id && each.via === from)
+    if (this.directory && !this.isYours(from) && !passedThere) {
+      // (Once the link has said, an ask is answered, so its asker isn't left waiting, and nothing
+      // is spent: a spend begun for it here before, as that went, or still open, never "nothing was
+      // used" for one that may have gone. Anything else is dropped.)
+      const ask = mail.ask
+      if (!this.directory.told || !ask || typeof ask.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(ask.id)) return
+      const known = this.spends.find((each) => each.id === `${from}:${ask.id}` || each.also?.includes(`${from}:${ask.id}`))
+      const answer: NonNullable<ResetMail["answer"]> = !known
+        ? { id: ask.id, outcome: "failed", message: NOT_YOURS }
+        : known.state === "done"
+          ? { id: ask.id, outcome: known.outcome!, ...(known.until ? { until: known.until } : {}), ...(known.outcome === "reset" ? { already: true as const } : {}) }
+          : { id: ask.id, outcome: "not-now", open: true, message: NOT_YOURS_OPEN }
+      this.transport?.send(from, { kind: "reset", at: this.now(), answer }, false)
+      return
+    }
     if (mail.answer && typeof mail.answer.id === "string") {
       this.waiting.get(mail.answer.id)?.(mail.answer)
       return
@@ -383,7 +467,7 @@ export class LimitResets {
       // Kept as decided then, whether or not this box knows the account yet (an "off" for one it
       // learns of later holds then), unless a later decision is.
       const at = typeof mail.always.at === "number" ? mail.always.at : typeof mail.at === "number" ? mail.at : 0
-      this.decide(mail.always.row, mail.always.on, at)
+      this.decide(mail.always.row, mail.always.on, at, from)
       return
     }
     const ask = mail.ask
@@ -404,9 +488,9 @@ export class LimitResets {
     })
   }
 
-  /** Whether a peer of yours can be asked now (one a peer vouches for never spends your resets). */
+  /** Whether one of your own computers can be asked now (any other box never spends your resets). */
   private reaches(key: string) {
-    return !!this.transport?.followed && this.directory?.isPeer?.(key) === true
+    return !!this.transport?.followed && this.isYours(key)
   }
 
   /** Asks passed to a peer and waiting for its answer, by id: asked again meanwhile, the same wait. */
@@ -472,7 +556,7 @@ export class LimitResets {
     if (this.limits.held(account.provider)) return refused("not-now")
     // An agent's under Always Allow, no one having confirmed it: only while this box, which spends
     // it, has it allowed (turned off anywhere, it's off here once told).
-    if ((unasked || spend?.unasked) && this.allowed.get(rowID)?.on !== true) return refused("failed", NOT_ALLOWED)
+    if ((unasked || spend?.unasked) && !this.allowedNow(rowID)) return refused("failed", this.directory && !this.directory.told ? NOT_YET : NOT_ALLOWED)
     if (!spend) {
       spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...(by ? { by } : {}), ...(unasked ? { unasked: true as const } : {}) }
       // Kept before anything goes to its maker (and before anything is waited for, so another ask
@@ -547,8 +631,9 @@ export class LimitResets {
     try {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as Saved
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string")
-      for (const [row, decided] of Object.entries(saved.allowed ?? {})) if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number") this.allowed.set(row, { on: decided.on, at: decided.at })
+      for (const [row, decided] of Object.entries(saved.allowed ?? {})) if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number") this.allowed.set(row, { on: decided.on, at: decided.at, ...(typeof decided.from === "string" ? { from: decided.from } : {}) })
       for (const [provider, row] of Object.entries(saved.seen ?? {})) if (typeof row === "string") this.seen.set(provider, row)
+      this.sharedSeen = saved.shared === true
     } catch {}
   }
 
@@ -558,7 +643,7 @@ export class LimitResets {
     const at = this.now()
     this.spends = this.spends.filter((spend) => spend.state === "sending" || at - spend.at < KEEP_FOR).slice(-KEEP)
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen) } satisfies Saved), { mode: 0o600 })
+    writeFileSync(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen), ...(this.sharedSeen ? { shared: true } : {}) } satisfies Saved), { mode: 0o600 })
     renameSync(this.file + ".new", this.file)
   }
 }

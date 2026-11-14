@@ -1,6 +1,5 @@
 import AppKit
 import ClientAccounts
-import ClientSessions
 import Foundation
 import Observation
 import OpenCodeKit
@@ -23,12 +22,6 @@ final class UsageSettingsOnBox {
     @ObservationIgnored private var api: OpenCodeAPI?
     @ObservationIgnored private let host: HostSettings
     @ObservationIgnored private let defaults: UserDefaults
-    /// This Mac's box, by its id (`BoxClient`), and whether it keeps them (`usage.settings` in its
-    /// features): nil until it says, asked again at each read until then.
-    @ObservationIgnored private var box: String?
-    @ObservationIgnored private var kept: Bool?
-    /// What each box says it has: the app's one reader (`AppModel.boxFeatures`, set as it starts).
-    @ObservationIgnored var features = BoxFeatures(hasEverything: BoxClient.hasEveryFeature) { id in try await BoxClient.routes(id).send("GET", "kuvo/info") }
     /// One ask of the box at a time, in order: a change made here goes after what was asked before it.
     @ObservationIgnored private var work: Task<Void, Never>?
     /// Parts changed here the box hasn't taken yet (it wasn't answering, or the app quit first), each
@@ -78,23 +71,12 @@ final class UsageSettingsOnBox {
         defaults.set(data, forKey: Self.unsentKey)
     }
 
-    /// This Mac's box's bridge is up (again): `box`, its id (`BoxClient`), which says whether it keeps them.
-    func connected(api: OpenCodeAPI?, box: String) {
+    /// This Mac's box's bridge is up (again). (Every box the update gate lets through keeps them,
+    /// `usage.settings`.)
+    func connected(api: OpenCodeAPI?) {
         guard let api else { return }
         self.api = api
-        // (Asked again each time: a box updated in place under the same id may keep them now.)
-        kept = nil
-        features.forget(box)
-        self.box = box
         then { await $0.read() }
-    }
-
-    /// Whether `box` keeps the usage settings (`usage.settings`): this app's own box does. Nil when
-    /// it couldn't be asked now.
-    private func keeps(_ box: String) async -> Bool? {
-        let keeps = await features.has("usage.settings", on: box)
-        if keeps == nil { log.info("usage settings: whether this Mac's box keeps them can't be told now") }
-        return keeps
     }
 
     /// Its bridge said they changed (another computer's change, or one of its routes).
@@ -126,16 +108,10 @@ final class UsageSettingsOnBox {
         }
     }
 
-    /// Whether this Mac's box keeps them, asked if it hasn't said.
-    private func keepsThem() async -> Bool {
-        if kept == nil, let box { kept = await keeps(box) }
-        return kept ?? false
-    }
-
     /// The parts changed here, to the box, with what each was made from and what this panel knows;
     /// what it answers shows (a part changed since on another computer, the box's).
     private func send() async {
-        guard api != nil, !unsent.isEmpty, await keepsThem(), let api else { return }
+        guard !unsent.isEmpty, let api else { return }
         let parts = unsent
         var body = parts
         body["based"] = .object(based.filter { parts[$0.key] != nil })
@@ -165,7 +141,7 @@ final class UsageSettingsOnBox {
             }
             apply(answer)
             if !own.isEmpty { await send() }
-        } catch let error as ServerError where ![502, 503, 504].contains(error.status) {
+        } catch let error as ServerError where ![404, 502, 503, 504].contains(error.status) {
             // Not a change it takes: the box's stay, and show again.
             log.info("usage settings refused: \(String(describing: error), privacy: .public)")
             for (name, value) in parts where unsent[name] == value {
@@ -175,7 +151,8 @@ final class UsageSettingsOnBox {
             host.forget(Set(parts.keys))
             await read()
         } catch {
-            // Not answering: they go again as it's back.
+            // Not answering, or a bridge from before them (404: one an older app's keeper still runs
+            // while the update gate holds its box): they go again as it's back.
             log.info("usage settings: \(String(describing: error), privacy: .public)")
         }
     }
@@ -183,8 +160,7 @@ final class UsageSettingsOnBox {
     /// The box's, shown; the first time, what this Mac kept before goes to it (once, on the box's
     /// word, when the panel has read its layout).
     private func read() async {
-        // COMPAT(0.7 usage-settings-box): a box from before it kept them (no `usage.settings`): the panel keeps its own, in its stores here, and shares none, as before (it goes with #679's box updates and #631 piece H). Goes 3 months after 0.8.0.
-        guard api != nil, await keepsThem() else { return }
+        guard api != nil else { return }
         if !unsent.isEmpty { await send() }
         guard let api, unsent.isEmpty else { return }
         do {

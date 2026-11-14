@@ -46,19 +46,24 @@ public enum BoxGate {
 
     /// The routes a held box is still asked: what it is (`kuvo/info`) and its own update
     /// (`kuvo/update`, `kuvo/box/update`); its Mac's app registering with it (`kuvo/box/app`: where
-    /// its agents' browser calls and a phone's asks of the Mac's own go, never held); and what keeps
-    /// work already under way there going: its
-    /// engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), its running agents' own tool
-    /// calls (`kuvo/agent-tools`), and what answers a session waiting on you (its asks: `kuvo/asks`,
-    /// `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`, and Auto's decisions). A route it
-    /// hasn't says so in its own words. Every other request to it waits for the update.
+    /// its agents' browser calls and a phone's asks of the Mac's own go, never held), and the keys
+    /// it holds for that app (`kuvo/box/proof`, the vault's proof for one of your machines, and
+    /// `kuvo/box/kept-keys`, bots' keys an earlier Kuvo Code kept): what the app does with its own
+    /// box's keys, which an update doesn't change; and what keeps work already under way there
+    /// going: its engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), its running agents'
+    /// own tool calls (`kuvo/agent-tools`), and what answers a session waiting on you (its asks:
+    /// `kuvo/asks`, `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`, and Auto's
+    /// decisions). A route it hasn't says so in its own words. Every other request to it waits for
+    /// the update.
     public static func isAllowed(_ path: String) -> Bool {
         let route = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
-        if ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/box/app", "kuvo/agent-tools"].contains(route) { return true }
+        if ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/box/app", "kuvo/box/proof", "kuvo/box/kept-keys", "kuvo/agent-tools"].contains(route) { return true }
         if route.hasPrefix("api/") || route.hasPrefix("kuvo/agents/") { return true }
         for asks in ["kuvo/asks", "kuvo/sandbox/asks", "kuvo/vault/asks", "kuvo/work/asks"] where route == asks || route.hasPrefix(asks + "/") { return true }
         let parts = route.split(separator: "/")
-        return parts.count == 4 && parts[0] == "kuvo" && parts[1] == "sessions" && parts[3] == "decisions"
+        // A conversation's decisions, and its asks (`…/asks`, `…/asks/events`, `…/asks/<ask>`).
+        let session = parts.count >= 4 && parts[0] == "kuvo" && parts[1] == "sessions"
+        return (session && parts.count == 4 && parts[3] == "decisions") || (session && parts[3] == "asks" && parts.count <= 5)
     }
 
     /// What both apps say of a box that's older than they need.

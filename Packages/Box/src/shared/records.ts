@@ -77,6 +77,10 @@ export interface ToldAgents {
   moved?: { session: string; key: string; at: number }[];
   /** The boxes it knows (its own peers), which this box may take plan limits from and tell its own to (PROTOCOL.md, "Plan limits"). */
   boxes?: { key: string; address: string; kind: "mac" | "machine"; name: string }[];
+  /** The setup it follows (its id), where it said one (PROTOCOL.md, "Your setup"). */
+  setup?: string;
+  /** It's a machine two people's Macs set up: never one of your own computers for plan limits' resets and usage totals. */
+  shared?: true;
 }
 
 /** `run/agents.json`: everyone, for list_agents here (kuvo-browser.js reads it), and this box's

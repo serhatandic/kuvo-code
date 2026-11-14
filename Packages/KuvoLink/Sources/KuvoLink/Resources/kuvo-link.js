@@ -2536,7 +2536,9 @@ function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
       list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
       ...Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {},
       ...Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {},
-      ...Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {}
+      ...Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {},
+      ...typeof given.setup === "string" && SETUP_ID.test(given.setup) ? { setup: given.setup } : {},
+      ...given.shared === true ? { shared: true } : {}
     };
     writePrivate(file, JSON.stringify(all));
     return true;
@@ -25547,13 +25549,28 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
   const key = link ? ownKey(link) : null;
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os11.hostname();
   const setup = followedSetup(link);
+  const shared = sharedMachine(link);
+  const saysShared = (key) => told[key]?.shared === true || toldShared(key) === true;
+  const apart = (key) => shared || saysShared(key) || !!setup && !!told[key]?.setup && told[key].setup !== setup.id;
   return {
     ...key ? { self: { key, name } } : {},
     also: vouchedOf(link, told).map((box) => ({ key: box.key, name: plainName(box.name) || "another computer" })),
-    boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
+    boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...apart(peer.key) ? { apart: true } : {}, ...saysShared(peer.key) ? { shared: true } : {} })),
     bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} }))),
-    ...setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}
+    ...setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {},
+    ...shared ? { shared: true } : {}
   };
+}
+var whereSeen;
+function whereChanged(link) {
+  const now = `${followedSetup(link)?.id ?? ""}|${sharedMachine(link)}`;
+  const before = whereSeen;
+  whereSeen = now;
+  return before !== undefined && before !== now;
+}
+async function tellIfSharingChanged(old, link, ask = bridgeAsk) {
+  if (sharedMachine(old) !== sharedMachine(link))
+    await tellSeatPeers(link, true, ask).catch(() => {});
 }
 var toldSeatPeers = "";
 async function tellSeatPeers(link = readLink(), force = false, ask = bridgeAsk) {
@@ -32265,7 +32282,9 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
     return;
   const moved = movedAway(now).map(({ session, key, at }) => ({ session, key, at }));
   const boxes = peersOf(link).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
-  const json = JSON.stringify([ownList, moved, boxes]);
+  const setup = followedSetup(link)?.id;
+  const where = { ...setup ? { setup } : {}, ...sharedMachine(link) ? { shared: true } : {} };
+  const json = JSON.stringify([ownList, moved, boxes, where]);
   let have = null;
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
@@ -32277,7 +32296,7 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved, boxes: boxes.filter((box) => box.key !== peer.key) }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved, boxes: boxes.filter((box) => box.key !== peer.key), ...where }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
       if (bytes)
         break;
     }
@@ -40434,7 +40453,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "87c3c0fa04b6";
+var BRIDGE_VERSION = "77ecffe52e43";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -52358,6 +52377,12 @@ function boxPlaces() {
 scriptIs(fileURLToPath4(import.meta.url));
 onDocsChanged(macDocsChanged);
 onLinkWritten((link) => {
+  if (whereChanged(link)) {
+    tellSeatPeers(link, true).catch(() => {});
+    const host = IS_MAC ? macLink.host : liveHost;
+    if (host?.welcomed)
+      announce(host, readEngineFile, link).catch(() => {});
+  }
   if (IS_MAC) {
     for (const tell of macLink.phoneFollowers)
       tell();
@@ -52372,6 +52397,7 @@ onLinkWritten((link) => {
   else
     fs161.rmSync(NEEDED_FILE, { force: true });
 });
+var liveHost = null;
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
   try {
@@ -52594,6 +52620,7 @@ async function run6() {
       send: () => {}
     });
     current = host;
+    liveHost = host;
     const started = Date.now();
     const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, machineWelcomed);
     const next = nextTry(attempt, welcomed, Date.now() - started);
@@ -52974,6 +53001,7 @@ async function setup() {
     console.log("{}");
     return;
   }
+  await tellIfSharingChanged(old, link);
   let runningVersion = null;
   try {
     runningVersion = fs161.readFileSync(VERSION_FILE, "utf8").trim();
@@ -53555,6 +53583,7 @@ export {
   takeRows,
   takeSeat,
   takeWorkQueueMail,
+  tellIfSharingChanged,
   tellQueuesAgain,
   tellSeatPeers,
   tellWorktree,
@@ -53578,6 +53607,7 @@ export {
   watchEvents,
   watchMoves,
   watchSeats,
+  whereChanged,
   workWatcher,
   worktreesWhere,
   writeAgents,

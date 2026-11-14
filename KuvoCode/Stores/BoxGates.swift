@@ -93,7 +93,15 @@ final class BoxGates {
     /// with the gate's words (`reason: "updating"`); nil for a box that isn't, or a route that
     /// tells or brings about its update (`BoxGate.isAllowed`).
     nonisolated static func refusal(for box: String, path: String) -> BoxRefusal? {
-        guard !BoxGate.isAllowed(path), let words = mirror.withLock({ $0[box] }) else { return nil }
+        guard !BoxGate.isAllowed(path) else { return nil }
+        return refusalIfHeld(box)
+    }
+
+    /// The same refusal for anything `box` would be asked while it's held, where what's read first
+    /// is a route it still answers (a new chat, whose chats folder `kuvo/info` names); nil when it
+    /// isn't held.
+    nonisolated static func refusalIfHeld(_ box: String) -> BoxRefusal? {
+        guard let words = mirror.withLock({ $0[box] }) else { return nil }
         return BoxRefusal(status: 503, message: words, reason: reason)
     }
 

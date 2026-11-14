@@ -60,8 +60,23 @@ struct BoxGateTests {
         #expect(BoxGate.isAllowed("kuvo/sandbox/asks/ask_1"))
         #expect(BoxGate.isAllowed("kuvo/asks"))
         #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/decisions"))
+        #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/asks"))
+        #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/asks/events"))
+        #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/asks/per_1"))
+        #expect(!BoxGate.isAllowed("kuvo/sessions/ses_1/asks/per_1/more"))
+        #expect(!BoxGate.isAllowed("kuvo/sessions/ses_1/queue"))
         #expect(!BoxGate.isAllowed("kuvo/sessions"))
         #expect(!BoxGate.isAllowed("kuvo/askslater"))
+    }
+
+    // This Mac's own box, held after an update, still holds its app's keys: the vault's proof for
+    // one of your machines and a bot's kept keys are asked of it, while its projects wait.
+    @Test func aHeldOwnBoxStillAnswersForItsAppsKeys() {
+        #expect(BoxGate.isAllowed("kuvo/box/proof"))
+        #expect(BoxGate.isAllowed("kuvo/box/kept-keys?bot=bot_1"))
+        #expect(!BoxGate.isAllowed("kuvo/box/proof/extra"))
+        #expect(!BoxGate.isAllowed("kuvo/box/kept-keysx"))
+        #expect(!BoxGate.isAllowed("kuvo/projects"))
     }
 
     // A phone says who brings a machine up to date: by itself overnight only where it can.

@@ -1,5 +1,6 @@
 import AppKit
 import ClientSessions
+import KuvoLink
 import OpenCodeKit
 import SwiftUI
 import Testing
@@ -9,7 +10,7 @@ import Testing
 /// Starred list shows each once, saying whose it is, however you came to it; and picking one picks
 /// that account's. Stars and conversations from before Claude Code's `default` went (the box lists
 /// the model it stands for, known by that name too) still find that model on their account. The
-/// agents' bridge is stubbed; the picker and the catalog are real.
+/// agents' bridge and the box's answer are stubbed; the picker and the catalog are real.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct ModelPickerAccountsTests {
     static let bridge = "http://127.0.0.1:47945"
@@ -40,6 +41,19 @@ import Testing
                 }
             }])
         }
+        // Its box, saying both accounts' models run (`kuvo/models/offered`).
+        let offered = try? JSONSerialization.data(withJSONObject: [
+            "models": Self.accounts.flatMap { account, _ in [("opus", "Opus 5.5"), ("sonnet", "Sonnet 5.5")].map { ["providerID": account, "id": $0.0, "name": $0.1] } },
+            "known": ["engine": true, "agents": true],
+        ] as [String: Any])
+        app.catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(answered ? offered ?? Data() : Data(#"{"message":"No such route."}"#.utf8)))
+                continuation.finish()
+            }
+        })
         app.catalog.outsideAgents = app.agents
         app.agents.connect(ServerEndpoint(url: URL(string: Self.bridge)!, password: "test"), folderPrefix: "")
         await app.catalog.refreshAgents()
@@ -163,8 +177,12 @@ import Testing
         #expect(starredRows.first(where: \.inUse)?.label.contains("Work") == (other == "claude-code@work"), "on \(other)'s row: \(starredRows)")
     }
 
-    @Test func aConversationOnDefaultShowsAndSendsTheModelItStandsFor() async throws {
+    /// (Which model a new conversation on `default` starts on is its box's rule: the box's own
+    /// tests, model-aliases.test.ts.)
+    @Test func aConversationOnDefaultShowsTheModelItStandsFor() async throws {
         defer { close() }
+        _ = app.catalog.offered
+        try await until { app.catalog.offeredSaid != nil }
         for account in ["claude-code", "claude-code@work"] {
             let ref = ModelRef(id: "default", providerID: account, variant: "high")
             #expect(app.catalog.model(ref)?.name == "Opus 5.5")
@@ -173,8 +191,6 @@ import Testing
             let said = SessionModelState(model: ref, name: "Opus 5.5", runs: true)
             #expect(app.catalog.chipModel(ref, in: .all, said: said)?.name == "Opus 5.5")
             #expect(!app.catalog.isUnavailable(ref))
-            // What a new message goes out on: the model itself, on the same account, with its effort.
-            #expect(app.catalog.startingModel(ref) == ModelRef(id: "opus", providerID: account, variant: "high"))
             // Setting its effort isn't another model: nothing stops for it.
             #expect(app.catalog.isSameModel(ModelRef(id: "opus", providerID: account, variant: "low"), ref))
             #expect(!app.catalog.isSameModel(ModelRef(id: "sonnet", providerID: account), ref))

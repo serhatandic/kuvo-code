@@ -14,7 +14,11 @@ export interface LimitsBox {
   here: boolean
   /** A peer not heard from for a while: what it said is as of then. */
   away: boolean
-  /** A box a peer of yours vouches for, not one of yours: it never uses your resets. */
+  /**
+   * Not one of your own computers (`LimitsDirectory.isYours`): a box a peer of yours vouches for,
+   * any peer of a machine two people's Macs share (on that machine), a machine that is one, or a box
+   * of another setup. It never uses your resets.
+   */
   vouched?: boolean
   accounts: AccountLimits[]
 }
@@ -63,7 +67,7 @@ export function limitRows(boxes: LimitsBox[]): LimitRow[] {
   }
   return groups.map(({ id, members }) => {
     const row: LimitRow = {
-      ...merged(members.map((member) => member.account)),
+      ...merged(members),
       id,
       boxes: members.map(({ box, account }) => ({
         key: box.key,
@@ -86,7 +90,8 @@ export function limitRows(boxes: LimitsBox[]): LimitRow[] {
 /**
  * The computer that would use one of a row's resets: the first of its boxes (this box's first)
  * whose own sign-in can (its `resets` extra says `usable`), one that's heard from before one that's
- * away. None where none can: the row's resets are only counted.
+ * away, and only this box or one of your own computers (never a `vouched` one). None where none
+ * can: the row's resets are only counted.
  */
 function withResetsOn(row: LimitRow, members: { box: LimitsBox; account: AccountLimits }[]) {
   const index = row.extras?.findIndex((extra) => extra.kind === "resets") ?? -1
@@ -111,9 +116,15 @@ const newestOf = (account: AccountLimits) => account.checked ?? Math.max(0, ...a
  * plan, credits, what it has beyond its windows (`extras`) and when it was checked as the newest says; a problem only when none of them could
  * read it.
  */
-function merged(members: AccountLimits[]): AccountLimits {
+function merged(boxes: { box: LimitsBox; account: AccountLimits }[]): AccountLimits {
+  const members = boxes.map((member) => member.account)
   const base = members.find((member) => member.agent) ?? members[0]!
   if (members.length === 1) return base
+  // (What it spends and has beyond its limits from your own computers where one of them read it
+  // without a problem: a box that isn't yours is told none of it, so its reading never takes
+  // theirs' place.)
+  const yours = boxes.filter((member) => !member.box.vouched).map((member) => member.account)
+  const pool = yours.some((member) => member.checked && !member.problem) ? yours : members
   const account: AccountLimits = { ...base }
   const label = members.map((member) => member.label?.trim()).find(Boolean)
   if (label) account.label = label
@@ -127,7 +138,7 @@ function merged(members: AccountLimits[]): AccountLimits {
     }
   }
   account.windows = windows
-  const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a))
+  const newest = [...pool].sort((a, b) => newestOf(b) - newestOf(a))
   const plan = newest.find((member) => member.plan)?.plan
   const balance = newest.find((member) => member.balance)?.balance
   // (A reading without them says there are none now: the newest that read without a problem;

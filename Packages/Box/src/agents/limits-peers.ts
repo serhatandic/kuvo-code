@@ -47,6 +47,16 @@ export interface LimitsDirectory {
   listen(listener: () => void): void
   /** Whether a box is one of your computers (a peer), not one a peer vouches for. */
   isPeer?(key: string): boolean
+  /**
+   * Whether a box is one of your own computers for what's yours alone (spending resets, Always
+   * Allow, what you spend beyond your limits, usage totals): a peer, neither of the two a machine
+   * two people's Macs share, nor in another setup.
+   */
+  isYours?(key: string): boolean
+  /** Whether the link says this box is a machine set up by Macs that aren't all in one setup. */
+  readonly sharedHere?: boolean
+  /** Whether a peer says it's such a machine. */
+  isSharedPeer?(key: string): boolean
 }
 
 interface Kept {
@@ -100,15 +110,20 @@ export class LimitsPeers {
     return this.directory.own()?.key ?? ""
   }
 
-  /** The newest time a peer read this account from its maker (on this box's clock), if any did. */
+  /** The newest time one of your own computers read this account from its maker (on this box's clock), if any did. */
   fresh(service: LimitsService, identity: string): number | undefined {
     return this.freshest(service, identity)?.checked
   }
 
-  /** The newest reading a peer had of this account from its maker, without a problem, if any did. */
+  /**
+   * The newest reading one of your own computers had of this account from its maker, without a
+   * problem, if any did: never one that isn't yours, nor any before the link has said (what such a
+   * box is told of an account lacks its spend and extras, so it never stands in for a read of here).
+   */
   freshest(service: LimitsService, identity: string): AccountLimits | undefined {
     let newest: AccountLimits | undefined
-    for (const kept of this.peers.values()) {
+    for (const [key, kept] of this.peers) {
+      if (!this.ours(key)) continue
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked) continue
         if (!newest || account.checked > newest.checked!) newest = account
@@ -123,7 +138,11 @@ export class LimitsPeers {
     const self = this.directory.own()
     const boxes: LimitsBox[] = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }]
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))
-    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(this.directory.isPeer?.(key) === false ? { vouched: true } : {}), accounts: kept.accounts })
+    for (const [key, kept] of peers) {
+      // (One that isn't yours, or before the link has said: only what such a box is told.)
+      const ours = this.ours(key)
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(!ours ? { vouched: true } : {}), accounts: ours ? kept.accounts : forVouched(kept.accounts) })
+    }
     return limitRows(boxes)
   }
 
@@ -158,10 +177,16 @@ export class LimitsPeers {
     const now = this.now()
     // Its clock, onto this box's: a mail takes a moment, so only one that's well off is moved.
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW ? now - given.at : 0
-    const accounts = given.accounts.slice(0, 100).flatMap((account) => {
+    const read = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount(account, off, now)
       return taken ? [taken] : []
     })
+    // (From a box that isn't one of your own computers, or before the link has said, only what such
+    // a box is told, whatever it said: a machine Macs of two setups share never keeps one's spending
+    // or Always Allow for the other. Once the link says one is yours, it's asked for all of its own,
+    // `directorySaid`. What was kept before, from a restart, is kept whole and shown so only once
+    // the link says it's yours: `rows`, `freshest`.)
+    const accounts = !this.ours(from) ? forVouched(read) : read
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     this.peers.set(from, { name, heard: now, accounts })
@@ -213,9 +238,9 @@ export class LimitsPeers {
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
   }
 
-  /** Whether a box is one of your own computers (not one a peer of yours only vouches for). */
+  /** Whether a box is one of your own computers (not one a peer of yours only vouches for, a machine two people's Macs share, or a box of another setup). */
   private ours(key: string) {
-    return this.directory.isPeer?.(key) === true
+    return this.directory.isYours?.(key) === true
   }
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
@@ -225,14 +250,32 @@ export class LimitsPeers {
     return accounts
   }
 
-  /** The link said who your computers are: those no longer among them go, and one new to this box is told now. */
+  /** Your own computers as the link last said, to know one that has just become yours. */
+  private yoursBefore = new Set<string>()
+
+  /**
+   * The link said who your computers are: those no longer among them go, one that's no longer one
+   * of your own keeps only what such a box is told, one new to this box is told now, and one that
+   * has just become yours (again) is told all and asked for all of its own.
+   */
   private directorySaid() {
     const here = new Set(this.directory.peerBoxes().map((box) => box.key))
-    let gone = false
-    for (const key of [...this.peers.keys()]) {
-      if (here.has(key)) continue
-      this.peers.delete(key)
-      gone = true
+    const yours = new Set([...here].filter((key) => this.ours(key)))
+    // (Told again as if never told: with `ask`, so it tells this box all of its own at once.)
+    for (const key of yours) if (!this.yoursBefore.has(key)) this.told.delete(key)
+    // (Which are yours changed, the first time the link says too: what clients see of them with it.)
+    let gone = yours.size !== this.yoursBefore.size || [...yours].some((key) => !this.yoursBefore.has(key))
+    this.yoursBefore = yours
+    for (const [key, kept] of [...this.peers]) {
+      if (!here.has(key)) {
+        this.peers.delete(key)
+        gone = true
+      } else if (!this.ours(key)) {
+        const told = forVouched(kept.accounts)
+        if (JSON.stringify(told) === JSON.stringify(kept.accounts)) continue
+        kept.accounts = told
+        gone = true
+      }
     }
     for (const key of [...this.told.keys()]) if (!here.has(key)) this.told.delete(key)
     for (const key of [...this.answered.keys()]) if (!here.has(key)) this.answered.delete(key)
@@ -240,7 +283,8 @@ export class LimitsPeers {
       this.save()
       this.limits.peersChanged()
     }
-    this.tell()
+    // (One that's no longer one of your own is told only what such a box is, now.)
+    this.tell(true)
   }
 
   private load() {
@@ -249,6 +293,7 @@ export class LimitsPeers {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as { peers?: Record<string, Kept> }
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts)) continue
+        // (Whole, as kept: shown as one that isn't yours until the link says it is, `rows`.)
         this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) })
       }
     } catch {}

@@ -91,7 +91,7 @@ import { sendToPhones } from "./notices/push";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
 import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
 import { peerMail, receiveMail } from "./peers/mail";
-import { watchSeats } from "./peers/seats";
+import { tellIfSharingChanged, tellSeatPeers, watchSeats, whereChanged } from "./peers/seats";
 import { changePersonalities, mergePersonalities, readPersonalities } from "./personalities/library";
 import { takePersonalities } from "./personalities/take";
 import { authorizePhone, confirmPhone, foldPhones, newPairingToken, PAIRING_MINUTES, pairingLink } from "./phones";
@@ -207,7 +207,7 @@ export { keptFeatures, peerOf, readPeerAgents, takeAgents, vouchedOf } from "./p
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
-export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeLimits, takeSeat, tellSeatPeers, watchSeats } from "./peers/seats";
+export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeLimits, takeSeat, tellIfSharingChanged, tellSeatPeers, watchSeats, whereChanged } from "./peers/seats";
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
@@ -252,6 +252,13 @@ scriptIs(fileURLToPath(import.meta.url));
 onDocsChanged(macDocsChanged);
 
 onLinkWritten(link => {
+  // The setup it follows, or whether Macs of two setups share it, changed: its bridge and its peers
+  // hear at once which computers are yours (PROTOCOL.md, "Plan limits", Whose).
+  if (whereChanged(link)) {
+    tellSeatPeers(link, true).catch(() => {});
+    const host = IS_MAC ? macLink.host : liveHost;
+    if (host?.welcomed) announce(host, readEngineFile, link).catch(() => {});
+  }
   if (IS_MAC) {
     for (const tell of macLink.phoneFollowers) tell();
     // Phones no longer paired lose what they have open, whoever removed them, and a link no longer
@@ -268,6 +275,9 @@ onLinkWritten(link => {
   if (needed(link)) fs.writeFileSync(NEEDED_FILE, "", { mode: 0o600 });
   else fs.rmSync(NEEDED_FILE, { force: true });
 });
+
+/** This machine's relay connection now, for what's told at once (`whereChanged`). */
+let liveHost: LinkHost | null = null;
 
 // ---- The commands ----
 
@@ -496,6 +506,7 @@ async function run(): Promise<void> {
       send: () => {},
     });
     current = host;
+    liveHost = host;
     const started = Date.now();
     const welcomed = await connectOnce(link!.relay!, Buffer.from(link!.secret!, "base64url"), host, machineWelcomed);
     const next = nextTry(attempt, welcomed, Date.now() - started);
@@ -931,6 +942,9 @@ async function setup(): Promise<void> {
     console.log("{}");
     return;
   }
+  // Shared by Macs of two setups now, or no longer: the bridge hears at once which computers are
+  // yours, the relay or not (the running link tells your other computers at its next round).
+  await tellIfSharingChanged(old, link);
   // A new relay or name needs a new connection, and a newer bridge replaces an older one.
   let runningVersion = null;
   try { runningVersion = fs.readFileSync(VERSION_FILE, "utf8").trim(); } catch {}

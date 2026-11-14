@@ -176,6 +176,8 @@ fn a_held_box_is_asked_only_what_keeps_work_going() {
         "kuvo/update",
         "kuvo/box/update",
         "kuvo/box/app",
+        "kuvo/box/proof",
+        "kuvo/box/kept-keys?bot=bot_1",
         "kuvo/agent-tools",
         "api/session/ses_1/message?limit=5",
         "kuvo/agents/api/event",
@@ -184,10 +186,13 @@ fn a_held_box_is_asked_only_what_keeps_work_going() {
         "kuvo/vault/asks",
         "kuvo/work/asks/w1",
         "kuvo/sessions/ses_1/decisions",
+        "kuvo/sessions/ses_1/asks",
+        "kuvo/sessions/ses_1/asks/events",
+        "kuvo/sessions/ses_1/asks/per_1",
     ] {
         assert!(gate::is_allowed(allowed), "{allowed}");
     }
-    for held in ["kuvo/sessions/list", "kuvo/sessions/ses_1/typed", "kuvo/asksx", "kuvo/work-queue", "kuvo/sessions/ses_1/decisions/x"] {
+    for held in ["kuvo/sessions/list", "kuvo/sessions/ses_1/typed", "kuvo/asksx", "kuvo/work-queue", "kuvo/sessions/ses_1/decisions/x", "kuvo/box/proofs", "kuvo/sessions/ses_1/asks/per_1/more", "kuvo/sessions/ses_1/queue"] {
         assert!(!gate::is_allowed(held), "{held}");
     }
 }
