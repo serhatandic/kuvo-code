@@ -32,3 +32,11 @@ export function usageSnapshot(data: Record<string, unknown>, tell: (notice: Noti
   usageNotices({ notices: eligible, push: true }, tell);
   usageNotices({ notices: all, push: false }, tell);
 }
+
+/** Ignore a snapshot overtaken by its connection ending or a newer limits/notice event. */
+export async function catchUpUsage(signal: AbortSignal, revision: () => number, read: () => Promise<unknown>, apply: (data: Record<string, unknown>) => void): Promise<void> {
+  const before = revision();
+  const answer = await read() as { data?: Record<string, unknown> } | null;
+  if (signal.aborted || before !== revision() || !answer?.data) return;
+  apply(answer.data);
+}

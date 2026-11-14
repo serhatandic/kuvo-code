@@ -2,7 +2,7 @@ import "./safety"
 import { expect, test } from "bun:test"
 import { randomUUID, randomBytes } from "node:crypto"
 import { newNotice, initialState, noticeAccountName } from "../src/agents/usage/notices"
-import { usageNotices, usageSnapshot } from "../src/link/notices/usage"
+import { usageNotices, usageSnapshot, catchUpUsage } from "../src/link/notices/usage"
 import { readTold, toldLately } from "../src/link/notices/told"
 import { NoticeHold } from "../src/link/notices/hold"
 import { mkdtempSync, writeFileSync, unlinkSync, rmSync } from "node:fs"
@@ -164,3 +164,32 @@ test("a queued losing forwarder copy is cancelled when a snapshot agrees on anot
   expect(hold.count).toBe(0)
   expect(sent).toEqual([])
 })
+
+test("a catch-up resolving after a reconnect cannot replace the new connection's snapshot", async () => {
+  const old = new AbortController(), current = new AbortController()
+  let finish!: (answer: unknown) => void
+  const late = new Promise(resolve => { finish = resolve })
+  const applied: string[] = []
+  const pending = catchUpUsage(old.signal, () => 0, () => late, data => applied.push(String(data.id)))
+  old.abort()
+  await catchUpUsage(current.signal, () => 0, async () => ({data:{id:"current"}}), data => applied.push(String(data.id)))
+  finish({data:{id:"old"}})
+  await pending
+  expect(applied).toEqual(["current"])
+})
+
+test("a newer usage-notices event invalidates an in-flight catch-up", async () => {
+  const connection = new AbortController()
+  let revision = 0, finish!: (answer: unknown) => void
+  const late = new Promise(resolve => { finish = resolve })
+  const delivered: string[] = []
+  const pending = catchUpUsage(connection.signal, () => revision, () => late, data => usageSnapshot(data, n => delivered.push(n.data!.notice!)))
+  const fresh = fact(), stale = fact()
+  // The watcher advances this revision when it receives kuvo.usage.notices.
+  revision++
+  usageNotices({notices:[fresh],push:true}, n => delivered.push(n.data!.notice!))
+  finish({data:{notices:[stale],ownNotices:[stale]}})
+  await pending
+  expect(delivered).toEqual([fresh.id])
+})
+

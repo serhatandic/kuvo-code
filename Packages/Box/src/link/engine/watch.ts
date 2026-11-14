@@ -1,5 +1,5 @@
 import { takeNotices } from "../../agents/usage/notices";
-import { usageNotices, usageSnapshot } from "../notices/usage";
+import { usageNotices, usageSnapshot, catchUpUsage } from "../notices/usage";
 // Watching this box's engine and its coding agents' bridge: their events followed, and what the
 // box does as they come (its bots kept told, ended sign-ins noted, news for your phones, a message
 // that steers an agent read at once).
@@ -355,13 +355,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // The bridge may have decided notices while this link wasn't listening. Rehydrate facts on
       // every connection and retry failed sends; peer decisions are kept for this Mac but never pushed.
       if (work === "bridge") {
-        const catchUp = () => {
-          const revision = usageRevision;
-          return engineGet(source, "api/kuvo/limits").then((answer: any) => {
-            if (connection.signal.aborted || revision !== usageRevision || !answer?.data) return;
-            usageSnapshot(answer.data, tell, hold);
-          }).catch(() => {});
-        };
+        const catchUp = () => catchUpUsage(connection.signal, () => usageRevision,
+          () => engineGet(source, "api/kuvo/limits"), data => usageSnapshot(data, tell, hold)).catch(() => {});
         void catchUp();
         const retry = setInterval(catchUp, 60_000);
         retry.unref?.();
