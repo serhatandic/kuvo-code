@@ -150,7 +150,7 @@ test("a box with settings of its own keeps them when the app's are taken in", ()
   expect(readBrowserSettings(folder)).toMatchObject({ searchEngine: "kagi", tidiesAgentTabs: true, offersToSave: true, never: [] })
 })
 
-test("the settings: each checked, kept, and the search engine's address beside it for the keeper", () => {
+test("the settings: each checked and kept, where the keeper reads them", () => {
   const settings = readBrowserSettings(folder)
   expect(offShape("GET", "kuvo/browser/settings", 200, settings)).toBeNull()
   expect(settings).toMatchObject({ searchEngine: "google", tidiesAgentTabs: true, offersToSave: true, never: [] })
@@ -159,8 +159,8 @@ test("the settings: each checked, kept, and the search engine's address beside i
   expect(changeBrowserSettings({ never: ["https://Bank.example.com/login", "bank.example.com"] }, folder)).toBeNull()
   expect(changeBrowserSettings({ searchEngine: "ecosia", tidiesAgentTabs: false, offersToSave: false }, folder)).toBeNull()
   expect(readBrowserSettings(folder)).toMatchObject({ searchEngine: "ecosia", tidiesAgentTabs: false, offersToSave: false, never: ["bank.example.com"] })
-  // What the keeper reads: the engine's address, and the file it has always read for agents' tabs.
-  expect(JSON.parse(readFileSync(join(folder, "settings.json"), "utf8")).searchURL).toBe("https://www.ecosia.org/search?q=%s")
+  // What the keeper reads: the engine, and the file it has always read for agents' tabs.
+  expect(JSON.parse(readFileSync(join(folder, "settings.json"), "utf8")).searchEngine).toBe("ecosia")
   expect(existsSync(join(folder, "keeps-agent-tabs"))).toBe(true)
   expect(changeBrowserSettings({ tidiesAgentTabs: true }, folder)).toBeNull()
   expect(existsSync(join(folder, "keeps-agent-tabs"))).toBe(false)
@@ -183,6 +183,7 @@ function profile(rows: { host: string; name: string; expires: number | null; per
   }
   db.close()
   for (const name of ["https_x.com_0.indexeddb.leveldb", "https_www.example.org_0.indexeddb.leveldb"]) mkdirSync(join(folder, "profile", "Default", "IndexedDB", name), { recursive: true })
+  mkdirSync(join(folder, "profile", "Default", "Local Storage", "leveldb"), { recursive: true })
 }
 
 const CATALOG = [
@@ -201,8 +202,10 @@ test("which sites the browser is signed in to, from its cookie file: a sign-in k
     { host: "www.example.org", name: "theme", expires: now + DAY, persistent: true },
   ])
   expect(await siteSignInsHere(CATALOG, folder, run)).toEqual({ x: true, linkedin: false, reddit: false })
-  // No browser here yet: it can't be told.
+  // No browser here yet, or its cookies there but unreadable now: it can't be told.
   expect(await siteSignInsHere(CATALOG, join(root, "nothing"), run)).toBeNull()
+  writeFileSync(join(folder, "profile", "Default", "Network", "Cookies"), "not a database")
+  expect(await siteSignInsHere(CATALOG, folder, run)).toBeNull()
 })
 
 test("removing a site's data with the browser stopped signs it out of that site, and leaves the others", async () => {
@@ -221,15 +224,18 @@ test("removing a site's data with the browser stopped signs it out of that site,
     { site: "x.com", kinds: ["cookies", "storage"] },
   ])
 
-  await removeSiteData(["x.com"], folder, run)
+  expect(await removeSiteData(["x.com"], folder, run)).toBe(true)
   expect(await siteSignInsHere(CATALOG, folder, run)).toEqual({ x: false, linkedin: false, reddit: true })
   expect((await browserSites(folder, run)).sites.map(site => site.site)).toEqual(["example.org", "reddit.com"])
   expect(existsSync(join(folder, "profile", "Default", "IndexedDB", "https_x.com_0.indexeddb.leveldb"))).toBe(false)
   // What's left for Chrome to clear as it starts: the site's other stored data.
   expect(JSON.parse(readFileSync(join(folder, "clear-sites.json"), "utf8")).sort()).toEqual(["api.x.com", "x.com"])
 
-  await removeSiteData("all", folder, run)
+  expect(await removeSiteData("all", folder, run)).toBe(true)
   expect((await browserSites(folder, run)).sites).toEqual([])
+  // Every site's: what pages stored goes whole, a site with local storage alone too.
+  expect(existsSync(join(folder, "profile", "Default", "IndexedDB"))).toBe(false)
+  expect(existsSync(join(folder, "profile", "Default", "Local Storage"))).toBe(false)
   expect(await siteSignInsHere(CATALOG, folder, run)).toEqual({ x: false, linkedin: false, reddit: false })
 })
 

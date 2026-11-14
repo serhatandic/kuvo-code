@@ -94,6 +94,8 @@ test("removing a site's data while Chrome runs signs the machine's browser out o
   assert.equal(await signedIn(), true);
   assert.deepEqual(JSON.parse((await route("GET", "kuvo/browser/sites")).body).sites.map((each) => each.site), ["example.org", "x.com"]);
 
+  // Never a part of a site's name: that would be every site under it.
+  assert.equal((await route("DELETE", "kuvo/browser/sites/com")).status, 400);
   const removed = await route("DELETE", "kuvo/browser/sites/x.com");
   assert.equal(removed.status, 200);
   assert.deepEqual(JSON.parse(removed.body).sites.map((each) => each.site), ["example.org"]);

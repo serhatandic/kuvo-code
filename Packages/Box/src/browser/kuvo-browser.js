@@ -23,7 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const CONFIG = /*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", vaultInstructions: "" };
+const CONFIG = /*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", vaultInstructions: "", searchEngines: [] };
 
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
 // The version of Kuvo Code this box's files are from (`bin/box-version`), for what this says it is.
@@ -727,8 +727,24 @@ async function host() {
   } catch {}
   fs.rmSync(PAGESFILE, { force: true });
   // The box removing a site's data from the profile's files while Chrome was stopped: Chrome
-  // starts once it's done (half a minute at most, for one that was cut off).
-  for (const until = Date.now() + 30_000; fs.existsSync(PROFILE_EDITING) && Date.now() < until; ) await sleep(100);
+  // starts once it's done. One held over half a minute was cut off: it goes, as the box's own
+  // locks do.
+  for (const until = Date.now() + 30_000; Date.now() < until; await sleep(100)) {
+    let age;
+    try {
+      age = Date.now() - fs.statSync(PROFILE_EDITING).mtimeMs;
+    } catch {
+      break;
+    }
+    if (age <= 30_000) continue;
+    try {
+      fs.rmdirSync(PROFILE_EDITING);
+    } catch {}
+    break;
+  }
+  // What this Mac's app's panel kept before (its history, its settings): taken in by the box once,
+  // as its own browser first starts (nothing to take on a machine).
+  if (!fs.existsSync(path.join(BROWSER, "app-data-read"))) askBox(["browser", "take-in"]);
   // What a keeper before this one left asked: it went with it.
   fs.rmSync(ASKSFILE, { force: true });
   let started = await launchChrome(sandbox);
@@ -853,11 +869,33 @@ async function host() {
   let firstPage = null;
   // Each page's title, as the browser last said.
   const titles = new Map();
+  // What the box removed while Chrome was stopped, the rest of it (what each site's pages stored):
+  // cleared in the first page Chrome has (Storage's calls need one), and forgotten once Chrome took
+  // each; what it refused is cleared the next time.
+  let clearing = [];
+  try {
+    clearing = JSON.parse(fs.readFileSync(CLEAR_SITES, "utf8")).filter((host) => typeof host === "string" && /^[a-z0-9.:[\]-]+$/i.test(host));
+  } catch {}
+  const clearPending = async (sessionId) => {
+    const hosts = clearing;
+    clearing = [];
+    const left = [];
+    for (const host of hosts) {
+      const done = await Promise.all(["https", "http"].map((scheme) => ownCall("Storage.clearDataForOrigin", { origin: `${scheme}://${host}`, storageTypes: "all" }, sessionId)));
+      if (done.some((answer) => answer === null)) left.push(host);
+    }
+    try {
+      if (left.length) fs.writeFileSync(CLEAR_SITES, JSON.stringify(left), { mode: 0o600 });
+      else fs.rmSync(CLEAR_SITES, { force: true });
+    } catch {}
+  };
   // A line for the box's history (a page that loaded, or its site's icon); the box is asked to take
   // them in once they've piled up, so the file stays small with no client asking for the history.
   let foldAsked = 0;
   const noteForHistory = (line) => {
     try {
+      // (Never past a few megabytes, should the box not take them in: a box from before this keeper.)
+      if ((fs.statSync(VISITS, { throwIfNoEntry: false })?.size ?? 0) > 4 * 1024 * 1024) return;
       fs.appendFileSync(VISITS, JSON.stringify(line) + "\n", { mode: 0o600 });
       if (fs.statSync(VISITS).size > 256 * 1024 && Date.now() - foldAsked > 60_000) {
         foldAsked = Date.now();
@@ -1051,7 +1089,10 @@ async function host() {
       if (frame) {
         ownFrames.add(sessionId);
         frameTargets.set(sessionId, { targetId: targetInfo.targetId, page: pageOf(message.sessionId) });
-      } else own.set(targetInfo.targetId, sessionId);
+      } else {
+        own.set(targetInfo.targetId, sessionId);
+        if (clearing.length && targetInfo.type === "page") clearPending(sessionId);
+      }
       toChrome({ id: next++, method: "Network.setUserAgentOverride", params: browserIdentity, sessionId });
       // No passkeys here yet: a page asking for one hears so at once, instead of Chrome's passkey
       // dialog, which no one sees in the live view, holding the page still (Passkeys.swift). The
@@ -1311,13 +1352,6 @@ async function host() {
   // And every hour while it runs, which can be for days.
   setInterval(clearOldDownloads, 3_600_000).unref?.();
   internal("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: DOWNLOADS, eventsEnabled: true });
-  // What the box removed while Chrome was stopped, the rest of it: what each site's pages stored.
-  let clearing = [];
-  try {
-    clearing = JSON.parse(fs.readFileSync(CLEAR_SITES, "utf8")).filter((host) => typeof host === "string" && /^[a-z0-9.:[\]-]+$/i.test(host));
-  } catch {}
-  fs.rmSync(CLEAR_SITES, { force: true });
-  for (const host of clearing) for (const scheme of ["https", "http"]) internal("Storage.clearDataForOrigin", { origin: `${scheme}://${host}`, storageTypes: "all" });
   if (reopen.length) {
     for (const { url, session } of reopen) {
       // Each page again its conversation's, as when it was last used.
@@ -1876,8 +1910,8 @@ function destination(input) {
   const looksLikeHost = !text.includes(" ") && (text.includes(".") || text.startsWith("localhost") || text.includes(":"));
   if (looksLikeHost) return (text.startsWith("localhost") || text.startsWith("127.") ? "http://" : "https://") + text;
   // The box's own search engine once it has one (`kuvo/browser/settings`), else the one its Mac named.
-  const chosen = readJSON(SETTINGS)?.searchURL;
-  const search = (typeof chosen === "string" && /^https:\/\/[^\s]*%s/.test(chosen) ? chosen : "") || process.env.KUVO_SEARCH || "https://www.google.com/search?q=%s";
+  const chosen = CONFIG.searchEngines.find((engine) => engine.id === readJSON(SETTINGS)?.searchEngine)?.url;
+  const search = chosen || process.env.KUVO_SEARCH || "https://www.google.com/search?q=%s";
   return search.replace("%s", encodeURIComponent(text));
 }
 

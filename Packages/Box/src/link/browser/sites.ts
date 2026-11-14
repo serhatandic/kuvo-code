@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { BrowserSites, DataSite } from "../../shared/routes/browser";
 import { lockedWhile, writePrivate } from "../files";
+import { sleep } from "../../shared/wait";
 import { RUN } from "../home";
 import { BROWSER_FOLDER } from "./history";
 import { keeperRuns, withKeeper, type KeeperCall } from "./keeper-client";
@@ -45,32 +46,19 @@ export const chromeTime = (microseconds: number): number => microseconds / 1000 
 interface Statement { all(...values: unknown[]): any[]; run(...values: unknown[]): unknown }
 interface Database { query(sql: string): Statement; close(): void }
 
-/** SQLite as the engine's Bun has it (`bun:sqlite`); null under anything else. */
-function sqlite(file: string, readonly: boolean): Database | null {
+/** `work` with the database open (SQLite as the engine's Bun has it, `bun:sqlite`), tried again a
+ * moment later while Chrome holds it busy; null under a runtime without it, or when it can't be read. */
+async function inDatabase<T>(file: string, readonly: boolean, work: (db: Database) => T): Promise<T | null> {
   let made: { Database: new (file: string, options?: object) => Database };
   try { made = createRequire(import.meta.url)(["bun", "sqlite"].join(":")); } catch { return null; }
-  // (Busy while Chrome writes: tried again a few times, a moment apart.)
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return new made.Database(file, readonly ? { readonly: true } : { readwrite: true });
-    } catch (error) {
-      if (attempt >= 4 || !/busy|locked/i.test(String(error))) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-    }
-  }
-}
-
-/** `work` with the database open, tried again shortly while it's busy. */
-function inDatabase<T>(file: string, readonly: boolean, work: (db: Database) => T): T | null {
   for (let attempt = 0; ; attempt++) {
     let db: Database | null = null;
     try {
-      db = sqlite(file, readonly);
-      if (!db) return null;
+      db = new made.Database(file, readonly ? { readonly: true } : { readwrite: true });
       return work(db);
     } catch (error) {
       if (attempt >= 4 || !/busy|locked/i.test(String(error))) return null;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+      await sleep(100);
     } finally {
       try { db?.close(); } catch {}
     }
@@ -78,10 +66,10 @@ function inDatabase<T>(file: string, readonly: boolean, work: (db: Database) => 
 }
 
 /** The cookies in the profile's file; null when there's none, or it can't be read. */
-export function fileCookies(folder = BROWSER_FOLDER): BrowserCookie[] | null {
+export async function fileCookies(folder = BROWSER_FOLDER): Promise<BrowserCookie[] | null> {
   const file = cookieFile(folder);
   if (!file) return null;
-  return inDatabase(file, true, db => db.query("SELECT host_key, name, path, expires_utc, has_expires, is_persistent FROM cookies").all().map(row => ({
+  return await inDatabase(file, true, db => db.query("SELECT host_key, name, path, expires_utc, has_expires, is_persistent FROM cookies").all().map(row => ({
     domain: String(row.host_key),
     name: String(row.name),
     path: String(row.path ?? "/"),
@@ -109,7 +97,7 @@ export async function browserCookies(folder = BROWSER_FOLDER, run = RUN): Promis
     const live = await withKeeper(liveCookies, { run, wait: 5_000 });
     if (live) return { live: true, cookies: live };
   }
-  const kept = fileCookies(folder);
+  const kept = await fileCookies(folder);
   return kept ? { live: false, cookies: kept } : null;
 }
 
@@ -169,53 +157,61 @@ const pendingFile = (folder: string) => path.join(folder, "clear-sites.json");
  * it's gone (`kuvo-browser.js host`). */
 const editingLock = (folder: string) => path.join(folder, ".profile-editing");
 
+/** What the profile keeps of every site but its cookies, folder by folder: removing every site's data
+ * with Chrome stopped removes these whole. */
+const STORAGE_FOLDERS = ["Local Storage", "Session Storage", "IndexedDB", "Service Worker", "Cache", "Code Cache", "WebStorage", "File System", "databases", "Shared Storage"];
+
 /** Every site's data, or these sites' (by `siteOf`'s names), gone from the browser: its cookies (so it's
  * signed out of them) and what its pages stored. While Chrome runs, through it; else from its profile's
- * files, with what's left there for the keeper to clear as Chrome starts. */
-export async function removeSiteData(sites: string[] | "all", folder = BROWSER_FOLDER, run = RUN): Promise<void> {
-  if (!fs.existsSync(path.join(folder, "profile"))) return;
+ * files, with what's left there for the keeper to clear as Chrome starts. False when it couldn't be
+ * done now (Chrome starting, or its files busy), with nothing removed. */
+export async function removeSiteData(sites: string[] | "all", folder = BROWSER_FOLDER, run = RUN): Promise<boolean> {
+  if (!fs.existsSync(path.join(folder, "profile"))) return true;
   const wanted = (host: string) => sites === "all" || sites.some(site => onSite(host, site));
-  if (keeperRuns(run) && (await removeLive(wanted, folder, run))) return;
+  if (keeperRuns(run)) return await removeLive(wanted, sites === "all", folder, run);
   // Stopped: the profile's files, with the keeper kept from starting Chrome meanwhile (and if it
   // started a moment ago, through it after all).
   const done = await lockedWhile(editingLock(folder), async () => {
-    if (keeperRuns(run)) return false;
+    if (keeperRuns(run)) return null;
     const file = cookieFile(folder);
     const hosts = new Set<string>();
+    // The cookies first: what can't be removed leaves everything as it was.
     if (file) {
-      inDatabase(file, false, db => {
+      const removed = await inDatabase(file, false, db => {
         const all = db.query("SELECT DISTINCT host_key FROM cookies").all().map(row => String(row.host_key));
-        const removed = all.filter(wanted);
-        for (const host of removed) {
-          db.query("DELETE FROM cookies WHERE host_key = ?").run(host);
-          hosts.add(host.replace(/^\./, ""));
-        }
+        const going = all.filter(wanted);
+        for (const host of going) db.query("DELETE FROM cookies WHERE host_key = ?").run(host);
+        return going;
       });
+      if (!removed) return false;
+      for (const host of removed) hosts.add(host.replace(/^\./, ""));
+    }
+    if (sites === "all") {
+      for (const name of STORAGE_FOLDERS) fs.rmSync(path.join(folder, "profile", "Default", name), { recursive: true, force: true });
+      return true;
     }
     for (const [host, folders] of storageHosts(folder)) {
       if (!wanted(host)) continue;
       for (const each of folders) fs.rmSync(each, { recursive: true, force: true });
       hosts.add(host);
     }
-    if (hosts.size || sites === "all") {
-      let pending: string[] = [];
-      try { pending = JSON.parse(fs.readFileSync(pendingFile(folder), "utf8")); } catch {}
-      const next = [...new Set([...(Array.isArray(pending) ? pending.filter(each => typeof each === "string") : []), ...hosts, ...(sites === "all" ? [] : sites)])];
-      writePrivate(pendingFile(folder), JSON.stringify(next));
-    }
+    let pending: unknown = [];
+    try { pending = JSON.parse(fs.readFileSync(pendingFile(folder), "utf8")); } catch {}
+    const next = [...new Set([...(Array.isArray(pending) ? pending.filter(each => typeof each === "string") : []), ...hosts, ...sites])];
+    writePrivate(pendingFile(folder), JSON.stringify(next));
     return true;
   }, { stale: 30_000, wait: 10_000 });
-  if (!done) await removeLive(wanted, folder, run);
+  return done ?? await removeLive(wanted, sites === "all", folder, run);
 }
 
 /** Through Chrome while it runs: the cookies that fit, deleted one by one in a page of its (each
- * exactly as Chrome said it: a whole domain's, or one host's), then what each of their hosts stored.
- * False when Chrome couldn't be reached. */
-async function removeLive(wanted: (host: string) => boolean, folder: string, run: string): Promise<boolean> {
+ * exactly as Chrome said it: a whole domain's, or one host's), then what each of their hosts stored;
+ * every site's, all its cookies and its cache too. False when Chrome couldn't be reached. */
+async function removeLive(wanted: (host: string) => boolean, all: boolean, folder: string, run: string): Promise<boolean> {
   const done = await withKeeper(async call => {
     const cookies = (await liveCookies(call)).filter(cookie => wanted(cookie.domain));
     const hosts = new Set([...cookies.map(cookie => cookie.domain.replace(/^\./, "")), ...[...storageHosts(folder).keys()].filter(wanted)]);
-    if (!hosts.size) return true;
+    if (!hosts.size && !all) return true;
     // (Network's calls need a page: the first there is, or one opened for this and closed after.)
     const targets = await call("Target.getTargets");
     let page = (Array.isArray(targets?.targetInfos) ? targets.targetInfos : []).find((each: any) => each?.type === "page")?.targetId as string | undefined;
@@ -226,9 +222,14 @@ async function removeLive(wanted: (host: string) => boolean, folder: string, run
     }
     const sessionId = (await call("Target.attachToTarget", { targetId: page, flatten: true }))?.sessionId as string;
     try {
-      for (const cookie of cookies) {
-        const live = cookie.live ?? {};
-        await call("Network.deleteCookies", { name: cookie.name, domain: cookie.domain, path: cookie.path, ...(live.partitionKey ? { partitionKey: live.partitionKey } : {}) }, sessionId);
+      if (all) {
+        await call("Network.clearBrowserCookies", {}, sessionId);
+        await call("Network.clearBrowserCache", {}, sessionId).catch(() => {});
+      } else {
+        for (const cookie of cookies) {
+          const live = cookie.live ?? {};
+          await call("Network.deleteCookies", { name: cookie.name, domain: cookie.domain, path: cookie.path, ...(live.partitionKey ? { partitionKey: live.partitionKey } : {}) }, sessionId);
+        }
       }
       for (const host of hosts) {
         for (const scheme of ["https", "http"]) {
@@ -267,6 +268,8 @@ export async function siteSignInsHere(entries: { id: string; signInCookie?: unkn
   });
   if (!named.length) return null;
   const cookies = await browserCookies(folder, run);
-  if (!cookies) return fs.existsSync(path.join(folder, "profile")) ? Object.fromEntries(named.map(each => [each.id, false])) : null;
+  // No cookies kept at all (a browser that never signed in anywhere): signed in nowhere. One there
+  // that couldn't be read now: can't be told.
+  if (!cookies) return fs.existsSync(path.join(folder, "profile")) && !cookieFile(folder) && !keeperRuns(run) ? Object.fromEntries(named.map(each => [each.id, false])) : null;
   return Object.fromEntries(named.map(each => [each.id, signedIn(cookies, each.signInCookie)]));
 }

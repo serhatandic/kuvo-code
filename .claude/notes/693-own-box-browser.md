@@ -256,9 +256,9 @@ add a **view vocabulary** of facts, so a client draws without CDP. Feature `brow
   #333's move knows `S`; the box reads it only, never a client handing it over.
 - **Built in piece 2** (PROTOCOL.md, "The browser's data"): the keeper only appends what loaded
   (and an icon Chrome fetched) to `browser/visits.jsonl`; the box folds it into `history.json`, so
-  how history is kept is said once, in `link/browser/history.ts`. The one-time read runs the first
-  time a Mac box's `kuvo/browser/…` is asked; piece 5 should make sure nothing asks before
-  `browser.own` turns on, or the app's later history won't be taken.
+  how history is kept is said once, in `link/browser/history.ts`. The one-time read runs as the
+  box's keeper first starts (`kuvo-link.js browser take-in`), which on this Mac is only once piece
+  5 has `browser.own` on.
 
 ### 4.3 Ask-the-user, sign-in and one-time-code tools
 

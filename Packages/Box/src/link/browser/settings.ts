@@ -1,7 +1,7 @@
 // The browser's settings on this box (PROTOCOL.md, "The browser's data"): its search engine, whether
 // agents' tabs no one looked at close by themselves, and offering to save passwords (with the sites
-// you said Never to). Kept in `browser/settings.json`, with the search engine's address beside its id
-// for the keeper and the tools (`kuvo-browser.js`) to read; whether agents' tabs are left open is the
+// you said Never to). Kept in `browser/settings.json`, which the agents' tools (`kuvo-browser.js`) read
+// the search engine from; whether agents' tabs are left open is the
 // file the keeper has always read, `browser/keeps-agent-tabs`, which a Mac before this writes too.
 
 import fs from "node:fs";
@@ -14,10 +14,9 @@ import { BROWSER_FOLDER } from "./history";
 const settingsFile = (folder: string) => path.join(folder, "settings.json");
 const keepsTabsFile = (folder: string) => path.join(folder, "keeps-agent-tabs");
 
-/** What `settings.json` keeps: each setting changed from its default, and the search's address. */
+/** What `settings.json` keeps: each setting changed from its default. */
 interface Kept {
   searchEngine?: SearchEngine;
-  searchURL?: string;
   offersToSave?: boolean;
   never?: string[];
 }
@@ -73,10 +72,7 @@ export function changeBrowserSettings(change: unknown, folder = BROWSER_FOLDER):
     never = [...new Set(sites as string[])].sort();
   }
   const kept = readKept(folder);
-  if (isEngine(change.searchEngine)) {
-    kept.searchEngine = change.searchEngine;
-    kept.searchURL = SEARCH_ENGINES.find(engine => engine.id === change.searchEngine)!.url;
-  }
+  if (isEngine(change.searchEngine)) kept.searchEngine = change.searchEngine;
   if (typeof change.offersToSave === "boolean") kept.offersToSave = change.offersToSave;
   if (never) kept.never = never;
   writePrivate(settingsFile(folder), JSON.stringify(kept));

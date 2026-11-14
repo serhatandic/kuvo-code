@@ -1,14 +1,11 @@
 // The browser's data, as every box answers it (PROTOCOL.md, "The browser's data"; feature
-// `browser.data`): `kuvo/browser/history` and `…/icons/:host`, `…/sites`, `…/settings`. On this
-// Mac's box, what its app's panel kept is taken in the first time any of them is asked.
+// `browser.data`): `kuvo/browser/history` and `…/icons/:host`, `…/sites`, `…/settings`.
 
 import { parsed } from "../../shared/json";
-import { IS_MAC } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
-import { takeInAppBrowserData, thisMacsAppFolder } from "./from-app";
-import { BROWSER_FOLDER, forgetHistory, iconOf, readHistory } from "./history";
+import { forgetHistory, iconOf, readHistory } from "./history";
 import { changeBrowserSettings, readBrowserSettings } from "./settings";
-import { browserSites, removeSiteData } from "./sites";
+import { browserSites, removeSiteData, siteOf } from "./sites";
 
 /** The routes this file answers: the history (a site's in it), a site's icon, the sites with data
  * (one of them), the settings. */
@@ -22,7 +19,6 @@ function part(text: string): string | null {
 export async function* browserDataRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
   const { request, json } = context;
   const method = request.method.toUpperCase();
-  if (IS_MAC) takeInAppBrowserData(thisMacsAppFolder(), BROWSER_FOLDER);
   const [, list, one, icons, iconHost, settings] = match;
   if (icons) {
     if (method !== "GET") return yield* json(405, {});
@@ -48,6 +44,11 @@ export async function* browserDataRoute(context: RouteContext, match: RegExpMatc
   }
   if (method === "GET" && which === null) return yield* json(200, await browserSites());
   if (method !== "DELETE") return yield* json(405, {});
-  await removeSiteData(which === null ? "all" : [which.toLowerCase()]);
-  return yield* json(200, await browserSites());
+  // A site as the list names it (`example.com`, `localhost`, an address), never a part of one (`com`).
+  const site = which?.toLowerCase() ?? null;
+  if (site !== null && (siteOf(site) !== site || !(site.includes(".") || site === "localhost"))) return yield* json(400, { message: "Name a site as the list of sites names it." });
+  if (!(await removeSiteData(site === null ? "all" : [site]))) return yield* json(503, { message: "The browser is busy starting. Try again in a moment." });
+  // (What Chrome still clears of it, a moment later, isn't listed.)
+  const { sites } = await browserSites();
+  return yield* json(200, { sites: site === null ? [] : sites.filter(each => each.site !== site) });
 }

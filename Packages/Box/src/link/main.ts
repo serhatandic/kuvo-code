@@ -59,6 +59,7 @@ import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
 import { browserStatus, installBrowser, startBrowserInstall } from "./browser/install";
 import { foldHistory } from "./browser/history";
+import { takeInAppBrowserData, thisMacsAppFolder } from "./browser/from-app";
 import { APP_FOLDER, BRIDGE_FILE, IS_MAC, K, MAC_APP_VERSION, NEEDED_FILE, OWN_HOME_MAC, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { rehomeCommand } from "./rehome/command";
 import { clearKept, SERVED_FILE } from "./rehome/move";
@@ -1135,7 +1136,8 @@ if (main) {
   // [--repair]` sets it up, as the keeper starts it (one at a time); `browser start [--now]
   // [--repair]` has it set up in a process of its own, as a browser tool does, and says how it
   // stands then; `browser status` says how it stands; `browser fold` takes in the pages its keeper
-  // noted for the history ("The browser's data"), as the keeper asks once they've piled up.
+  // noted for the history ("The browser's data"), as the keeper asks once they've piled up; `browser
+  // take-in`, what this Mac's app's panel kept, taken in once, as the keeper first starts.
   else if (mode === "browser") {
     const args = process.argv.slice(3);
     if (argument === "install") {
@@ -1148,8 +1150,11 @@ if (main) {
     } else if (argument === "fold") {
       foldHistory();
       console.log(JSON.stringify({ folded: true }));
+    } else if (argument === "take-in") {
+      takeInAppBrowserData(IS_MAC ? thisMacsAppFolder() : null);
+      console.log(JSON.stringify({ taken: true }));
     } else {
-      console.error("Usage: kuvo-link.js browser install|start [--now] [--repair] | status | fold");
+      console.error("Usage: kuvo-link.js browser install|start [--now] [--repair] | status | fold | take-in");
       process.exit(2);
     }
   }
@@ -1173,7 +1178,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | helper install|start|status | engine-config | login-path | update [--now] | browser install|start|status|fold | selftest");
+    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | helper install|start|status | engine-config | login-path | update [--now] | browser install|start|status|fold|take-in | selftest");
     process.exit(2);
   }
 }
