@@ -246,3 +246,18 @@ test("notice wording carries the same named account and window as the panel", as
   expect(noticeWindowName({id:"seven_day_sonnet",used:0.2,minutes:10080,model:"Sonnet"})).toBe("Sonnet")
   expect(noticeWindowName({id:"primary",used:0.2,minutes:300})).toBe("Session")
 })
+
+test("learning the setup immediately shares pending facts despite a recent unscoped limits mail", async () => {
+  const f=fixture(); f.limits.ownKey=()=>"own"; await f.limits.tick(); f.advance(0.95); await f.limits.tick()
+  let changed=()=>{}
+  const directory:{told:boolean;setup?:string;own:()=>{key:string;name:string};peerBoxes:()=>{key:string;name:string}[];listen:(f:()=>void)=>void;isPeer:()=>boolean}={told:true,own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:(f)=>{changed=f},isPeer:()=>true}
+  const sent:LimitsMail[]=[]
+  const peers=new LimitsPeers(f.limits,{followed:true,send:(_,m)=>{sent.push(m)}},directory,undefined,()=>reset-599000)
+  peers.tell(true)
+  expect(sent).toHaveLength(1)
+  expect(sent[0].accounts[0].notices).toBeUndefined()
+  directory.setup="set_test"; changed()
+  expect(sent).toHaveLength(2)
+  expect(sent[1].noticeSetup).toBe("set_test")
+  expect(sent[1].accounts[0].notices).toHaveLength(2)
+})

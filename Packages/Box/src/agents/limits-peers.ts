@@ -172,8 +172,8 @@ export class LimitsPeers {
     const mine = this.shared()
     const theirs = forVouched(mine)
     for (const { key } of this.directory.peerBoxes()) {
-      const accounts = this.ours(key) ? mine : theirs
-      const json = JSON.stringify(accounts)
+      const accounts = this.forPeer(key, this.ours(key) ? mine : theirs)
+      const json = JSON.stringify([this.noticeEnvelope(key), accounts])
       const last = this.told.get(key)
       const due = !last || now - last.at >= TELL_AGAIN || (last.json !== json && (urgent || now - last.at >= HEARD_EVERY))
       if (!due) continue
@@ -247,7 +247,7 @@ export class LimitsPeers {
     this.answered.set(key, now)
     const accounts = this.forPeer(key, this.ours(key) ? this.shared() : forVouched(this.shared()))
     this.transport.send(key, { kind: "limits", at: now, accounts, ...this.noticeEnvelope(key) }, false)
-    this.told.set(key, { json: JSON.stringify(accounts), at: now })
+    this.told.set(key, { json: JSON.stringify([this.noticeEnvelope(key), accounts]), at: now })
   }
 
   private forPeer(key: string, accounts: AccountLimits[]): AccountLimits[] {
@@ -309,7 +309,7 @@ export class LimitsPeers {
       this.save()
       this.limits.peersChanged()
     }
-    this.tell()
+    this.tell(true)
   }
 
   private load() {
