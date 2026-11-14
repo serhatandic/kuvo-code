@@ -207,6 +207,18 @@ fn the_gate_needs_what_the_swift_clients_need() {
     assert_eq!(names, gate::REQUIRED);
 }
 
+/// The protocol names exactly the same required features as both native clients.
+#[test]
+fn the_gate_matches_the_protocols_update_gate_list() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/PROTOCOL.md");
+    let protocol = std::fs::read_to_string(path).unwrap();
+    let list = protocol.split("### The update gate").nth(1)
+        .and_then(|rest| rest.split("today\n").nth(1))
+        .and_then(|rest| rest.split("(KuvoClient's").next()).expect("documented gate list");
+    let names: Vec<&str> = list.split('`').skip(1).step_by(2).collect();
+    assert_eq!(names, gate::REQUIRED);
+}
+
 /// A message's parts as every client reads them, kept with a message or read by its box from one
 /// from before; and the fields a client sends, as the box takes them (Vectors/message-parts.json).
 #[test]

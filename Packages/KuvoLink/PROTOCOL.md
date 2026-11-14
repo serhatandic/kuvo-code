@@ -2431,7 +2431,7 @@ before it uses it, and meanwhile says so. A box is older than a client needs whe
 `agent-tools.own`, `folders.tree`, `git.branches`, `git.branches.worktree`, `git.changes.path`,
 `git.files`, `git.merge`, `git.pull-request`, `git.status`, `messages.send`, `models.offered`,
 `models.offered.folder`, `models.offered.sides`, `models.readiness`, `queue.items`, `sessions.asks`,
-`sessions.list`, `sessions.mentions`, `sessions.models`, `sessions.start.empty` and `typed`
+`sessions.list`, `sessions.mentions`, `sessions.models`, `sessions.start.empty`, `typed` and `usage.notices`
 (KuvoClient's `BoxGate.required`, and the same list in every client, gpui's `kuvo_box` too, so
 every client holds the same boxes; a box with `messages.send` has what came before it too,
 `sessions.move`, `projects.folders` and `sign-in.methods` among them, and names its chats folder in
