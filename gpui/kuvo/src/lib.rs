@@ -25,6 +25,7 @@ actions!(kuvo, [NewSession, ToggleAppearance, Quit]);
 pub fn bind_keys(cx: &mut App) {
     kuvo_ui::bind_keys(cx);
     composer::bind_keys(cx);
+    sidebar::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-n", NewSession, Some("Workspace")),
         KeyBinding::new("cmd-shift-l", ToggleAppearance, Some("Workspace")),

@@ -662,3 +662,69 @@ fn a_tool_step_opens_to_what_it_printed_and_long_output_unfolds(cx: &mut TestApp
     cx.run_until_parked();
     assert!(bounds(cx, "output-msg_s5:3").is_none());
 }
+
+fn type_in(field: &Entity<kuvo_ui::TextField>, text: &str, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+    cx.simulate_input(text);
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn the_sidebar_search_finds_sessions_by_name_and_by_what_was_said(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    let search = workspace.read_with(cx, |workspace, _| workspace.search().clone());
+
+    // By name as you type: only the sessions whose titles have it.
+    type_in(&search, "fo", cx);
+    assert!(bounds(cx, "session-found-ses_signup").is_some(), "“Fix the sign-up form…”");
+    assert!(bounds(cx, "session-project-ses_dark").is_none(), "the rest of the list goes");
+    assert!(bounds(cx, "header-In Conversations").is_none(), "two characters: names only");
+
+    // From three, what was said too: the box searches conversations, less those found by name.
+    search.update(cx, |field, cx| field.set_text("", cx));
+    type_in(&search, "redis", cx);
+    assert!(bounds(cx, "found-ses_limits").is_some(), "the rate limits conversation mentions Redis");
+    assert!(bounds(cx, "session-found-ses_signup").is_none());
+    assert!(bounds(cx, "header-In Conversations").is_some());
+
+    // Nothing anywhere: said so.
+    search.update(cx, |field, cx| field.set_text("", cx));
+    type_in(&search, "zzzz", cx);
+    assert!(workspace.read_with(cx, |workspace, cx| kuvo::sidebar::lines(workspace, cx).contains(&kuvo::sidebar::Line::Quiet("Nothing matches.".into()))));
+
+    // Escape clears it, and the list is back.
+    cx.simulate_keystrokes("escape");
+    assert!(bounds(cx, "session-project-ses_dark").is_some());
+}
+
+#[gpui::test]
+fn the_keyboard_walks_the_sidebar_and_opens_what_its_on(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    workspace.update_in(cx, |workspace, window, cx| workspace.focus_search(window, cx));
+
+    // ↓ from the search steps into the list: the first project, then its first session.
+    cx.simulate_keystrokes("down");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), Some(format!("project:{}", "/Users/sam/Projects/website")));
+    cx.simulate_keystrokes("down down");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), Some("session-project:ses_dark".into()));
+
+    // Return opens it, and the keyboard goes to its composer.
+    cx.simulate_keystrokes("enter");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_dark".into()));
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), None);
+
+    // Return on a project folds it; ↑ from the first row goes back to the search.
+    workspace.update_in(cx, |workspace, window, cx| workspace.focus_search(window, cx));
+    cx.simulate_keystrokes("down enter");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_collapsed("/Users/sam/Projects/website")));
+    assert!(bounds(cx, "session-project-ses_signup").is_none());
+    cx.simulate_keystrokes("up");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), None);
+    let search = workspace.read_with(cx, |workspace, _| workspace.search().clone());
+    assert!(cx.update(|window, cx| search.focus_handle(cx).is_focused(window)));
+
+    // From the search, Return opens the first that's found.
+    cx.simulate_input("lifetimes");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_lifetimes".into()));
+}

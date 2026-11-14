@@ -36,6 +36,8 @@ pub struct NavRow {
     /// Shown only while the pointer is over the row (a "more" button, say).
     hover_trailing: Option<AnyElement>,
     selected: bool,
+    /// Where the keyboard is, walking the list: its ring and a wash.
+    cursor: bool,
     disabled: bool,
     muted: bool,
     indent: usize,
@@ -53,6 +55,7 @@ impl NavRow {
             trailing: None,
             hover_trailing: None,
             selected: false,
+            cursor: false,
             disabled: false,
             muted: false,
             indent: 0,
@@ -113,6 +116,12 @@ impl NavRow {
         self.on_click = Some(Rc::new(handler));
         self
     }
+
+    /// Marks it as where the keyboard is in its list (arrows walk it, Return opens it).
+    pub fn cursor(mut self, cursor: bool) -> Self {
+        self.cursor = cursor;
+        self
+    }
 }
 
 /// The height of a navigation row.
@@ -155,6 +164,12 @@ impl RenderOnce for NavRow {
 
         if self.selected {
             row = row.bg(selected_bg).medium();
+        }
+        if self.cursor {
+            row = row.border_color(accent);
+            if !self.selected {
+                row = row.bg(hover);
+            }
         }
         match self.shown {
             Some(RowState::Hovered) => row = row.bg(hover),

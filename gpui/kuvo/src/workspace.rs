@@ -3,19 +3,28 @@
 
 use std::collections::{HashMap, HashSet};
 
+use std::time::Duration;
+
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
+    ParentElement, Render, ScrollHandle, SharedString, Styled, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use kuvo_box::follow::{Follow, ListUpdate, Timing};
 use kuvo_box::models::StartIn;
+use kuvo_box::search::{Found, SEARCHED_FROM};
 use kuvo_box::sessions::project_name;
 use kuvo_box::{BoxClient, BoxInfo, Listing, Where};
-use kuvo_ui::{ActiveTheme, StyledType, Theme, TypeSize, theme::{radius, space}};
+use kuvo_ui::{ActiveTheme, StyledType, TextField, TextFieldEvent, Theme, TypeSize, theme::{radius, space}};
 
 use crate::composer::{Composer, ComposerEvent, Target};
 use crate::conversation::ConversationView;
+use crate::sidebar::{FocusSearch, Line};
 use crate::{NewSession, ToggleAppearance, landing, sidebar, time};
+
+/// How long typing pauses before the box is asked to search conversations.
+const SEARCH_PAUSE: Duration = Duration::from_millis(300);
+/// How many conversations a search shows.
+const SEARCH_MOST: usize = 20;
 
 /// How the session lists stand.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,15 +80,34 @@ pub struct Workspace {
     /// Now, as the sidebar's times count from it (fixed for shots).
     now: Option<f64>,
     focus: FocusHandle,
+    /// The sidebar's search, and what the box found in conversations for it (`finds_for`).
+    search: Entity<TextField>,
+    finds: Vec<Found>,
+    finds_for: String,
+    finding: bool,
+    find_failed: Option<String>,
+    find_task: Option<Task<()>>,
+    /// The sidebar's list while the keyboard walks it: where it is (a line's key), its focus, and
+    /// its scrolling.
+    walked: Option<String>,
+    list_focus: FocusHandle,
+    list_scroll: ScrollHandle,
     _sessions: Option<Follow<ListUpdate>>,
     tasks: Vec<Task<()>>,
     _landing: Subscription,
+    _search: Subscription,
 }
 
 impl Workspace {
     pub fn new(client: BoxClient, live: bool, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let landing = cx.new(|cx| Composer::new(client.clone(), Target::New(StartIn::Chat), live, cx));
         let subscription = cx.subscribe_in(&landing, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
+        let search = cx.new(|cx| TextField::new(cx).bare().placeholder("Search"));
+        let search_subscription = cx.subscribe(&search, |this: &mut Workspace, _, event: &TextFieldEvent, cx| {
+            if matches!(event, TextFieldEvent::Changed) {
+                this.search_changed(cx);
+            }
+        });
         let mut workspace = Workspace {
             client: client.clone(),
             live,
@@ -98,9 +126,19 @@ impl Workspace {
             showing_all: HashSet::new(),
             now: None,
             focus: cx.focus_handle(),
+            search,
+            finds: Vec::new(),
+            finds_for: String::new(),
+            finding: false,
+            find_failed: None,
+            find_task: None,
+            walked: None,
+            list_focus: cx.focus_handle(),
+            list_scroll: ScrollHandle::new(),
             _sessions: None,
             tasks: Vec::new(),
             _landing: subscription,
+            _search: search_subscription,
         };
         if live {
             let connecting = client.clone();
@@ -408,6 +446,175 @@ impl Workspace {
         }
     }
 
+    // MARK: Search and walking the sidebar
+
+    pub fn search(&self) -> &Entity<TextField> {
+        &self.search
+    }
+
+    pub fn search_text(&self, cx: &App) -> String {
+        self.search.read(cx).text().to_owned()
+    }
+
+    /// What the box found in conversations for the search as it is now.
+    pub fn finds(&self) -> &[Found] {
+        &self.finds
+    }
+
+    pub fn is_finding(&self) -> bool {
+        self.finding
+    }
+
+    pub fn find_failed(&self) -> Option<&str> {
+        self.find_failed.as_deref()
+    }
+
+    /// Where the keyboard is in the sidebar's list: a line's key.
+    pub fn walked(&self) -> Option<&str> {
+        self.walked.as_deref()
+    }
+
+    pub fn list_focus(&self) -> &FocusHandle {
+        &self.list_focus
+    }
+
+    pub fn list_scroll(&self) -> &ScrollHandle {
+        &self.list_scroll
+    }
+
+    /// The search changed: names match at once; conversations once typing pauses, from three
+    /// characters (the box searches them).
+    fn search_changed(&mut self, cx: &mut Context<Self>) {
+        self.walked = None;
+        let query = self.search_text(cx).trim().to_owned();
+        if query == self.finds_for {
+            cx.notify();
+            return;
+        }
+        self.finds.clear();
+        self.find_failed = None;
+        self.finds_for = query.clone();
+        self.find_task = None;
+        self.finding = query.chars().count() >= SEARCHED_FROM;
+        if self.finding {
+            let client = self.client.clone();
+            if self.live {
+                self.find_task = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(SEARCH_PAUSE).await;
+                    let asked = query.clone();
+                    let found = cx.background_executor().spawn(async move { client.search(&asked, SEARCH_MOST) }).await;
+                    this.update(cx, |this, cx| this.found(&query, found, cx)).ok();
+                }));
+            } else {
+                // (Tests and shots: at once, as the box would answer.)
+                let found = client.search(&query, SEARCH_MOST);
+                self.found(&query, found, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// What the box found for `query`, unless the search has changed since.
+    fn found(&mut self, query: &str, found: kuvo_box::Result<Vec<Found>>, cx: &mut Context<Self>) {
+        if query != self.finds_for {
+            return;
+        }
+        self.finding = false;
+        match found {
+            Ok(finds) => self.finds = finds,
+            Err(error) => self.find_failed = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+
+    pub fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search.update(cx, |field, cx| field.set_text("", cx));
+        self.walked = None;
+        window.focus(&self.search.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Puts the keyboard in the sidebar's search.
+    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.walked = None;
+        window.focus(&self.search.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Steps the keyboard through the sidebar's list, `by` one down or up. Up from its first row
+    /// goes back to the search.
+    pub fn walk(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let lines = sidebar::lines(self, cx);
+        let walkable: Vec<usize> = lines.iter().enumerate().filter(|(_, line)| line.walkable()).map(|(ix, _)| ix).collect();
+        if walkable.is_empty() {
+            return;
+        }
+        let at = self.walked.as_ref().and_then(|key| walkable.iter().position(|ix| &lines[*ix].key() == key));
+        let next = match (at, by > 0) {
+            (None, true) => Some(0),
+            (None, false) => Some(walkable.len() - 1),
+            (Some(at), true) => Some((at + 1).min(walkable.len() - 1)),
+            (Some(0), false) => None,
+            (Some(at), false) => Some(at - 1),
+        };
+        match next {
+            Some(next) => {
+                let ix = walkable[next];
+                self.walked = Some(lines[ix].key());
+                self.list_scroll.scroll_to_item(ix);
+                window.focus(&self.list_focus, cx);
+            }
+            None => {
+                self.walked = None;
+                window.focus(&self.search.focus_handle(cx), cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Return: opens the session under the keyboard (from the search, the first one found), folds
+    /// a project, or shows more of one.
+    pub fn open_walked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lines = sidebar::lines(self, cx);
+        let line = match &self.walked {
+            Some(key) => lines.iter().find(|line| &line.key() == key),
+            None => lines.iter().find(|line| line.walkable()),
+        };
+        match line.cloned() {
+            Some(Line::Project(directory)) => {
+                self.walked = Some(Line::Project(directory.clone()).key());
+                self.toggle_project(&directory, cx);
+            }
+            Some(Line::More(directory)) => self.toggle_all(&directory, cx),
+            Some(Line::Session { id, .. }) | Some(Line::Found { id, .. }) => {
+                self.walked = None;
+                self.open_session(&id, window, cx);
+                // (One already open: the keyboard goes back to it all the same.)
+                if let Some(view) = self.conversation() {
+                    window.focus(&view.focus_handle(cx), cx);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Escape: out of the list, to the search; in the search, its words cleared, or (with none) back
+    /// to the conversation or the landing view.
+    pub fn leave_walk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.walked.take().is_some() {
+            window.focus(&self.search.focus_handle(cx), cx);
+        } else if !self.search_text(cx).is_empty() {
+            self.search.update(cx, |field, cx| field.set_text("", cx));
+        } else {
+            match self.conversation() {
+                Some(view) => window.focus(&view.focus_handle(cx), cx),
+                None => window.focus(&self.landing.focus_handle(cx), cx),
+            }
+        }
+        cx.notify();
+    }
+
     fn header(&self, cx: &App) -> AnyElement {
         let c = &cx.theme().colors;
         let (title, project) = match self.opened() {
@@ -459,6 +666,7 @@ impl Render for Workspace {
             .key_context("Workspace")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &NewSession, window, cx| this.new_session(None, window, cx)))
+            .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
             .on_action(cx.listener(|_, _: &ToggleAppearance, _, cx| {
                 let next = cx.theme().appearance.toggled();
                 Theme::set_appearance(next, cx);

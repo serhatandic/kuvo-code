@@ -25,16 +25,21 @@ struct Screen {
     empty: bool,
     /// Tool steps opened (a step's id, and which of its blocks), and outputs shown whole.
     opens: &'static [(&'static str, usize)],
+    /// What's typed in the sidebar's search, and how many rows the keyboard walks down.
+    search: Option<&'static str>,
+    walks: usize,
 }
 
 const SCREENS: &[Screen] = &[
-    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[] },
-    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[] },
-    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false, opens: &[] },
-    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[] },
-    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[] },
-    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)] },
-    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[] },
+    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0 },
+    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0 },
+    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false, opens: &[], search: None, walks: 0 },
+    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[], search: None, walks: 0 },
+    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0 },
+    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)], search: None, walks: 0 },
+    Screen { slug: "search", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: Some("redis"), walks: 1 },
+    Screen { slug: "walking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 3 },
+    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[], search: None, walks: 0 },
 ];
 
 fn main() -> anyhow::Result<()> {
@@ -79,6 +84,20 @@ fn main() -> anyhow::Result<()> {
                         field.update(cx, |field, cx| field.set_text(typed, cx));
                     }
                     window.focus(&field.focus_handle(cx), cx);
+                    if let Some(search) = screen.search {
+                        workspace.search().clone().update(cx, |field, cx| field.set_text(search, cx));
+                        workspace.focus_search(window, cx);
+                    }
+                });
+            })?;
+            cx.run_until_parked();
+            // (After the search's change has come through, which leaves the list.)
+            cx.update_window(any, |root, window, cx| {
+                let workspace = root.downcast::<Workspace>().expect("the workspace");
+                workspace.update(cx, |workspace, cx| {
+                    for _ in 0..screen.walks {
+                        workspace.walk(1, window, cx);
+                    }
                 });
             })?;
             cx.run_until_parked();

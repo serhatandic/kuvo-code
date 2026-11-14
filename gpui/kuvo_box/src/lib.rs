@@ -23,6 +23,7 @@ pub mod models;
 pub mod parts;
 pub mod paths;
 pub mod place;
+pub mod search;
 pub mod sessions;
 pub mod ssh;
 pub mod transport;

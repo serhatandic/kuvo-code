@@ -461,6 +461,23 @@ impl StandIn {
                 answer(200, json!({ "kind": "mac", "name": NAME, "app": "1.0.0", "engine": "2.3.0", "features": features, "agents": true, "started": 1.0, "chats": format!("{HOME}/.kuvo-code/chats") }))
             }
             ("GET", ["kuvo", "sessions", "list"]) => answer(200, state.line(true)),
+            ("GET", ["kuvo", "search"]) => {
+                let Some(query) = query(path, "q").map(decoded).map(|q| q.replace('+', " ")).filter(|q| !q.trim().is_empty()) else {
+                    return answer(400, json!({ "message": "Say what to search for: q=<words>." }));
+                };
+                let wanted = query.trim().to_lowercase();
+                // The latest first, each with the words around where they were found.
+                let mut results: Vec<(f64, Value)> = Vec::new();
+                for (session, messages) in &state.messages {
+                    let said = messages.iter().flat_map(said_in).find(|text| text.to_lowercase().contains(&wanted));
+                    if let Some(text) = said {
+                        let updated = state.sessions.get(session).and_then(|facts| facts["updated"].as_f64()).unwrap_or(0.0);
+                        results.push((updated, json!({ "session": session, "snippet": snippet(&text, &wanted), "info": { "id": session } })));
+                    }
+                }
+                results.sort_by(|a, b| b.0.total_cmp(&a.0));
+                answer(200, json!({ "results": results.into_iter().map(|(_, result)| result).collect::<Vec<_>>() }))
+            }
             ("GET", ["kuvo", "sessions", "models"]) if state.models_fail => answer(503, json!({ "message": "The engine isn't answering." })),
             ("GET", ["kuvo", "sessions", "models"]) => {
                 let asked = query(path, "sessions").map(decoded).unwrap_or_default();
@@ -657,6 +674,28 @@ impl StandIn {
             state.emit("session.execution.succeeded", json!({ "sessionID": session }));
         });
     }
+}
+
+/// What a message says, as the box's search reads it: your words, the agent's text.
+fn said_in(message: &Value) -> Vec<String> {
+    let mut said: Vec<String> = message["text"].as_str().map(str::to_owned).into_iter().collect();
+    for block in message["content"].as_array().into_iter().flatten() {
+        if block["type"] == "text"
+            && let Some(text) = block["text"].as_str()
+        {
+            said.push(text.to_owned());
+        }
+    }
+    said
+}
+
+/// A line's worth of `text` around where `wanted` is.
+fn snippet(text: &str, wanted: &str) -> String {
+    let flat = text.replace(['*', '`'], "").split_whitespace().collect::<Vec<_>>().join(" ");
+    let at = flat.to_lowercase().find(wanted).unwrap_or(0);
+    let start = flat.get(..at).unwrap_or("").char_indices().rev().nth(40).map_or(0, |(ix, _)| ix);
+    let rest: String = flat[start..].chars().take(110).collect();
+    if start > 0 { format!("…{rest}") } else { rest }
 }
 
 /// A new session's title, from its first words (the box asks a model for one; the stand-in cuts).
