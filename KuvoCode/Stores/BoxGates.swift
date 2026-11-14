@@ -41,6 +41,13 @@ final class BoxGates {
         }
     }
 
+    /// What a box said it has (to the app's reader of features, `BoxFeatures`): held if it's
+    /// older than this app needs, let go if it has it all.
+    func said(_ box: String, features: Set<String>, name: String) {
+        let said = Array(features)
+        if BoxGate.isCurrent(said) { foundCurrent(box, features: said) } else { foundOlder(box, features: said, name: name) }
+    }
+
     /// A box that said it has all this app needs (to what reads its features): let go, if held.
     func foundCurrent(_ box: String, features: [String]) {
         if BoxGate.isCurrent(features) { letGo(box) }

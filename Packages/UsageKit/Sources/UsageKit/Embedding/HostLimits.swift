@@ -18,8 +18,7 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     public var meters: [Meter]
     /// Credits left, where the account has them (OpenRouter's).
     public var balance: Balance?
-    /// What the plan has beyond its meters: an amount spent with no limit (Cursor's on-demand
-    /// spend without a cap).
+    /// What the plan has beyond its meters (`Extra`): amounts, its resets.
     public var extras: [Extra]
     /// Why it couldn't be read just now, in words to show.
     public var notice: String?
@@ -69,36 +68,81 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
+    /// A fact of the plan beyond its meters, as the host's box states it: an amount spent with no
+    /// limit (`spent`: Cursor's on-demand, an OpenRouter key's spend today), one used of a limit
+    /// (`capped`: Claude's extra usage), one left (`left`: Codex's credits), the plan's resets
+    /// (`resets`), or what this login can't read (`unreadable`).
     public struct Extra: Sendable, Hashable {
-        /// The box's own name for it (`on_demand`).
+        public enum Kind: String, Sendable { case spent, capped, left, resets, unreadable }
+
+        /// The box's own name for it (`on_demand`, `extra_usage`, `resets`).
         public var id: String
-        /// Its maker's own label ("On-demand").
+        /// Its maker's own label ("On-demand", "Extra Usage", "Rate Limit Resets").
         public var name: String
+        public var kind: Kind
         public var amount: Double
+        /// `capped`: the most it may come to.
+        public var limit: Double?
         /// `usd`, `credits` or `requests`.
         public var unit: String
         /// When it starts over (its billing cycle's end), where its maker says.
         public var resetsAt: Date?
+        /// `resets`: how many, when each expires, and whether one can be used now.
+        public var count: Int
+        public var expiries: [Date]
+        /// `resets`: how soon the soonest expires, as the host says it (its clients share one rule).
+        public var soonest: Urgency?
+
+        public enum Urgency: Sendable, Hashable { case normal, warning, critical }
+        public var usable: Bool
+        /// `resets`: the computer that uses one, by name, where it isn't this Mac.
+        public var elsewhere: String?
+        /// `resets`: what the control that uses one there says on hover.
+        public var elsewhereHelp: String?
+        /// `unreadable`: why, in words.
+        public var message: String?
 
         public init(id: String, name: String, amount: Double, unit: String, resetsAt: Date? = nil) {
+            self.init(id: id, name: name, kind: .spent, amount: amount, unit: unit, resetsAt: resetsAt)
+        }
+
+        public init(id: String, name: String, kind: Kind, amount: Double = 0, limit: Double? = nil, unit: String = "", resetsAt: Date? = nil, count: Int = 0,
+                    expiries: [Date] = [], soonest: Urgency? = nil, usable: Bool = false, elsewhere: String? = nil, elsewhereHelp: String? = nil, message: String? = nil) {
+            self.soonest = soonest
             self.id = id
             self.name = name
+            self.kind = kind
             self.amount = amount
+            self.limit = limit
             self.unit = unit
             self.resetsAt = resetsAt
+            self.count = count
+            self.expiries = expiries
+            self.usable = usable
+            self.elsewhere = elsewhere
+            self.elsewhereHelp = elsewhereHelp
+            self.message = message
         }
     }
 
     public struct Balance: Sendable, Hashable {
         public var left: Double
+        /// What was bought, where its maker says: a meter of what's left of it.
+        public var limit: Double?
         /// `usd` or `credits`.
         public var unit: String
 
-        public init(left: Double, unit: String) {
+        public init(left: Double, limit: Double? = nil, unit: String) {
             self.left = left
+            self.limit = limit
             self.unit = unit
         }
     }
+
+    /// Its resets, where it has them.
+    public var resets: Extra? { extras.first { $0.kind == .resets } }
+    /// What its login can't read, where the box says.
+    public var unreadable: Extra? { extras.first { $0.kind == .unreadable } }
 
     public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, extras: [Extra] = [], notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil, isAway: Bool = false) {
         self.extras = extras
@@ -128,6 +172,21 @@ public final class HostLimits {
     public private(set) var covered: Set<String> = []
     /// Reads them again (a bar's Refresh).
     @ObservationIgnored public var refresh: (() -> Void)?
+    /// Asks the host's box to use one of a row's resets (by its id): what it would spend, and the
+    /// confirmation that spends it (`useReset`). Throws why it can't, in words.
+    @ObservationIgnored public var askReset: ((_ row: String) async throws -> HostResetOffer)?
+    /// Uses it, once: how it went.
+    @ObservationIgnored public var useReset: ((_ row: String, _ confirm: String) async throws -> HostResetDone)?
+    /// Each row's reset as it's being used, by row id (its confirmation, the spinner, how it went).
+    @ObservationIgnored private var flows: [String: HostResetFlow] = [:]
+
+    /// The reset flow of a row's resets, the same one wherever its bar is drawn.
+    func resetFlow(for row: String) -> HostResetFlow {
+        if let flow = flows[row] { return flow }
+        let flow = HostResetFlow(row: row, limits: self)
+        flows[row] = flow
+        return flow
+    }
 
     public func update(rows: [HostLimitRow], covered: Set<String>) {
         let changed = self.rows != rows || self.covered != covered
@@ -181,7 +240,16 @@ public final class HostLimits {
             }
             // (One that started over since it was read isn't known now, as a meter.)
             for extra in row.extras where (extra.resetsAt ?? .distantFuture) > now {
-                lines.append(.values(label: extra.name, values: [extra.unit == "usd" ? MetricValue(number: extra.amount, kind: .dollars) : MetricValue(number: extra.amount, kind: .count, label: extra.unit)]))
+                switch extra.kind {
+                case .spent, .left:
+                    lines.append(.values(label: extra.name, values: [extra.unit == "usd" ? MetricValue(number: extra.amount, kind: .dollars) : MetricValue(number: extra.amount, kind: .count, label: extra.unit)]))
+                case .capped:
+                    lines.append(.progress(label: extra.name, used: extra.amount, limit: extra.limit ?? 0, format: extra.unit == "usd" ? .dollars : .count(suffix: extra.unit), resetsAt: extra.resetsAt))
+                case .resets:
+                    lines.append(.values(label: extra.name, values: [MetricValue(number: Double(extra.count), kind: .count, label: "available")], expiriesAt: extra.expiries))
+                case .unreadable:
+                    break
+                }
             }
         }
         return (lines, row.plan, row.readAt, row.notice)
@@ -268,31 +336,135 @@ public final class HostLimits {
         return local.isEmpty && Self.limitsOnlyFromHost.contains(family) ? mine : local
     }
 
-    /// The lines a covered provider's card has from the host's rows rather than of its own (Cursor's
-    /// `Credits` and `On-demand`): a phone draws them from the rows themselves, under each account.
-    func rowLines(for family: String) -> Set<String> {
-        rows.filter { ProviderAccountID.family(of: $0.providerID) == family }.reduce(into: Set<String>()) { $0.formUnion(HostLimitData.labels($1)) }
-    }
-
-    /// The panel's own bars a phone gets (`kuvo/usage`), in the Bars view's order: those whose
-    /// place the box's rows take, as the Bars view takes them (`takingPlace`), say so (`covers`,
-    /// their service), keeping only what the box doesn't state (spend, its trend), which the phone
-    /// shows under the first of those rows, where they go.
-    func phoneGroups(_ groups: [ProviderGroup]) -> [(group: ProviderGroup, covers: String?)] {
-        var placed = Set<String>()
-        return groups.compactMap { group in
-            let family = ProviderAccountID.family(of: group.provider.id)
-            guard covers(family), !takingPlace(of: family).isEmpty else { return (group, nil) }
-            // (One place per service: its other account cards go with it.)
-            guard placed.insert(family).inserted else { return nil }
-            return (group, family)
-        }
-    }
-
     /// A plain provider, for a service the panel doesn't know: its mark and color by its ID.
     static func provider(for id: String) -> Provider {
         Provider(id: id, displayName: id.prefix(1).uppercased() + id.dropFirst(), icon: .providerMark(id))
     }
+}
+
+/// What the host's box offers on asking to use a reset: the confirmation, in its words.
+public struct HostResetOffer: Sendable, Hashable {
+    public var confirm: String
+    /// "Use 1 of 2 resets?"
+    public var question: String
+    /// "Your 5-hour window starts over now." (and where it's used, when that's another computer).
+    public var detail: String
+
+    public init(confirm: String, question: String, detail: String) {
+        self.confirm = confirm
+        self.question = question
+        self.detail = detail
+    }
+}
+
+/// How using a reset went: done, or why not in words; `stillOpen`, it may have gone (the box keeps
+/// it open: asked again with the same confirmation, it's the same request).
+public struct HostResetDone: Sendable, Hashable {
+    public var succeeded: Bool
+    public var message: String?
+    public var stillOpen: Bool
+
+    public init(succeeded: Bool, message: String? = nil, stillOpen: Bool = false) {
+        self.succeeded = succeeded
+        self.message = message
+        self.stillOpen = stillOpen
+    }
+}
+
+/// The host's box doesn't know a confirmation any more (it expired, or the box started again before
+/// it was used): Retry asks anew.
+public struct HostResetExpired: Error {
+    public init() {}
+}
+
+/// One row's reset being used, as its resets row and the confirmation in place under it draw it:
+/// asked of the box, confirmed in place, using, done, or failed with why.
+@MainActor
+@Observable
+final class HostResetFlow {
+    enum Phase: Equatable {
+        case idle
+        /// Asking the box what it would spend.
+        case asking
+        case confirming(HostResetOffer)
+        case using
+        case done
+        case failed(String)
+    }
+
+    let row: String
+    /// (Set only by this flow, and by pictures of its states.)
+    var phase: Phase = .idle
+    @ObservationIgnored private weak var limits: HostLimits?
+    /// A confirmation sent whose answer didn't come back, or that may have gone: Retry sends it
+    /// again (the box's journal makes it the same request), never a new one.
+    @ObservationIgnored private(set) var sent: HostResetOffer?
+    /// How long "done" shows before the row is as it was.
+    @ObservationIgnored var doneFor: Duration = .seconds(3)
+
+    init(row: String, limits: HostLimits) {
+        self.row = row
+        self.limits = limits
+    }
+
+    var isConfirming: Bool { if case .confirming = phase { true } else { false } }
+
+    /// Use (or Retry): what it would spend is asked, then confirmed in place. (The work, for a
+    /// test to wait on.)
+    @discardableResult
+    func begin() -> Task<Void, Never>? {
+        guard phase == .idle || phase == .done || isFailed, let ask = limits?.askReset else { return nil }
+        // One sent that may have gone: the same again.
+        if isFailed, let sent {
+            phase = .confirming(sent)
+            return confirm()
+        }
+        sent = nil
+        phase = .asking
+        return Task {
+            do {
+                phase = .confirming(try await ask(row))
+            } catch {
+                phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func cancel() {
+        if isConfirming { phase = .idle }
+    }
+
+    /// The confirmation's Use: spent, once (a second tap meanwhile does nothing).
+    @discardableResult
+    func confirm() -> Task<Void, Never>? {
+        guard case .confirming(let offer) = phase, let use = limits?.useReset else { return nil }
+        phase = .using
+        sent = offer
+        return Task {
+            do {
+                let done = try await use(row, offer.confirm)
+                guard done.succeeded else {
+                    if !done.stillOpen { sent = nil }
+                    phase = .failed(done.message ?? "Didn't go through. Nothing was used.")
+                    return
+                }
+                sent = nil
+                phase = .done
+                try? await Task.sleep(for: doneFor)
+                if phase == .done { phase = .idle }
+            } catch is HostResetExpired {
+                // (Not known there now: a new confirmation, asked for at once.)
+                sent = nil
+                phase = .idle
+                await begin()?.value
+            } catch {
+                // No answer came back: it may have gone, and Retry sends the same confirmation.
+                phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private var isFailed: Bool { if case .failed = phase { true } else { false } }
 }
 
 /// A bar in the Bars view: one of the panel's providers, or one of the host's rows.
@@ -334,29 +506,68 @@ enum HostLimitData {
             return data
         }
         if let balance = row.balance {
-            var data = WidgetData(title: "Credits", icon: .providerMark(row.providerID), kind: balance.unit == "usd" ? .dollars : .count, used: balance.left, limit: nil,
-                                  countSuffix: balance.unit == "usd" ? nil : "credits")
-            data.unboundedValueWord = "left"
+            let dollars = balance.unit == "usd"
+            var data: WidgetData
+            if let bought = balance.limit, bought > 0 {
+                // What's left of what was bought, as a meter ("$7.70 left", "$50 limit").
+                data = WidgetData(title: "Credits", icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: max(0, bought - balance.left), limit: bought,
+                                  countSuffix: dollars ? nil : "credits")
+                data.displayMode = store.meterStyle
+            } else {
+                data = WidgetData(title: "Credits", icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: balance.left, limit: nil,
+                                  countSuffix: dollars ? nil : "credits")
+                data.unboundedValueWord = "left"
+            }
             rows.append(data)
         }
-        // What it spent with no limit, as the card shows it ("On-demand $12.34 spent").
+        // What it has beyond its meters, as the panel draws its own: a capped amount a meter, the
+        // rest amounts ("On-demand $12.34 spent", "Extra Usage 1,240 credits"). Its resets are a
+        // row of their own (`BarResetsRow`), and what its login can't read a note.
         for extra in row.extras where (extra.resetsAt ?? .distantFuture) > now {
             let dollars = extra.unit == "usd"
-            var data = WidgetData(title: extra.name, icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: extra.amount, limit: nil,
+            var data: WidgetData
+            switch extra.kind {
+            case .capped:
+                guard let limit = extra.limit, limit > 0 else { continue }
+                data = WidgetData(title: extra.name, icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: extra.amount, limit: limit,
                                   countSuffix: dollars ? nil : extra.unit)
-            data.unboundedValueWord = "spent"
+                data.resetsAt = extra.resetsAt
+                data.displayMode = store.meterStyle
+                data.resetDisplayMode = store.resetDisplayMode
+            case .spent, .left:
+                data = WidgetData(title: extra.name, icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: extra.amount, limit: nil,
+                                  countSuffix: dollars ? nil : extra.unit)
+                if extra.kind == .spent { data.unboundedValueWord = "spent" }
+                // (What's left with no cap reads as itself, whole: "1,240 credits".)
+                else if dollars { data.values = [MetricValue(number: extra.amount, kind: .dollars)] }
+                else { data.valueTextOverride = "\(extra.amount.rounded(.down).formatted(.number.precision(.fractionLength(0)).locale(Locale(identifier: "en_US")))) \(extra.unit)" }
+            case .resets, .unreadable:
+                continue
+            }
             rows.append(data)
         }
         return rows
     }
 
-    /// The lines a row's own rows stand for beyond its meters (`Credits`, each extra's name), which
-    /// the card's widgets of the same lines mustn't show again beside them: only for a card that
-    /// reads nothing of its own (Cursor's), whose lines of those names are the row's (another's,
-    /// OpenRouter's "Credits", say, is its own, and stays).
+    /// UsageKit's own names for what a box's extra states, where the panel's card read it itself
+    /// before (its "Credits" for Codex's, "Extra usage spent" for Claude's): not shown again beside it.
+    static let alsoCalled: [String: Set<String>] = [
+        "extra_usage": ["Extra usage spent", "Extra Usage"],
+        "credits": ["Credits"],
+        "resets": ["Rate Limit Resets"],
+        "org_credits": ["Org Credits"],
+        "org_spend": ["Org Spend"],
+    ]
+
+    /// The lines a row's own rows stand for beyond its meters (`Credits`, each extra's name, and the
+    /// panel's own names for the same facts), which the card's widgets of the same lines mustn't
+    /// show again beside them.
     static func labels(_ row: HostLimitRow) -> Set<String> {
-        guard HostLimits.limitsOnlyFromHost.contains(ProviderAccountID.family(of: row.providerID)) else { return [] }
-        return Set((row.balance == nil ? [] : ["Credits"]) + row.extras.map(\.name))
+        var labels = Set(row.extras.map(\.name))
+        for extra in row.extras { labels.formUnion(alsoCalled[extra.id] ?? []) }
+        // (Its credits, where the box states them; OpenRouter's card calls one without a total its "Balance".)
+        if row.balance != nil { labels.formUnion(ProviderAccountID.family(of: row.providerID) == "openrouter" ? ["Credits", "Balance"] : ["Credits"]) }
+        return labels
     }
 
     /// "As of …" once what it shows was read longer ago than that, or its computers aren't heard from.

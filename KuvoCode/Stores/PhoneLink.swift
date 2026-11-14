@@ -4,7 +4,6 @@ import Foundation
 import KuvoLink
 import OpenCodeKit
 import os
-import UsageKit
 import Security
 import SystemConfiguration
 
@@ -153,7 +152,9 @@ final class PhoneLink {
 
     /// This Mac's keys are its box's (it moved into a home of its own, `OwnBoxHome.hasMoved`): the app
     /// reads none of them, and has no identity of its own; what's signed with them, its box signs
-    /// (`kuvo/box/proof`). Set by AppModel; a test's own.
+    /// (`kuvo/box/proof`). And while the app is attached in place to any box (#689): they're that
+    /// box's, or (a machine's set up here, which keeps its own link) none of the app's to read or make
+    /// there. Set by AppModel; a test's own.
     @ObservationIgnored var keysOnBox: () -> Bool = { OwnBoxHome.hasMoved }
     /// This Mac's public link key, as its box says it once it has moved (`here`). Set by AppModel.
     @ObservationIgnored var boxKey: () -> String? = { nil }
@@ -196,6 +197,12 @@ final class PhoneLink {
         _ = identity
         return !unreadable
     }
+
+    /// Whether this Mac's link has its keys, for what its box does with them (setting your machines
+    /// up, the peers document it signs): the app's own (`hasIdentity`), or, while they're its box's
+    /// (moved into a home of its own), that box's, as it says its key (`boxKey`). None while the app
+    /// is attached to a machine's box, which keeps its own link.
+    private var linkHasKeys: Bool { keysOnBox() ? boxKey() != nil : hasIdentity }
 
     /// The key this Mac signs its documents with (PROTOCOL.md, "Documents"), from the Keychain beside
     /// the others, made the first time.
@@ -378,9 +385,17 @@ final class PhoneLink {
         var missed = 0
         while !Task.isCancelled {
             if let client = box() { await handOver(client) }
-            if let client = box(),
-               (try? await client.send("PUT", "kuvo/link/config", body: linkConfig))?.status == 200,
-               await tellPeers(client), await sendRemovals(client) {
+            // Held by the update gate (#679: an older box, taking the release the app carries): its
+            // words, at once, rather than that it isn't answering.
+            var held: String?
+            let client = box()
+            var told: (status: Int, body: Data)?
+            if let client { told = try? await client.send("PUT", "kuvo/link/config", body: linkConfig) }
+            if let told, told.status == 503 {
+                let refusal = BoxRefusal(status: told.status, data: told.body)
+                if refusal.reason == BoxGates.reason { held = refusal.message }
+            }
+            if let client, told?.status == 200, await tellPeers(client), await sendRemovals(client) {
                 missed = 0
                 // Told: your machines are set up with what it keeps (one that couldn't be before).
                 syncMachines()
@@ -400,8 +415,12 @@ final class PhoneLink {
             guard !Task.isCancelled else { return }
             // Starting, or starting again: still coming for a few tries, then said.
             missed += 1
-            status = missed < Self.graceTries ? (relayWanted ? .connecting : .off)
-                : .failed("Kuvo Code’s background service on this Mac, which holds the link to your phones and machines, isn’t answering. It’s being started again.")
+            if let held {
+                status = .failed(held)
+            } else {
+                status = missed < Self.graceTries ? (relayWanted ? .connecting : .off)
+                    : .failed("Kuvo Code’s background service on this Mac, which holds the link to your phones and machines, isn’t answering. It’s being started again.")
+            }
             try? await Task.sleep(for: .seconds(2))
         }
     }
@@ -609,7 +628,7 @@ final class PhoneLink {
             setupFailed[engine.machine.id] = asked ? why : nil
             return
         }
-        guard hasIdentity else {
+        guard linkHasKeys else {
             setupFailed[engine.machine.id] = nil
             return
         }
@@ -756,7 +775,7 @@ final class PhoneLink {
     /// What `peersChanged` tells the box; none while there's no link to your machines (nothing's
     /// made for it then).
     private func peersBody(removed: [String] = []) -> Data? {
-        guard relayWanted, hasIdentity else { return nil }
+        guard relayWanted, linkHasKeys else { return nil }
         struct Peer: Encodable { var key: String; var sign: String; var address: String; var name: String; var id: String }
         // COMPAT(beta.1 mac-moves): `moved`, none: the boxes that move conversations say where they went. Goes when 0.8.0 ships.
         struct Moved: Encodable { var session: String; var key: String }
@@ -935,9 +954,6 @@ final class PhoneLink {
                 }
             }
         }
-        // Open while the panel comes up (it takes a moment after the app starts), so the phone hears
-        // it the moment it's there.
-        if route == "kuvo/usage/events" { return Self.following(waits: true) { link?.usageJSON() } }
         return AsyncThrowingStream { [routed] continuation in
             Task { @MainActor in
                 let (status, body) = link?.answer(routed) ?? (503, Data())
@@ -1120,7 +1136,7 @@ final class PhoneLink {
     /// This Mac's own areas, which the app answers itself: what its box hands it of a phone's
     /// (the box's `MAC_APP_ROUTES`, the one list of them, which a test holds this to). Everything
     /// else, a phone's or the app's own (`BoxClient`), is its box's (`BoxProcess`).
-    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"]
+    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/asks", "kuvo/mac", "kuvo/engine"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1198,14 +1214,6 @@ final class PhoneLink {
             return (200, Data("{}".utf8))
         case "kuvo/asks":
             return (200, asksJSON())
-        case "kuvo/usage":
-            guard let usage = usageJSON() else { return (404, Data()) }
-            return (200, usage)
-        case "kuvo/usage/refresh" where request.method.uppercased() == "POST":
-            #if DEBUG
-            if Self.usageSample { return (200, Data("{}".utf8)) }
-            #endif
-            return UsageMenuBar.shared.refreshAll() ? (200, Data("{}".utf8)) : (404, Data())
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
@@ -1348,44 +1356,6 @@ final class PhoneLink {
         return (200, Data("{}".utf8))
     }
 
-    // MARK: Usage
-
-    /// The menu bar's usage panel, as its Bars view lists it; nil while it isn't running (a phone
-    /// then hides Usage).
-    private func usageJSON() -> Data? {
-        #if DEBUG
-        if Self.usageSample { return Data(Self.sampleUsage.utf8) }
-        #endif
-        return usagePanel()
-    }
-
-    /// What the panel reports (a test's panel in its place: the real one puts an item in the menu bar).
-    var usagePanel: @MainActor () -> Data? = { UsageMenuBar.shared.phoneUsage() }
-
-    #if DEBUG
-    /// KUVO_DEMO_USAGE=sample: the usage tracker stays out (as with `off`), and phones get these
-    /// numbers instead of your accounts'.
-    static var usageSample: Bool { ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"] == "sample" }
-
-    private static var sampleUsage: String {
-        let now = Int(Date.now.timeIntervalSince1970)
-        // The providers' own marks, as the real panel sends them.
-        let icon = { (id: String) in UsageMenuBar.phoneMark(for: id).map { #""icon":"\#($0)","iconIsTemplate":true,"# } ?? "" }
-        return """
-        {"providers":[\
-        {"id":"claude",\(icon("claude"))"name":"Claude","plan":"Max","color":"#DE7356","refreshed":\(now - 40),"lines":[\
-        {"type":"progress","label":"Session","used":42,"limit":100,"format":{"kind":"percent"},"resetsAt":\(now + 7_200),"periodDurationMs":18000000},\
-        {"type":"progress","label":"Weekly","used":67,"limit":100,"format":{"kind":"percent"},"resetsAt":\(now + 259_200),"periodDurationMs":604800000}]},\
-        {"id":"codex",\(icon("codex"))"name":"Codex","plan":"Pro","color":"#10A37F","refreshed":\(now - 95),"lines":[\
-        {"type":"progress","label":"Session","used":18,"limit":100,"format":{"kind":"percent"},"resetsAt":\(now + 12_600),"periodDurationMs":18000000},\
-        {"type":"text","label":"Credits","value":"$12.40"}]},\
-        {"id":"cursor",\(icon("cursor"))"name":"Cursor","color":"#13120A","refreshed":\(now - 900),"notice":"Not logged in. Sign in to Cursor to see its usage.","stale":true,"lines":[\
-        {"type":"badge","label":"Error","text":"Not logged in"}]}],\
-        "refreshing":false,"refreshed":\(now - 40)}
-        """
-    }
-    #endif
-
     // MARK: Bots
 
     /// A conversation's wake-ups as its box has them now, for what the app shows of them.
@@ -1405,25 +1375,20 @@ final class PhoneLink {
 
     /// A response that doesn't end: `current()` now, as a line of JSON, and again each time it
     /// changes, until the phone stops reading. 404 when there's nothing to follow (no such chat), as
-    /// reading it once answers; `waits`, it's something that comes later: open meanwhile, with
-    /// an empty line and then nothing until it does.
-    nonisolated private static func following(waits: Bool = false, _ current: @escaping @MainActor () -> Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
+    /// reading it once answers.
+    nonisolated private static func following(_ current: @escaping @MainActor () -> Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
-                guard waits || current() != nil else {
+                guard current() != nil else {
                     continuation.yield(.head(status: 404, headers: [:]))
                     continuation.finish()
                     return
                 }
                 continuation.yield(.head(status: 200, headers: ["content-type": "application/x-ndjson"]))
-                // An empty line when it has nothing yet: what passes it on holds the head back
-                // until the first bytes, and the phone hears the app's there.
-                if waits, current() == nil { continuation.yield(.body(Data("\n".utf8))) }
                 var last: Data?
                 while !Task.isCancelled {
-                    let now = current()
-                    guard now != nil || waits else { break }
-                    if let now, now != last {
+                    guard let now = current() else { break }
+                    if now != last {
                         continuation.yield(.body(now + Data("\n".utf8)))
                         last = now
                     }

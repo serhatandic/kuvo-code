@@ -54,8 +54,6 @@ final class HostLimitsTests: XCTestCase {
             HostLimitRow(id: "claude#b2", providerID: "claude", name: "Claude · Athas", meters: [], isLocal: false, place: "mini-local"),
         ], covered: ["claude"])
         XCTAssertEqual(names(limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }), ["Claude +spend", "Claude · Athas", "panel:cursor"])
-        // A phone gets Claude's place for them too.
-        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") }, ["claude>claude", "cursor"])
         // With no bar of that name, just its name.
         XCTAssertEqual(names(limits.entries(groups: [group("cursor")]) { _ in false }), ["panel:cursor", "Claude", "Claude · Athas"])
 
@@ -74,16 +72,6 @@ final class HostLimitsTests: XCTestCase {
         let limits = HostLimits()
         limits.update(rows: [HostLimitRow(id: "mini/codex-cli", providerID: "codex", name: "Codex", meters: [], isLocal: false, place: "mini-local")], covered: ["codex"])
         XCTAssertEqual(names(limits.entries(groups: [group("codex"), group("cursor")]) { _ in false }), ["panel:codex", "Codex · mini-local", "panel:cursor"])
-        XCTAssertEqual(limits.phoneGroups([group("codex")]).map { $0.covers }, [nil])
-    }
-
-    func testAPhoneGetsThePanelInOrderWithWhereThisMacsBoxRowsGo() {
-        let limits = HostLimits()
-        limits.update(rows: [row("this Mac/claude-code", "claude", "Claude"), row("this Mac/openrouter", "openrouter", "OpenRouter")], covered: ["claude", "openrouter", "copilot"])
-        // Claude's place (once for its account cards) and OpenRouter's, marked; Copilot, covered with
-        // no row here, as the panel's own.
-        XCTAssertEqual(limits.phoneGroups([group("cursor"), group("claude"), group("claude@ab12cd34"), group("copilot"), group("openrouter")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") },
-                       ["cursor", "claude>claude", "copilot", "openrouter>openrouter"])
     }
 
     func testACoveredProviderTheHostHasNoRowForYetKeepsItsOwnBar() {
@@ -234,17 +222,132 @@ final class HostLimitsTests: XCTestCase {
         XCTAssertEqual(later?.lines.first { $0.label == "Credits" }, .values(label: "Credits", values: [MetricValue(number: 18, kind: .dollars)]))
     }
 
-    /// What a phone gets of a covered card: not the lines it has from the rows (Cursor's credits and
-    /// on-demand spend), which the phone draws from each row, under its own account; another card's
-    /// credits (OpenRouter's) are its own, and go.
-    func testThePhoneDrawsCursorsCreditsAndSpendFromItsRowsNotTheCards() {
+    /// What a plan has beyond its windows, as the box states it (#631 E), under its bar: a capped
+    /// amount a meter, the rest amounts; credits bought a meter of what's left; its resets and what
+    /// its login can't read are rows of their own, not readings. The card's own lines of the same
+    /// facts (its "Rate Limit Resets", "Extra usage spent", OpenRouter's "Balance") don't show again.
+    func testAPlansExtrasUnderItsBarAsThePanelDrawsItsOwn() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let store = WidgetDataStore(registry: WidgetRegistry(providers: [], descriptors: []), providers: [], defaults: testDefaults(suiteName: "HostLimitsTests.extras")!)
+        let claude = HostLimitRow(id: "claude#a", providerID: "claude", name: "Claude · Work", meters: [HostLimitRow.Meter(title: "Session", fraction: 0.88)], extras: [
+            .init(id: "extra_usage", name: "Extra Usage", kind: .capped, amount: 12.4, limit: 50, unit: "usd", resetsAt: now.addingTimeInterval(18 * 86_400)),
+            .init(id: "resets", name: "Rate Limit Resets", kind: .resets, count: 2, expiries: [now.addingTimeInterval(86_400)], usable: true, elsewhere: "hetzner"),
+        ])
+        let rows = HostLimitData.rows(claude, store: store, now: now)
+        XCTAssertEqual(rows.map(\.title), ["Session", "Extra Usage"])
+        XCTAssertTrue(rows[1].isBounded)
+        XCTAssertEqual([rows[1].used, rows[1].limit], [12.4, 50])
+        XCTAssertEqual(claude.resets?.elsewhere, "hetzner")
+        XCTAssertTrue(HostLimitData.labels(claude).isSuperset(of: ["Rate Limit Resets", "Extra usage spent"]))
+
+        let codex = HostLimitRow(id: "codex#b", providerID: "codex", name: "Codex", meters: [], extras: [.init(id: "credits", name: "Extra Usage", kind: .left, amount: 1240, unit: "credits")])
+        let credits = HostLimitData.rows(codex, store: store, now: now)
+        XCTAssertEqual(credits.map(\.unboundedDetail), ["1,240 credits"])
+        XCTAssertTrue(HostLimitData.labels(codex).contains("Credits"), "the card's own Credits line isn't shown again")
+
+        let openrouter = HostLimitRow(id: "openrouter#c", providerID: "openrouter", name: "OpenRouter", meters: [], balance: .init(left: 7.7, limit: 50, unit: "usd"), extras: [
+            .init(id: "today", name: "Today", amount: 1.84, unit: "usd", resetsAt: now.addingTimeInterval(3600)),
+            .init(id: "week", name: "This Week", amount: 9.2, unit: "usd", resetsAt: now.addingTimeInterval(-60)),
+        ])
+        let spend = HostLimitData.rows(openrouter, store: store, now: now)
+        // (This week's started over since it was read: not known now.)
+        XCTAssertEqual(spend.map(\.title), ["Credits", "Today"])
+        XCTAssertTrue(spend[0].isBounded)
+        XCTAssertEqual(spend[0].used, 50 - 7.7, accuracy: 0.001)
+        XCTAssertEqual(spend[1].unboundedDetail, "$1.84 spent")
+
+        let mac = HostLimitRow(id: "mac/claude-code", providerID: "claude", name: "Claude", meters: [], extras: [.init(id: "resets", name: "Rate Limit Resets", kind: .unreadable, message: "Can't.")])
+        XCTAssertEqual(HostLimitData.rows(mac, store: store, now: now).count, 0)
+        XCTAssertEqual(mac.unreadable?.message, "Can't.")
+        XCTAssertNil(mac.resets)
+    }
+
+    /// #631 E second review: the answer to Use didn't come back (the connection dropped), or the box
+    /// said it may have gone: Retry sends the same confirmation again (the box's journal makes it the
+    /// same request), never a new one; only once the box no longer knows it does Retry ask anew.
+    func testRetryAfterALostAnswerSendsTheSameConfirmationAgain() async throws {
+        struct Dropped: LocalizedError { var errorDescription: String? { "The connection was lost." } }
         let limits = HostLimits()
-        limits.update(rows: [
-            HostLimitRow(id: "cursor#a", providerID: "cursor", name: "Cursor", meters: [], balance: .init(left: 18, unit: "usd"), extras: [.init(id: "on_demand", name: "On-demand", amount: 4, unit: "usd")]),
-            HostLimitRow(id: "openrouter#b", providerID: "openrouter", name: "OpenRouter", meters: [], balance: .init(left: 2, unit: "usd")),
-        ], covered: ["cursor", "openrouter"])
-        XCTAssertEqual(limits.rowLines(for: "cursor"), ["Credits", "On-demand"])
-        XCTAssertEqual(limits.rowLines(for: "openrouter"), [])
+        var asked = 0
+        var used: [String] = []
+        var answers: [Result<HostResetDone, Error>] = [
+            .failure(Dropped()),
+            .success(HostResetDone(succeeded: false, message: "No answer came, so it may have been used. Asking again won't use another.", stillOpen: true)),
+            .success(HostResetDone(succeeded: true)),
+            .failure(HostResetExpired()),
+            .success(HostResetDone(succeeded: true)),
+        ]
+        limits.askReset = { _ in
+            asked += 1
+            return HostResetOffer(confirm: "rsc_\(asked)", question: "Use 1 of 2 resets?", detail: "")
+        }
+        limits.useReset = { _, confirm in
+            used.append(confirm)
+            return try answers.removeFirst().get()
+        }
+        let flow = limits.resetFlow(for: "claude#a")
+        flow.doneFor = .zero
+
+        await flow.begin()?.value
+        await flow.confirm()?.value
+        XCTAssertEqual(flow.phase, .failed("The connection was lost."))
+        await flow.begin()?.value
+        XCTAssertEqual(flow.phase, .failed("No answer came, so it may have been used. Asking again won't use another."))
+        await flow.begin()?.value
+        XCTAssertEqual(flow.phase, .idle)
+        XCTAssertEqual(used, ["rsc_1", "rsc_1", "rsc_1"], "Retry is the same confirmation")
+        XCTAssertEqual(asked, 1)
+
+        // A new one the box no longer knows when it's sent (it started again meanwhile): asked anew.
+        await flow.begin()?.value
+        await flow.confirm()?.value
+        XCTAssertEqual(used.last, "rsc_2")
+        XCTAssertEqual(asked, 3, "a new confirmation once the box no longer knows the old")
+        if case .confirming(let offer) = flow.phase { XCTAssertEqual(offer.confirm, "rsc_3") } else { XCTFail("not confirming: \(flow.phase)") }
+    }
+
+    /// Using a reset from its row: asked of the box, confirmed in place, used once, done; Cancel
+    /// leaves it as it was; what the box says when it doesn't go through shows, and Retry asks again.
+    func testAResetIsAskedConfirmedInPlaceAndUsedOnce() async throws {
+        let limits = HostLimits()
+        var asked: [String] = []
+        var used: [String] = []
+        var answer = HostResetDone(succeeded: true)
+        limits.askReset = { row in
+            asked.append(row)
+            return HostResetOffer(confirm: "rsc_\(asked.count)", question: "Use 1 of 2 resets?", detail: "Your 5-hour window starts over now.")
+        }
+        limits.useReset = { _, confirm in
+            used.append(confirm)
+            return answer
+        }
+        let flow = limits.resetFlow(for: "codex#b")
+        XCTAssertTrue(limits.resetFlow(for: "codex#b") === flow, "the same flow wherever its bar is drawn")
+        flow.doneFor = .zero
+
+        await flow.begin()?.value
+        XCTAssertEqual(flow.phase, .confirming(HostResetOffer(confirm: "rsc_1", question: "Use 1 of 2 resets?", detail: "Your 5-hour window starts over now.")))
+        XCTAssertEqual(used, [], "asking spends nothing")
+        flow.cancel()
+        XCTAssertEqual(flow.phase, .idle)
+
+        await flow.begin()?.value
+        let using = flow.confirm()
+        // A second tap while it's used does nothing.
+        XCTAssertNil(flow.confirm())
+        XCTAssertNil(flow.begin())
+        await using?.value
+        XCTAssertEqual(used, ["rsc_2"])
+        XCTAssertEqual(flow.phase, .idle)
+
+        answer = HostResetDone(succeeded: false, message: "Nothing to reset: this account isn't at a limit. Nothing was used.")
+        await flow.begin()?.value
+        await flow.confirm()?.value
+        XCTAssertEqual(flow.phase, .failed("Nothing to reset: this account isn't at a limit. Nothing was used."))
+        // Retry asks again (a new confirmation).
+        await flow.begin()?.value
+        XCTAssertEqual(asked.count, 4)
+        if case .confirming(let offer) = flow.phase { XCTAssertEqual(offer.confirm, "rsc_4") } else { XCTFail("not confirming") }
     }
 
     /// The credits a row has go on the card only where the card reads nothing of its own (Cursor's):

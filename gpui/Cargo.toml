@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["kuvo_ui", "kuvo_box", "gallery"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license-file = "../LICENSE"
+publish = false
+
+[workspace.dependencies]
+# GPUI, Zed's UI framework (Apache-2.0). Pinned to one revision of Zed's repository:
+# only the Apache-2.0 crates `gpui` and `gpui_platform` are used, never Zed's GPL code.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "dc93abce2fa6c0bf349d425310db4884aa953467" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "dc93abce2fa6c0bf349d425310db4884aa953467", features = ["font-kit", "runtime_shaders"] }
+kuvo_ui = { path = "kuvo_ui" }

@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import Testing
 @testable import KuvoCode
@@ -14,17 +15,15 @@ import Testing
         ("Why? It broke after the last change", "Why? It broke after the last change"),
     ])
     func fromYourFirstWords(message: String, title: String) {
-        #expect(Workspace.title(from: message) == title)
+        #expect(Workspace.title(from: MessageParts(words: message)) == title)
     }
 
-    /// Only comments on the changes: the first comment names it.
+    /// Only comments on the changes: the first comment names it. Its files never do.
     @Test func fromACommentWhenThereAreNoWords() {
-        let comment = ReviewComment(file: "a.swift", line: 1, side: .new, snippet: "x", text: "Rename this variable")
-        #expect(Workspace.title(from: ReviewComments.text("", adding: [comment])) == "Rename this variable")
-        var prepared = Attachments.Prepared()
-        prepared.paths = ["/x/log.txt"]
-        #expect(Workspace.title(from: Attachments.text("Look at this log", for: prepared)) == "Look at this log")
-        #expect(Workspace.title(from: Attachments.text("", for: prepared)) == nil)
+        let comment = MessageParts.Comment(file: "a.swift", line: 1, side: .new, snippet: "x", text: "Rename this variable")
+        #expect(Workspace.title(from: MessageParts(words: "", comments: [comment])) == "Rename this variable")
+        #expect(Workspace.title(from: MessageParts(words: "Look at this log", paths: ["/x/log.txt"])) == "Look at this log")
+        #expect(Workspace.title(from: MessageParts(words: "", paths: ["/x/log.txt"])) == nil)
     }
 
     @Test(arguments: [

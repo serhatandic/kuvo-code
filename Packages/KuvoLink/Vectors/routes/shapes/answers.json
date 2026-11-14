@@ -3077,6 +3077,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.app.host"
+           },
+           {
             "literal": "box.appKeys"
            },
            {
@@ -3090,6 +3093,9 @@
            },
            {
             "literal": "box.serve"
+           },
+           {
+            "literal": "box.serve.mac"
            },
            {
             "literal": "box.uninstall"
@@ -3203,7 +3209,13 @@
             "literal": "limits"
            },
            {
+            "literal": "limits.resets"
+           },
+           {
             "literal": "mcp.catalog"
+           },
+           {
+            "literal": "messages.send"
            },
            {
             "literal": "models.offered"
@@ -3414,9 +3426,6 @@
            },
            {
             "literal": "machines"
-           },
-           {
-            "literal": "usage"
            }
           ]
          }
@@ -3557,6 +3566,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.app.host"
+           },
+           {
             "literal": "box.appKeys"
            },
            {
@@ -3570,6 +3582,9 @@
            },
            {
             "literal": "box.serve"
+           },
+           {
+            "literal": "box.serve.mac"
            },
            {
             "literal": "box.uninstall"
@@ -3683,7 +3698,13 @@
             "literal": "limits"
            },
            {
+            "literal": "limits.resets"
+           },
+           {
             "literal": "mcp.catalog"
+           },
+           {
+            "literal": "messages.send"
            },
            {
             "literal": "models.offered"
@@ -6154,20 +6175,6 @@
   },
   {
    "route": "DELETE kuvo/hosts/:machine",
-   "answers": {
-    "200": {
-     "object": {}
-    }
-   }
-  },
-  {
-   "route": "GET kuvo/usage",
-   "answers": {
-    "200": "any"
-   }
-  },
-  {
-   "route": "POST kuvo/usage/refresh",
    "answers": {
     "200": {
      "object": {}
@@ -8858,6 +8865,7 @@
             "files?": {
              "list": "string"
             },
+            "keyword?": "string",
             "at": "number"
            }
           }
@@ -9300,6 +9308,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9326,6 +9335,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9367,6 +9377,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9408,6 +9419,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9449,6 +9461,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9490,6 +9503,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -9537,6 +9551,7 @@
          "files?": {
           "list": "string"
          },
+         "keyword?": "string",
          "at": "number"
         }
        }
@@ -10044,6 +10059,105 @@
         "beside?": "string"
        }
       }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/send",
+   "answers": {
+    "200": "any",
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "405": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/messages/parts",
+   "answers": {
+    "200": {
+     "object": {
+      "parts": {
+       "list": {
+        "object": {
+         "words": "string",
+         "keyword?": "string",
+         "widget?": "string",
+         "comments?": {
+          "list": {
+           "object": {
+            "file": "string",
+            "line": "number",
+            "side": {
+             "oneOf": [
+              {
+               "literal": "new"
+              },
+              {
+               "literal": "old"
+              }
+             ]
+            },
+            "snippet": "string",
+            "text": "string"
+           }
+          }
+         },
+         "paths?": {
+          "list": "string"
+         },
+         "agents?": {
+          "list": {
+           "object": {
+            "name": "string",
+            "session": "string"
+           }
+          }
+         },
+         "phone?": {
+          "literal": true
+         },
+         "mail?": {
+          "object": {
+           "name": "string",
+           "session": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "405": {
+     "object": {
+      "message": "string"
      }
     }
    }
@@ -10871,6 +10985,9 @@
            },
            {
             "literal": "cloneProject"
+           },
+           {
+            "literal": "resetLimits"
            }
           ]
          },
@@ -10887,6 +11004,24 @@
           ]
          },
          "suggested?": "string",
+         "reset?": {
+          "object": {
+           "row": "string",
+           "account": "string",
+           "service": "string",
+           "count": "number",
+           "refills?": {
+            "list": "string"
+           },
+           "on?": "string"
+          }
+         },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }
@@ -11099,6 +11234,9 @@
            },
            {
             "literal": "cloneProject"
+           },
+           {
+            "literal": "resetLimits"
            }
           ]
          },
@@ -11115,6 +11253,24 @@
           ]
          },
          "suggested?": "string",
+         "reset?": {
+          "object": {
+           "row": "string",
+           "account": "string",
+           "service": "string",
+           "count": "number",
+           "refills?": {
+            "list": "string"
+           },
+           "on?": "string"
+          }
+         },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }
@@ -11139,6 +11295,9 @@
            },
            {
             "literal": "cloneProject"
+           },
+           {
+            "literal": "resetLimits"
            }
           ]
          },
@@ -11155,6 +11314,24 @@
           ]
          },
          "suggested?": "string",
+         "reset?": {
+          "object": {
+           "row": "string",
+           "account": "string",
+           "service": "string",
+           "count": "number",
+           "refills?": {
+            "list": "string"
+           },
+           "on?": "string"
+          }
+         },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }

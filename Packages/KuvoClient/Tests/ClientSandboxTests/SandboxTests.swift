@@ -7,32 +7,28 @@ import Testing
 /// for This would keep; and a project's Also Allowed, asked for by its folder.
 @Suite struct SandboxTests {
     /// In Auto, an ask to work outside the folder is its reviewer's: no card while it checks, nor
-    /// once it allowed or held it back, only a mark on its step; one it leaves for you is yours. A
-    /// box that lists them all is the whole word: one it hasn't listed isn't yours yet. From a box
-    /// that doesn't, one not listed is yours at once.
+    /// once it allowed or held it back, only a mark on its step; one it leaves for you is yours. Its
+    /// list is the whole word: one it hasn't listed isn't yours yet.
     @Test func anAskAutosReviewerTakesUpIsntYours() throws {
         let line = #"{"asks":[],"reviews":[{"id":"per_1","session":"ses_a","call":"call_1","state":"checking","at":1},{"id":"per_2","session":"ses_a","state":"yours","at":2}]}"#
         let list = try JSONDecoder().decode(SandboxAsks.self, from: Data(line.utf8))
         let reviews = try #require(list.reviews)
         let outside = "external_directory"
-        #expect(!AskReview.isYours(action: outside, review: reviews[0], listsAll: true), "being checked")
+        #expect(!AskReview.isYours(action: outside, review: reviews[0]), "being checked")
         #expect(reviews[0].mark == "Auto is checking…")
-        #expect(AskReview.isYours(action: outside, review: reviews[1], listsAll: true), "left for you")
+        #expect(AskReview.isYours(action: outside, review: reviews[1]), "left for you")
         #expect(reviews[1].mark == nil)
         // Who allowed it, on its step (#406).
         #expect(AskReview(id: "a", session: "s", state: .allowed, at: 1).mark == "Allowed by Auto-review")
         #expect(AskReview(id: "a", session: "s", state: .refused, at: 1).mark == "Not allowed by Auto-review")
-        // Not listed yet by a box that lists them all: not yours until it says so.
-        #expect(!AskReview.isYours(action: outside, review: nil, listsAll: true))
-        // What the reviewer never takes up, and one not listed by a box that doesn't list them all.
-        #expect(AskReview.isYours(action: "shell", review: nil, listsAll: true))
-        let before = try JSONDecoder().decode(SandboxAsks.self, from: Data(#"{"asks":[]}"#.utf8))
-        #expect(before.reviews == nil)
-        #expect(AskReview.isYours(action: outside, review: nil, listsAll: false))
+        // Not listed yet: not yours until it says so.
+        #expect(!AskReview.isYours(action: outside, review: nil))
+        // What the reviewer never takes up.
+        #expect(AskReview.isYours(action: "shell", review: nil))
         // Its box not heard now (its link down, or starting again): one it never listed is yours, as
         // nothing would list it; what it last said of one stands.
-        #expect(AskReview.isYours(action: outside, review: nil, listsAll: true, heard: false))
-        #expect(!AskReview.isYours(action: outside, review: reviews[0], listsAll: true, heard: false))
+        #expect(AskReview.isYours(action: outside, review: nil, heard: false))
+        #expect(!AskReview.isYours(action: outside, review: reviews[0], heard: false))
     }
 
     /// An ask the box took up that's over (answered, or gone with its run or its engine) is listed
@@ -44,10 +40,10 @@ import Testing
         #expect(list.reviews?.map(\.id) == ["per_1"])
         let every = Dictionary(uniqueKeysWithValues: try #require(list.everyReview).map { ($0.id, $0) })
         let outside = "external_directory"
-        #expect(AskReview.isYours(action: outside, review: every["per_1"], listsAll: true))
+        #expect(AskReview.isYours(action: outside, review: every["per_1"]))
         for id in ["per_2", "per_3"] {
-            #expect(!AskReview.isYours(action: outside, review: every[id], listsAll: true), "over")
-            #expect(!AskReview.isYours(action: outside, review: every[id], listsAll: true, heard: false), "over, its box not heard")
+            #expect(!AskReview.isYours(action: outside, review: every[id]), "over")
+            #expect(!AskReview.isYours(action: outside, review: every[id], heard: false), "over, its box not heard")
             #expect(every[id]?.mark == nil, "no mark on its step")
         }
         // A box from before says nothing of them.

@@ -22,8 +22,6 @@ struct GoalCard: View {
 
     /// A project's name is being typed: Return and Escape are its, not Start's and Not Now's.
     @State private var renamesProject = false
-    /// Its computer has Autopilot, as last read.
-    private var offersAutopilot: Bool { app.workspace.autopilotHere[box] == true }
     @State private var wake = false
     /// On Autopilot: one setting with the bot's conversation.
     @State private var autopilot = false
@@ -88,7 +86,6 @@ struct GoalCard: View {
         }
         .padding(16)
         .onAppear(perform: takeIn)
-        .task(id: box) { await app.workspace.readAutopilotHere(on: box) }
         #if DEBUG
         // KUVO_DEMO_GOAL_OPEN=<seconds>: that long after it shows, its first page to open is
         // opened, as its button does.
@@ -328,16 +325,13 @@ struct GoalCard: View {
     private var settingsSection: some View {
         GoalCardSection(symbol: "slider.horizontal.3", title: "Execution settings", caption: "How the goal runs") {
             VStack(spacing: 0) {
-                // How it runs first: its one setting with the bot's conversation, where its
-                // computer has Autopilot.
-                if offersAutopilot {
-                    GoalSettingRow(symbol: AutopilotShown.symbol, title: "Autopilot") {
-                        Toggle("Autopilot", isOn: $autopilot)
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                    }
-                    Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
+                // How it runs first: its one setting with the bot's conversation.
+                GoalSettingRow(symbol: AutopilotShown.symbol, title: "Autopilot") {
+                    Toggle("Autopilot", isOn: $autopilot)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
                 }
+                Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
                 GoalSettingRow(symbol: "calendar", title: "Deadline", subtitle: "When it should be done") {
                     Picker("Deadline", selection: $deadline) {
                         ForEach(deadlineChoices, id: \.self) { choice in
@@ -482,7 +476,7 @@ struct GoalCard: View {
         sent = action
         failure = nil
         let answer: GoalPlanAnswer = action == .start
-            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods, autopilot: offersAutopilot ? autopilot : nil)
+            ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods, autopilot: autopilot)
             : .decline
         Task {
             do {

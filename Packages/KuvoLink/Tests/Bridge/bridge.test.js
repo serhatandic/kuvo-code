@@ -653,8 +653,8 @@ test("requests go to the engine with its password, all of its API; paths that ar
   assert.equal(answer.head.s, 200);
   assert.equal(answer.head.h["content-type"], "application/json");
   assert.equal(answer.head.h["set-cookie"], undefined);
-  // A message from the phone says so, at its end.
-  assert.deepEqual(JSON.parse(answer.body), { path: "/api/session/ses_1/prompt?x=1", body: JSON.stringify({ text: `hi\n\n${link.FROM_PHONE}` }) });
+  // A message from the phone says so, at its end, and keeps its parts (PROTOCOL.md, "A message's parts").
+  assert.deepEqual(JSON.parse(answer.body), { path: "/api/session/ses_1/prompt?x=1", body: JSON.stringify({ text: `hi\n\n${link.FROM_PHONE}`, metadata: { kuvo: { parts: { words: "hi", phone: true } } } }) });
   const call = engine.asked.at(-1);
   assert.equal(call.auth, `Basic ${Buffer.from("opencode:s3cret").toString("base64")}`);
   assert.equal(call.directory, "/home/me/p");
@@ -1540,6 +1540,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.make": ["GET", "kuvo/bots/templates"],
     // (This Mac's app, registered with a Mac's box in a home of its own: a machine says it has none.)
     "box.app": ["GET", "kuvo/box/app"],
+    // (Where the app's own host answers, said as it registers there: the same route.)
+    "box.app.host": ["GET", "kuvo/box/app"],
     // (What this Mac's app asks of a Mac's box's keys: a GET is the wrong method, here as there.)
     "box.appKeys": ["GET", "kuvo/box/proof"],
     // (A command, `kuvo-link.js helper`, not a route: kuvo/info names it.)
@@ -1550,6 +1552,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "box.rehome": ["GET", "kuvo/box/rehome"],
     // (Its server kept for clients while one wants it.)
     "box.serve": ["GET", "kuvo/box/serve"],
+    // (Kuvo Code on its computer reaching that server as `box route` does: the same route.)
+    "box.serve.mac": ["GET", "kuvo/box/serve"],
     // (A command, `kuvo-link.js uninstall`, not a route: kuvo/info names it.)
     "box.uninstall": ["GET", "kuvo/info"],
     // (A release from a folder here, which only Kuvo Code offers: a GET is the wrong method.)
@@ -1596,7 +1600,11 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "letters-read": ["POST", "kuvo/agent-tools"],
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
+    // (Using a plan's resets, and the agents' tool for it: the bridge's `limits/reset`.)
+    "limits.resets": ["POST", "kuvo/agents/api/kuvo/limits/reset"],
     "mcp.catalog": ["GET", "kuvo/mcp/catalog"],
+    // (And kuvo/sessions/<id>/send, which the same box answers.)
+    "messages.send": ["POST", "kuvo/messages/parts"],
     "models.offered": ["GET", "kuvo/models/offered"],
     moves: ["GET", "kuvo/moves"],
     // (Moves with a coding agent's own conversation: what kuvo/moves takes besides.)
@@ -1684,7 +1692,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
   for (const [feature, [method, route]] of Object.entries(routes)) assert.ok(await isRoute(method, route), `${feature}: ${method} ${route}`);
   // The Mac's own aren't here: a route this box doesn't have.
-  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/usage"]) assert.equal(await status("GET", route), 404, route);
+  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac"]) assert.equal(await status("GET", route), 404, route);
   fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
 });
 

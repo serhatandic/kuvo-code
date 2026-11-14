@@ -69,9 +69,10 @@ final class BoxNotices {
     /// removed): read as it connects, and followed while it's connected and ready. A box from before them is asked again only
     /// now and then, and words its own as it did.
     func follow(_ box: String) async {
-        // (Followed as it changes on the app's own box, which streams; read now and then on any
-        // other, the one attached in place too, which answers once a read.)
-        let onThisMac = BoxClient.streams(box)
+        // (Followed as it changes on a box that streams (the app's own, and the one attached in place
+        // while it's reached over its server: asked each round); read now and then on any other, which
+        // answers once a read.)
+        var onThisMac: Bool { BoxClient.streams(box) }
         var older = false
         var first = true
         while !Task.isCancelled {

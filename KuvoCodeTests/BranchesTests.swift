@@ -38,8 +38,9 @@ import Testing
         engine.on("GET", "/api/provider", json: ["data": []])
         engine.on("GET", "/api/integration", json: ["data": []])
         let messages: [[String: Any]] = [
-            ["id": "msg_0001", "type": "user", "text": "Split the timer into phases.", "time": ["created": 1]],
-            ["id": "msg_0002", "type": "user", "text": "Now test the long break.", "time": ["created": 3]],
+            // (As its box keeps them: with their parts.)
+            ["id": "msg_0001", "type": "user", "text": "Split the timer into phases.", "time": ["created": 1], "metadata": KeptParts.json(words: "Split the timer into phases.")],
+            ["id": "msg_0002", "type": "user", "text": "Now test the long break.", "time": ["created": 3], "metadata": KeptParts.json(words: "Now test the long break.")],
         ]
         engine.conversation("ses_timer", messages)
         // The engine's copy, which says nothing of where it came from.
@@ -82,7 +83,7 @@ import Testing
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
         try await engine.listed(for: workspace)
-        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Now test the long break.")
+        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Now test the long break.", metadata: KeptParts.value(words: "Now test the long break."))
         try await workspace.fork("ses_timer", from: message)
 
         let marked = try #require(engine.requests("PATCH", "/api/session/ses_tried").first?.body["metadata"] as? [String: Any])
@@ -105,7 +106,9 @@ import Testing
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
         try await engine.listed(for: workspace)
-        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>")
+        // As its box keeps it: the text the agent read, and its parts.
+        let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Summarize the commits weekly\n\n<sent-with>…</sent-with>",
+                                   metadata: .object(["kuvo": .object(["parts": .object(["words": .string("Summarize the commits weekly"), "keyword": .string("/goal")])])]))
         try await workspace.fork("ses_timer", from: message)
         #expect(Drafts.shared["ses_tried"].text == "/goal Summarize the commits weekly")
     }

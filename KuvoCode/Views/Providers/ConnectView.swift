@@ -1,5 +1,6 @@
 import ClientAccounts
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -535,13 +536,12 @@ struct ConnectView: View {
     /// Asks its box for the ways in. A box from before it can't say them: it needs updating.
     private func readMethods() async {
         guard let box = catalog.box else { return offeredFailure = unreachable }
-        if !BoxClient.hasEveryFeature(box.box) {
-            struct Info: Decodable { var features: [String]? }
-            guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return offeredFailure = unreachable }
-            guard info.features?.contains(SignInMethods.feature) == true else {
-                guard let machine = catalog.machine else { return offeredFailure = "This Mac’s box needs a newer Kuvo Code to sign in. It updates by itself overnight." }
-                return offeredFailure = "\(app.name(of: .machine(machine))) needs a newer Kuvo Code to sign in from here. Update it, then try again."
-            }
+        // (One that said it hasn't is asked again: it may have been updated since, Try Again.)
+        if app.boxFeatures.knows(SignInMethods.feature, on: box.box) == false { await app.boxFeatures.readAgain(box.box) }
+        guard let says = await app.boxFeatures.has(SignInMethods.feature, on: box.box) else { return offeredFailure = unreachable }
+        guard says else {
+            guard let machine = catalog.machine else { return offeredFailure = "This Mac’s box needs a newer Kuvo Code to sign in. It updates by itself overnight." }
+            return offeredFailure = "\(app.name(of: .machine(machine))) needs a newer Kuvo Code to sign in from here. Update it, then try again."
         }
         let path = SignInMethods.path(integration: integrationID, agents: OutsideAgents.isAgent(integrationID))
         // Its box still starting is asked again each second, for half a minute at most.

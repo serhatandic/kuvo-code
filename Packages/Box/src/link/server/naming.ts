@@ -42,14 +42,21 @@ export function listedAgents(): AgentsFile {
 }
 export function namingHere(readEngine: () => Target): Naming {
   return async (text, session) => {
-    let everyone = listedAgents();
-    const working = refreshOwnShared(readEngine);
-    if (nameMissing(text, everyone.agents)) {
-      await Promise.race([working, new Promise<void>(resolve => setTimeout(resolve, 2000).unref?.())]);
-      everyone = listedAgents();
-    }
+    const everyone = await everyoneFor(text, readEngine);
     return nameAgents(text, { excluding: session, here: everyone.machine, agents: everyone.agents });
   };
+}
+
+// Everyone "&" can name in `text`, as this box lists them now, and its name there: its own worked
+// out again meanwhile, and waited for (two seconds at most) only when a name in it, or one `picked`
+// from the list (by its session), isn't there yet (one made a moment ago).
+export async function everyoneFor(text: string, readEngine: () => Target, picked: string[] = []): Promise<AgentsFile> {
+  const everyone = listedAgents();
+  const working = refreshOwnShared(readEngine);
+  const listed = new Set(everyone.agents.map(agent => agent.session));
+  if (!nameMissing(text, everyone.agents) && picked.every(session => listed.has(session))) return everyone;
+  await Promise.race([working, new Promise<void>(resolve => setTimeout(resolve, 2000).unref?.())]);
+  return listedAgents();
 }
 
 // Whether `text` names with "&" someone `agents` don't have: an "&" starting a word, with none of

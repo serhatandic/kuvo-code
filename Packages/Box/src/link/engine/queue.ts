@@ -7,6 +7,7 @@
 // the engine started again pause it until Resume; Stop holds what was for the next step ahead of
 // the queue, the latest Stop's first. Kept in `run/queues.json`, by session.
 
+import { withPartsOf } from "../messages/parts";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -139,7 +140,11 @@ export async function keepWaitingBefore(target: Target, session: string, message
  * news, an answer's note): while its queue is paused, kept to go once it goes on ("waits", see
  * `keepWaiting`); else sent now ("sent"). It throws when the engine doesn't take it. */
 export async function sendInto(target: Target, session: string, message: Outgoing, shown: Shown = {}): Promise<"sent" | "waits"> {
-  const whole = { ...message, id: message.id ?? messageID() };
+  // (Its parts kept with it, for clients to draw it by, as `kuvo/sessions/<id>/send`'s are, where
+  // there's more to them than its text: a message from another agent, one with a client's blocks.
+  // Never the box's own notes, which clients draw as notes; a plain one a client asks about once.)
+  const metadata = isBoxNote(message.metadata) ? message.metadata : withPartsOf(message.metadata, message.text);
+  const whole = { ...message, id: message.id ?? messageID(), ...(metadata !== undefined ? { metadata } : {}) };
   if (keepWaiting(session, whole, shown)) return "waits";
   await asked(target, "POST", `api/session/${address(session)}/prompt`, whole);
   return "sent";

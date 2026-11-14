@@ -368,6 +368,7 @@ struct ToolCallView: View {
         case "list_models": return isActive ? "Looking up the models" : "Looked up the models"
         case "list_projects": return isActive ? "Looking up the projects" : "Looked up the projects"
         case "plan_limits": return isActive ? "Reading the plan limits" : "Read the plan limits"
+        case "use_limit_reset": return (isActive ? "Using a rate-limit reset" : "Used a rate-limit reset") + (string("account").flatMap { $0.contains("#") || $0.contains("/") ? nil : " of \($0)" } ?? "")
         case "make_project": return (isActive ? "Making " : "Made ") + (string("name").map { "the project “\($0)”" } ?? "a project")
         case "set_job": return (isActive ? "Setting its job" : "Set its job") + (string("summary").map { ": \($0)" } ?? "")
         case "propose_goal": return (isActive ? "Proposing " : "Proposed ") + (string("title").map { "the goal “\($0)”" } ?? "a goal")
@@ -493,6 +494,7 @@ struct ToolCallView: View {
         case "list_models": "cpu"
         case "list_projects": "folder"
         case "plan_limits": "gauge.with.dots.needle.50percent"
+        case "use_limit_reset": "arrow.counterclockwise"
         case "make_project": "folder.badge.plus"
         case "set_job": "person.text.rectangle"
         case "propose_goal", "goal_progress", "finish_goal": "scope"

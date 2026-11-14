@@ -62,15 +62,20 @@ export const WORK_SESSION = object({
  * there's one), and when (ms). */
 export const WORK_ASK = object({
   id: string,
-  action: words("makeProject", "cloneProject"),
+  action: words("makeProject", "cloneProject", "resetLimits"),
   session: string,
   name: string,
   "bot?": string,
+  /** The project's name; for a reset, the account's ("Codex"). */
   project: string,
   "clone?": string,
   folderName: string,
   folder: nullable(string),
   "suggested?": string,
+  /** For a reset (`use_limit_reset`): the account (its row in "Plan limits"), how many resets it has, what one refills, and the computer of yours that uses it where that isn't this one. */
+  "reset?": object({ row: string, account: string, service: string, count: number, "refills?": list(string), "on?": string }),
+  /** What a notification of it says, in the box's words (a reset's). */
+  "words?": object({ title: string, body: string }),
   at: number,
 });
 /** What's asked here now, the oldest first. */

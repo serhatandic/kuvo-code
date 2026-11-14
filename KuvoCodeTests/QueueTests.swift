@@ -1,3 +1,4 @@
+import ClientSessions
 import ClientText
 import Foundation
 import KuvoLink
@@ -45,9 +46,7 @@ import Testing
 
     /// The session, at work or not, with `inbox` waiting, and its box (this Mac's), as the app
     /// reaches it. `queues`: what the box keeps, before it starts.
-    /// `older`: its box is a machine's from before the box carried the queue (no `queue` in its
-    /// `kuvo/info`, none of the queue's routes).
-    private func open(running: Bool, inbox: [[String: Any]], queues: String? = nil, older: Bool = false, prompt: (@Sendable (StubEngine.Request) -> Void)? = nil) async throws -> (SessionModel, TestBox, Inbox) {
+    private func open(running: Bool, inbox: [[String: Any]], queues: String? = nil, prompt: (@Sendable (StubEngine.Request) -> Void)? = nil) async throws -> (SessionModel, TestBox, Inbox) {
         let session = StubEngine.session(id, title: "Queue", directory: "/tmp/kuvo-tests-queue")
         engine.list([session], running: running ? [id] : [])
         let kept = Inbox(inbox)
@@ -74,15 +73,7 @@ import Testing
             try Data(queues.utf8).write(to: BoxProcess.run.appending(path: "queues.json"))
         }
         let url = engine.url
-        let olderBox = BoxClient(box: "lab", transport: LocalBox { request in
-            AsyncThrowingStream { answer in
-                let info = request.path == "kuvo/info"
-                answer.yield(.head(status: info ? 200 : 404, headers: ["content-type": "application/json"]))
-                answer.yield(.body(Data((info ? #"{"name":"lab","features":["sessions","agent-tools"]}"# : #"{"message":"Not here."}"#).utf8)))
-                answer.finish()
-            }
-        })
-        workspace.boxes = { $0 == BoxClient.mac ? (older ? olderBox : box.client(engine: url)) : nil }
+        workspace.boxes = { $0 == BoxClient.mac ? box.client(engine: url) : nil }
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -103,8 +94,10 @@ import Testing
     /// in its row and the folded line, as its bubble does (it read as the words alone, so a waiting
     /// /goal looked like any message).
     @Test func aMessageWaitingWithAKeywordReadsAsTyped() {
-        let goal = Transcript.Pending(id: "msg_8", text: "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>", delivery: .queue, isLocal: false)
-        let loop = Transcript.Pending(id: "msg_9", text: SentWithKeyword.message("check CI", typed: "/loop every hour"), delivery: .queue, isLocal: false)
+        var goal = Transcript.Pending(id: "msg_8", text: KeptParts.text("Summarize the commits weekly"), delivery: .queue, isLocal: false)
+        goal.metadata = KeptParts.value(words: "Summarize the commits weekly", keyword: "/goal")
+        var loop = Transcript.Pending(id: "msg_9", text: KeptParts.text("check CI"), delivery: .queue, isLocal: false)
+        loop.metadata = KeptParts.value(words: "check CI", keyword: "/loop every hour")
         #expect(QueueRow.summary(of: goal) == "/goal Summarize the commits weekly")
         #expect(QueueRow.summary(of: loop) == "/loop every hour check CI")
         let row = QueueRow.styledSummary(of: goal, folders: [])
@@ -297,6 +290,23 @@ import Testing
         #expect(engine.requests("POST", "/prompt").count == 1, "one run at a time")
     }
 
+    /// Another agent's letter waiting in the engine's queue, removed and put back with Undo: it goes
+    /// back as the agent read it, still theirs to answer, never as words of yours.
+    @Test func anotherAgentsLetterPutBackStaysTheirs() async throws {
+        let letter = "[Message from Ada · ses_ada] (To answer, use send_message to ses_ada.)\n\nThe build is green."
+        let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", letter)])
+        defer { box.stop(); engine.stop() }
+        let item = try #require(model.waiting.first)
+        // Read by its box: from Ada.
+        #expect(SentMessage.parts(item).mail?.name == "Ada")
+        model.cancelPending(item)
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+        model.requeue(item, for: nil, paused: false)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        #expect(engine.requests("POST", "/prompt").last?.body["text"] as? String == letter)
+    }
+
     /// Stopped from another client a moment ago, before this Mac heard: a message sent for after
     /// this run still waits on the box, which decides, rather than reaching the engine, which would
     /// run all it holds.
@@ -371,81 +381,6 @@ import Testing
         try await until { model.isQueuePaused }
     }
 
-    /// A machine whose box doesn't carry the queue yet (its update to this version didn't get
-    /// through): this Mac carries it, as before. Stop pauses it, Resume gives the agent the next
-    /// one, a run that ends starts the next, and Send Now gives one right away.
-    @Test func onABoxWithoutTheQueueThisMacCarriesIt() async throws {
-        let (model, box, kept) = try await open(running: true, inbox: [queued("msg_02", "Then update the docs"), queued("msg_03", "Also run the linter"), queued("msg_04", "And tag it")], older: true)
-        defer { box.stop(); engine.stop() }
-        model.stop()
-        try await until { !engine.requests("POST", "/interrupt").isEmpty }
-        #expect(model.isQueuePaused)
-        stopped()
-        model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
-        #expect(model.isQueuePaused, "Stop pauses it")
-
-        model.resumeQueue()
-        try await until { !deliveries(of: "msg_02").isEmpty }
-        #expect(deliveries(of: "msg_02") == ["steer"])
-        #expect(!model.isQueuePaused && model.failure == nil)
-
-        kept.remove("msg_02")
-        model.apply(try engine.event("session.inbox.delivered", session: id, ["inboxID": "msg_02"]))
-        model.apply(try engine.event("session.execution.started", session: id))
-        model.apply(try engine.event("session.execution.succeeded", session: id))
-        try await until { !deliveries(of: "msg_03").isEmpty }
-        #expect(deliveries(of: "msg_03") == ["steer"], "the next goes as the run ends")
-
-        let last = try #require(model.waiting.first { $0.id == "msg_04" })
-        model.sendNow(last)
-        try await until { !deliveries(of: "msg_04").isEmpty }
-        #expect(deliveries(of: "msg_04") == ["steer"])
-        #expect(model.failure == nil)
-    }
-
-    /// On a box without the queue, a session opened with messages left waiting (the app quit
-    /// mid-run): it waits for Resume, what was for the next step held ahead of the queue; Resume
-    /// gives that first; a run that fails holds what came for its next step and pauses again.
-    @Test func onABoxWithoutTheQueueALeftQueueWaitsAndAFailedRunPausesIt() async throws {
-        let (model, box, kept) = try await open(running: false, inbox: [queued("msg_02", "Then update the docs"), ["id": "msg_03", "sessionID": id, "type": "user", "delivery": "steer", "payload": ["text": "Also run the linter"]]], older: true)
-        defer { box.stop(); engine.stop() }
-        try await until { model.isQueuePaused && !deliveries(of: "msg_03").isEmpty }
-        #expect(deliveries(of: "msg_03") == ["queue"], "held, not left for a step that won't come")
-        #expect(deliveries(of: "msg_02").isEmpty)
-        model.apply(try engine.event("session.inbox.delivery.changed", session: id, ["inboxID": "msg_03", "delivery": "queue"]))
-        #expect(model.waiting.map(\.text) == ["Also run the linter", "Then update the docs"])
-
-        model.resumeQueue()
-        try await until { deliveries(of: "msg_03").count == 2 }
-        #expect(deliveries(of: "msg_03").last == "steer", "what was held goes first")
-        #expect(deliveries(of: "msg_02").isEmpty)
-
-        kept.add("msg_04", "And tag it", "steer")
-        model.apply(try engine.event("session.inbox.enqueued", session: id, ["inboxID": "msg_04", "item": ["type": "user", "delivery": "steer", "payload": ["text": "And tag it"]]]))
-        model.apply(try engine.event("session.execution.failed", session: id, ["error": ["type": "provider", "message": "Overloaded."]]))
-        try await until { !deliveries(of: "msg_04").isEmpty }
-        #expect(deliveries(of: "msg_04") == ["queue"])
-        #expect(model.isQueuePaused)
-        #expect(deliveries(of: "msg_02").isEmpty, "not run into the same error")
-    }
-
-    /// A machine's box updated while the session was open: once the Mac connects again, the box
-    /// carries the queue, and a Stop goes to it.
-    @Test func aBoxUpdatedSinceCarriesTheQueueAfterTheMacReconnects() async throws {
-        let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", "Then update the docs")], older: true)
-        defer { box.stop(); engine.stop() }
-        model.stop()
-        try await until { !engine.requests("POST", "/interrupt").isEmpty }
-        let kept = BoxProcess.run.appending(path: "queues.json")
-        #expect(!FileManager.default.fileExists(atPath: kept.path), "carried here: the box keeps nothing")
-
-        let url = engine.url
-        workspace.boxes = { $0 == BoxClient.mac ? box.client(engine: url) : nil }
-        model.reconnect(engine.api)
-        model.stop()
-        try await until { (try? Data(contentsOf: kept)).flatMap { String(data: $0, encoding: .utf8) }?.contains(#""paused":true"#) == true }
-    }
-
     /// A queued message removed by mistake: Undo puts it back in the queue, as it was, behind
     /// the run, rather than starting it.
     @Test func undoPutsARemovedMessageBackInTheQueue() async throws {
@@ -469,7 +404,7 @@ import Testing
         let queued: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
         let (model, box, _) = try await open(running: true, inbox: [queued])
         defer { box.stop(); engine.stop() }
-        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Ship v2", typed: "/goal")]
+        let goal: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]
         engine.on("POST", "/api/experimental/session/\(id)/wait", json: [:])
         engine.on("POST", "/api/session/\(id)/revert/stage") { request in
             StubWeb.json(["data": ["messageID": request.body["messageID"] as? String ?? ""]])
@@ -488,7 +423,7 @@ import Testing
     /// Edit on a waiting goal, then on another waiting message: the goal Edit put back loses its
     /// "/goal" as the other goes ahead of it.
     @Test func editingTwoWaitingMessagesBackLeavesNoGoalInTheMiddle() async throws {
-        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": SentWithKeyword.message("Ship v2", typed: "/goal")]]
+        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]]
         let lint: [String: Any] = ["id": "msg_05", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
         let (model, box, _) = try await open(running: true, inbox: [goal, lint])
         defer { box.stop(); engine.stop() }
@@ -506,7 +441,7 @@ import Testing
     /// bringing it back, or the undo made final elsewhere, still leaves no "/goal" in the middle
     /// when a waiting message is edited back ahead of it.
     @Test func aGoalPutBackStaysOneUntilItsSent() async throws {
-        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": SentWithKeyword.message("Ship v2", typed: "/goal")]]
+        let goal: [String: Any] = ["id": "msg_04", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]]
         let lint: [String: Any] = ["id": "msg_05", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then run the linter"]]
         let docs: [String: Any] = ["id": "msg_06", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then the docs"]]
         let (model, box, _) = try await open(running: true, inbox: [goal, lint, docs])
@@ -538,7 +473,7 @@ import Testing
         // An undone goal, the undo made final (by another client, a starter, a command) with the
         // goal still in the composer.
         model.draftText = ""
-        let goalSent: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": SentWithKeyword.message("Ship v2", typed: "/goal")]
+        let goalSent: [String: Any] = ["id": "msg_03", "type": "user", "time": ["created": 3], "text": KeptParts.text("Ship v2"), "metadata": KeptParts.json(words: "Ship v2", keyword: "/goal")]
         guard case .user(let undoneGoal) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: goalSent)) else { return }
         model.undo(from: undoneGoal)
         try await until { model.draftText == "/goal Ship v2" }

@@ -48,27 +48,6 @@ enum ToolApproval: String, CaseIterable, Codable {
         session.metadata?["kuvo"]?["applied"]?.string.flatMap(ToolApproval.init(rawValue:)) ?? of(session)
     }
 
-    /// The rules a conversation is made with until its box makes its own a moment later (from
-    /// this, with its Settings › Permissions): Ask First's asks for Ask First and Accept Edits,
-    /// so nothing runs unasked meanwhile; the rest as Settings says, its asks let through. Both
-    /// keep what Settings doesn't allow.
-    func provisionalRules(settings: [PermissionRule]) -> [PermissionRule] {
-        let denied = settings.filter { $0.effect.holdsBack }
-        switch self {
-        case .auto, .fullAccess:
-            return settings.filter { $0.effect == .ask }.map { PermissionRule(action: $0.action, resource: $0.resource, effect: .allow) } + denied
-        case .askFirst, .acceptEdits:
-            // A PDF the browser saves is a file written, and an upload sends one of yours to a
-            // site. A watch runs its check, a command, whenever it's due. Folders outside the
-            // project ask already, unless Settings allows them all.
-            let everywhere = settings.last { $0.action == "external_directory" && $0.resource == "*" }?.effect == .allow
-            let asks = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"]
-                .filter { everywhere || $0 != "external_directory" }
-                .map { PermissionRule(action: $0, effect: .ask) }
-            return asks + settings.filter { !$0.effect.holdsBack && $0.resource != "*" && $0.action != "external_directory" } + denied
-        }
-    }
-
     /// A rule a session has for something of its own, which neither its approval nor Settings
     /// make: a folder it may work in (the project's others, a bot's). Its box keeps them as it
     /// makes the rest from its approval.

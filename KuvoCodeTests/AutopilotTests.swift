@@ -99,8 +99,10 @@ import Testing
         let order = engine.asked.filter { $0 == "PUT \(Self.entry)" || $0 == "POST /api/session/ses_one/prompt" }
         #expect(order == ["PUT \(Self.entry)", "POST /api/session/ses_one/prompt"], "its agent works on Autopilot from the first word")
         let text = try #require(engine.requests("POST", "/api/session/ses_one/prompt").first?.body["text"] as? String)
-        #expect(SentMessage.split(text).text == "pick a palette and build the menu page")
-        #expect(SentMessage.keyword(of: text) == "/autopilot")
+        #expect(text.hasPrefix("pick a palette and build the menu page\n\n<sent-with>\n"))
+        let parts = (engine.requests("POST", "/api/session/ses_one/prompt").first?.body["metadata"] as? [String: Any]).flatMap { $0["kuvo"] as? [String: Any] }?["parts"] as? [String: Any]
+        #expect(parts?["words"] as? String == "pick a palette and build the menu page")
+        #expect(parts?["keyword"] as? String == "/autopilot")
 
         model.draftText = "/autopilot"
         model.submitDraft(for: nil, queue: false)
@@ -137,25 +139,6 @@ import Testing
                 return text.contains("[Decision changed]") && text.contains("Dark and smoky") && text.contains("Warm and roasty")
             }
         }
-    }
-
-    /// Whether a computer offers Autopilot (a goal's card, a new conversation) is what its box says:
-    /// not until it has, none on one from before it, and this Mac's always.
-    @Test func aComputerOffersAutopilotOnlyWhereItsBoxHasIt() async throws {
-        func box(_ features: [String]) -> BoxClient {
-            BoxClient(box: "lab", transport: LocalBox { _ in
-                AsyncThrowingStream { $0.yield(.head(status: 200, headers: [:])); $0.yield(.body(try! JSONSerialization.data(withJSONObject: ["features": features]))); $0.finish() }
-            })
-        }
-        let workspace = Workspace()
-        workspace.boxes = { id in id == "old" ? box(["work.goals"]) : box(["work.goals", "autopilot"]) }
-        #expect(workspace.autopilotHere["old"] == nil)
-        await workspace.readAutopilotHere(on: "old")
-        await workspace.readAutopilotHere(on: "new")
-        await workspace.readAutopilotHere(on: BoxClient.mac)
-        #expect(workspace.autopilotHere["old"] == false)
-        #expect(workspace.autopilotHere["new"] == true)
-        #expect(workspace.autopilotHere[BoxClient.mac] == true)
     }
 
     /// What the agent's browser asks of you, with the app's own wiring, through the tool it calls.

@@ -33,15 +33,12 @@ import Testing
 
         // Changed as Settings' pages change them: a toggle, a new agent, a rule, a popular MCP
         // server's Add, a command.
-        var rulesChanged = 0
-        config.onRulesChanged = { rulesChanged += 1 }
         config.bool(["compaction", "auto"], default: true).wrappedValue = false
         config.set(.object(["mode": .string("subagent"), "description": .string("Reviews code")]), at: ["agents", "review"])
         config.setItems([Self.rule("git push *")], at: ["permissions"])
         MCPCatalog.add(try #require(MCPCatalog.servers.first { $0.id == "context7" }), to: config)
         config.set(.object(["template": .string("Ship it"), "description": .string("Ships")]), at: ["commands", "ship"])
         #expect(await config.settled() == nil)
-        #expect(rulesChanged == 1)
 
         let disk = try SettingsBox.onDisk()
         #expect(disk["model"] as? String == "anthropic/sonnet" && disk["theme"] as? String == "dark", "what Settings doesn't show stays")
@@ -63,7 +60,6 @@ import Testing
         #expect(try await phone.send("PATCH", "kuvo/config", body: body).status == 200)
         await config.refresh()
         #expect(config.permissionRules.map(\.resource) == ["docker *"])
-        #expect(rulesChanged == 2)
         #expect(changed == 1)
         // And its popular servers, Chrome DevTools among them on a Mac, Context7 added.
         struct Listed: Decodable { struct Server: Decodable { var id: String; var added: Bool; var macOnly: Bool }; var servers: [Server] }
@@ -176,7 +172,6 @@ import Testing
                                         settings: #"{"permissions": [{"action": "shell", "resource": "git push *", "effect": "deny"}], "model": "openai/luna"}"#)
         defer { box.stop() }
         try await until { config.isLoaded }
-        #expect(EngineConfig.rules(on: nil).map(\.resource) == ["git push *"])
         #expect(try await app.machineSeed().settings["model"] == .string("openai/luna"))
     }
 
@@ -201,7 +196,6 @@ import Testing
         await config.refresh()
         #expect(!config.isLoaded)
         #expect(config.problem == "Its settings couldn't be read: Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
-        #expect(EngineConfig.knowsRules(on: nil) == false, "sessions wait for its rules")
         config.set(.string("openai/luna"), at: ["model"])
         #expect(try SettingsBox.onDisk()["model"] as? String == "anthropic/sonnet")
 

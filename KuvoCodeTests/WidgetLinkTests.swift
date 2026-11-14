@@ -22,7 +22,7 @@ import WebKit
                                     state: .completed(input: .object(["title": .string("Benchmarks"), "html": .string(html)]), output: [], metadata: nil))
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 640, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let host = NSHostingView(rootView: WidgetCard(call: call, send: { _ in }))
+        let host = NSHostingView(rootView: WidgetCard(call: call, send: { _, _ in }))
         window.contentView = host
         window.orderBack(nil)
         defer { window.close() }

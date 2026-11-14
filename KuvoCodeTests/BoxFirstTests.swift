@@ -27,7 +27,9 @@ import Testing
         #expect(info.app == AppInfo.version)
         #expect(info.engine == "2.0.32", "the one running")
         #expect(info.chats == Workspace.chatsFolder)
-        for feature in ["machines", "hosts", "mac", "claude-code", "usage", "sandbox.asks", "autopilot"] { #expect(info.features.contains(feature), "\(feature)") }
+        for feature in ["machines", "hosts", "mac", "claude-code", "usage.history", "sandbox.asks", "autopilot"] { #expect(info.features.contains(feature), "\(feature)") }
+        // (Usage is every box's, `usage.history`: no longer a Mac's own through its app.)
+        #expect(!info.features.contains("usage"))
         #expect(!info.features.contains("update") && !info.features.contains("engine.start"), "a machine's own")
 
         // Routes no list named before: its news as it tells it (the Mac shows it as it's worded
@@ -39,7 +41,7 @@ import Testing
         // The app's own stay its own: with no PhoneLink to answer them here, they say so, rather
         // than reach the box (which would say it has no such route).
         #expect(try await client.send("GET", "kuvo/hosts").status == 503)
-        #expect(try await client.send("GET", "kuvo/usage").status == 503)
+        #expect(try await client.send("GET", "kuvo/asks").status == 503)
         // And one no box has, the box's to say.
         #expect(try await client.send("GET", "kuvo/nothing-here").status == 404)
     }

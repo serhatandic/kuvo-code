@@ -30,7 +30,7 @@ const REFUSED = object({ message: string });
 
 /** A message waiting on the box while its conversation is paused: who it's from (none for yours),
  * what it says as shown, its files' names, and when it began to wait (ms). */
-export const WAITING = object({ id: string, "from?": string, text: string, "files?": list(string), at: number });
+export const WAITING = object({ id: string, "from?": string, text: string, "files?": list(string), "keyword?": string, at: number });
 
 /** A session's queue: whether it waits for Resume, what Stop held, in the order it goes, and what
  * waits on the box (left out when nothing does). */

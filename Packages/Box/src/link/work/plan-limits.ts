@@ -44,6 +44,33 @@ function windowName(window: Record<string, unknown>): string {
   return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
 }
 
+/** An account's name, as an agent names it: "Codex", "Claude Code (Work)", "GitHub Copilot". */
+export function rowTitle(account: Record<string, unknown>): string {
+  const service = typeof account.agent === "string" ? (AGENT_NAMES[account.agent] ?? account.agent) : (ENGINE_NAMES[String(account.service)] ?? String(account.service));
+  return `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}`;
+}
+
+/** What a plan has beyond its windows, a line each: an amount, what's left, its resets (and how to use one). */
+function extraLines(account: Record<string, unknown>, now: number): string[] {
+  const lines: string[] = [];
+  for (const extra of Array.isArray(account.extras) ? account.extras.filter(isObject) : []) {
+    const name = typeof extra.name === "string" ? extra.name : String(extra.id);
+    // (One that started over since it was read isn't known now.)
+    if (typeof extra.resetsAt === "number" && extra.resetsAt <= now) continue;
+    const resets = typeof extra.resetsAt === "number" ? `, starts over ${until(extra.resetsAt, now)}` : "";
+    if (extra.kind === "spent" && typeof extra.amount === "number") lines.push(`  - ${name}: ${amount(extra.amount, extra.unit)} spent${resets}`);
+    else if (extra.kind === "capped" && typeof extra.amount === "number" && typeof extra.limit === "number") lines.push(`  - ${name}: ${amount(extra.amount, extra.unit)} of ${amount(extra.limit, extra.unit)} used${resets}`);
+    else if (extra.kind === "left" && typeof extra.amount === "number") lines.push(`  - ${name}: ${amount(extra.amount, extra.unit)} left`);
+    else if (extra.kind === "resets") {
+      const count = Number(extra.count) || 0;
+      const where = isObject(extra.on) && extra.on.here !== true && typeof extra.on.name === "string" ? ` (used on ${extra.on.name}, which has its sign-in)` : "";
+      const use = count > 0 && extra.usable === true ? `; use_limit_reset with account "${String(account.id ?? account.provider)}" uses one${where}${extra.agents === true ? " (the user allows it without asking)" : " (the user approves each)"}` : count > 0 ? "; none can be used from your computers now" : "";
+      lines.push(`  - rate-limit resets: ${count} available${use}`);
+    } else if (extra.kind === "unreadable" && typeof extra.message === "string") lines.push(`  - ${extra.message}`);
+  }
+  return lines;
+}
+
 /** The limits as an agent reads them: every account across your computers where the box lists
  * them so (`rows`, read wherever it was read last), this computer's first; else this one's own. */
 export function describePlanLimits(data: unknown, now = Date.now()): string {
@@ -74,7 +101,8 @@ export function describePlanLimits(data: unknown, now = Date.now()): string {
     }
     const balance = isObject(account.balance) ? account.balance : undefined;
     if (balance) lines.push(`  - credits: ${amount(Number(balance.left), balance.unit)} left${typeof balance.limit === "number" ? ` of ${amount(balance.limit, balance.unit)}` : ""}`);
-    if (!windows.length && !balance) lines.push("  - none read yet");
+    lines.push(...extraLines(account, now));
+    if (!windows.length && !balance && !Array.isArray(account.extras)) lines.push("  - none read yet");
     const problem = isObject(account.problem) ? account.problem : undefined;
     if (problem && typeof problem.message === "string") {
       const next = typeof problem.until === "number" && problem.until > now ? ` Read again ${until(problem.until, now)}.` : "";

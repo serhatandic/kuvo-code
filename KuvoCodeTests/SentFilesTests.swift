@@ -6,13 +6,15 @@ import Testing
 
 /// A message sent with files (C1–C3): the engine gets what the model can read with its contents and
 /// the rest as paths the agent can open, and once the agent has the message, it still shows its
-/// files, each once, under the words you wrote. The engine is stubbed.
+/// files, each once, under the words you wrote. This Mac's box is the real one, which writes the
+/// files' note; the engine is stubbed.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct SentFilesTests {
     let engine = StubEngine(port: 47991)
     let workspace = Workspace()
     let id = "ses_files"
     let folder = AppInfo.testRoot.appending(path: "Sent files \(UUID().uuidString.prefix(8))")
+    let box = SessionsBox()
 
     init() throws {
         workspace.api = engine.api
@@ -26,16 +28,17 @@ import Testing
     }
 
     /// What the conversation shows of a sent message: its words, and its files by name, those it
-    /// carries and those its note names besides them (as its bubble lists them).
+    /// carries and those its parts name besides them (as its bubble lists them).
     private func shown(_ message: Message.User) -> (words: String, files: [String]) {
-        let (words, _, paths, _) = SentMessage.split(CommandMessages.shared.text(of: message))
+        let parts = SentMessage.parts(message)
         let own = (message.files ?? []).compactMap(\.name)
-        let named = Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map { ($0 as NSString).lastPathComponent }
-        return (words, own + named)
+        let named = Attachments.paths(parts.paths, besides: (message.files ?? []).compactMap(\.fileURL)).map { ($0 as NSString).lastPathComponent }
+        return (parts.words, own + named)
     }
 
     @Test func aSentMessageKeepsItsFiles() async throws {
         defer {
+            box.stop()
             engine.stop()
             try? FileManager.default.removeItem(at: folder)
         }
@@ -45,6 +48,7 @@ import Testing
         engine.list([StubEngine.session(id, title: "Files", directory: folder.path)])
         engine.conversation(id, [])
         engine.on("POST", "/api/session/\(id)/prompt", json: [:])
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -64,7 +68,7 @@ import Testing
         model.apply(try engine.event("session.inbox.enqueued", session: id, [
             "inboxID": messageID,
             "item": ["type": "user", "delivery": "steer", "payload": [
-                "text": text,
+                "text": text, "metadata": sent.body["metadata"] ?? [:],
                 "files": [["mime": "text/markdown", "name": "Q3 report.md", "data": "IyBRMw==", "source": ["type": "uri", "uri": report.absoluteString]]],
             ]],
         ]))
@@ -84,6 +88,7 @@ import Testing
     /// with the session; it isn't left waiting with the pictures not sent yet.
     @Test func aPastedPictureSentIsKeptWithItsSession() async throws {
         defer {
+            box.stop()
             engine.stop()
             try? FileManager.default.removeItem(at: folder)
             Attachments.forget(session: id)
@@ -92,6 +97,7 @@ import Testing
         engine.list([StubEngine.session(id, title: "Files", directory: folder.path)])
         engine.conversation(id, [])
         engine.on("POST", "/api/session/\(id)/prompt", json: [:])
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()

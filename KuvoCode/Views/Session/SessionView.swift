@@ -931,17 +931,14 @@ struct DraftSessionView: View {
     @State private var isCreating = false
 
     /// What "/" offers a new conversation: a goal where its computer runs them, a loop, Plan, and
-    /// Autopilot where its computer has it.
+    /// Autopilot.
     private var newSessionKeywords: [Keyword] {
         let goals = workspace.agents(forFolder: directory).map { $0.api != nil && $0.runsGoals != false } ?? false
-        let autopilot = workspace.autopilotHere[Workspace.box(of: directory)] == true
-        return Keyword.allCases.filter { $0 == .loop || $0 == .plan || ($0 == .goal && goals) || ($0 == .autopilot && autopilot) }
+        return Keyword.allCases.filter { $0 == .loop || $0 == .plan || $0 == .autopilot || ($0 == .goal && goals) }
     }
 
-    /// Autopilot as its Mode menu offers it, once its computer is known.
-    private var autopilotChoice: AutopilotChoice? {
-        workspace.autopilotHere[Workspace.box(of: directory)].map { AutopilotChoice(on: autopilot && $0, unavailable: $0 ? nil : "Needs a newer Kuvo Code on its computer") }
-    }
+    /// Autopilot as its Mode menu offers it.
+    private var autopilotChoice: AutopilotChoice? { AutopilotChoice(on: autopilot) }
 
     /// Worktrees are for git repositories.
     private var isRepository: Bool { workspace.branches[directory] != nil || workspace.defaultBranches[directory] != nil }

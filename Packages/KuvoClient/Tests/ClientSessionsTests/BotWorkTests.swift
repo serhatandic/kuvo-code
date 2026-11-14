@@ -88,6 +88,21 @@ struct BotWorkTests {
         #expect(WorkWords.about(try item("auto", ""), model: "Auto") == ["Auto · high · Kuvo Code"])
     }
 
+    @Test func anAgentsAskToUseAResetSaysTheAccountWhatItSpendsAndThatAlwaysIsTheAccounts() throws {
+        let json = #"{"asks": [{"id": "wak_r1", "action": "resetLimits", "session": "ses_mira", "name": "Mira", "project": "Codex", "folderName": "", "folder": null, "at": 1, "reset": {"row": "codex#bbbb", "account": "Codex", "service": "codex", "count": 2, "refills": ["five_hour"], "on": "hetzner"}, "words": {"title": "Mira asks to use a reset", "body": "Codex: 1 of 2, on hetzner"}}]}"#
+        let ask = try #require(try JSONDecoder().decode(WorkAskList.self, from: Data(json.utf8)).asks.first)
+        #expect(ask.action == .resetLimits)
+        #expect(ask.reset?.row == "codex#bbbb")
+        #expect(ask.words?.body == "Codex: 1 of 2, on hetzner")
+        // Nothing of folders is asked.
+        #expect(!ask.needsFolder)
+        #expect(WorkWords.askTitle(ask) == "Allow using a reset?")
+        #expect(WorkWords.askLine(ask) == "Mira wants to use 1 of 2 resets on Codex.")
+        #expect(WorkWords.askDoes(ask) == "Your 5-hour window starts over now. Used on hetzner, which has this account's sign-in.")
+        #expect(WorkWords.always(ask) == "Always Allow for Codex")
+        #expect(WorkWords.alwaysHelp(ask).hasSuffix("Settings › Accounts takes it back."))
+    }
+
     @Test func whatABotMayDoWithoutAskingReadsEvenWhenANewerBoxNamesMore() throws {
         let allowed = try JSONDecoder().decode(WorkActions.self, from: Data(#"["makeProject", "buyDomain"]"#.utf8))
         #expect(allowed.actions == [.makeProject])

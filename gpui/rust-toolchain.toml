@@ -1,0 +1,5 @@
+# Matches the toolchain the pinned GPUI revision is built and tested with.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

@@ -147,9 +147,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UsageMenuBar.shared.settingsInHost = { [model] in model.openSettings(.usage) }
         #if DEBUG
         // KUVO_DEMO_USAGE=off leaves the usage tracker out, so a second copy of the app
-        // (for screenshots) never renews the logins the first one is using; `sample` too, and
-        // phones get sample numbers (see PhoneLink).
-        if ["off", "sample"].contains(ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"]) {
+        // (for screenshots) never renews the logins the first one is using.
+        if ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"] == "off" {
             if intoBackground { InBackground.shared.enterAtLaunch(model, usageStarting: false) }
             return
         }
@@ -189,8 +188,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.boxGroups.flush()
         // Closing the engine's stdin shuts it down cleanly (it would also exit with us).
         model.stop()
-        // This Mac's box: the keeper's goes on; the app's own goes with it.
+        // This Mac's box: the keeper's goes on; the app's own goes with it. This Mac's own box in a
+        // home of its own goes on too, told the app quit.
         model.stopBox()
+        if model.attachedIsOwnBox { AppModel.tellOwnBoxQuitting(updating: false) }
         model.stopMachines()
         Analytics.shared.flushBeforeQuit()
     }

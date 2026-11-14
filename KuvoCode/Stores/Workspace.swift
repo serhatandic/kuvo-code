@@ -57,12 +57,6 @@ final class Workspace {
     @ObservationIgnored var machineAPI: (String) -> OpenCodeAPI? = { _ in nil }
     /// The machine each session's events came from, for sessions without a row (a subagent's).
     @ObservationIgnored private var sessionMachines: [String: String] = [:]
-    /// Permissions kept until their box says whether its reviewer takes them up: the old-box path,
-    /// for a box from before `sandbox.reviews.settled`. A box with it keeps them itself, to their
-    /// end (`Sandboxes.settles`), and nothing is kept here.
-    // (Old-box path: it and what keeps it, each marked so, go once no box before
-    // `sandbox.reviews.settled` is supported.)
-    @ObservationIgnored private var awaitingReview: [String: PermissionRequest] = [:]
     /// From a box that keeps them to their end, those heard asked that it hasn't listed yet (it lists
     /// each as it hears it): until it does, one is yours should it go quiet first, as nothing would
     /// list it, and told then.
@@ -322,37 +316,40 @@ final class Workspace {
     /// which the sidebar says). Asked again now and then, as it may be updated meanwhile.
     private(set) var outdatedLists: Set<String> = []
 
-    /// A box said it has less than the app needs (its features, as it said them): the app holds it
-    /// for its update (#679).
-    @ObservationIgnored var onOlderBox: (String, [String]) -> Void = { _, _ in }
-    /// A box said it has all the app needs (its features, as it said them): one held is let go.
-    @ObservationIgnored var onCurrentBox: (String, [String]) -> Void = { _, _ in }
+    /// What each box says it has (`kuvo/info`'s `features`), read through `boxes`: the app's one
+    /// reader of them (`AppModel.boxFeatures`), which tells the update gate what each says
+    /// (`AppModel.wireStores`). This Mac's own box, of this version, has them all.
+    @ObservationIgnored private(set) lazy var features = BoxFeatures(hasEverything: BoxClient.hasEveryFeature) { [weak self] id in
+        guard let box = self?.boxes?(id) else { throw CancellationError() }
+        return try await box.send("GET", "kuvo/info")
+    }
 
     /// Whether `box` is held for its update now (`BoxGates`): what it has is asked again each time.
     @ObservationIgnored var isHeld: (String) -> Bool = { _ in false }
 
     /// Whether `box` lists its sessions, as it says of itself: noted (`outdatedLists`); nil where it
-    /// can't be asked now. What it said it has goes to the update gate, against all the app needs
-    /// (`BoxGate.required`), not only its lists.
-    private func checkLists(on box: String) async -> Bool? {
+    /// can't be asked now. What it says it has goes to the update gate (`features`), against all
+    /// the app needs (`BoxGate.required`), not only its lists. `again`: asked again whatever it said.
+    private func checkLists(on box: String, again: Bool = false) async -> Bool? {
+        if BoxClient.hasEveryFeature(box) { return true }
+        guard boxes?(box) != nil else { return false }
+        let said: Set<String>?
         // (One that said it didn't, or is held, asked again: it may have been updated since.)
-        if outdatedLists.contains(box) || isHeld(box) { featuresHere[box] = nil }
-        let says = await boxSays(SessionLists.feature, on: box)
-        if let features = featuresHere[box].map(Array.init) {
-            if BoxGate.isCurrent(features) { onCurrentBox(box, features) } else { onOlderBox(box, features) }
+        if again || outdatedLists.contains(box) || isHeld(box) {
+            if case .has(let now) = await features.readAgain(box) { said = now } else { said = nil }
+        } else {
+            said = await features.features(of: box)
         }
-        if says == false {
-            outdatedLists.insert(box)
-        } else if says == true {
-            outdatedLists.remove(box)
-        }
-        return says
+        guard let said else { return nil }
+        let lists = said.contains(SessionLists.feature)
+        if lists { outdatedLists.remove(box) } else { outdatedLists.insert(box) }
+        return lists
     }
 
     /// `box` is up to date now (the update gate let it go): what it has is asked again, and its
     /// list read at once.
     func boxUpdated(_ box: String) {
-        featuresHere[box] = nil
+        features.forget(box)
         outdatedLists.remove(box)
         if !BoxClient.streams(box), !isRemoved(box) { Task { await readSessionList(on: box) } }
     }
@@ -476,9 +473,8 @@ final class Workspace {
     /// COMPAT(0.7 worktrees): worktrees this Mac removed before its boxes kept their records, given to `box` once, so its session lists file their sessions under their projects as this Mac did. Goes 3 months after 0.8.0.
     private func handOverRemovedWorktrees(on box: String) async {
         let key = "removedWorktreesHandedOver." + box
-        // (Only to a box that keeps them, as one that lists its sessions does: an older one refuses
-        // the records, and they're given once it's updated.)
-        guard !UserDefaults.standard.bool(forKey: key), boxes?(box) != nil, await boxSays(SessionLists.feature, on: box) == true else { return }
+        // (A box held for its update refuses the records: given once it's updated.)
+        guard !UserDefaults.standard.bool(forKey: key), boxes?(box) != nil else { return }
         for (folder, project) in removedWorktrees.filter({ Self.isOn($0.key, box) }).sorted(by: { $0.key < $1.key }) {
             do {
                 let _: Empty = try await onBox(box, "POST", "kuvo/worktrees/record", ["removed": true, "folder": Self.onBox(folder), "project": Self.onBox(project)])
@@ -510,8 +506,7 @@ final class Workspace {
             } catch let refusal as BoxRefusal where refusal.status == 404 {
                 // Not served: as it says of itself now (its features asked again), noted; else
                 // read again later.
-                featuresHere[box] = nil
-                _ = await checkLists(on: box)
+                _ = await checkLists(on: box, again: true)
             } catch {}
         } while listReads[box] == true
     }
@@ -663,32 +658,11 @@ final class Workspace {
     /// Moves a chat into the project at `directory`: its conversation goes along, and from then on
     /// it works in that project's folders. If it's working, the move comes at its next step.
     func move(_ id: String, toProject directory: String) async throws {
-        guard let session = session(id) else { return }
+        guard session(id) != nil else { return }
         // Its box moves it and gives it the project's folders (PROTOCOL.md, "Projects"); it says
         // why where it can't (a coding agent's, one moving to another computer).
-        let boxID = Self.box(of: directory)
-        if let box = boxes?(boxID), try await goesThroughBox(SessionMove.feature, on: boxID) {
-            _ = try await box.value(SessionMove.Moved.self, "POST", SessionMove.route(id), body: SessionMove.Asked(directory: Self.onBox(directory)))
-            await reload(id)
-            Analytics.shared.track("chat_moved")
-            return
-        }
-        // A box from before `sessions.move`: the app moves it with the engine and gives it the
-        // project's folders itself.
-        if OutsideAgents.isAgentSession(session) { throw OutsideAgents.Failure.unavailable("Moving a chat into a project") }
-        // Moving to another computer: what changes it waits until it's there.
-        if Moves.isFrozen(id) { throw Moves.Failure.moving }
-        guard let api = api(forFolder: directory) else { return }
-        try await api.moveSession(id, to: directory)
-        // As its engine knows them: a machine's folders are plain paths there.
-        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
-        try? await api.setPermissions(session: id, rules: ProjectFolders.permissions(session.permissions ?? [], folders: extra))
-        if extra.isEmpty {
-            try? await api.removeInstruction(session: id, key: ProjectFolders.instructionKey)
-        } else {
-            try? await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(directory), folders: extra))
-        }
-        // Its open conversation stays as it is, now in its new place.
+        guard let box = boxes?(Self.box(of: directory)) else { throw Self.unreachable }
+        _ = try await box.value(SessionMove.Moved.self, "POST", SessionMove.route(id), body: SessionMove.Asked(directory: Self.onBox(directory)))
         await reload(id)
         Analytics.shared.track("chat_moved")
     }
@@ -958,6 +932,8 @@ final class Workspace {
     func markdown(of id: String) async throws -> String? {
         guard let session = session(id), let api = api(for: session) else { return nil }
         let messages = try await ConversationExport.messages(of: session, api: api)
+        // Those from before as their box reads them.
+        await SentMessage.read(messages, from: box(of: id, else: session.location.directory)())
         return ConversationExport.markdown(title: session.title ?? "New Session", messages: messages, directory: session.location.directory)
     }
 
@@ -1260,14 +1236,11 @@ final class Workspace {
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
         keepOnBox(directory)
-        // Sessions not open yet catch up when they open. A box with `projects.folders` gives each
-        // its folders as it next runs or opens, never all at once at rest, which would make each
-        // the newest: only those open in a tab now. A box from before: the app gives each loaded
-        // one them now.
-        givingFolders = models.values.filter { projectDirectory(of: $0.session) == directory }.map { model in
-            let isShown = shown.contains(model.id)
-            return Task {
-                if !isShown, await model.boxHas(ProjectFoldersOnBox.feature) { return }
+        // Sessions not open yet catch up when they open: their box gives each its folders as it
+        // next runs or opens, never all at once at rest, which would make each the newest. Only
+        // those open in a tab now.
+        givingFolders = models.values.filter { shown.contains($0.id) && projectDirectory(of: $0.session) == directory }.map { model in
+            Task {
                 // (Once its box has them.)
                 await projectsWritten()
                 await model.syncFolders()
@@ -1280,41 +1253,16 @@ final class Workspace {
     /// waits for).
     @ObservationIgnored private(set) var givingFolders: [Task<Void, Never>] = []
 
-    /// Settings › Permissions changed: each box makes its conversations' rules again with them
-    /// (PROTOCOL.md, "Approval"); open sessions' folders follow here where their box is from
-    /// before `projects.folders` (one with it keeps them itself).
-    func syncPermissions() {
-        for model in models.values {
-            Task {
-                if await model.boxHas(ProjectFoldersOnBox.feature) { return }
-                await model.syncFolders()
-            }
-        }
-    }
-
     /// Each computer's approvals (`GET kuvo/approval`), by box, as last read: what a new
     /// conversation's composer starts with there.
     var approvalsHere: [String: ApprovalHere] = [:]
 
-    /// Whether each computer's box has Autopilot, by box, as last read: a new conversation's Mode
-    /// menu offers it there, or says it needs a newer Kuvo Code.
-    var autopilotHere: [String: Bool] = [:]
-
-    /// Reads the approvals of the computer `directory` is on, and whether it has Autopilot.
+    /// Reads the approvals of the computer `directory` is on.
     func readApprovalHere(for directory: String) async {
         let id = Self.box(of: directory)
         guard let box = boxes?(id) else { return }
-        await readAutopilotHere(on: id)
         guard let here = try? await box.value(ApprovalHere.self, "GET", "kuvo/approval") else { return }
         if approvalsHere[id] != here { approvalsHere[id] = here }
-    }
-
-    /// Reads whether the computer `id` has Autopilot, unless that's known.
-    func readAutopilotHere(on id: String) async {
-        guard autopilotHere[id] == nil, let box = boxes?(id) else { return }
-        struct Info: Decodable { var features: [String]? }
-        let has = BoxClient.hasEveryFeature(id) ? true : (try? await box.value(Info.self, "GET", "kuvo/info")).map { $0.features?.contains("autopilot") == true }
-        if let has { autopilotHere[id] = has }
     }
 
     /// Reads the approvals of the computer `id` (its box).
@@ -1352,79 +1300,32 @@ final class Workspace {
         // approval and Autopilot, all there. (Told before the folder's added, as one that can't be
         // told adds nothing.)
         let boxID = Self.box(of: directory)
-        let throughBox = boxes?(boxID) != nil ? try await goesThroughBox(SessionStart.feature, on: boxID) : false
+        guard let box = boxes?(boxID) else { throw Self.unreachable }
         let directory = addFolder(directory)
-        if throughBox, let box = boxes?(boxID) {
-            let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
-            let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
-            let session: Session
-            if var made = started.info {
-                made.location.directory = api.appFolder(made.location.directory)
-                session = made
-            } else {
-                session = try await api.session(started.session)
-            }
-            if let tree = started.worktree {
-                let folder = Self.here(tree.folder ?? tree.root, on: boxID)
-                worktrees[folder] = Worktree(project: directory, root: Self.here(tree.root, on: boxID), branch: tree.branch, base: tree.base)
-                saveWorktrees()
-                // (Its box told it it works there.)
-                toldWorktree.insert(session.id)
-            }
-            noteMade(session, as: started, in: directory, on: boxID)
-            upsert(session)
-            trackCreated(session, model: model, agent: agent, approval: session.metadata?["kuvo"]?["applied"]?.string ?? "default", worktree: worktree)
-            return session
-        }
-        // A box from before `sessions.start.empty` makes no session without a task: the app makes it
-        // here, with the project's folders, approval and Autopilot itself.
-        let folder = worktree ? try await makeWorktree(of: directory) : directory
-        // As its engine knows them: a machine's folders are plain paths there.
-        let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
-        // Its box makes its rules from the approval it's made with a moment later; until then,
-        // these hold nothing back that it would, and ask where it would (Auto asking first for
-        // now; Ask First where this computer's approvals aren't read yet).
-        let here = approvalsHere[Self.box(of: directory)]
-        let starting = here.map { $0.shown(approval ?? $0.default, agents: isAgents).effective } ?? .askFirst
-        let rules = ProjectFolders.permissions(starting.provisionalRules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
-        // (One in a worktree carries its project, for every client to file it there from the first.)
-        var kuvo: [String: JSONValue] = [:]
-        if let approval { kuvo["approval"] = .string(approval.rawValue) }
-        if worktree { kuvo["filed"] = SessionProject.mark(folder: Self.onBox(folder), project: Self.onBox(directory)) }
-        // A chat carries its mark from the first, as its box would put it (PROTOCOL.md, "Chats"):
-        // no second write, which the engine would make it newer for.
-        if !worktree, Self.isChat(folder) { kuvo["chat"] = SessionChat.mark(folder: Self.onBox(folder)) }
-        let metadata: JSONValue? = kuvo.isEmpty ? nil : .object(["kuvo": .object(kuvo)])
+        let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
+        let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
         let session: Session
-        do {
-            session = try await api.createSession(directory: folder, agent: agent, model: model, permissions: rules.isEmpty ? nil : rules, metadata: metadata)
-        } catch {
-            // A worktree made for it goes too, with its branch (nothing's on it yet).
-            if worktree { await discardWorktree(folder) }
-            throw error
+        if var made = started.info {
+            made.location.directory = api.appFolder(made.location.directory)
+            session = made
+        } else {
+            session = try await api.session(started.session)
         }
-        if autopilot {
-            do {
-                guard let box = boxes?(Self.box(of: directory)) else { throw CancellationError() }
-                _ = try await box.value(AutopilotShown.self, "PUT", "kuvo/sessions/\(session.id)/autopilot", body: ["autopilot": true])
-            } catch {
-                // Not to start Interactive when you picked Autopilot: it goes, and the message comes back.
-                try? await api.deleteSession(session.id)
-                if worktree { await discardWorktree(folder) }
-                throw error
-            }
-        }
-        if !extra.isEmpty {
-            try? await api.setInstruction(session: session.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(folder), folders: extra))
-        }
-        if let tree = worktrees[folder] {
+        if let tree = started.worktree {
+            let folder = Self.here(tree.folder ?? tree.root, on: boxID)
+            worktrees[folder] = Worktree(project: directory, root: Self.here(tree.root, on: boxID), branch: tree.branch, base: tree.base)
+            saveWorktrees()
+            // (Its box told it it works there.)
             toldWorktree.insert(session.id)
-            try? await api.setInstruction(session: session.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
         }
+        noteMade(session, as: started, in: directory, on: boxID)
         upsert(session)
-        trackCreated(session, model: model, agent: agent, approval: starting.rawValue, worktree: worktree)
+        trackCreated(session, model: model, agent: agent, approval: session.metadata?["kuvo"]?["applied"]?.string ?? "default", worktree: worktree)
         return session
     }
+
+    /// What a start or a move says when its computer's box can't be reached.
+    private static var unreachable: BoxRefusal { BoxRefusal(status: 503, message: "Its computer can’t be reached now. Try again once it’s connected.") }
 
     private func trackCreated(_ session: Session, model: ModelRef?, agent: String?, approval: String, worktree: Bool) {
         let used = model ?? session.model
@@ -1434,44 +1335,6 @@ final class Workspace {
         props["worktree"] = worktree
         if let since = Analytics.shared.sinceInstall { props["since_install"] = since }
         Analytics.shared.track("session_created", props)
-    }
-
-    /// Each box's features, by box, as last read (`kuvo/info`): whether a new session, a move into a
-    /// project and a project's folders go through it there. Read once a run.
-    @ObservationIgnored private var featuresHere: [String: Set<String>] = [:]
-
-    /// Whether the box `id` has `feature`: the app's own always, a machine's as it says (one that
-    /// answers it hasn't `kuvo/info`, 404 or 405, is from before: none). Nil where that can't be told
-    /// just now (it couldn't be asked, or didn't answer as either).
-    func boxSays(_ feature: String, on id: String) async -> Bool? {
-        if BoxClient.hasEveryFeature(id) { return true }
-        if let known = featuresHere[id] { return known.contains(feature) }
-        guard let box = boxes?(id) else { return false }
-        struct Info: Decodable { var features: [String]? }
-        let features: Set<String>
-        do {
-            let (status, data) = try await box.send("GET", "kuvo/info")
-            if status == 404 || status == 405 {
-                features = []
-            } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
-                features = Set(info.features ?? [])
-            } else {
-                return nil
-            }
-        } catch {
-            return nil
-        }
-        featuresHere[id] = features
-        return features.contains(feature)
-    }
-
-    /// Whether `feature` goes through the box `id`, as `boxSays`: where that can't be told now,
-    /// nothing is done (the app making it itself would write its own rules, not its box's).
-    private func goesThroughBox(_ feature: String, on id: String) async throws -> Bool {
-        guard let says = await boxSays(feature, on: id) else {
-            throw BoxRefusal(status: 503, message: "Its computer can’t be reached now. Try again once it’s connected.")
-        }
-        return says
     }
 
     // MARK: Worktrees
@@ -1517,18 +1380,6 @@ final class Workspace {
         You work in a git worktree of this project, on the branch \(tree.branch), so your changes stay apart from \
         the user's own checkout at \(RemoteFolder.parse(tree.project)?.path ?? tree.project) until they merge them. Make your changes here, not there.
         """
-    }
-
-    /// A new worktree of the project's repository on a branch of its own, made by the box the
-    /// project's on, which keeps it (PROTOCOL.md, "Worktrees"), its branch named with that
-    /// computer's branch prefix (Settings › Git). Returns the folder for the session to run in.
-    private func makeWorktree(of directory: String) async throws -> String {
-        let box = Self.box(of: directory)
-        let made: BoxWorktree = try await onBox(box, "POST", "kuvo/worktrees", ["project": Self.onBox(directory)])
-        let folder = Self.here(made.folder ?? made.root, on: box)
-        worktrees[folder] = Worktree(project: directory, root: Self.here(made.root, on: box), branch: made.branch, base: made.base)
-        saveWorktrees()
-        return folder
     }
 
     /// A worktree made for a session that wasn't: removed, with its branch, and not recorded as
@@ -1756,31 +1607,30 @@ final class Workspace {
     }
 
     /// This Mac's worktrees as its box keeps them, from now on: one made, renamed or removed for a
-    /// phone shows here as it happens. The box attached in place (`box`), which answers once a
-    /// read, is read again now and then instead, as slowly as a machine's things are.
+    /// phone shows here as it happens. The box attached in place (`box`) streams them too while
+    /// it's reached over its server; while it isn't, it answers once a read, and is read again now
+    /// and then instead, as slowly as a machine's things are.
     func followWorktrees(on box: String = BoxClient.mac) async {
-        guard BoxClient.streams(box) else {
-            // (Read as it connected, with what this Mac kept handed over then, or now, if it couldn't
-            // be then: only read from then on.)
-            while !Task.isCancelled {
+        struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
+        while !Task.isCancelled {
+            guard BoxClient.streams(box) else {
+                // (Read as it connected, with what this Mac kept handed over then, or now, if it
+                // couldn't be then: only read from then on.)
                 try? await Task.sleep(for: BoxClient.readAgainAfter)
                 guard !Task.isCancelled else { return }
                 await takeWorktrees(from: box)
+                continue
             }
-            return
-        }
-        struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
-        while !Task.isCancelled {
-            if let client = boxes?(BoxClient.mac), await takeWorktrees(from: BoxClient.mac) != nil {
+            if let client = boxes?(box), await takeWorktrees(from: box) != nil {
                 do {
                     for try await line in client.follow("kuvo/worktrees/events") {
                         guard let listed = try? JSONDecoder().decode(Listed.self, from: line) else { continue }
-                        followingWorktrees = true
-                        take(listed.worktrees, from: BoxClient.mac)
-                        takeRestorable(listed.restorable ?? [], from: BoxClient.mac)
+                        if box == BoxClient.mac { followingWorktrees = true }
+                        take(listed.worktrees, from: box)
+                        takeRestorable(listed.restorable ?? [], from: box)
                     }
                 } catch {}
-                followingWorktrees = false
+                if box == BoxClient.mac { followingWorktrees = false }
             }
             // The box restarted, or isn't up yet: followed again in a moment.
             try? await Task.sleep(for: .seconds(2))
@@ -2008,9 +1858,10 @@ final class Workspace {
     /// minute after it connects (they're read as it does, `refreshOnce`), and again that long
     /// after its stream ends; an older Kuvo Code there, which can't keep them yet, now and then.
     func followProjects(on box: String = BoxClient.thisMac) async {
-        // (The app's own box streams them; any other, the one attached in place too, answers once a
-        // read, so it's read now and then.)
-        let onThisMac = BoxClient.streams(box)
+        // (A box that streams has them followed (the app's own, and the one attached in place while
+        // it's reached over its server: asked each round); any other answers once a read, so it's
+        // read now and then.)
+        var onThisMac: Bool { BoxClient.streams(box) }
         var older = false
         while !Task.isCancelled, !isRemoved(box) {
             if !onThisMac {
@@ -2167,21 +2018,23 @@ final class Workspace {
     func fork(_ id: String, from message: Message.User) async throws {
         Analytics.shared.track("session_branched")
         guard let api = api(forSession: id) else { return }
+        // What goes in the new composer, known before anything's made.
+        guard let parts = await SentMessage.ensure(id: message.id, text: message.text, metadata: message.metadata, from: box(of: id, else: self.session(id)?.location.directory ?? "")()) else {
+            throw BoxRefusal(status: 503, message: SessionModel.unread)
+        }
         let session = try await branch(id, before: message.id, api: api)
         upsert(session)
-        let sent = CommandMessages.shared.text(of: message)
-        let (text, comments, paths, _) = SentMessage.split(sent)
         // The engine's copy carries the attachments; one seen arrive live has them as picked.
         let recent = (try? await api.messages(session: id, limit: 100).data) ?? []
         var stored = message
         for case .user(let user) in recent where user.id == message.id { stored = user }
         // What it replied to comes back over the composer, as you wrote it, and so do its comments
         // (a goal as one).
-        let (quotes, written) = Quoting.draft(of: text)
-        let words = SentWithKeyword.draft(written, keyword: SentMessage.keyword(of: sent))
-        let files = Attachments.restored(SessionModel.files(of: message, stored: stored), noting: paths)
+        let (quotes, written) = Quoting.draft(of: parts.words)
+        let words = SentWithKeyword.draft(written, keyword: parts.keyword)
+        let files = Attachments.restored(SessionModel.files(of: message, stored: stored), noting: parts.paths)
         var draft = Drafts.Draft(text: words, files: files, quotes: quotes)
-        draft.comments = comments
+        draft.comments = parts.reviewComments
         Drafts.shared[session.id] = draft
         tabs?.open(.session(session.id))
     }
@@ -2551,8 +2404,7 @@ final class Workspace {
             sharedForms[request] = nil
             Notifier.shared.clear(request: request)
         }
-        // (Old-box path: what Auto's reviewer was checking here, kept for a box before `sandbox.reviews.settled`.)
-        awaitingReview = awaitingReview.filter { !isMac($0.value.sessionID) }
+        // (What was heard asked here that its box hasn't listed yet.)
         heardUnlisted = heardUnlisted.filter { !isMac($0.value.sessionID) }
         running = running.filter { !isMac($0) }
         dropShellJobs(where: isMac)
@@ -2574,8 +2426,7 @@ final class Workspace {
             asking[request] = nil
             Notifier.shared.clear(request: request)
         }
-        // (Old-box path: what Auto's reviewer was checking there.)
-        awaitingReview = awaitingReview.filter { !isMacs($0.value.sessionID) }
+        // (What was heard asked there that its box hasn't listed yet.)
         heardUnlisted = heardUnlisted.filter { !isMacs($0.value.sessionID) }
         running = running.filter { !isMacs($0) }
         dropShellJobs(where: isMacs)
@@ -2740,9 +2591,6 @@ final class Workspace {
             var folders = Set(theirs.filter { models[$0.id] != nil || running.contains($0.id) }.map(\.location.directory))
             folders.formUnion(jobFolders.removeValue(forKey: machine) ?? [])
             Task { [weak self] in for folder in folders { await self?.readShellJobs(in: folder) } }
-            // (Old-box path: what Auto's reviewer checks as these are read stays; only those from
-            // before can be found gone.)
-            let checking = Set(awaitingReview.keys)
             if let active = try? await api.activeSessions(), isCurrent() {
                 // (No bridge there, none at work; one not read, as they were.)
                 let bridgeActive: Set<String>? = if let bridge { bridgeListed == nil ? nil : try? await bridge.activeSessions() } else { [] }
@@ -2756,7 +2604,7 @@ final class Workspace {
                 findParents(of: active)
                 var asked = active.map { (id: $0, api: api) }
                 if let bridge, let bridgeActive { asked += bridgeActive.map { (id: $0, api: bridge) } }
-                await noteAsks(on: machine, in: asked, tell: reconnected, complete: bridgeActive != nil, checking: checking)
+                await noteAsks(on: machine, in: asked, tell: reconnected, complete: bridgeActive != nil)
             }
             // Its open conversations, kept while it was away, are read again; one deleted there
             // meanwhile goes. (The list has only the newest, so one missing from it is asked about.)
@@ -2794,12 +2642,9 @@ final class Workspace {
     /// What a machine's sessions at work ask you, once it's back: `asking` as it is there now and,
     /// when it `tell`s (connected again since launch, as for bots' news), each request made while
     /// it was out of reach (a bot's wake-up while your Mac slept) told then, as it would have
-    /// been, since no event brings it. One told before isn't told again. `checking`: what Auto's
-    /// reviewer was checking before its sessions were asked which work, the most found gone.
-    private func noteAsks(on machine: String, in active: [(id: String, api: OpenCodeAPI)], tell: Bool, complete wholly: Bool = true, checking: Set<String> = []) async {
+    /// been, since no event brings it. One told before isn't told again.
+    private func noteAsks(on machine: String, in active: [(id: String, api: OpenCodeAPI)], tell: Bool, complete wholly: Bool = true) async {
         var found: [String: String] = [:]
-        // Every permission read, Auto's reviewer's too.
-        var listed: Set<String> = []
         // (Some of its sessions not read at all: what they asked stays as it was.)
         var complete = wholly
         for (id, api) in active {
@@ -2811,7 +2656,6 @@ final class Workspace {
                 continue
             }
             for request in permissions {
-                listed.insert(request.id)
                 // (One its box's reviewer takes up isn't yours: not listed, nor told.)
                 guard tellsOnceYours(request) else { continue }
                 found[request.id] = request.sessionID
@@ -2831,9 +2675,6 @@ final class Workspace {
         // offering an answer to a request that's gone.
         for request in asking.keys where kept[request] == nil && found[request] == nil { Notifier.shared.clear(request: request) }
         asking = kept.merging(found) { $1 }
-        // What Auto's reviewer was checking there, gone meanwhile (its run ended, unheard): never
-        // yours later (#425). The old-box path: a box with `sandbox.reviews.settled` lists it gone.
-        if complete { awaitingReview = awaitingReview.filter { !checking.contains($0.key) || !isTheirs($0.value.sessionID) || listed.contains($0.key) } }
     }
 
     /// A machine disconnected: its sessions stay as last seen until it's back, their
@@ -2936,8 +2777,7 @@ final class Workspace {
                 asking[request] = nil
                 Notifier.shared.clear(request: request)
             }
-            // (Old-box path: what Auto's reviewer was checking there.)
-            awaitingReview = awaitingReview.filter { !gone.contains($0.value.sessionID) && sessionMachines[$0.value.sessionID] != machine }
+            // (What was heard asked there that its box hasn't listed yet.)
             heardUnlisted = heardUnlisted.filter { !gone.contains($0.value.sessionID) && sessionMachines[$0.value.sessionID] != machine }
             sessionMachines = sessionMachines.filter { $0.value != machine }
         }
@@ -2986,14 +2826,7 @@ final class Workspace {
             }
             Notifier.shared.clear(request: request)
         }
-        // What Auto's reviewer was checking here, gone meanwhile (its run ended unheard, or the
-        // engine started again): never yours later (#425). The old-box path: a box with
-        // `sandbox.reviews.settled` lists it gone.
-        for (request, permission) in awaitingReview where sessionMachines[permission.sessionID] == nil && !isBridgeSession(permission.sessionID) {
-            guard let api = api(forSession: permission.sessionID), let asked = await Self.stillAsked(in: permission.sessionID, api: api), !asked.contains(request) else { continue }
-            awaitingReview[request] = nil
-        }
-        // And one heard asked here that its box hasn't listed, gone meanwhile: never told later.
+        // One heard asked here that its box hasn't listed, gone meanwhile: never told later.
         for (request, permission) in heardUnlisted where sessionMachines[permission.sessionID] == nil && !isBridgeSession(permission.sessionID) {
             guard let api = api(forSession: permission.sessionID), let asked = await Self.stillAsked(in: permission.sessionID, api: api), !asked.contains(request) else { continue }
             heardUnlisted[request] = nil
@@ -3204,8 +3037,7 @@ final class Workspace {
             if machine != nil { Attachments.forget(session: id) }
             models[id] = nil
             asking = asking.filter { $0.value != id }
-            // (Old-box path: what Auto's reviewer was checking in it.)
-            awaitingReview = awaitingReview.filter { $0.value.sessionID != id && root(of: $0.value.sessionID) != id }
+            // (What was heard asked in it that its box hasn't listed yet.)
             heardUnlisted = heardUnlisted.filter { $0.value.sessionID != id && root(of: $0.value.sessionID) != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).
             if running.contains(id) { running.remove(id) }
@@ -3332,16 +3164,14 @@ final class Workspace {
             try? await Task.sleep(for: .seconds(15))
             guard let session = session(id), session.parentID == nil, session.title?.isEmpty != false, let api = api(forSession: id),
                   let page = try? await api.firstMessages(session: id, limit: 10) else { return }
-            // What you wrote first, as it shows in the conversation: a command as you typed it,
-            // without the note on attached files, and another agent's message without its header.
-            let first = page.data.lazy.compactMap { message -> String? in
-                guard case .user(let user) = message else { return nil }
-                let text = SentMessage.words(of: CommandMessages.shared.text(of: user))
-                let words = AgentMail.parse(text)?.text ?? text
-                return words.isEmpty ? nil : words
-            }.first
+            // What you wrote first, as it shows in the conversation (its parts, as its box keeps or
+            // reads them): a command as you typed it, without the note on attached files, and another
+            // agent's message without its header.
+            await SentMessage.read(page.data, from: box(of: id, else: session.location.directory)())
+            let users = page.data.compactMap { message -> Message.User? in if case .user(let user) = message { user } else { nil } }
+            let first = users.lazy.map(SentMessage.parts).first { !$0.words.isEmpty }
             guard let first else { return }
-            let written = OutsideAgents.runsInBridge(session.model?.providerID) ? try? await self.api?.generate(Self.titlePrompt(for: first)) : nil
+            let written = OutsideAgents.runsInBridge(session.model?.providerID) ? try? await self.api?.generate(Self.titlePrompt(for: first.words)) : nil
             guard let title = written.flatMap(Self.cleanTitle) ?? Self.title(from: first),
                   self.session(id)?.title?.isEmpty != false else { return }
             try? await api.renameSession(id, title: title)
@@ -3363,12 +3193,11 @@ final class Workspace {
         return title.isEmpty ? nil : String(title.prefix(80))
     }
 
-    /// A title from a message: its words without review comments, the note of attached files or
-    /// line breaks, up to the end of its first sentence or about 48 characters, at a word. A dot in
+    /// A title from a message's parts: its words (or its first comment on the changes) without line
+    /// breaks, up to the end of its first sentence or about 48 characters, at a word. A dot in
     /// a word (README.md, a web address) doesn't end a sentence.
-    nonisolated static func title(from message: String) -> String? {
-        let split = SentMessage.split(message)
-        let words = (split.text.isEmpty ? split.comments.first?.text ?? "" : split.text)
+    nonisolated static func title(from message: MessageParts) -> String? {
+        let words = (message.words.isEmpty ? message.comments.first?.text ?? "" : message.words)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !words.isEmpty else { return nil }
         var title = words
@@ -3441,9 +3270,6 @@ final class Workspace {
             // bridge says itself). Its permissions are named `per_…`.
             guard let ended = event.sessionID, !isBridgeSession(ended) else { return }
             for (request, session) in asking where session == ended && request.hasPrefix("per_") { settled(request) }
-            // And one Auto's reviewer was checking: gone too, never yours later (#425; the old-box
-            // path, as a box with `sandbox.reviews.settled` lists it gone).
-            for (request, permission) in awaitingReview where permission.sessionID == ended && request.hasPrefix("per_") { settled(request) }
             for (request, permission) in heardUnlisted where permission.sessionID == ended && request.hasPrefix("per_") { heardUnlisted[request] = nil }
         default:
             break
@@ -3526,23 +3352,16 @@ final class Workspace {
     /// notification goes, or isn't posted if it's still being made.
     private func settled(_ request: String) {
         asking[request] = nil
-        awaitingReview[request] = nil
         heardUnlisted[request] = nil
         if notifying.contains(request) { settledWhileNotifying.insert(request) }
         Notifier.shared.clear(request: request)
     }
 
     /// Whether a permission is yours now. One its box's reviewer takes up is told once its box
-    /// lists it as yours (`Sandboxes.onYours`): read from its engine then, from a box that keeps it
-    /// to its end (`sandbox.reviews.settled`); kept here meanwhile from one before (the old-box path).
+    /// lists it as yours (`Sandboxes.onYours`), read from its engine then: its box keeps it to its end.
     private func tellsOnceYours(_ request: PermissionRequest) -> Bool {
-        let box = box(of: request)
-        guard !Sandboxes.shared.isYours(request, on: box) else { return true }
-        if !Sandboxes.shared.settles(box) {
-            awaitingReview[request.id] = request
-        } else if Sandboxes.shared.review(of: request.id) == nil {
-            heardUnlisted[request.id] = request
-        }
+        guard !Sandboxes.shared.isYours(request, on: box(of: request)) else { return true }
+        if Sandboxes.shared.review(of: request.id) == nil { heardUnlisted[request.id] = request }
         return false
     }
 
@@ -3556,12 +3375,10 @@ final class Workspace {
         notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request))
     }
 
-    /// One its box's reviewer took up turned out to be yours (nil: its box not heard now, or its
-    /// word not whole). From a box that keeps them to their end, the one it lists yours, as its
-    /// engine still asks it; what it last listed of the rest stands. From a box before that (the
-    /// old-box path), each kept here, looked at again.
+    /// One its box's reviewer took up turned out to be yours (nil: its box not heard now): the one
+    /// it lists yours, as its engine still asks it; what it last listed of the rest stands.
     func reviewLeftForYou(_ id: String?) {
-        if let id, awaitingReview[id] == nil, let listed = Sandboxes.shared.review(of: id), Sandboxes.shared.settles(listed.box), listed.review.state == .yours {
+        if let id, let listed = Sandboxes.shared.review(of: id), listed.review.state == .yours {
             let session = listed.review.session
             // (As its open conversation has it, at once; else as its engine says.)
             if let request = models[session]?.permissions.first(where: { $0.id == id }) ?? models[root(of: session)]?.permissions.first(where: { $0.id == id }) {
@@ -3570,12 +3387,6 @@ final class Workspace {
                 Task { await tellLeftForYou(id, in: session) }
             }
             return
-        }
-        let ids = id.map { [$0] } ?? Array(awaitingReview.keys)
-        for id in ids {
-            guard let request = awaitingReview[id], Sandboxes.shared.isYours(request, on: box(of: request)) else { continue }
-            awaitingReview[id] = nil
-            tellYours(request)
         }
         // Heard asked and not listed by a box that keeps them, which went quiet first: yours.
         guard id == nil else { return }
@@ -3599,7 +3410,7 @@ final class Workspace {
     /// or its engine): off the Dock's count and Notification Center, though its answer or its
     /// run's end wasn't heard here.
     func reviewOver(_ id: String) {
-        guard asking[id] != nil || awaitingReview[id] != nil || notifying.contains(id) else { return }
+        guard asking[id] != nil || notifying.contains(id) else { return }
         settled(id)
     }
 

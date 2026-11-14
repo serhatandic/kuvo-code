@@ -9,7 +9,9 @@
 // it), at the box's ask (`app/open` on the host interface).
 //
 // What it keeps, in `run` (each only you can read):
-// - `app.json`: `{bundle, tools: {url, token} | null, at}`, the app as it last registered;
+// - `app.json`: `{bundle, tools: {url, token} | null, host: {url, password} | null, at}`, the app as
+//   it last registered (`host`: where its own host interface answers what only it can, for a phone's
+//   ask of the Mac's own routes and the panel's sign-ins, `openAppHost`);
 // - `app-opening.json`: `{at, by}`, an opening under way, and which process asked for it;
 // - `app-open-failed.json`: `{at, message}`, the last opening that failed;
 // - `app-updating`: noted as the app quits to install an update (by its time).
@@ -52,6 +54,7 @@ const NO_OPENER = "nothing that opens it is running on this Mac";
 export interface AppRecord {
   bundle: string | null;
   tools: { url: string; token: string } | null;
+  host: { url: string; password: string } | null;
   at: number;
 }
 
@@ -76,10 +79,21 @@ function toolsOf(given: unknown): AppRecord["tools"] {
   return { url: url.toString(), token: given.token };
 }
 
+/** Where the app's own host interface answers (`link/route`, `sites/signed-in`): on this Mac only,
+ * with its password (the box proves it's the app there before sending anything, `proveHost`). */
+function hostOf(given: unknown): AppRecord["host"] {
+  if (!isObject(given) || typeof given.url !== "string" || typeof given.password !== "string") return null;
+  if (given.password.length < 16 || given.password.length > 512) return null;
+  let url: URL;
+  try { url = new URL(given.url); } catch { return null; }
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port || url.pathname !== "/" || url.search || url.username || url.password) return null;
+  return { url: `http://127.0.0.1:${url.port}`, password: given.password };
+}
+
 export function readApp(): AppRecord | null {
   const said = readJSON(APP_FILE());
   if (!isObject(said)) return null;
-  return { bundle: bundleOf(said.bundle), tools: toolsOf(said.tools), at: typeof said.at === "number" ? said.at : 0 };
+  return { bundle: bundleOf(said.bundle), tools: toolsOf(said.tools), host: hostOf(said.host), at: typeof said.at === "number" ? said.at : 0 };
 }
 
 /** Whether the app has said where its tools answer (and hasn't said it quit). */
@@ -102,12 +116,14 @@ export function updating(now = Date.now()): boolean {
   try { return Math.abs(now - fs.statSync(UPDATING_FILE()).mtimeMs) < UPDATING_FOR; } catch { return false; }
 }
 
-/** The app registered: open (`tools`), or quit (`tools` null), and where it's installed (kept from
- * before when it doesn't say). Open, what an opening that failed said is forgotten, as is an update
- * that installed. */
-export function registerApp(given: { tools: AppRecord["tools"]; bundle?: string | null }, now = Date.now()): AppRecord {
+/** The app registered: open (`tools`), or quit (`tools` null, and its host with it), and where it's
+ * installed (kept from before when it doesn't say), and where its own host answers (none when it
+ * doesn't say: a registration is whole, so a host an earlier app left is never kept for this one).
+ * Open, what an opening that failed said is forgotten, as is an update that installed. */
+export function registerApp(given: { tools: AppRecord["tools"]; bundle?: string | null; host?: AppRecord["host"] }, now = Date.now()): AppRecord {
   const before = readApp();
-  const record: AppRecord = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, at: now };
+  const host = given.tools === null ? null : given.host ?? null;
+  const record: AppRecord = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, host, at: now };
   writePrivate(APP_FILE(), JSON.stringify(record));
   if (record.tools) {
     fs.rmSync(FAILED_FILE(), { force: true });
@@ -121,7 +137,7 @@ export function registerApp(given: { tools: AppRecord["tools"]; bundle?: string 
 export function forgetTools(token: string, now = Date.now()) {
   const app = readApp();
   if (!app?.tools || app.tools.token !== token) return;
-  const record: AppRecord = { ...app, tools: null, at: now };
+  const record: AppRecord = { ...app, tools: null, host: null, at: now };
   if (readApp()?.tools?.token === token) writePrivate(APP_FILE(), JSON.stringify(record));
 }
 
@@ -279,8 +295,11 @@ const OPEN_WAYS: OpenWays = { open: hostOpens, now: () => Date.now(), until: wai
 const ONLY_MAC = "Only a Mac's box in a home of its own has its app register with it.";
 
 /** `kuvo/box/app`: how this Mac's app stands (`GET`, for any client), and its registration (`POST`, from Kuvo Code
- * itself): `{tools: {url, token}, bundle}` as it opens, `{tools: null}` as it quits, `{updating:
- * true}` as it quits to install an update. */
+ * itself): `{tools: {url, token}, bundle, host?}` as it opens, `{tools: null}` as it quits, `{updating:
+ * true}` as it quits to install an update. `host` (`{url, password}`, `box.app.host`), where the
+ * app's own host interface answers what only it can, only from the app itself (`fromApp`, over this
+ * box's server): never from `box route`, which anything you run could use to have your phones' asks
+ * sent elsewhere. */
 export async function* appRoute({ request, json }: RouteContext): AsyncGenerator<AnswerPiece> {
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "POST") return yield* json(405, {});
@@ -298,7 +317,10 @@ export async function* appRoute({ request, json }: RouteContext): AsyncGenerator
   if (given.tools !== null && !tools) return yield* json(400, { message: "Its tools answer on this Mac, at an http address, with a token." });
   const bundle = given.bundle === undefined ? undefined : bundleOf(given.bundle);
   if (given.bundle !== undefined && !bundle) return yield* json(400, { message: "Its bundle is a whole path to the app (…/Kuvo Code.app)." });
-  registerApp({ tools, bundle });
+  if (given.host !== undefined && given.host !== null && !request.fromApp) return yield* json(403, { message: "Only Kuvo Code itself says where its own host answers." });
+  const host = given.host === undefined ? undefined : given.host === null ? null : hostOf(given.host);
+  if (given.host !== undefined && given.host !== null && !host) return yield* json(400, { message: "Its host answers on this Mac (http://127.0.0.1:<port>), with a password." });
+  registerApp({ tools, bundle, host });
   return yield* json(200, appStatus());
 }
 

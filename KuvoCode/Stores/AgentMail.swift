@@ -9,8 +9,8 @@ import os
 /// (read_conversation) and start a session (start_session). Every box answers these tools itself,
 /// the same on all your computers (PROTOCOL.md, "Agents' tools"): this Mac's conversations' calls
 /// go to this Mac's box, which reaches agents on your other computers by mail. Here: who there is,
-/// as the box says, for "&" (`AgentReferences`) and the transcript, and how a message from another
-/// agent reads.
+/// as the box says, for "&" (`AgentReferences`) and the transcript. A message from another agent is
+/// read from its parts (`MessageParts.mail`), as its box keeps them.
 @MainActor @Observable
 final class AgentMail {
     static let shared = AgentMail()
@@ -45,38 +45,6 @@ final class AgentMail {
     var agents: [Agent] = []
     @ObservationIgnored private var asked = Date.distantPast
     @ObservationIgnored private let log = Logger(subsystem: "run.kuvo.code", category: "agents")
-
-    // MARK: The message
-
-    private static let opening = "[Message from "
-
-    /// What the receiving agent reads: who it's from and how to answer, then the message (as every
-    /// box words it).
-    static func compose(from name: String, session: String, text: String, waits: Bool) -> String {
-        let answer = waits ? "They're waiting for your reply: just answer, in your words."
-            : session == "unknown" ? "It can't be answered: who sent it isn't known." : "To answer, use send_message to \(session)."
-        return opening + name + " · " + session + "] (\(answer))\n\n" + text
-    }
-
-    /// A message from another agent: who sent it, and what it says. Its first line is
-    /// "[Message from <name> · <session>] (…)", read from the end, as a name can hold anything.
-    static func parse(_ message: String) -> (name: String, session: String, text: String)? {
-        guard message.hasPrefix(opening) else { return nil }
-        let first = message.prefix { $0 != "\n" }
-        guard let dot = first.range(of: " · ", options: .backwards) else { return nil }
-        let after = first[dot.upperBound...]
-        guard let close = after.firstIndex(of: "]") else { return nil }
-        let session = after[..<close]
-        guard session.hasPrefix("ses_") || session == "unknown", !session.contains(" ") else { return nil }
-        // No name ("[Message from · ses_1]"): the " · " is the opening's own space, before where a
-        // name would start.
-        let nameStart = first.index(first.startIndex, offsetBy: opening.count)
-        guard dot.lowerBound >= nameStart else { return nil }
-        let name = first[nameStart..<dot.lowerBound]
-        let rest = message[first.endIndex...]
-        let text = rest.range(of: "\n\n").map { String(rest[$0.upperBound...]) } ?? String(rest.drop { $0 == "\n" })
-        return (String(name), String(session), text)
-    }
 
     // MARK: Who there is
 

@@ -187,9 +187,9 @@ test("the phone link on, this Mac is back on the relay after its box starts agai
   assert.deepEqual(info.json.features, link.macFeatures());
   // The box's own areas answer; the Mac's own say the app isn't answering.
   assert.equal((await iphone.request("GET", "kuvo/personalities")).status, 200);
-  const usage = await iphone.request("GET", "kuvo/usage");
-  assert.deepEqual([usage.status, usage.json.message], [503, "Kuvo Code on this Mac isn't answering. Try again in a moment."]);
-  assert.deepEqual(keeper.asked, ["kuvo/usage"], "only the Mac's own went to the keeper, for the app");
+  const asks = await iphone.request("GET", "kuvo/asks");
+  assert.deepEqual([asks.status, asks.json.message], [503, "Kuvo Code on this Mac isn't answering. Try again in a moment."]);
+  assert.deepEqual(keeper.asked, ["kuvo/asks"], "only the Mac's own went to the keeper, for the app");
   await again.stop();
 });
 

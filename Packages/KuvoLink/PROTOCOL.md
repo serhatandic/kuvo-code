@@ -1232,8 +1232,8 @@ the same for every client and with none connected, and keeps them in `run/queues
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
   request before it asks the box to stop, and for its hold before it asks the box to resume.
-- A box without `queue` in its features (its update didn't get through): each client carries that
-  box's queues itself, as clients did before.
+- A box without `queue` in its features is older than the update gate lets through: held until
+  it's up to date, never carried by a client.
 
 ### A session at a glance
 
@@ -1811,11 +1811,18 @@ folder you pick once per box, after asking you.
   with `note`, "Peers").
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
-    → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
-    folderName, folder: string|null, suggested?, at}]}`: `session` and `name` are the
+    → `{asks: [{id, action: makeProject|cloneProject|resetLimits, session, name, bot?, project, clone?,
+    folderName, folder: string|null, suggested?, reset?, at}]}`: `session` and `name` are the
     conversation asking (a bot's own), `folderName` the folder it gets, `folder` where it would go
     (null with no projects folder yet). A bot's are in its `kuvo/work` too, as `asks`, with the
-    projects it made, as `projects`.
+    projects it made, as `projects`. `resetLimits` is any agent's `use_limit_reset` ("Plan limits",
+    "Resets"): `project` is the account's name, `folderName` empty, `folder` null, and `reset`
+    `{row, account, service, count, refills?, on?}` the account's row, how many resets it has, what
+    one refills and the computer of yours that uses it where that isn't this box, and `words`
+    `{title, body}`, what its notification says (every client says the same). One open card a
+    conversation for each account. Allow uses one;
+    Always keeps Always Allow with the account (never with the bot), then uses one; deny uses none.
+    No folder is picked.
   - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
     what's asked is done there and then, `text` in the words its asker reads (`isError` when it
     couldn't be: the ask is answered all the same). `folder` picks the projects folder while none
@@ -2085,8 +2092,9 @@ did: the box keeps working as itself ("For released Macs").
   (`Contents/Resources/box-release`: `boxes.json` and `box-<version>.tar.gz`, put there by
   `scripts/app-box-release.sh` when the release is built), for it to offer the box on its computer
   as it updates. The app offers it to a box on this Mac it's attached to in place that's older than
-  it needs ("The update gate"); a Mac's box in the app's folder is refused, as it doesn't update
-  itself (its keeper takes the new app's).
+  it needs ("The update gate"), and to this Mac's own box in a home of its own each time it opens
+  (with `movesOwnBox`, "The app attached to this Mac's own box"); a Mac's box in the app's folder is
+  refused, as it doesn't update itself (its keeper takes the new app's).
   - `POST kuvo/box/update {from: "<folder>"}`, from Kuvo Code only (this Mac's app, or a Mac's
     `box route`; a phone gets 403): `from` is a full path to a folder with `boxes.json` and the pack
     its `pack.url` ends in, beside it. The box checks it as it would a download: a pinned key's
@@ -2277,7 +2285,7 @@ too). A client adds a name there as it drops its fallback for a box without it, 
 such a box needs a newer Kuvo Code.
 
 - **Held**: a client sends a held box nothing but `kuvo/info`, `kuvo/update` and `kuvo/box/update`,
-  and what keeps work already under way there going, so a session waiting on you can be answered:
+  its Mac's app's own registration (`kuvo/box/app`, "This Mac's app"), and what keeps work already under way there going, so a session waiting on you can be answered:
   its engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), the tool calls of the agents at
   work there (`kuvo/agent-tools`; a tool that box hasn't is said to the agent as waiting for the
   update), its asks (`kuvo/asks`, `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`) and
@@ -3731,24 +3739,21 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   bridge answers it too, with the Mac closed: its own, then those its other computers told it of
   (`Peers`). While its engine can't list them (starting), its own are as it last listed them
   (from 0.9.66). Insert
-  `&` and the name, and send the message as it is: every box adds to a prompt it passes on
-  (`api/…` and `kuvo/agents/api/…`) a block naming each agent the text names, from everyone it
-  lists then (its `run/agents.json`; worked out again meanwhile, and waited for a moment only when
+  `&` and the name, and send the message as fields (`kuvo/sessions/<id>/send`, "A message's
+  parts"): its box writes a block naming each agent the text names (as it does on a prompt passed
+  on the way before, `api/…` and `kuvo/agents/api/…`), from everyone it lists then (its `run/agents.json`; worked out again meanwhile, and waited for a moment only when
   a name after `&` isn't there yet), which the agent reads
   (bridge 0.9.64; before, only the Mac did, and a machine sent it without). The Mac and the boxes
   read the same cases (`Vectors/routes/names/agent-naming.json`). A message to a group
   chat (`POST kuvo/groups/<id>`) gets its block on the computer the chat lives on, from the agents
   there are to name there (not the chat's own bots), for every client alike: send only the words,
-  and a block sent is not taken. Show a message
-  without it: it ends the text, from a line `<named-agents>` (then a heading line, then
-  `- &<name> (<session>): <what it is>` lines) to a line `</named-agents>`, before the
-  `<review-comments>` and `<attached-files>` blocks. Show each `&<name>` it lists in bold
-  (a bot's in its color), opening that session.
+  and a block sent is not taken. Show a message from its parts (`agents`), each `&<name>` they
+  list in bold (a bot's in its color), opening that session.
 - A message a keyword sends (/plan's words, /loop's when it sends now, a bot's /goal) carries the
   keyword as typed, right after its words and before every other block: a line `<sent-with>`, a
   heading in `SentWithKeyword.swift`, the keyword on one line (`/plan`, `/loop every hour`,
-  `/goal`), and a line `</sent-with>`. The client sending it writes it (the box, for a bot's
-  /goal). Show the keyword in front of the message's words, drawn as the composer draws it (its
+  `/goal`), and a line `</sent-with>`. Its box writes it from the message's `keyword` (and for a
+  bot's /goal). Show the keyword (its parts' `keyword`) in front of the message's words, drawn as the composer draws it (its
   mark for the "/", the rest in bold, in the accent; Plan's in orange). Taken back (Undo, a failed
   send, editing a queued one), it's the words alone, so sending them again sets no second loop.
 - A message the box writes to an agent in its conversation (a goal starting, changed, at its
@@ -3788,9 +3793,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
-  words (this Mac's box since bridge 0.9.64; the app did before); send the text without it. Show a
-  message without it (everything from a line `<from-phone>` to the line `</from-phone>`), as
-  sent from the phone. It tells the agent to keep replies short and to show files with
+  words (this Mac's box since bridge 0.9.64; the app did before); send the words without it. Show a
+  message from its parts (`phone`), as sent from the phone. It tells the agent to keep replies short and to show files with
   `show_file`.
 - A message whose request arrived whole (`POST api/session/<id>/prompt`, and
   `kuvo/agents/api/…` alike) goes on to its conversation even if the phone that sent it ends its
@@ -3938,20 +3942,6 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   {"message"}` for one that isn't there or isn't a file, `403 {"message"}` for one it can't read,
   `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
-- On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
-  doesn't state yet (a plan's limits are every box's own, in "Plan limits"). A provider whose
-  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out,
-  and for Claude and Cursor, whose bars have no limits of their own, the lines the card has from
-  the rows too (Cursor's `Credits` and its `extras`, `On-demand`), which a client draws from each
-  row under its own account: one this Mac's box states rows for (`services`, with an account
-  listed), and Claude and Cursor wherever any of the Mac's computers states an account of them. Its
-  spend shows under the first of those rows. A client lists these in their order, the box's rows
-  in the place of each that `covers`: each provider's name, plan, brand color, mark as a PNG
-  to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
-  `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
-  While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200
-  with an empty line and stays open, saying nothing more until it's up. Lines that JSON can't carry are left out. Times are
-  seconds since 1970.
 
 ### Goals
 
@@ -4067,16 +4057,44 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     window whose `resetsAt` has passed has started over since: show it as not read yet, not as
     used.
   - `balance` `{left, limit?, unit}`: credits left to spend, where the account has them.
-  - `extras`: what the plan has beyond its windows, each `{id, name, kind, …}`. So far one `kind`,
-    `spent` `{amount, unit, resetsAt?}`: an amount used so far with no limit to it (`unit` `usd`,
-    `credits` or `requests`; `name` its maker's own label), Cursor's on-demand spend without a cap
-    (`on_demand`, "On-demand", its `resetsAt` the billing cycle's end where Cursor says it). #631
-    piece E grows this list with more kinds (Claude's extra usage and reset grants, Codex's credits,
-    OpenRouter's key spend by period): a client leaves out a kind it doesn't know, and one whose
-    `resetsAt` has passed (not known now, as a window), and a box from before this keeps none from a
-    peer's mail (one from now on passes a kind it doesn't know on as told, only its plain fields,
-    1 KB at most). Absent when there's none. A row's are its newest reading's that had no problem: a
-    reading without them says there are none now.
+  - `balance` with `limit`: what was bought (OpenRouter's total credits), so a client draws what's
+    left of it as a meter.
+  - `extras`: what the plan has beyond its windows, each `{id, name, kind, …}` (`name` its maker's
+    own label), by `kind` (#631 E):
+    - `spent` `{amount, unit, resetsAt?}`: an amount used so far with no limit to it (`unit` `usd`,
+      `credits` or `requests`): Cursor's on-demand spend without a cap (`on_demand`), Claude's extra
+      usage without a monthly cap (`extra_usage`), an OpenRouter key's spend (`today`, `week`,
+      `month`: "Today", "This Week", "This Month", each `resetsAt` the end of OpenRouter's UTC day,
+      week from Monday, or month), a Copilot organization's credits and spend this month for a seat
+      it pays for by the credit (`org_credits` in `credits`, `org_spend` in `usd`; only where the
+      sign-in may read that organization's billing, else none, never a zero);
+    - `capped` `{amount, limit, unit, resetsAt?}`: an amount used of a limit: Claude's extra usage
+      with its monthly cap (`extra_usage`, "Extra Usage", dollars);
+    - `left` `{amount, unit}`: an amount left to spend, with no cap: Codex's credits (`credits`,
+      "Extra Usage", whole credits);
+    - `resets` `{count, expiries?, refills?, usable, agents?}`: the plan's rate-limit resets
+      (`resets`, "Rate Limit Resets"): Claude's reset grants (read at most hourly an account, with
+      Claude Code's own request, as Anthropic offers them to no other; `refills`, the windows the
+      next one refills, `five_hour` and `seven_day`, where it says) and Codex's reset credits (the
+      Codex agent's own sign-in, its home's `auth.json`, or the engine's ChatGPT sign-in); `count`,
+      how many; `expiries`, each one's, soonest first (ms, 50 at most); `usable`, one can be used now
+      with this sign-in; `agents: true`, agents may use them without asking (Always Allow, below).
+      In a row, `usable` and `on` `{key, name, here?}` say which of your computers would use one:
+      the first of its `boxes` (this box first, one heard from before one that's away, never one a
+      peer only vouches for) whose own
+      `resets` say `usable`; none can, `usable: false` and no `on`. `agents` is that computer's.
+    - `unreadable` `{message}`: what this sign-in can't read: a Mac's Claude token can only run
+      Claude, so its extra usage and resets show only from a computer of yours signed in to Claude
+      Code with the same account (as one row, its numbers are that computer's); alone, the row
+      states this (`id` `resets`).
+    A read of them that fails keeps what was read (a failed read never states none, nor a zero).
+    A box a peer only vouches for is told an account's limits and its `resets` count, never what
+    it spends or has to spend (`spent`, `capped`, `left`, `balance`) nor `agents`/`agentsReset`.
+    A client leaves out a kind it doesn't know, and one whose `resetsAt` has passed (not known
+    now, as a window); a box keeps from a peer's mail the kinds it knows, checked, and passes a
+    kind it doesn't know on as told, only its plain fields, 1 KB at most. Absent when there's none.
+    A row's are its newest reading's that had no problem (a reading without them says there are
+    none now); with none, while none could read lately, the last read, before an `unreadable` one.
   - `checked`, when its maker last answered (with its limits or a problem; absent for an account
     only its turns tell of); `next`, when it's read again (absent for one that's never read).
   - `problem` `{kind, message, until?}` when the last read didn't work, with `windows` as last
@@ -4150,8 +4168,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     never merged by its numbers: two accounts can read alike (a personal plan and a team's, each
     at 12%).
 - Listing them (KuvoClient's `UsageListing.listing`, as the Mac and the phone do): one box's `rows`
-  as they are, merging nothing (the Mac: its own box's; the phone: the box of the first Mac whose
-  usage panel answers, else the first that answers, that panel placing the rows), refreshed
+  as they are, merging nothing (the Mac: its own box's; the phone: the first box in its list of
+  your computers that states accounts, a machine's on Linux too), refreshed
   through that box alone, while they have every row each other box the client reaches says is
   signed in there (`here`), with that box among the row's `boxes` and not `away`. A row whose computers are all away shows "As of" its reading's time.
   Naming, a view: a row's name is its account's ("Claude", "Codex", "ChatGPT", "Claude · Work");
@@ -4211,7 +4229,89 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   as asked before it's answered, so a restart meanwhile never asks again; a sign-in that lapsed or
   can't read its limits isn't asked again until it changes.
 - Agents read them with the tool `plan_limits` (read only): each account's windows, how much is
-  used, when each resets and as of when, and why one couldn't be read just now.
+  used, when each resets and as of when, what the plan has beyond them (an account with resets
+  with its row's `id`, for `use_limit_reset`), and why one couldn't be read just now.
+- **Resets** (#631 E, feature `limits.resets`): using one of an account's rate-limit resets, from
+  any client or an agent, through any box of yours.
+  - `POST kuvo/agents/api/kuvo/limits/reset {row}` → `{data: {confirm, row, service, count,
+    refills?, on, always, expires}}`: what one more ask spends (one of `count`), the computer whose
+    sign-in spends it (`on`), whether agents may without asking (`always`), and a one-time
+    `confirm` id that holds 10 minutes. Spends nothing. 404 `{message}` for no such row; 409 for a
+    row with no resets, none left, none any computer of yours can use (a Mac's Claude token alone:
+    its `unreadable` message), or one whose maker holds requests off; 503 when the computer with the
+    sign-in can't be reached.
+  - `POST … {row, confirm, by?, unasked?}` → `{data: {outcome, until?, message?, row?}}`: one reset spent,
+    once. `outcome` `reset` (done: the windows it refills start over; the account is read again at
+    once, and `row` is as it is then), `unconfirmed` (its maker took it but couldn't say it went
+    through), `nothing-to-reset` (not at a limit), `no-reset` (none to spend), `not-now` (a
+    cooldown, `until` where it says), `failed` (turned away, or nothing sent: nothing used) or
+    `unknown` (no answer came: a timeout, its maker failing, its sign-in turned away for now, the
+    computer with the sign-in not answering within 45 seconds; it may have been used); `message`
+    says it in words where it isn't `reset`. The same `confirm` again answers how it went, and never spends twice; one never given,
+    for another row, or older than 10 minutes is 404. `by`: who asked (an agent's name), for the
+    log.
+  - **Once**: a spend is written to the box's journal (`limits-resets.json` in the bridge's
+    folder, 200 at most, a month) before any request goes, with the request id its maker takes as
+    the same request (Anthropic's `request_id`, ChatGPT's `redeem_request_id`) and, once chosen,
+    what it spends (the grant Anthropic names next; the reset credit soonest to expire), also kept
+    before the request. Asked again after a crash, a lost answer or a failure, it goes as the same
+    request with the same grant or credit, and its maker answers that it's done (`already_used`,
+    `already_redeemed`) rather than spending another. `unknown` and `unconfirmed` leave it open (it
+    may have gone); every other outcome settles it, but a refusal here before anything goes (its
+    maker holding requests off, its sign-in unreadable for a moment, another account signed in)
+    leaves an open spend open, and says so. Within 10 minutes of a row's open spend, a new
+    confirmation for that row is that same spend (its request here, or its id on the peer it was
+    passed to), and two confirmations at once share one request; later (a day at most), the open
+    one is asked again first, as itself, and the new one is that one only if it was used just now
+    or still can't be told, else it goes as its own. Right before a request goes, the account
+    signed in there now (its sign-in's own identity, not as last read) must be the row's: if
+    another is, nothing is spent (`no-reset`), and the slot's earlier account's Always Allow goes
+    off (below). Claude on Linux: its token carries no claims and Claude Code's own record of the
+    sign-in can lag a new one, so Anthropic's profile is asked too, right then; its account must be
+    the record's (and its organization, where both say one), and the reset is spent with that very
+    sign-in (one signed in meanwhile never is), else nothing is spent, and nothing of
+    what's allowed changes on that (whichever of the two lags, the newly signed-in account's
+    stays). `unasked: true` marks an agent's spend under Always Allow that no one confirmed:
+    refused (`failed`) where the asking box's own decision for the row is off, and again by the box
+    that spends it unless its decision is on. A confirmation by the user that joins an open
+    `unasked` spend (or, past the 10 minutes, asks it again first) makes it the user's, here and on
+    the peer it was passed to (the same request: nothing more is spent). A peer asked to spend one follows these same rules for a new ask
+    (joining within 10 minutes, settling an older one first). A client sends the same
+    `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
+    longer knows it) asks anew.
+  - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
+    `on`, a peer of yours (never a box a peer vouches for), as `{"seat": {"kind": "reset", at, ask:
+    {id, row, by?}}}`, and answers when that one does (`{"seat": {"kind": "reset", at, answer: {id,
+    outcome, until?, already?, open?, message?}}}`: `already`, its maker said this request was done
+    before; `open`, the spend stays open there, so it stays open here too), or `unknown` after 45
+    seconds (asked again, with the same `confirm` or a new one for that row, it's asked there again
+    under the same id, which that box's journal answers once). An open one that can't be passed
+    there now stays open (`not-now`, saying an earlier try may have gone); a new one that can't is
+    never kept. A box takes a
+    reset's mail only from your own computers; its link drops it from a box a peer vouches for.
+  - **Always Allow**: `PUT kuvo/agents/api/kuvo/limits/reset/always {provider | row, always}`:
+    agents may (or may not) use an account's resets without asking. It's the account's, by who it
+    is (its row `<service>#<identity>`; 409 for one that doesn't say who it is yet): each decision
+    stamped with when it was made and kept in the journal (`allowed`, by row, whether or not the box
+    knows the account yet) on every computer of yours with its sign-in, here (`provider`, as
+    Settings › Accounts names it here, or the `row`) and on the others among its row's `boxes`,
+    told to every computer of yours as `{"seat": {"kind": "reset", at, always: {row, on, at}}}` mail
+    that's kept until it's there; a decision older than the one kept is ignored, and of two stamped
+    the same, an off holds. One made here (by `PUT`, or a slot signed in to another account since,
+    which turns its earlier account's off, so coming back asks again) is stamped after any this box
+    knows of, so it's always kept here, and told. What that leaves: a decision made on a computer
+    that hadn't yet heard an opposite one made elsewhere (the mail on its way, or one of the two
+    off the relay) is ordered by the two computers' clocks, so within as much as their clocks
+    differ, the one stamped later holds, whichever was made later. Stated as
+    `agents: true` on its `resets`, and as `agentsReset: true` on the account in this box's own
+    `accounts` whether or not it has resets now (so a client can turn it off). Answering a card
+    Always while the computer with the sign-in is away keeps it all the same; no reset is used then.
+  - **The agents' tool** `use_limit_reset {account}` (an account's row `id`, or its name as
+    `plan_limits` says it): asks the user first, every time, on the permission card in the calling
+    conversation (`kuvo/work/asks`, action `resetLimits`, "Work"), unless its account's `always` is
+    set; Allow uses one; Always Allow sets `always` first, then uses one; Don't uses none. Its answer
+    says how it went with the account's limits after. Every use is in the conversation (the tool's
+    call) and the bridge's log.
 - Times are ms since 1970.
 
 ### Usage history
@@ -4378,6 +4478,27 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   seconds, the rest coming as the event).
 - The bridge's events carry `kuvo.usage.updated` `{services}` when the rows change (a read here, a
   peer's word): ask again, in your zone.
+- Showing it (KuvoClient's `UsageSpend` and `UsageLayout`, views both apps draw by): a client takes
+  a service's `totals` from one box, the one whose plan limits `rows` it lists ("Listing them"),
+  else the first it reaches that states that service, and never adds two boxes' up (each counts
+  your other computers already). Under the service's first account it shows Today, Yesterday and
+  Last 30 Days, each in dollars (an estimate unless every row of that service says `estimated:
+  false`) and tokens, in the answer's `zone` as of now (a day more than 30 before today left out),
+  and Usage Trend, the tokens of each of those 31 days. A period with no use has no line, never
+  $0, and a box that couldn't be read gives none. A service with use and no plan limits row
+  (OpenCode's Zen alone) is a row of its own. The cards go in the order of the usage settings'
+  `layout.providerOrder` (a card `claude@…` is Claude's place), the rest in the panel's own
+  (Claude, Codex, Cursor, Antigravity, Copilot, Grok, Ollama, OpenCode, OpenRouter, Z.ai, Devin
+  last). The spend goes after the account's own lines (its limits, credits, extras and resets),
+  in its service's first card's `layout.metricOrder` (the trend, Today, Yesterday and Last 30 Days
+  where that names none), a line where `layout.placed` holds its meter on that first card
+  (`<card>.today`, `.yesterday`, `.last30`, `.trend`; a card `claude@…` before `claude` is
+  Claude's first), and all of them while `layout` was never set. A box that lists a service without its `totals`
+  doesn't speak for it. Not yet followed: cards turned off (`providers`) and the limits' own
+  meters in `placed`, which the Mac judges by what it finds there (#631 H1 moves that to the box).
+  The phone reads every box it reaches this way, a
+  machine's on Linux too, with no Mac app open; a box from before `usage.history` answers 404 and
+  shows no spend (the update gate brings it up to date).
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail
   below, only when what was used changed. A log is read on from where
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
@@ -5211,6 +5332,61 @@ client does with the rest; a client keeps the draft, puts back what it's told to
 - Kept in clients, as drawing: which keyword or command a text starts with as it's typed (to draw
   it), the side thread's tag following what runs as typed, and whether Send needs a model.
 
+### A message's parts
+
+A client sends what was written and what goes with it as fields, and the conversation's box writes
+the text the agent reads (feature `messages.send`, which the update gate requires); every message
+the box sends keeps its parts, which clients draw it by. No client writes or reads the blocks.
+
+- `POST kuvo/sessions/<session>/send` `{id, words, files?, delivery?, keyword?, widget?, comments?,
+  named?, notes?}`: `words` as written (the composer's text, quotes and all), `files` as the engine
+  takes them (`file://` on the box's own disk, or `data:` inline, which the box keeps as
+  `attachedIn` does), `keyword` as typed (from `typed`'s `send.typed`), `widget` the title of the
+  widget it answers (`""` for none), `comments` `[{file, line, side: "new"|"old", snippet, text}]`,
+  `named` the sessions picked from the "&" list (of two agents with one name, these), `notes`
+  `{included?, paths?, unsent?}` (files the client sent with their contents, by path, or couldn't
+  send). With `command`, that command runs with `words` as its arguments, as written, and only the
+  files' note after them. `{id, text, files?, delivery?}` sends one sent before again as the agent
+  read it (Retry; another agent's letter put back; one from before whose parts couldn't be read),
+  `words` then only how it's shown; its files are kept as a message's are (a picture for a model that
+  only reads words goes as a path, in the note it has). A session picked in `named` that this box
+  doesn't list, after a moment's wait for its list, is refused (`409`), never dropped. It goes to the
+  engine or the coding agents' bridge, wherever the session is, once per `id` (`sentOnce`), and
+  answers as they do; `400` nothing to send, `404` no such session, `409` moving or an agent not
+  listed, `503` not running. `queue/add` takes the same fields, `{text, again: true, words?}` for one
+  sent again as the agent read it, and `{text, kept: true, words?, metadata?}` for one a DELETE gave
+  back (Undo) with the parts it had; `text` alone is an older client's own envelope.
+- **What the agent reads,** in this order (the words Kuvo Code wrote before, byte for byte): the
+  words (trimmed; the widget's block after them: a line `<from-widget>`, a heading, its title on one
+  line, `</from-widget>`), the keyword's block (`<sent-with>`, a heading, the keyword on one line,
+  `</sent-with>`; a bot's /goal has its own heading and how to plan it), who the "&" names are
+  (`<named-agents>`, from everyone the box lists then, `- &<name> (<session>): <what it is>`), the
+  comments (`<review-comments>`, a heading, then for each a blank line, `[<file>:<line>]` or
+  `[<file>:<line> (removed)]`, `> <the line>`, what was said), the files' note (`<attached-files>`,
+  the client's `notes` then what the box keeps, each list under its heading), and from a phone
+  (a request that isn't a Kuvo Code app's) `<from-phone>`. An `&` in a keyword or a title is written
+  `＆`; words ending like the named, comments' or files' block get a space after its tag, so they
+  stay words.
+- **Parts:** kept in the engine message's (and inbox item's) `metadata.kuvo.parts`: `{words,
+  keyword?, widget?, comments?, paths?, agents?: [{name, session}], phone?: true, mail?: {name,
+  session}}` (`paths`: files its note names that it doesn't carry; `mail`: another agent wrote it,
+  `"[Message from <name> · <session>] (…)"`, and `words` is what they wrote). Those sent here and
+  `queue/add`'s with fields keep them, as do a started session's task and a bot's /goal; a letter
+  between agents, a prompt passed on the way before (`api/session/<id>/prompt`) and anything else
+  the box sends keep them where there's more to them than the text. The box's own notes keep none
+  (`kuvo.note`), nor does a plain message, which a client asks about once.
+- **Messages from before** keep no parts: `POST kuvo/messages/parts {texts}` (at most 500) answers
+  `{parts}`, one for each, read from the text as the apps read it before (every block, a /goal
+  sent as `[Goal] …`, a file listed with ` (on the user's Mac: …)`, the named block's earlier
+  heading). A client asks once for each message (KuvoClient's `MessageParts.read`), before it shows
+  the page, and shows one its box couldn't read as written. A command shows as typed: a client
+  keeps which messages ran one (`CommandMessages`).
+- Both directions: `Vectors/message-parts.json` (written from the apps' Swift before this), which
+  the box (`test/message-parts.test.ts`) and KuvoClient (`MessagePartsTests`) are held to.
+- One waiting on the box (`waiting` in a queue) says the keyword it was sent with (`keyword`), for
+  its row to show in front of its words.
+- A group chat's message still carries the widget it answers as its own block (`WidgetAnswer`).
+
 ### Features
 
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
@@ -5227,6 +5403,14 @@ step 2; the app gave it before): every box's but a machine's own, and the Mac's 
 with its app closed, when what needs the app answers `503 {"message"}`.
 A note of when a name came in names the bridge's version up to 0.9.211; after that, the bridge's
 version is a hash, and a name is its own mark.
+
+A client reads a box's features in one place (KuvoClient's `BoxFeatures`), once a box, and keeps
+them until the box connects again or the update gate lets it go, when it reads them again. The rule
+is the gate's ("The update gate"): an answer with `features` says them; one without `features`, or
+a `404` or `405` (no `kuvo/info`), says none, so the box is held; any other answer, or none, can't
+tell: nothing is assumed, old or new, and the next ask reads it again. Each saying goes to the gate.
+A client checks only names newer than the gate's (`BoxGate.required` and what came before them,
+which a box that isn't held has) and a kind's own (`update`, `engine.start`).
 
 One row a name, in order, so branches that each add one merge cleanly.
 
@@ -5257,11 +5441,13 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `box.app` | `kuvo/box/app` and `kuvo/box/app/open`: this Mac's app registering with a Mac's box in a home of its own, and opened by it for its agents' browser ("This Mac's box: this Mac's app") |
+| `box.app.host` | `kuvo/box/app`'s `host`: the app's own host interface, where a Mac's box in a home of its own sends a phone's ask of the Mac's own routes and asks what the panel's browser is signed in to ("This Mac's app") |
 | `box.appKeys` | `kuvo/box/proof` and `kuvo/box/kept-keys`: what this Mac's app asks of the keys a Mac's box in a home of its own holds ("This Mac's box: its keys, for its app"); `bin/integrations-mac.json` read there |
 | `box.helper` | `kuvo-link.js helper install [--load] [--app <bundle ID>] \| status`: the launch agent that starts Kuvo Code Box, a Mac's box's helper, at login ("This Mac's box: its helper"); `kuvo-start serve`; `serve` saying where it answers in `run/serve.json` |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
 | `box.serve` | `kuvo/box/serve`: the box's server kept running for clients ("Kept for clients"); `kuvo-link.js serve --kept` |
+| `box.serve.mac` | the box's server takes Kuvo Code on its computer (`x-kuvo-from: mac`) as `box route` takes it ("Kept for clients") |
 | `box.uninstall` | `kuvo-link.js uninstall [--check]`: removing Kuvo Code from this computer ("Uninstalling") |
 | `box.update` | `POST kuvo/box/update {from}`: a release from a folder on the box's computer, the one Kuvo Code carries, taken at the next quiet moment ("Updates"); a release's Mac bundles, swapped whole; `kuvo/update`'s `offered` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
@@ -5300,6 +5486,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `keys` | `kuvo/keys…` |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
+| `limits.resets` | `kuvo/agents/api/kuvo/limits/reset…` and `use_limit_reset`: using a plan's resets, once, on the computer with its sign-in ("Plan limits", "Resets") |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
@@ -5343,7 +5530,6 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
 | `typed` | `kuvo/sessions/<id>/typed`: what "/" offers, and what a typed text means ("What a typed message means") |
 | `update` | a machine only: `kuvo/update` |
-| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -5847,16 +6033,30 @@ in its folder, whose keeper does this) is where its app registers, and its agent
 app's panel through it, with no Chromium of its own. A machine's box answers `409` to both routes
 (after a phone's `403` where one asks what only Kuvo Code may).
 
-- **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle}`
-  as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
+- **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle,
+  host?}` as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
   `[::1]` only, to `Authorization: Bearer <token>`), and where it's installed (a whole path to its
-  `.app`). `{tools: null}` as it quits, its place kept. `{updating: true}` as it quits to install an
-  update (today's app doesn't say it yet: #333 piece 6b, with telling the box it quits; until then
-  the box finds it gone when its tools stop answering). `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
+  `.app`). `{tools: null}` as it quits, its place kept (the app says so over the box's server as it
+  goes, waiting a second at most; one that doesn't, a crash, is found gone when its tools stop
+  answering). `{updating: true}` as it quits to install an update, so the box doesn't open it while
+  Sparkle does. `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
   updating, opening, failed}`: where it's installed (null before it ever said), whether its tools
   answer now, whether an update installs (said in the last two minutes), whether an opening is under
   way, and the last opening that failed, within its rest (`{at, message}`, `at` in ms). Kept in
-  `run/app.json` (`{bundle, tools, at}`, `0600`).
+  `run/app.json` (`{bundle, tools, host, at}`, `0600`).
+- **The app's own host** (`box.app.host`, #333 piece 6b). The box's host is its helper, which holds
+  its keys but can't answer what only the open app can: a phone's ask of the Mac's own routes
+  (`link/route`, "This Mac's box: the relay") and what the panel's browser is signed in to
+  (`sites/signed-in`). So the app also says where its own host interface answers: `host: {url,
+  password}`, `url` `http://127.0.0.1:<port>`, taken only from the app itself (`x-kuvo-from: app` over
+  the box's server; `403` from `box route`, which anything you run could use to have your phones'
+  asks sent elsewhere; `400` for anything else). It's kept while the app's open; a registration
+  without `host` has none (a host an earlier app left isn't kept for it), and it goes with `{tools:
+  null}` and `{updating: true}`; never in what `GET` answers. The box sends those two calls there, proving it's the app first (`hello`, "Host
+  interface") for each one, as the box outlives the app and a port it left after a crash could be
+  anyone's by the next; with no app there, a phone's ask is `503` ("isn't answering"). The app answers
+  only those there (`hello`, `sites/signed-in`, `link/route`; `404` for its keys, which are the
+  helper's).
 - **The browser's tools.** The box's tool server (`kuvo-browser.js mcp`, as its engine and coding
   agents run it) sends each `browser_*` call to the app's tools as it came (`tools/call`, with the
   session's `_meta`, `x-kuvo-session` naming the conversation, and an `mcp-session-id` of its own;
@@ -5883,6 +6083,33 @@ app's panel through it, with no Chromium of its own. A machine's box answers `40
   any more; it couldn't be opened (and why); it wasn't ready within 30 seconds; it never registered
   here (nothing to open). A call stopped while it waits stops waiting; the one that asked for the
   opening sees it through, for the others.
+
+#### The app attached to this Mac's own box
+
+#333 piece 6b, behind the app's `movesOwnBox` (off). Once this Mac's box has moved into a home of its
+own, the app attaches to it in place, as to any box already on this Mac (`here` answers `attach`,
+its `box.kind` `mac`), and does for it, through its routes, what it did for its box in its folder:
+
+- **Reached over its server**, where `run/serve.json` says it answers (its helper keeps it up), as
+  its own app (`x-kuvo-from: app`), so what the app follows there streams; while there's none, its
+  CLI (`box route`), a request at a time, as a machine's is read.
+- **Its link**: told what's wanted (`kuvo/link/config`), followed (`kuvo/link/status/events`,
+  `kuvo/link/phones/events`), told your machines (`kuvo/link/peers`, which it signs; and each
+  machine set up for your phones with what `kuvo/link/setup` gives), and phones paired from Settings
+  › Phone (`kuvo/phones/pair`), as the app's own box was. The app reads none of this Mac's keys and
+  makes none: its key is the one the box says.
+- **Registered** (`kuvo/box/app`, above): its browser's tools, its place, and its own host.
+- **Offered the release it carries** (`kuvo/box/update {from}`, "Updates"), once each time it opens,
+  where the box has `box.update`; one that isn't newer the box refuses (`409`), as it should.
+
+A machine's box attached in place (one a Mac set up on this one) keeps its own link: the app tells
+it nothing of it, pairs no phone there and reads or makes no key of this Mac's for it (its
+`kuvo/link/*` answer `403` all the same). It asks for the box's server to be kept each time it
+connects (`kuvo/box/serve {needed: true}`, "Kept for clients"; left asked for as it quits, for the
+next time it opens), and once the box says it takes Kuvo Code
+there (`box.serve.mac`), reaches it over that server as Kuvo Code on its computer (`x-kuvo-from:
+mac`, taken as `box route` is), so what it follows streams; else, and while there's no server, its
+CLI.
 
 #### This Mac's box: its keys, for its app
 
@@ -6123,7 +6350,7 @@ from 0.9.201, while it waits for its next try, `run/engine.retry`, that it's try
 machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
 minutes." The Mac's own routes (`MAC_APP_ROUTES`, the one list of them: `kuvo/machines…`,
-`kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/engine/…`), it hands the app
+`kuvo/hosts…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/engine/…`), it hands the app
 (`link/route`), but `kuvo/engine/restart` while its keeper runs (`run/keeper.json`, its process
 alive), which it answers itself (from #341). (`kuvo/claude-code` was one of them before #341: every
 box answers it now.) Those it hands the app as it comes, whether its app or its keeper runs the box (the keeper's
@@ -7644,8 +7871,8 @@ vault does (`run/vault.sock`); another passes them on.
   nothing of its own. An answered ask (or one gone with its run) leaves the list unless the reviewer
   decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
   (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
-  it never listed is yours, as nothing would list it. From a box without that word, a client takes
-  one not listed as yours at once.
+  it never listed is yours, as nothing would list it. (A box without that word is older than the
+  update gate lets through: held, never taken at its word.)
   `settled` (`sandbox.reviews.settled`): each ask the reviewer was checking or had left for you
   that's over without its word, the latest 200, each `{id, session, call?, state, at}`, `state`
   `answered` (by you, on any client, or by its engine: `permission.replied`) or `gone` (its run
@@ -7663,8 +7890,7 @@ vault does (`run/vault.sock`); another passes them on.
   can't be read, it's told without its words), and lets go of one listed in `settled`. The
   reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's
   process started again lists what still waits as it takes it up again (`checking` at once) and
-  none from before. From a box without `settled`, a client keeps what it heard asked until the box
-  lists it, as before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  none from before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,
@@ -7844,7 +8070,10 @@ phone), which starts the
 keeper too if it isn't running; `{needed: false}` lets it go), the keeper keeps `kuvo-link.js serve
 --kept` running, as it keeps the link, starting it again within a round (15 s) when it ends. It
 answers clients' routes as `serve` does, streams included, at `127.0.0.1`, with a password of its
-own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); on a Mac its port
+own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); Kuvo Code on its
+computer (the app attached to this box in place) says so with `x-kuvo-from: mac` (`box.serve.mac`),
+and is taken as `box route` takes it: what only Kuvo Code asks, it may, and what only its own Macs'
+apps do (its link) it's refused, as there; on a Mac its port
 is refused to agents' commands in the sandbox, as the box's other servers are, from the sandbox's
 next look (ten seconds at most). It does nothing else: what the
 box does in the background stays with its link and its keeper. It goes once `run/serve.needed` is
@@ -7929,6 +8158,12 @@ before connects (the box notes one: `run/attached`).
   to the copy. Marking a box, a Mac puts its `kuvo-npx` there only with its own engine version
   there, which it runs.
   <!-- compat: 0.7 files -->
+- **Messages it writes itself**: such a Mac, and every Mac and phone from before `messages.send`,
+  writes a message's blocks itself and sends its text (`api/session/<id>/prompt`, `queue/add` with
+  `text`): the box still tells who a phone's names with "&", adds the phone's block and the files'
+  note for files it carries, and keeps the parts where there's more to them than the text ("A
+  message's parts").
+  <!-- compat: 0.7 own-envelope -->
 - **Its keeper**: such a Mac's `kuvo-start` only starts the engine after a restart, and its
   `kuvo-launch` knows neither Stop nor the box's settings. The keeper keeps a copy of both
   (`bin/.kuvo-start-keeper`, `bin/.kuvo-launch-keeper`), runs its starts from them, and puts them

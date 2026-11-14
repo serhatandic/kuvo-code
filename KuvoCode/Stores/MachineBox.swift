@@ -203,36 +203,6 @@ enum MachineBox {
         return (routed.status, routed.bodyBase64.flatMap { Data(base64Encoded: $0) } ?? Data((routed.body ?? "").utf8))
     }
 
-    /// A message with files for a session on a machine, through its box, as a phone's goes: the
-    /// box keeps the files there for the agent and gives the model as files what it reads, saying
-    /// where they are in a note at the message's end (the box's `attachedIn`).
-    /// A session the coding agents run (`withAgents`) gets it through the machine's agents bridge.
-    static func prompt(session: String, id: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery, withAgents: Bool, folder: String?, on connection: SSHConnection) async throws {
-        try await send(session: session, kind: "prompt", body: ["id": id, "text": text, "files": files.map(described), "delivery": delivery.rawValue], withAgents: withAgents, folder: folder, on: connection)
-    }
-
-    /// A command with files, the same way.
-    static func command(session: String, name: String, text: String, files: [OpenCodeAPI.PromptFile], delivery: InboxItem.Delivery?, withAgents: Bool, folder: String?, on connection: SSHConnection) async throws {
-        var body: [String: Any] = ["name": name, "text": text, "files": files.map(described)]
-        if let delivery { body["delivery"] = delivery.rawValue }
-        try await send(session: session, kind: "command", body: body, withAgents: withAgents, folder: folder, on: connection)
-    }
-
-    private static func described(_ file: OpenCodeAPI.PromptFile) -> [String: Any] {
-        var described: [String: Any] = ["uri": file.uri]
-        if let name = file.name { described["name"] = name }
-        return described
-    }
-
-    private static func send(session: String, kind: String, body: [String: Any], withAgents: Bool, folder: String?, on connection: SSHConnection) async throws {
-        let escaped = session.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? session
-        let (status, data) = try await route("POST", (withAgents ? "kuvo/agents/" : "") + "api/session/\(escaped)/\(kind)", body: body, folder: folder, on: connection)
-        guard (200..<300).contains(status) else {
-            struct Said: Decodable { var message: String? }
-            throw Failure.refused((try? JSONDecoder().decode(Said.self, from: data))?.message ?? "The machine didn't take it (\(status)).")
-        }
-    }
-
     /// What `kuvo-link.js box <arguments>` answered (its last line, JSON), or why not.
     private static func answer(_ arguments: String, input: Data?, on connection: SSHConnection) async throws -> Data {
         let output = try await lastLine(arguments, input: input, on: connection)

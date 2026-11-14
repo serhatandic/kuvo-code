@@ -1,3 +1,4 @@
+import ClientAccounts
 import ClientSessions
 import Foundation
 import KuvoLink
@@ -55,9 +56,10 @@ final class BotAsks {
     func follow(_ box: String) async {
         let me = UUID()
         following[box] = me
-        // (Followed as it changes on the app's own box, which streams; read now and then on any
-        // other, the one attached in place too, which answers once a read.)
-        let onThisMac = BoxClient.streams(box)
+        // (Followed as it changes on a box that streams (the app's own, and the one attached in place
+        // while it's reached over its server: asked each round); read now and then on any other, which
+        // answers once a read.)
+        var onThisMac: Bool { BoxClient.streams(box) }
         var older = false
         while !Task.isCancelled {
             if !onThisMac {
@@ -123,8 +125,9 @@ final class BotAsks {
 
     // A notification for it: this Mac's box tells your phones its own; a machine tells them itself.
     private func tell(_ ask: WorkAsk, on box: String) {
-        let title = ask.action == .cloneProject ? "\(ask.name) asks to clone a project" : "\(ask.name) asks to make a project"
-        let body = ask.folder.map { BoxClient.isThisMac(box) ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
+        // (A reset's, in its box's words, as its phones get them.)
+        let title = ask.words?.title ?? (ask.action == .cloneProject ? "\(ask.name) asks to clone a project" : "\(ask.name) asks to make a project")
+        let body = ask.words?.body ?? ask.folder.map { BoxClient.isThisMac(box) ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
         Notifier.shared.notify(session: ask.session, title: title, body: body, push: .init(.ask, ask: ask.id, machine: box == BoxClient.mac ? nil : box, answerable: false))
     }
 

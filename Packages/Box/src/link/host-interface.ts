@@ -45,6 +45,23 @@ export function appHost(): HostAddress | null {
   return LAUNCH_HOST && { ...LAUNCH_HOST, said: "launch" };
 }
 
+/** Where this Mac's open app answers what only it can (a phone's ask of the Mac's own routes,
+ * `link/route`; what its panel's browser is signed in to, `sites/signed-in`): its host (`appHost`),
+ * whose keeper asks the open app; but a Mac's box in a home of its own has its helper for a host,
+ * which can't, so there it's the app's own host interface, where the open app said it answers as it
+ * registered (`kuvo/box/app`'s `host`, kept in `run/app.json`, gone as it quits). Null while it's
+ * closed. */
+export function openAppHost(): HostAddress | null {
+  if (!OWN_HOME_MAC) return appHost();
+  try {
+    const host: { url?: unknown; password?: unknown } | null = JSON.parse(fs.readFileSync(path.join(RUN, "app.json"), "utf8"))?.host;
+    if (typeof host?.url === "string" && host.url && typeof host?.password === "string" && host.password) {
+      return { url: host.url.replace(/\/+$/, ""), password: host.password, said: `app ${host.url} ${host.password}` };
+    }
+  } catch {}
+  return null;
+}
+
 /** What the app signs for `hello`: the nonce and where it was reached (`127.0.0.1:<port>`). */
 function helloProof(password: string, nonce: string, url: string): string {
   const reached = new URL(url);
@@ -82,6 +99,9 @@ export async function proveHost(host: HostAddress, signal?: AbortSignal): Promis
   } catch {}
   const expected = Buffer.from(helloProof(host.password, nonce, host.url));
   if (!proof || proof.length !== expected.length || !crypto.timingSafeEqual(proof, expected)) throw new KeysUnavailable(NOT_ANSWERING);
+  // (The open app's own host, a Mac's box in a home of its own: proved for each request, as this box
+  // outlives the app, and a port it left after a crash could be anyone's by the next.)
+  if (host.said.startsWith("app ")) return;
   provenBy = host.said;
 }
 
@@ -154,8 +174,7 @@ export async function askHost(host: HostAddress, call: string, body: unknown, mi
     });
   } catch {
     // Gone from there: proved again before anything more is sent there.
-    provenBy = null;
-    vaultProvenBy = null;
+    forgetHostProof();
     throw new KeysUnavailable(NOT_ANSWERING);
   }
   if (missing && response.status === 404) {
@@ -175,7 +194,7 @@ export async function askHost(host: HostAddress, call: string, body: unknown, mi
 /** Whether this Mac's browser is signed in to the sites the agent uses there, by integration, as its
  * app reads their cookies; null where that can't be told (a machine's box, or its app not answering). */
 export async function siteSignIns(): Promise<Record<string, unknown> | null> {
-  const host = appHost();
+  const host = openAppHost();
   if (!host) return null;
   try {
     const answer = await askHost(host, "sites/signed-in", {});

@@ -173,8 +173,8 @@ final class MachineEngine {
         agents = OutsideAgents(machine: machine.id)
         catalog.outsideAgents = agents
         catalog.machine = machine.id
-        // (This Mac's own box, moved into a home of its own: reached as its app, `OwnBoxHome`.)
-        let box = machine.isThisMac && OwnBoxHome.hasMoved ? OwnBoxHome.client : BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))
+        // (The box attached in place: over its server where it can be, `OwnBoxHome`.)
+        let box = machine.isThisMac ? OwnBoxHome.client : BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))
         catalog.box = box
         // This Mac's own box, moved into a home of its own: its settings file there, to open.
         config = EngineConfig(remote: BoxSettings(client: box), file: machine.isThisMac && OwnBoxHome.hasMoved ? OwnBoxHome.folder.map { EngineFolders(root: $0).configFile } : nil)
@@ -1041,11 +1041,11 @@ final class MachineEngine {
     /// 405, or no `features`), and whether its engine is stopped on purpose; nil when it couldn't
     /// say just now.
     private func info(of box: BoxClient) async -> (features: [String], stopped: Bool)? {
-        struct Info: Decodable { var features: [String]?; var stopped: Bool? }
-        guard let (status, data) = try? await box.send("GET", "kuvo/info") else { return nil }
-        if status == 404 || status == 405 { return ([], false) }
-        guard (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
-        return (info.features ?? [], info.stopped == true)
+        struct Info: Decodable { var stopped: Bool? }
+        // (Its features as the update gate reads them: `BoxFeatures.said`.)
+        guard let (status, data) = try? await box.send("GET", "kuvo/info"),
+              case .has(let features) = BoxFeatures.said(status: status, body: data) else { return nil }
+        return (features.sorted(), (try? JSONDecoder().decode(Info.self, from: data))?.stopped == true)
     }
 
     /// What `box` says it has (`kuvo/info`'s `features`); nil when it couldn't say just now.

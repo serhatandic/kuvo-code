@@ -11,6 +11,7 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MessagesOnTheirWayTests {
     let engine = StubEngine(port: 47904)
     let workspace = Workspace()
+    let box = SessionsBox()
     let id = "ses_outgoing_\(UUID().uuidString.prefix(8).lowercased())"
     let first: [String: Any] = ["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Fix the build"]
 
@@ -19,6 +20,7 @@ import Testing
     }
 
     private func done() {
+        box.stop()
         engine.stop()
         Drafts.shared.remove(id)
     }
@@ -37,6 +39,7 @@ import Testing
         engine.on("DELETE", "/api/session/\(id)/inbox/*", json: [:])
         engine.on("POST", "/api/session/\(id)/prompt", json: [:])
         engine.on("POST", "/api/session/\(id)/interrupt", json: ["interrupted": true])
+        try await box.start(engine, for: workspace)
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
         await model.load()
@@ -141,7 +144,8 @@ import Testing
     }
 
     /// Stop before a message for the next step has left (its folder's tools still being checked):
-    /// the agent is stopped at once, and the message goes to the queue rather than its next step.
+    /// the agent is stopped at once, and the message waits in the queue, on its box, rather than
+    /// going to its next step.
     @Test func stopBeforeAMessageLeftSendsItToTheQueue() async throws {
         defer { done() }
         let model = try await open(running: true, inbox: [queued("msg_02", "Then update the docs")])
@@ -158,13 +162,11 @@ import Testing
 
         gate.open()
         await model.messagesSent()
-        let sent = try #require(prompts.first)
-        #expect(sent.body["delivery"] as? String == "queue")
-        let message = try #require(sent.body["id"] as? String)
-        #expect(deliveries(of: message).isEmpty, "nothing hands it to the agent before Resume")
-        model.apply(try enqueued(message, "Also run the linter", "queue"))
+        // Its box holds it, paused, for Resume: nothing hands it to the agent before then.
+        #expect(prompts.isEmpty, "it waits on its box for Resume")
         model.apply(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
-        #expect(model.waiting.map(\.text) == ["Also run the linter", "Then update the docs"])
+        try await until { model.waiting.map(\.text).contains("Also run the linter") }
+        #expect(model.isQueuePaused)
     }
 
     /// Removed while its request is on its way: it goes from the queue at once, and the app takes
