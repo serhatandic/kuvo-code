@@ -34,7 +34,9 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 (`Offers`). Only the Mac's first launch offers them now: a computer is set up on the Mac before a
 phone pairs with it, so the phone, which had a sheet of its own for this, doesn't use them.
 `AccountNames` is what both apps call each provider's accounts in a word ("Claude", "Copilot"),
-the same in the usage panel and the work bar. `EngineProviders` is which of the engine's
+the same in the usage panel and the work bar. `UsageSpend` and `UsageLayout` are what the usage
+panel shows of a box's facts (PROTOCOL.md, "Usage history"): a service's Today, Yesterday and Last
+30 Days and its trend, from one box's totals, and the cards in the order your computers keep. `EngineProviders` is which of the engine's
 integrations Accounts lists as providers: no web search services, and not the engine's own
 "Claude Agent" (Claude comes through Claude Code, with the coding agents) unless it was added.
 `PlanSignIns` is what a conversation on the engine's own OpenAI or xAI model says when the engine

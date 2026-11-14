@@ -222,20 +222,6 @@ final class HostLimitsTests: XCTestCase {
         XCTAssertEqual(later?.lines.first { $0.label == "Credits" }, .values(label: "Credits", values: [MetricValue(number: 18, kind: .dollars)]))
     }
 
-    /// What a phone gets of a covered card: not the lines it has from the rows (Cursor's credits and
-    /// on-demand spend), which the phone draws from each row, under its own account; another card's
-    /// credits (OpenRouter's) are its own, and go.
-    func testThePhoneDrawsCursorsCreditsAndSpendFromItsRowsNotTheCards() {
-        let limits = HostLimits()
-        limits.update(rows: [
-            HostLimitRow(id: "cursor#a", providerID: "cursor", name: "Cursor", meters: [], balance: .init(left: 18, unit: "usd"), extras: [.init(id: "on_demand", name: "On-demand", amount: 4, unit: "usd")]),
-            HostLimitRow(id: "openrouter#b", providerID: "openrouter", name: "OpenRouter", meters: [], balance: .init(left: 2, unit: "usd")),
-        ], covered: ["cursor", "openrouter"])
-        XCTAssertEqual(limits.rowLines(for: "cursor"), ["Credits", "On-demand"])
-        // (OpenRouter's credits are the box's too since #631 E: the phone draws them from its row.)
-        XCTAssertEqual(limits.rowLines(for: "openrouter"), ["Balance", "Credits"])
-    }
-
     /// What a plan has beyond its windows, as the box states it (#631 E), under its bar: a capped
     /// amount a meter, the rest amounts; credits bought a meter of what's left; its resets and what
     /// its login can't read are rows of their own, not readings. The card's own lines of the same

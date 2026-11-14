@@ -75,9 +75,6 @@ here.
   the panel's own card surface, with buttons on the Options button's glass capsule. While Kuvo
   Code is in the background, the Options menu's and the right-click menu's Quit read and do what
   the host says (`HostCard.quitItem`: "Stop Background Work…"), since quitting only takes it there.
-- **The panel for the host's phones** (`Embedding/UsageMenuBar+Phone.swift`): what the Bars view
-  lists, as JSON (providers in its order with their brand color, mark, notice and lines), and a
-  refresh of everything, for Kuvo Code for iPhone.
 - **API keys pasted into the panel go into the Keychain** (`Providers/APIKeySecrets.swift`), not a
   JSON file; a key an earlier version saved in a file moves there the next time it's read. A key in
   another tool's file (`~/.config/openrouter/key.json`, `~/.config/zai/key.json`) is read but never
