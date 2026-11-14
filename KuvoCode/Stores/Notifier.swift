@@ -30,6 +30,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Shows a session in the window, for a clicked notification.
     var open: ((String) -> Void)?
+    var openUsage: (() -> Void)?
     /// Answers a permission request from its notification: the request's session, the request,
     /// and the decision.
     var answer: ((String, String, PermissionAnswer) -> Void)?
@@ -242,6 +243,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    func usageVisible() async -> Bool {
+        await UNUserNotificationCenter.current().notificationSettings().alertStyle != .none
+    }
+
     /// A box's usage verdict, with a stable OS identifier. It has no conversation or Reply action.
     @MainActor
     func usage(id: String, title: String, subtitle: String?, body: String) async -> Bool {
@@ -251,6 +256,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.subtitle = subtitle.map(Self.masked) ?? ""
         content.body = Self.masked(body)
         content.threadIdentifier = "usage"
+        content.userInfo = ["usage": true]
         if Self.playsSound { content.sound = .default }
         do {
             try await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "usage-" + id, content: content, trigger: nil))
@@ -368,16 +374,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let done = Self.response(to: response.actionIdentifier, info: response.notification.request.content.userInfo,
                                  text: (response as? UNTextInputNotificationResponse)?.userText)
-        await MainActor.run {
-            switch done {
-            case .permission(let session, let request, let answer): Notifier.shared.answer?(session, request, answer)
-            case .question(let session, let form, let key, let answer): Notifier.shared.answerQuestion?(session, form, key, answer)
-            case .reply(let session, let text): Notifier.shared.reply?(session, text)
-            case .open(let session):
-                NSApp.activate()
-                if !session.isEmpty { Notifier.shared.open?(session) }
-            case nil: break
-            }
+        await MainActor.run { Notifier.shared.handle(done) }
+    }
+
+    /// Runs a decoded notification action; keeping routing here lets tests exercise taps safely.
+    func handle(_ done: Response?) {
+        switch done {
+        case .permission(let session, let request, let decision): answer?(session, request, decision)
+        case .question(let session, let form, let key, let value): answerQuestion?(session, form, key, value)
+        case .reply(let session, let text): reply?(session, text)
+        case .open(let session):
+            NSApp.activate()
+            if !session.isEmpty { open?(session) }
+        case .usage: openUsage?()
+        case nil: break
         }
     }
 
@@ -405,10 +415,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case reply(session: String, String)
         /// Clicked: its conversation opens ("" for none, the app alone).
         case open(session: String)
+        case usage
     }
 
     /// What `action` on a notification with `info` (and the words typed in it) does.
     nonisolated static func response(to action: String, info: [AnyHashable: Any], text: String?) -> Response? {
+        if action == UNNotificationDefaultActionIdentifier, info["usage"] as? Bool == true { return .usage }
         // (Always only from one that offered it: one that didn't opens the conversation.)
         if let answer = PermissionAnswer(rawValue: action), answer != .always || info["always"] as? Bool != false,
            let session = info["requestSession"] as? String, let request = info["request"] as? String {

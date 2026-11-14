@@ -153,10 +153,7 @@ final class AppContainer {
 
         self.transparency = PopoverTransparencyStore()
         self.privacy = MenuBarPrivacyStore()
-        // Become the notification-center delegate so banners show while frontmost — a menu-bar accessory
-        // effectively always is. Notification authorization is requested the first time a trigger is
-        // turned on in Settings, not at launch — triggers default off. No-op under tests.
-        AppNotifications.shared.registerAsDelegate()
+        // The host owns notification presentation and tap routing.
     }
 
     var alertAvailabilityMessages: [String] {
