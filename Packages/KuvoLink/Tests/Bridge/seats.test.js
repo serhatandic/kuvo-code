@@ -524,6 +524,19 @@ test("the bridge is told which peers aren't your own computers for plan limits' 
   fs.rmSync(queues, { recursive: true, force: true });
 });
 
+test("a box that becomes a machine Macs of two setups share, or follows another setup, says so at once, not at the next round (#701)", () => {
+  fresh();
+  const air = box("mac", "air");
+  // (Each write of the link is looked at: the first says nothing changed.)
+  link.whereChanged(link.readLink());
+  assert.equal(link.whereChanged(link.readLink()), false, "the same: nothing to tell");
+  const shared = { ...link.readLink(), macs: [mac.pub, air.pub] };
+  assert.equal(link.whereChanged(shared), true, "now shared: told at once");
+  assert.equal(link.whereChanged(shared), false);
+  const inSetup = { ...link.readLink(), setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub, sign: mac.pub, role: "member" } };
+  assert.equal(link.whereChanged(inSetup), true, "another setup: told at once");
+});
+
 test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between your own computers only: to a peer as a seat's mail, never to a box only a peer knows, and from it never to the bridge", async () => {
   fresh();
   const air = box("mac", "air");

@@ -24,7 +24,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- On a machine that two people's Macs set up, neither person's agents can use the other's rate-limit resets, an **Always Allow** set on that machine no longer reaches your Mac, and the usage panel adds neither Mac's spend into the machine's totals, nor the machine's into either Mac's. What an account spends or has left, and whether agents may use its resets, is no longer told to that machine.
+- On a machine that two Macs set up (another person's and yours, or two of your own), neither Mac's agents can use the other's rate-limit resets, an **Always Allow** set before the second Mac set it up no longer holds there, one set on that machine no longer reaches your Mac, and the usage panel adds neither Mac's spend into the machine's totals, nor the machine's into either Mac's. What an account spends or has left, and whether agents may use its resets, is no longer told to that machine.
 - Each of your computers now says which of its sessions go in which project and which are chats, so your Mac's sidebar and your iPhone list them the same way, and a computer added later will too. The sidebar looks as before.
 - Kuvo Code now brings each of your computers up to date before it uses it, in place of features that half worked on an older Kuvo Code. A machine is updated as your Mac connects to it, as before; one that couldn't be says why, with Try Again. Your Mac, just after Kuvo Code updates, may show "Updating…" in the sidebar until the work that was running ends.
 - Signing in to an account now offers the same ways, in the same order and words, on your Mac and your iPhone: each computer decides them. A failed sign-in says why in the same words on both.

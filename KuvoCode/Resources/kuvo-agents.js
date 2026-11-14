@@ -9538,6 +9538,7 @@ var PEER_WAIT = 45000;
 var KEEP = 200;
 var KEEP_FOR = 30 * 24 * 60 * MINUTE;
 var READ_AFTER = 8000;
+var NOT_YOURS = "This computer isn't one of yours, so it doesn't use your resets: nothing was used.";
 
 class LimitResets {
   limits;
@@ -9561,6 +9562,24 @@ class LimitResets {
     this.peerWait = peerWait;
     this.load();
     limits.resets = this;
+    directory?.listen(() => this.directorySaid());
+  }
+  directorySaid() {
+    if (!this.directory?.told)
+      return;
+    const peers = this.directory.peerBoxes().map((box) => box.key);
+    const noneYours = peers.length > 0 && !peers.some((key) => this.isYours(key));
+    let forgot = false;
+    for (const [row, decided] of [...this.allowed]) {
+      if (decided.from === "" || (decided.from === undefined ? !noneYours : this.isYours(decided.from)))
+        continue;
+      this.allowed.delete(row);
+      forgot = true;
+    }
+    if (!forgot)
+      return;
+    this.save();
+    this.changedSoon();
   }
   agentsMay(provider) {
     const live = this.limits.liveRow(provider);
@@ -9580,7 +9599,7 @@ class LimitResets {
   }
   decideHere(rowID, on) {
     const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1);
-    this.decide(rowID, on, at);
+    this.decide(rowID, on, at, "");
     for (const box of this.yours())
       this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true);
   }
@@ -9591,11 +9610,11 @@ class LimitResets {
   isYours(key) {
     return this.directory?.isYours?.(key) === true;
   }
-  decide(rowID, on, at) {
+  decide(rowID, on, at, from) {
     const kept = this.allowed.get(rowID);
     if (kept && (kept.at > at || kept.at === at && on && !kept.on))
       return false;
-    this.allowed.set(rowID, { on, at });
+    this.allowed.set(rowID, { on, at, from });
     this.save();
     this.changedSoon();
     return true;
@@ -9733,15 +9752,19 @@ class LimitResets {
   take(from, mail) {
     if (!isResetMail(mail))
       return;
-    if (this.directory && !this.isYours(from))
+    if (this.directory && !this.isYours(from)) {
+      const ask = mail.ask;
+      if (ask && typeof ask.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(ask.id))
+        this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: "failed", message: NOT_YOURS } }, false);
       return;
+    }
     if (mail.answer && typeof mail.answer.id === "string") {
       this.waiting.get(mail.answer.id)?.(mail.answer);
       return;
     }
     if (mail.always && typeof mail.always.row === "string" && mail.always.row.includes("#") && typeof mail.always.on === "boolean") {
       const at = typeof mail.always.at === "number" ? mail.always.at : typeof mail.at === "number" ? mail.at : 0;
-      this.decide(mail.always.row, mail.always.on, at);
+      this.decide(mail.always.row, mail.always.on, at, from);
       return;
     }
     const ask = mail.ask;
@@ -9887,7 +9910,7 @@ class LimitResets {
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string");
       for (const [row, decided] of Object.entries(saved.allowed ?? {}))
         if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number")
-          this.allowed.set(row, { on: decided.on, at: decided.at });
+          this.allowed.set(row, { on: decided.on, at: decided.at, ...typeof decided.from === "string" ? { from: decided.from } : {} });
       for (const [provider, row] of Object.entries(saved.seen ?? {}))
         if (typeof row === "string")
           this.seen.set(provider, row);
@@ -35389,8 +35412,10 @@ class LimitsPeers {
     const self = this.directory.own();
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
-    for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...!this.ours(key) ? { vouched: true } : {}, accounts: kept.accounts });
+    for (const [key, kept] of peers) {
+      const ours = this.ours(key);
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...!ours ? { vouched: true } : {}, accounts: ours ? kept.accounts : forVouched(kept.accounts) });
+    }
     return limitRows(boxes);
   }
   tell(urgent = false) {
@@ -35424,7 +35449,7 @@ class LimitsPeers {
       const taken = takenAccount2(account, off, now);
       return taken ? [taken] : [];
     });
-    const accounts = !this.ours(from) ? forVouched(read) : read;
+    const accounts = this.directory.told && !this.ours(from) ? forVouched(read) : read;
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
     this.peers.set(from, { name, heard: now, accounts });
@@ -35480,8 +35505,14 @@ class LimitsPeers {
       accounts.pop();
     return accounts;
   }
+  yoursBefore = new Set;
   directorySaid() {
     const here = new Set(this.directory.peerBoxes().map((box) => box.key));
+    const yours = new Set([...here].filter((key) => this.ours(key)));
+    for (const key of yours)
+      if (!this.yoursBefore.has(key))
+        this.told.delete(key);
+    this.yoursBefore = yours;
     let gone = false;
     for (const [key, kept] of [...this.peers]) {
       if (!here.has(key)) {
@@ -35515,7 +35546,7 @@ class LimitsPeers {
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: forVouched(kept.accounts.flatMap((account) => takenAccount2(account, 0, Infinity) ?? [])) });
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount2(account, 0, Infinity) ?? []) });
       }
     } catch {}
   }
@@ -35998,4 +36029,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents dc0b142855d825e498f1385f60bdb3f82235ca69391274daebf90621737c1a48
+// Built from Packages/Box/src/agents a3e0fd5a90fec618345117bb372c1e1e534d73071cda74933d4c4906750ff64a

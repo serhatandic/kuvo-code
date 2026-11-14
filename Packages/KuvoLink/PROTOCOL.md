@@ -429,7 +429,7 @@ connection.
   (`[{key, address, kind, name}]`, 64 at most), the sender's other peers, which the receiver takes
   plan limits from and tells its own to where they aren't its peers too ("Plan limits", "Across your
   computers"; nothing else), and `setup` (the id of the setup it follows, where it follows one) and
-  `shared: true` (it's a machine two people's Macs set up), by which the receiver counts it as one of
+  `shared: true` (it's a machine set up by Macs that aren't all in one setup), by which the receiver counts it as one of
   your own computers, for resets, Always Allow and usage totals, only within one setup (#701; "Plan
   limits", "Across your computers", Whose). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
@@ -4142,15 +4142,27 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     names them any more. A box two hops away (known only to a box only a peer knows) isn't one.
   - **Whose** (#701): what's yours alone (spending a reset, Always Allow, what an account spends or
     has left to spend, `agents`/`agentsReset`, and usage `totals`) stays between your own
-    computers: a peer, unless this box or it is a machine two people's Macs set up, or it follows
-    another setup than this box's. The link works that out from its own setup and what each peer's
-    agents' mail says (`setup`, `shared`), and tells the bridge each peer that isn't (`apart: true`
-    in `PUT /api/kuvo/peers`' `boxes`; on a machine two Macs set up, every peer). A peer that says
+    computers: a peer, unless this box or it is a shared machine (one set up by Macs that aren't all
+    in one setup, `sharedMachine`), or it follows another setup than this box's. The code can't tell
+    people apart, only setups: one person's two Macs not joined in one setup (setups can't be joined
+    yet, #183) make a machine both set up shared too, and lose resets, Always Allow and totals
+    through it as two people would. The link works it out from its own setup and what each peer
+    says (`setup` and `shared` in its agents' mail; `shared` in its numbering mail too, which an
+    older box, or one whose engine isn't answering, still sends), and tells the bridge each peer
+    that isn't yours (`apart: true` in `PUT /api/kuvo/peers`' `boxes`; on a shared machine, every
+    peer), at once when its own setup or sharing changes, else at its next round. A peer that says
     nothing of a setup (one not in one yet, a box from before this) counts as yours, as before. So
-    on a machine two people's Macs share, no one's resets are used, no Always Allow is taken or
-    passed on, and no one's spend is added up but its own; and each Mac treats that machine as it
-    treats the other Mac (a box a peer vouches for), which is told, and keeps of what's told it, only
-    what such a box is.
+    on a shared machine no Mac's resets are used (only its own sign-ins' are, here), no Always Allow
+    is taken or passed on, and no one's spend is added up but its own; and each Mac treats that
+    machine as it treats the other Mac (a box a peer vouches for). Such a box is told only what a
+    box a peer vouches for is; what one says is kept as told, and shown, and stands for a read, as
+    such a box's (stripped as it's read) until the link says it's yours (so what your own machines
+    last said comes back whole after a restart); one that becomes yours again is asked for all of
+    its own at once. A reset asked of a box that isn't yours is answered `failed`, saying so, never
+    left to wait. Always Allow decisions are kept with the box they came from (`from` in the
+    journal, `""` decided here): one told by a box that isn't yours any more is forgotten, so
+    agents ask again (one kept from before this, whose box isn't known, once none of the box's
+    peers is yours).
   - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
     `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them, but its own
     numbers only (each account's hashed `identity`, its windows with when each was read, `checked`,
@@ -4417,7 +4429,7 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
     peers, not a box a peer vouches for, nor one that isn't yours ("Plan limits", "Across your
-    computers", Whose: a machine two people's Macs share, and on it every peer), whose accounts may
+    computers", Whose: a shared machine, and on it every peer), whose accounts may
     be another person's: their rows show, `vouched`, in no total), each folder once (an `accountWide` row's newest box of yours): what the Mac's Claude, Codex, Grok, OpenCode and Cursor cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).

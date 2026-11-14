@@ -556,7 +556,7 @@ describe("a Mac's Claude token and your other computers", () => {
       expect(resets()!.agents).toBe(true)
       expect((await post(mac.limits, { row: id })).body.data.always).toBe(true)
       // Kept through hetzner's restart, in its journal.
-      expect(JSON.parse(readFileSync(join(linuxFolder, "limits-resets.json"), "utf8")).allowed[id]).toEqual({ on: true, at: time })
+      expect(JSON.parse(readFileSync(join(linuxFolder, "limits-resets.json"), "utf8")).allowed[id]).toEqual({ on: true, at: time, from: "key-mac" })
 
       // Turned off where the account is (Settings › Accounts on hetzner's page).
       await limitsRoutes(hetzner.limits, "PUT", ["reset", "always"], async () => ({ provider: "claude-code", always: false }))
@@ -803,7 +803,7 @@ describe("the third review's cases", () => {
     const resets = new LimitResets(limits, join(folder, "limits-resets.json"), now)
     const id = `claude#${identityOf(`anthropic:${ACCOUNT}|${ORG}`)}`
     resets.take("key-mac", { kind: "reset", at: time, always: { row: id, on: false, at: time } })
-    expect(JSON.parse(readFileSync(join(folder, "limits-resets.json"), "utf8")).allowed[id]).toEqual({ on: false, at: time })
+    expect(JSON.parse(readFileSync(join(folder, "limits-resets.json"), "utf8")).allowed[id]).toEqual({ on: false, at: time, from: "key-mac" })
     resets.take("key-mac", { kind: "reset", at: time - 1, always: { row: id, on: true, at: time - 1 } })
     signedIn = true
     await limits.tick()
@@ -1213,9 +1213,20 @@ describe("a machine two people's Macs set up (#701)", () => {
       const asked = await post(machine.limits, { row: id })
       expect(asked.status).toBe(409)
       expect(asked.body.message).toBe("None of your computers can use this account's resets now.")
-      // Mail from the machine asking Ada's box to spend one (as a box from before this would send it): never taken.
+      // Mail from the machine asking Ada's box to spend one (as a box from before this would send it):
+      // never taken, and answered so, so its asker isn't left waiting.
+      const answers: any[] = []
+      ada.loses = (mail) => {
+        if (mail.kind === "reset" && mail.answer) answers.push(mail.answer)
+        return false
+      }
       await peerRoutes(ada.parts, "POST", ["mail"], async () => ({ from: "key-shared", mail: { kind: "reset", at: time, ask: { id: "s1", row: id, by: "Bo's agent", unasked: true } } }))
       await peerRoutes(ada.parts, "POST", ["mail"], async () => ({ from: "key-shared", mail: { kind: "reset", at: time, ask: { id: "s2", row: id } } }))
+      await until(() => answers.length === 2)
+      expect(answers).toEqual([
+        { id: "s1", outcome: "failed", message: "This computer isn't one of yours, so it doesn't use your resets: nothing was used." },
+        { id: "s2", outcome: "failed", message: "This computer isn't one of yours, so it doesn't use your resets: nothing was used." },
+      ])
       expect(makers.claims).toEqual([])
       expect(makers.spends).toBe(0)
       // Ada's own box still spends its own.
@@ -1272,6 +1283,61 @@ describe("a machine two people's Macs set up (#701)", () => {
     } finally {
       machine.stop()
       own.stop()
+    }
+  })
+
+  test("Always Allow Ada set before Bo's Mac also set up her machine is forgotten there once it's shared: agents there ask again, and a later word from Ada's Mac isn't taken", async () => {
+    const relay = new Map<string, Box>()
+    const macFolder = mkdtempSync(join(base, "ada-mac-"))
+    const claudeMac = macClaude(macFolder)
+    const mac = new Box("key-ada", "Ada's MacBook", () => agentAccounts([claudeMac]), macFolder, relay)
+    const machineFolder = mkdtempSync(join(base, "ada-machine-"))
+    const machine = new Box("key-shared", "shared", () => agentAccounts([linuxClaude(machineFolder)]), machineFolder, relay)
+    const bo = new Box("key-bo", "Bo's MacBook", () => [], mkdtempSync(join(base, "bo-later-")), relay)
+    try {
+      await mac.meet([machine])
+      await machine.meet([mac])
+      await mac.limits.tick()
+      claudeMac.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+      await machine.limits.tick()
+      const merged = () => mac.limits.rows().find((row) => row.boxes.length === 2)
+      await until(() => !!merged()?.extras?.some((extra) => extra.kind === "resets"))
+      const id = merged()!.id
+      await limitsRoutes(mac.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: true }))
+      await until(() => machine.resets.agentsMay("claude-code"))
+      // Bo's Mac sets the machine up too: its link says neither Mac is one of its own computers now.
+      await machine.meet([mac, bo], [], [mac, bo])
+      expect(machine.resets.agentsMay("claude-code")).toBe(false)
+      expect(JSON.parse(readFileSync(join(machineFolder, "limits-resets.json"), "utf8")).allowed[id]).toBeUndefined()
+      // Ada's Mac saying it again (it doesn't know yet) changes nothing there.
+      await peerRoutes(machine.parts, "POST", ["mail"], async () => ({ from: "key-ada", mail: { kind: "reset", at: time + 1_000, always: { row: id, on: true, at: time + 1_000 } } }))
+      expect(machine.resets.agentsMay("claude-code")).toBe(false)
+    } finally {
+      for (const box of [mac, machine, bo]) box.stop()
+    }
+  })
+
+  test("an Always Allow kept by a box from before this, which didn't say whose it was, goes once the machine is shared; on a box alone, it stays", async () => {
+    const relay = new Map<string, Box>()
+    const id = `claude#${identityOf(`anthropic:${ACCOUNT}|${ORG}`)}`
+    const kept = (folder: string) => writeFileSync(join(folder, "limits-resets.json"), JSON.stringify({ spends: [], allowed: { [id]: { on: true, at: time } }, seen: { "claude-code": id } }))
+    const sharedFolder = mkdtempSync(join(base, "legacy-shared-"))
+    kept(sharedFolder)
+    const machine = new Box("key-shared", "shared", () => agentAccounts([linuxClaude(sharedFolder)]), sharedFolder, relay)
+    const aloneFolder = mkdtempSync(join(base, "legacy-alone-"))
+    kept(aloneFolder)
+    const alone = new Box("key-alone", "alone", () => agentAccounts([linuxClaude(aloneFolder)]), aloneFolder, relay)
+    const ada = new Box("key-ada", "Ada's MacBook", () => [], mkdtempSync(join(base, "legacy-ada-")), relay)
+    const bo = new Box("key-bo", "Bo's MacBook", () => [], mkdtempSync(join(base, "legacy-bo-")), relay)
+    try {
+      await machine.meet([ada, bo], [], [ada, bo])
+      await alone.meet([])
+      await machine.limits.tick()
+      await alone.limits.tick()
+      expect(machine.resets.agentsMay("claude-code")).toBe(false)
+      expect(alone.resets.agentsMay("claude-code")).toBe(true)
+    } finally {
+      for (const box of [machine, alone, ada, bo]) box.stop()
     }
   })
 

@@ -25414,6 +25414,13 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
     ...setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}
   };
 }
+var whereSeen;
+function whereChanged(link) {
+  const now = `${followedSetup(link)?.id ?? ""}|${sharedMachine(link)}`;
+  const before = whereSeen;
+  whereSeen = now;
+  return before !== undefined && before !== now;
+}
 var toldSeatPeers = "";
 async function tellSeatPeers(link = readLink(), force = false, ask = bridgeAsk) {
   const peers = seatPeers(link);
@@ -40282,7 +40289,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f0a28ac64472";
+var BRIDGE_VERSION = "7d9656199e4f";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -51728,6 +51735,12 @@ function boxPlaces() {
 scriptIs(fileURLToPath4(import.meta.url));
 onDocsChanged(macDocsChanged);
 onLinkWritten((link) => {
+  if (whereChanged(link)) {
+    tellSeatPeers(link, true).catch(() => {});
+    const host = IS_MAC ? macLink.host : liveHost;
+    if (host?.welcomed)
+      announce(host, readEngineFile, link).catch(() => {});
+  }
   if (IS_MAC) {
     for (const tell of macLink.phoneFollowers)
       tell();
@@ -51742,6 +51755,7 @@ onLinkWritten((link) => {
   else
     fs160.rmSync(NEEDED_FILE, { force: true });
 });
+var liveHost = null;
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
   try {
@@ -51964,6 +51978,7 @@ async function run6() {
       send: () => {}
     });
     current = host;
+    liveHost = host;
     const started = Date.now();
     const welcomed = await connectOnce(link.relay, Buffer.from(link.secret, "base64url"), host, machineWelcomed);
     const next = nextTry(attempt, welcomed, Date.now() - started);
@@ -52948,6 +52963,7 @@ export {
   watchEvents,
   watchMoves,
   watchSeats,
+  whereChanged,
   workWatcher,
   worktreesWhere,
   writeAgents,

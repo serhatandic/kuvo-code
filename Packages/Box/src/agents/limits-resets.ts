@@ -92,9 +92,10 @@ interface Saved {
   /**
    * Whether agents may use an account's resets without asking, by account (its row,
    * `<service>#<identity>`): the latest decision, and when (ms), here or on another of your
-   * computers. A decision older than the one kept never takes its place.
+   * computers. A decision older than the one kept never takes its place. `from`: the box it came
+   * from (`""` decided here); none in a journal from before this, as if from a peer unknown.
    */
-  allowed?: Record<string, { on: boolean; at: number }>
+  allowed?: Record<string, Decision>
   /** The account each slot here (by provider) was last seen signed in to. */
   seen?: Record<string, string>
 }
@@ -125,6 +126,16 @@ const KEEP_FOR = 30 * 24 * 60 * MINUTE
 /** How long an answer waits for the account to be read again after a reset. */
 const READ_AFTER = 8_000
 
+/** An Always Allow decision kept: `from`, the box it was told by (`""` decided here, absent where a journal from before this doesn't say). */
+interface Decision {
+  on: boolean
+  at: number
+  from?: string
+}
+
+/** Said to a box that isn't one of yours asking this one to spend a reset. */
+const NOT_YOURS = "This computer isn't one of yours, so it doesn't use your resets: nothing was used."
+
 /** A refusal, in words, with the status a route answers it with. */
 export interface ResetRefusal {
   status: 404 | 409 | 503
@@ -143,7 +154,7 @@ export interface ResetDone {
 export class LimitResets {
   private confirms = new Map<string, { row: string; at: number; via?: string; provider?: string }>()
   private spends: Spend[] = []
-  private allowed = new Map<string, { on: boolean; at: number }>()
+  private allowed = new Map<string, Decision>()
   private seen = new Map<string, string>()
   private waiting = new Map<string, (answer: NonNullable<ResetMail["answer"]>) => void>()
   /** Spends under way here, by id: asked again meanwhile, the same one is waited for. */
@@ -160,6 +171,28 @@ export class LimitResets {
   ) {
     this.load()
     limits.resets = this
+    directory?.listen(() => this.directorySaid())
+  }
+
+  /**
+   * The link said who your computers are: a decision a box told this one is forgotten once that
+   * box isn't one of yours (it, or this box, became a machine Macs of two setups share), so agents
+   * here ask again rather than go on under another's Always Allow; one from a journal from before
+   * this, whose box isn't known, once none of this box's peers is yours.
+   */
+  private directorySaid() {
+    if (!this.directory?.told) return
+    const peers = this.directory.peerBoxes().map((box) => box.key)
+    const noneYours = peers.length > 0 && !peers.some((key) => this.isYours(key))
+    let forgot = false
+    for (const [row, decided] of [...this.allowed]) {
+      if (decided.from === "" || (decided.from === undefined ? !noneYours : this.isYours(decided.from))) continue
+      this.allowed.delete(row)
+      forgot = true
+    }
+    if (!forgot) return
+    this.save()
+    this.changedSoon()
   }
 
   /**
@@ -193,7 +226,7 @@ export class LimitResets {
    */
   private decideHere(rowID: string, on: boolean) {
     const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1)
-    this.decide(rowID, on, at)
+    this.decide(rowID, on, at, "")
     for (const box of this.yours()) this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true)
   }
 
@@ -212,10 +245,10 @@ export class LimitResets {
    * A decision for an account, kept unless a later one is; of two at once, an off (Always Allow
    * turned off is never lost to an on stamped the same); whether it was taken.
    */
-  private decide(rowID: string, on: boolean, at: number): boolean {
+  private decide(rowID: string, on: boolean, at: number, from: string): boolean {
     const kept = this.allowed.get(rowID)
     if (kept && (kept.at > at || (kept.at === at && on && !kept.on))) return false
-    this.allowed.set(rowID, { on, at })
+    this.allowed.set(rowID, { on, at, from })
     this.save()
     this.changedSoon()
     return true
@@ -381,7 +414,12 @@ export class LimitResets {
   /** A peer's reset mail: only from one of your own computers (another owner's, through a machine you share, never spends yours). */
   take(from: string, mail: unknown) {
     if (!isResetMail(mail)) return
-    if (this.directory && !this.isYours(from)) return
+    if (this.directory && !this.isYours(from)) {
+      // (An ask is answered, so its asker isn't left waiting: nothing is used. Anything else is dropped.)
+      const ask = mail.ask
+      if (ask && typeof ask.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(ask.id)) this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: "failed", message: NOT_YOURS } }, false)
+      return
+    }
     if (mail.answer && typeof mail.answer.id === "string") {
       this.waiting.get(mail.answer.id)?.(mail.answer)
       return
@@ -390,7 +428,7 @@ export class LimitResets {
       // Kept as decided then, whether or not this box knows the account yet (an "off" for one it
       // learns of later holds then), unless a later decision is.
       const at = typeof mail.always.at === "number" ? mail.always.at : typeof mail.at === "number" ? mail.at : 0
-      this.decide(mail.always.row, mail.always.on, at)
+      this.decide(mail.always.row, mail.always.on, at, from)
       return
     }
     const ask = mail.ask
@@ -554,7 +592,7 @@ export class LimitResets {
     try {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as Saved
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string")
-      for (const [row, decided] of Object.entries(saved.allowed ?? {})) if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number") this.allowed.set(row, { on: decided.on, at: decided.at })
+      for (const [row, decided] of Object.entries(saved.allowed ?? {})) if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number") this.allowed.set(row, { on: decided.on, at: decided.at, ...(typeof decided.from === "string" ? { from: decided.from } : {}) })
       for (const [provider, row] of Object.entries(saved.seen ?? {})) if (typeof row === "string") this.seen.set(provider, row)
     } catch {}
   }

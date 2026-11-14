@@ -224,6 +224,21 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   };
 }
 
+/** The setup this box follows and whether it's a machine Macs of two setups share, as last seen. */
+let whereSeen: string | undefined;
+
+/**
+ * Whether the setup this box follows, or whether it's a machine Macs of two setups share, changed
+ * since last seen (not the first time): then its bridge and its peers are told at once, not at the
+ * next round, so nothing of one setup's stays the other's for that minute.
+ */
+export function whereChanged(link: LinkState | null): boolean {
+  const now = `${followedSetup(link)?.id ?? ""}|${sharedMachine(link)}`;
+  const before = whereSeen;
+  whereSeen = now;
+  return before !== undefined && before !== now;
+}
+
 let toldSeatPeers = "";
 export async function tellSeatPeers(link: LinkState | null = readLink(), force = false, ask: BridgeAsk = bridgeAsk): Promise<void> {
   const peers = seatPeers(link);

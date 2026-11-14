@@ -113,8 +113,8 @@ export class LimitsPeers {
 
   /**
    * The newest reading one of your own computers had of this account from its maker, without a
-   * problem, if any did: never one that isn't yours (what it's told of an account lacks its spend
-   * and extras, so it never stands in for a read of here).
+   * problem, if any did: never one that isn't yours, nor any before the link has said (what such a
+   * box is told of an account lacks its spend and extras, so it never stands in for a read of here).
    */
   freshest(service: LimitsService, identity: string): AccountLimits | undefined {
     let newest: AccountLimits | undefined
@@ -134,7 +134,11 @@ export class LimitsPeers {
     const self = this.directory.own()
     const boxes: LimitsBox[] = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }]
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))
-    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(!this.ours(key) ? { vouched: true } : {}), accounts: kept.accounts })
+    for (const [key, kept] of peers) {
+      // (One that isn't yours, or before the link has said: only what such a box is told.)
+      const ours = this.ours(key)
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(!ours ? { vouched: true } : {}), accounts: ours ? kept.accounts : forVouched(kept.accounts) })
+    }
     return limitRows(boxes)
   }
 
@@ -173,11 +177,11 @@ export class LimitsPeers {
       const taken = takenAccount(account, off, now)
       return taken ? [taken] : []
     })
-    // (From a box that isn't one of your own computers, only what such a box is told, whatever it
-    // said: a machine two people's Macs share never shows one owner's spending or Always Allow to
-    // the other.)
-    // (Before the link has said, nothing is one of yours: kept so until it says, and told again then.)
-    const accounts = !this.ours(from) ? forVouched(read) : read
+    // (From a box the link says isn't one of your own computers, only what such a box is told,
+    // whatever it said: a machine Macs of two setups share never keeps one's spending or Always Allow
+    // for the other. Before the link has said, kept whole, and shown as such a box's until it says:
+    // `rows`, `freshest`.)
+    const accounts = this.directory.told && !this.ours(from) ? forVouched(read) : read
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     this.peers.set(from, { name, heard: now, accounts })
@@ -241,12 +245,20 @@ export class LimitsPeers {
     return accounts
   }
 
+  /** Your own computers as the link last said, to know one that has just become yours. */
+  private yoursBefore = new Set<string>()
+
   /**
    * The link said who your computers are: those no longer among them go, one that's no longer one
-   * of your own keeps only what such a box is told, and one new to this box is told now.
+   * of your own keeps only what such a box is told, one new to this box is told now, and one that
+   * has just become yours (again) is told all and asked for all of its own.
    */
   private directorySaid() {
     const here = new Set(this.directory.peerBoxes().map((box) => box.key))
+    const yours = new Set([...here].filter((key) => this.ours(key)))
+    // (Told again as if never told: with `ask`, so it tells this box all of its own at once.)
+    for (const key of yours) if (!this.yoursBefore.has(key)) this.told.delete(key)
+    this.yoursBefore = yours
     let gone = false
     for (const [key, kept] of [...this.peers]) {
       if (!here.has(key)) {
@@ -275,8 +287,8 @@ export class LimitsPeers {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as { peers?: Record<string, Kept> }
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts)) continue
-        // (Only what a box that isn't yours is told, until the link says it's one of yours and it tells again.)
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: forVouched(kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? [])) })
+        // (Whole, as kept: shown as one that isn't yours until the link says it is, `rows`.)
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) })
       }
     } catch {}
   }
