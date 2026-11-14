@@ -130,8 +130,9 @@ final class Catalog {
     /// The engine's models grouped by provider, in the order its box gives them (its featured
     /// providers first, each one's newest first); none until it has said what runs.
     var modelsByProvider: [(provider: String, models: [Model])] {
-        guard let said = offeredSaid else { return [] }
+        // (`offered` first: reading it asks its box, where it hasn't said yet.)
         let groups = Dictionary(grouping: offered.filter { !OutsideAgents.isAgent($0.providerID) }, by: \.providerID)
+        guard let said = offeredSaid else { return [] }
         let place = { (model: Model) in said.place(model.ref) ?? .max }
         return groups.values.map { $0.sorted { place($0) < place($1) } }
             .sorted { place($0[0]) < place($1[0]) }
