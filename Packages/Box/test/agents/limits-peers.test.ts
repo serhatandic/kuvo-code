@@ -683,3 +683,19 @@ describe("whose computers see what's yours alone (#701, the separate review)", (
     expect(only!.extras?.map((extra) => extra.kind)).toEqual(["resets"])
   })
 })
+
+test("without a setup a computer that stops being yours is immediately sent the stripped view", () => {
+  let yours = true, changed = () => {}, now = 1700000000000
+  const account = { provider: "claude-code", service: "claude", windows: [], balance: { left: 12, unit: "usd" }, agentsReset: true }
+  const limits = { list: () => [account], settleNoticeForwarders: () => {}, peersChanged: () => {} } as unknown as Limits
+  const sent: LimitsMail[] = []
+  const directory = { told: true, own: () => ({ key: "own", name: "Own" }), peerBoxes: () => [{ key: "peer", name: "Peer" }], listen: (f: () => void) => { changed = f }, isPeer: () => true, isYours: () => yours }
+  const peers = new LimitsPeers(limits, { followed: true, send: (_, mail) => { sent.push(mail) } }, directory, undefined, () => now)
+  peers.tell(true)
+  expect(sent[0].accounts[0].balance).toEqual({ left: 12, unit: "usd" })
+  expect(sent[0].accounts[0].agentsReset).toBe(true)
+  yours = false; now += 1000; changed()
+  expect(sent).toHaveLength(2)
+  expect(sent[1].accounts[0].balance).toBeUndefined()
+  expect(sent[1].accounts[0].agentsReset).toBeUndefined()
+})

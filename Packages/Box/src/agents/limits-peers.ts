@@ -347,7 +347,7 @@ export class LimitsPeers {
   /** The link said who your computers are: those no longer among them go, and one new to this box is told now. */
   private directorySaid() {
     const boundary = this.boundary()
-    const urgent = boundary !== this.noticeBoundary
+    let urgent = boundary !== this.noticeBoundary
     this.noticeBoundary = boundary
     const here = new Set(this.directory.peerBoxes().map((box) => box.key))
     const yours = new Set([...here].filter((key) => this.ours(key)))
@@ -382,6 +382,7 @@ export class LimitsPeers {
       this.save()
       this.limits.peersChanged()
     }
+    urgent ||= gone
     this.tell(urgent)
   }
 
