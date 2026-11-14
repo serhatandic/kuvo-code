@@ -159,6 +159,12 @@ final class AppContainer {
         AppNotifications.shared.registerAsDelegate()
     }
 
+    var alertAvailabilityMessages: [String] {
+        UsageAlertAvailability.shared.messages(for: registry.providers.filter {
+            enablement.isEnabled($0.id) && availability.isKnownConnected($0.id)
+        }.map(\.id))
+    }
+
     deinit {
         refreshTask?.cancel()
         newProviderTask?.cancel()

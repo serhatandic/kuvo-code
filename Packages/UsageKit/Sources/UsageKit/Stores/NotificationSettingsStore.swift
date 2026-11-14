@@ -10,8 +10,6 @@ import Observation
 @MainActor
 @Observable
 final class NotificationSettingsStore {
-    static let unavailableAlerts = "Devin alerts are unavailable because Devin is not connected to Kuvo Code’s background service."
-
     private let defaults: UserDefaults
 
     private static let underTenKey = "openusage.notifications.underTenPercent"

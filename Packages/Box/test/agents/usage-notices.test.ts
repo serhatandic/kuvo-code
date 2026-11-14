@@ -332,3 +332,12 @@ test("unrelated directory heartbeats do not bypass the heard-mail throttle", asy
   expect(sent).toHaveLength(1)
 })
 
+
+test("unsupported notification providers and their wording come from box answers", async () => {
+  const f=fixture()
+  const limits=await (await limitsRoutes(f.limits,"GET",[])).json()
+  const settings=await (await settingsRoutes(f.settings,()=>[],"GET",[],async()=>undefined)).json()
+  expect(limits.data.notificationAvailability).toEqual([{provider:"devin",available:false,message:"Devin alerts are unavailable because Devin is not connected to Kuvo Code’s background service."}])
+  expect(settings.data.notificationAvailability).toEqual(limits.data.notificationAvailability)
+})
+
