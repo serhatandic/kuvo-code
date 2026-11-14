@@ -169,11 +169,13 @@ test("on the engine, what isn't Bun may have your real home and the run's own ru
   rmSync(scratch, { recursive: true, force: true })
 })
 
-// (Every file `bun test` takes for a test, anywhere under the box: *.test, *_test, *.spec, *_spec, in
-// any of its script extensions, in test/'s subfolders and outside test/ too.)
+// (Every file `bun test` takes for a test, anywhere under its root, test/ (bunfig.toml): *.test,
+// *_test, *.spec, *_spec, in any of its script extensions, in test/'s subfolders too. The bridge's
+// tests, in bridge-tests/, run on Node and load its own guard, test-safety.js.)
 test("every box test file loads test/safety.ts before anything else", () => {
   const box = resolve(import.meta.dir, "..")
-  const files = (readdirSync(box, { recursive: true }) as string[]).filter(name => !name.split(sep).includes("node_modules") && /[._](test|spec)\.[cm]?[jt]sx?$/.test(name))
+  expect(readFileSync(join(box, "bunfig.toml"), "utf8")).toMatch(/^root = "test"$/m)
+  const files = (readdirSync(join(box, "test"), { recursive: true }) as string[]).filter(name => !name.split(sep).includes("node_modules") && /[._](test|spec)\.[cm]?[jt]sx?$/.test(name)).map(name => join("test", name))
   expect(files.length).toBeGreaterThan(50)
   expect(files.some(name => name.split(sep).length > 2)).toBe(true)
   const missing = files.filter(name => {
