@@ -192,6 +192,12 @@ import Testing
         #expect(app.workspace.session("ses_trip").map { RemoteFolder.machine(of: $0.location.directory) == id } == true)
 
         try await until { open.transcript.messages.map(\.id) == ["msg_02"] }
+        // What's sent goes through the machine's box (`kuvo/sessions/<id>/send`), the real one,
+        // reaching the machine's engine: its SSH here answers nothing.
+        let box = try await ConversationBox(engine: machine)
+        defer { box.stop() }
+        let client = box.machine.client
+        app.workspace.boxes = { [id] place in place == id ? client : nil }
         let sentHere = here.asked.count
         open.send("Book the hotel too", for: nil)
         try await until { machine.asked.contains { $0.hasPrefix("POST /api/session/ses_trip/") } }
