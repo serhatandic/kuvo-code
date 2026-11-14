@@ -17,6 +17,8 @@ use std::time::Duration;
 
 pub use crate::time::now_ms;
 
+pub mod git;
+
 use kuvo_box::Result;
 use kuvo_box::transport::{Closer, Request, Response, Stream, Transport};
 use serde_json::{Value, json};
@@ -87,10 +89,15 @@ struct State {
     asks: HashMap<String, Vec<Value>>,
     /// Each conversation's queue, in the order the box shows it (`kuvo/sessions/<id>/queue`).
     queues: HashMap<String, Vec<Value>>,
+    /// Its repositories and folders.
+    git: Option<git::Git>,
+    /// Those following a folder's changed files (`kuvo/git/files/events`): the folder, and where its
+    /// lines go.
+    git_followers: HashMap<u64, (String, Sender<String>)>,
 }
 
 pub const NAME: &str = "Stand-in Mac";
-const HOME: &str = "/Users/sam";
+pub const HOME: &str = "/Users/sam";
 
 
 const MINUTE: f64 = 60_000.0;
@@ -181,6 +188,30 @@ impl StandIn {
         self.state().emit(kind, data);
     }
 
+    /// The changed files of the repository at `root` from now on (each as `kuvo/git/files` lists
+    /// one), and its followers hear it.
+    pub fn set_git_files(&self, root: &str, files: Vec<Value>) {
+        let mut state = self.state();
+        if let Some(repo) = state.git.as_mut().and_then(|git| git.repos.get_mut(root)) {
+            repo.files = files;
+        }
+        state.git_changed(root);
+    }
+
+    /// The next commit that pushes lands, but its push doesn't go through.
+    pub fn fail_next_push(&self) {
+        if let Some(git) = self.state().git.as_mut() {
+            git.push_fails = true;
+        }
+    }
+
+    /// From now on, a merge stops on these files, and nothing is merged.
+    pub fn merges_conflict(&self, files: &[&str]) {
+        if let Some(git) = self.state().git.as_mut() {
+            git.conflicts = files.iter().map(|file| (*file).to_owned()).collect();
+        }
+    }
+
     fn fill(&self, now: f64) {
         let mut state = self.state();
         let website = format!("{HOME}/Projects/website");
@@ -225,6 +256,11 @@ impl StandIn {
         state.messages.insert("ses_recipes".into(), recipes(now));
         state.asks.insert("ses_cms".into(), vec![cms_question()]);
         state.queues.insert("ses_signup".into(), signup_queue());
+        // Dark mode is worked on in a worktree of the website, on a branch of its own.
+        if let Some(facts) = state.sessions.get_mut("ses_dark") {
+            facts["directory"] = json!(git::dark_mode_tree());
+        }
+        state.git = Some(git::Git::new());
     }
 }
 
@@ -393,6 +429,24 @@ impl State {
         self.followers.retain(|_, (followed, which, sender)| followed != session || *which != what || sender.send(line.clone()).is_ok());
     }
 
+    /// Those following a folder in `root` hear its changed files as they are now.
+    fn git_changed(&mut self, root: &str) {
+        let Some(git) = self.git.as_ref() else { return };
+        let lines: Vec<(u64, String)> = self
+            .git_followers
+            .iter()
+            .filter(|(_, (directory, _))| git.repo_of(directory) == Some(root))
+            .map(|(id, (directory, _))| (*id, git.files(directory).to_string()))
+            .collect();
+        for (id, line) in lines {
+            if let Some((_, sender)) = self.git_followers.get(&id)
+                && sender.send(line).is_err()
+            {
+                self.git_followers.remove(&id);
+            }
+        }
+    }
+
     fn list_changed(&mut self) {
         self.at += 1;
         let line = self.line(true).to_string();
@@ -545,6 +599,22 @@ impl StandIn {
         let mut state = self.state();
         state.seen.push(Seen { method: method.into(), path: path.into(), body: request.body.clone() });
         let segments: Vec<&str> = route.split('/').collect();
+        if let Some(git) = state.git.as_mut() {
+            if (method, route) == ("GET", "kuvo/file") {
+                let uri = query(path, "uri").map(decoded).unwrap_or_default();
+                return match git.bytes(&uri) {
+                    Some(bytes) => Ok(Response { status: 200, content_type: Some("application/octet-stream".into()), body: bytes }),
+                    None => answer(404, json!({ "message": "That file isn’t there anymore." })),
+                };
+            }
+            let body = request.body.clone().unwrap_or(Value::Null);
+            if let Some((status, value, changed)) = git.answer(method, route, |name| query(path, name).map(decoded), &body) {
+                if let Some(root) = changed {
+                    state.git_changed(&root);
+                }
+                return answer(status, value);
+            }
+        }
         match (method, segments.as_slice()) {
             ("GET", ["kuvo", "info"]) => {
                 let mut features: Vec<&str> = kuvo_box::gate::REQUIRED.to_vec();
@@ -878,6 +948,30 @@ impl Transport for StandIn {
             let inner = self.inner.clone();
             let closer = Closer::new(move || {
                 inner.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).followers.remove(&id);
+            });
+            if !hold(closer.clone()) {
+                closer.close();
+            }
+            return Ok(Stream { status: 200, content_type: Some("application/x-ndjson".into()), reader: Box::new(Pieces { receiver, piece: Vec::new(), at: 0, sse: false }), closer });
+        }
+        // A folder's changed files, followed: as they are now, then a line as they change.
+        if route == "kuvo/git/files/events" {
+            let directory = query(&request.path, "directory").map(decoded).unwrap_or_default();
+            let (sender, receiver) = channel();
+            let id = {
+                let mut state = self.state();
+                state.seen.push(Seen { method: request.method.clone(), path: request.path.clone(), body: None });
+                let id = state.next;
+                state.next += 1;
+                if let Some(git) = state.git.as_ref() {
+                    let _ = sender.send(git.files(&directory).to_string());
+                }
+                state.git_followers.insert(id, (directory, sender));
+                id
+            };
+            let inner = self.inner.clone();
+            let closer = Closer::new(move || {
+                inner.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).git_followers.remove(&id);
             });
             if !hold(closer.clone()) {
                 closer.close();

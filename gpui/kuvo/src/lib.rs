@@ -10,6 +10,7 @@ pub mod composer;
 pub mod conversation;
 pub mod entries;
 mod landing;
+pub mod panel;
 pub mod sidebar;
 #[cfg(feature = "stand-in")]
 pub mod stand_in;
@@ -20,15 +21,21 @@ use gpui::{App, KeyBinding, actions};
 
 pub use workspace::Workspace;
 
-actions!(kuvo, [NewSession, ToggleAppearance, Quit]);
+actions!(kuvo, [NewSession, ToggleAppearance, Quit, TogglePanel, ShowChanges, ShowFiles]);
 
 /// Binds the app's keys, after the blocks' (so "/"'s list takes its keys ahead of the field's).
 pub fn bind_keys(cx: &mut App) {
     kuvo_ui::bind_keys(cx);
     composer::bind_keys(cx);
     sidebar::bind_keys(cx);
+    panel::changes::bind_keys(cx);
+    panel::files::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-n", NewSession, Some("Workspace")),
+        // As the Mac app's: Show Panel, Show Changes, Show Files.
+        KeyBinding::new("cmd-alt-0", TogglePanel, Some("Workspace")),
+        KeyBinding::new("cmd-alt-i", ShowChanges, Some("Workspace")),
+        KeyBinding::new("cmd-alt-f", ShowFiles, Some("Workspace")),
         KeyBinding::new("cmd-shift-l", ToggleAppearance, Some("Workspace")),
         KeyBinding::new("cmd-q", Quit, None),
     ]);
