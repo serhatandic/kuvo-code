@@ -27,6 +27,17 @@ pub fn asks_box(text: &str) -> bool {
     matches!(text.chars().find(|c| !c.is_whitespace()), Some('/' | '!'))
 }
 
+/// What the box would answer for a plain text (one [`asks_box`] doesn't ask about) where it isn't
+/// sent as a message: in the box's order (`typed/decide.ts`), a model that can't run first (every
+/// plain text needs the model), all of it kept, saying why; then, with the side thread's tag on, a
+/// follow-up there. None: it's sent. Held to `Vectors/typed.json`'s `decide` cases.
+pub fn plain_answer(text: &str, side: bool, refusal: Option<&str>) -> Option<Answer> {
+    if let Some(refusal) = refusal {
+        return Some(Answer { restore: Some(Restore { text: text.to_owned(), beside: None }), error: Some(refusal.to_owned()), ..Answer::default() });
+    }
+    side.then(|| Answer { side_thread: Some(true), ..Answer::default() })
+}
+
 /// The keyword `text` starts with and what follows it ("/PLAN  sketch it" → `plan`, "sketch it"),
 /// for drawing it as it's typed the way the box will read it once sent.
 pub fn keyword(text: &str) -> Option<(&'static str, String)> {

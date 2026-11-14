@@ -113,26 +113,41 @@ fn a_keyword_is_drawn_as_the_box_reads_it() {
     }
 }
 
-/// A client sends a text that isn't "/" or "!" as a message without asking: the box would only
-/// say to send it (unless the model can't run, or the side thread's tag is on, which the client
-/// knows itself).
+/// A client answers a text that isn't "/" or "!" itself, without asking, as the box would: kept
+/// with a model that can't run, a follow-up in the side thread with its tag on, else sent.
 #[test]
-fn a_text_the_client_sends_without_asking_is_one_the_box_would_send() {
+fn a_text_the_client_answers_without_asking_is_answered_as_the_box_would() {
     let vectors = vectors("typed.json");
-    let mut checked = 0;
+    let mut checked = (0, 0, 0);
     for case in vectors["decide"].as_array().unwrap() {
         let text = case["text"].as_str().unwrap();
         if typed::asks_box(text) {
             continue;
         }
         let facts = &case["facts"];
-        if facts.get("refusal").is_some_and(|refusal| !refusal.is_null()) || facts.get("side") == Some(&Value::Bool(true)) {
-            continue;
+        let side = facts.get("side") == Some(&Value::Bool(true));
+        let refusal = facts.get("refusal").and_then(Value::as_str);
+        let decision = &case["decision"];
+        match typed::plain_answer(text, side, refusal) {
+            None => {
+                assert_eq!(decision["send"]["text"].as_str(), Some(text), "{text:?}");
+                checked.0 += 1;
+            }
+            Some(answer) if answer.side_thread == Some(true) => {
+                assert_eq!(decision, &serde_json::json!({ "sideThread": true }), "{text:?}");
+                checked.1 += 1;
+            }
+            Some(answer) => {
+                let restore = answer.restore.expect("put back");
+                assert_eq!(decision, &serde_json::json!({ "restore": { "text": restore.text }, "error": answer.error }), "{text:?}");
+                checked.2 += 1;
+            }
         }
-        assert_eq!(case["decision"]["send"]["text"].as_str(), Some(text), "{text:?}");
-        checked += 1;
     }
-    assert!(checked > 0);
+    assert!(checked.0 > 0 && checked.1 > 0 && checked.2 > 0, "{checked:?}");
+    // The box checks the model first (typed/decide.ts): with both, the refusal.
+    let both = typed::plain_answer("what now?", true, Some("Sign in to Anthropic again.")).unwrap();
+    assert_eq!((both.side_thread, both.error.as_deref()), (None, Some("Sign in to Anthropic again.")));
     // And every text that starts "/" or "!" is the box's to read.
     for case in vectors["decide"].as_array().unwrap() {
         let text = case["text"].as_str().unwrap();
@@ -161,6 +176,8 @@ fn a_held_box_is_asked_only_what_keeps_work_going() {
         "kuvo/update",
         "kuvo/box/update",
         "kuvo/box/app",
+        "kuvo/box/proof",
+        "kuvo/box/kept-keys?bot=bot_1",
         "kuvo/agent-tools",
         "api/session/ses_1/message?limit=5",
         "kuvo/agents/api/event",
@@ -169,10 +186,13 @@ fn a_held_box_is_asked_only_what_keeps_work_going() {
         "kuvo/vault/asks",
         "kuvo/work/asks/w1",
         "kuvo/sessions/ses_1/decisions",
+        "kuvo/sessions/ses_1/asks",
+        "kuvo/sessions/ses_1/asks/events",
+        "kuvo/sessions/ses_1/asks/per_1",
     ] {
         assert!(gate::is_allowed(allowed), "{allowed}");
     }
-    for held in ["kuvo/sessions/list", "kuvo/sessions/ses_1/typed", "kuvo/asksx", "kuvo/work-queue", "kuvo/sessions/ses_1/decisions/x"] {
+    for held in ["kuvo/sessions/list", "kuvo/sessions/ses_1/typed", "kuvo/asksx", "kuvo/work-queue", "kuvo/sessions/ses_1/decisions/x", "kuvo/box/proofs", "kuvo/sessions/ses_1/asks/per_1/more", "kuvo/sessions/ses_1/queue"] {
         assert!(!gate::is_allowed(held), "{held}");
     }
 }
@@ -235,5 +255,57 @@ fn a_client_sends_the_fields_the_box_takes() {
             ..Sending::default()
         };
         assert_eq!(numbers_as_floats(serde_json::to_value(&sending).unwrap()), numbers_as_floats(fields.clone()), "{}", case["about"]);
+    }
+}
+
+/// A value of `shape` as the box's route shapes write them (`Vectors/routes/shapes/answers.json`):
+/// every field there, optional ones too, and the first of what may be one of several.
+fn sample(shape: &Value) -> Value {
+    use serde_json::json;
+    match shape {
+        Value::String(kind) => match kind.as_str() {
+            "string" => json!("words"),
+            "number" => json!(1),
+            "bool" => json!(true),
+            _ => Value::Null,
+        },
+        Value::Object(shape) => {
+            if let Some(literal) = shape.get("literal") {
+                literal.clone()
+            } else if let Some(list) = shape.get("list") {
+                json!([sample(list)])
+            } else if let Some(one_of) = shape.get("oneOf").and_then(Value::as_array) {
+                one_of.iter().find(|each| each.as_str() != Some("null")).map(sample).unwrap_or(Value::Null)
+            } else if let Some(fields) = shape.get("object").and_then(Value::as_object) {
+                Value::Object(fields.iter().map(|(name, field)| (name.trim_end_matches('?').to_owned(), sample(field))).collect())
+            } else {
+                Value::Null
+            }
+        }
+        _ => Value::Null,
+    }
+}
+
+/// Every kind of ask the box words reads as that kind; one missing any field doesn't keep the rest
+/// from showing.
+#[test]
+fn every_ask_the_box_words_is_read_and_one_amiss_spoils_none_of_the_rest() {
+    use kuvo_box::asks::{Ask, Asks};
+    let answers = vectors("routes/shapes/answers.json");
+    let route = answers["routes"].as_array().unwrap().iter().find(|route| route["route"] == "GET kuvo/sessions/:id/asks").expect("the asks route's shape");
+    let kinds = route["answers"]["200"]["object"]["asks"]["list"]["oneOf"].as_array().expect("each kind of ask");
+    let samples: Vec<Value> = kinds.iter().map(sample).collect();
+    assert_eq!(samples.len(), 3, "permission, question, other");
+    let asks: Asks = serde_json::from_value(serde_json::json!({ "asks": samples })).unwrap();
+    assert!(matches!(asks.asks.as_slice(), [Ask::Permission(_), Ask::Question(_), Ask::Other { .. }]), "{asks:?}");
+    for (n, kind) in samples.iter().enumerate() {
+        for field in kind.as_object().unwrap().keys().filter(|field| *field != "kind") {
+            let mut amiss = samples.clone();
+            amiss[n].as_object_mut().unwrap().remove(field);
+            let asks: Asks = serde_json::from_value(serde_json::json!({ "asks": amiss })).unwrap();
+            assert_eq!(asks.asks.len(), 3);
+            let read = asks.asks.iter().filter(|ask| **ask != Ask::Unknown).count();
+            assert!(read >= 2, "without {field}, one ask spoiled the others: {asks:?}");
+        }
     }
 }

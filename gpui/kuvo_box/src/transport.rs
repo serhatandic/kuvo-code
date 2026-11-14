@@ -26,6 +26,10 @@ impl Request {
         Request { method: "POST".into(), path: path.into(), headers: Vec::new(), body: Some(body) }
     }
 
+    pub fn delete(path: impl Into<String>) -> Request {
+        Request { method: "DELETE".into(), path: path.into(), headers: Vec::new(), body: None }
+    }
+
     pub fn header(mut self, name: &str, value: impl Into<String>) -> Request {
         self.headers.push((name.to_ascii_lowercase(), value.into()));
         self

@@ -7,7 +7,7 @@
 // the engine started again pause it until Resume; Stop holds what was for the next step ahead of
 // the queue, the latest Stop's first. Kept in `run/queues.json`, by session.
 
-import { withPartsOf } from "../messages/parts";
+import { keptParts, partsOf, withPartsOf } from "../messages/parts";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +20,8 @@ import { carryUnderWay } from "./carrying";
 import { summaryAtEnd } from "../../shared/summaries";
 import { messageID } from "./sessions";
 import * as files from "../../shared/queues";
-import { isBoxNote, showsQueue, type Outgoing, type QueueState, type Shown, type Waiting } from "../../shared/queues";
+import { boxNoteOf, isBoxNote, showsQueue, wakeMarkOf, type Outgoing, type QueueState, type Shown, type Waiting } from "../../shared/queues";
+import type { QueueItem } from "../../shared/routes/sessions";
 import type { Target } from "../../shared/records";
 
 export type { Outgoing, QueueState, Shown, Waiting } from "../../shared/queues";
@@ -61,8 +62,8 @@ export const changeQueue = (session: string, change: (state: QueueState) => Queu
 
 const address = (session: string) => encodeURIComponent(session);
 
-async function inboxOf(target: Target, session: string): Promise<InboxEntry[]> {
-  const answer = await asked(target, "GET", `api/session/${address(session)}/inbox`) as { data?: unknown } | null;
+async function inboxOf(target: Target, session: string, patience?: number): Promise<InboxEntry[]> {
+  const answer = await asked(target, "GET", `api/session/${address(session)}/inbox`, undefined, patience) as { data?: unknown } | null;
   return Array.isArray(answer?.data) ? answer.data.filter((item): item is InboxEntry => isObject(item) && typeof item.id === "string" && (item.delivery === "steer" || item.delivery === "queue")) : [];
 }
 
@@ -354,6 +355,95 @@ export function dropWaiting(session: string, item: string, inbox: InboxEntry[] =
 /** The engine's inbox for `session`, as far as the queue reads it (none, when it can't be read). */
 export const inboxFor = (target: Target, session: string): Promise<InboxEntry[]> => inboxOf(target, session).catch(() => []);
 
+/** The engine's inbox for `session` as it is now, its messages only (no summary waiting); it throws
+ * when it can't be read. */
+export const inboxNow = (target: Target, session: string, patience?: number): Promise<InboxEntry[]> => inboxOf(target, session, patience).then(messagesIn);
+
+/** Told, with its session, each time an engine's (or the coding agents' bridge's) inbox changes
+ * (`session.inbox.*`), in the box's long-running process. */
+export const inboxFollowers = new Set<(session: string) => void>();
+
+/** A message the engine holds, as clients show it waiting (as one the box keeps is): who it's from
+ * (another agent, a wake-up, the box's own note; none for yours), what you wrote (its kept parts'
+ * words, or its text without what the box added for the agent), the keyword it was sent with, and
+ * its files' names. */
+function shownOfInbox(entry: InboxEntry): { from: string | null; words: string; keyword: string | null; files: string[] } {
+  const text = typeof entry.payload?.text === "string" ? entry.payload.text : typeof entry.text === "string" ? entry.text : "";
+  const metadata = entry.payload?.metadata;
+  const files = (Array.isArray(entry.payload?.files) ? entry.payload.files : []).flatMap(file => {
+    if (!isObject(file)) return [];
+    const uri = isObject(file.source) && typeof file.source.uri === "string" ? file.source.uri : typeof file.uri === "string" ? file.uri : "";
+    if (typeof file.name === "string" && file.name) return [file.name];
+    // (A link the system can't read as a path here, `file://host/…`: named as a file.)
+    try { return [uri.startsWith("file:") ? path.basename(fileURLToPath(uri)) : "file"]; } catch { return ["file"]; }
+  });
+  const note = boxNoteOf(text, metadata);
+  if (note) return { from: note.from, words: note.line, keyword: null, files };
+  const parts = keptParts(metadata) ?? partsOf(text);
+  if (parts.mail) return { from: parts.mail.name, words: parts.words, keyword: null, files };
+  const held = shownOfHeld(text);
+  if (held.from) return { from: held.from, words: held.words ?? text, keyword: null, files };
+  if (wakeMarkOf(metadata)) return { from: "Wake-up", words: parts.words, keyword: null, files };
+  return { from: null, words: parts.words, keyword: parts.keyword ?? null, files };
+}
+
+/** Every message waiting for `session`, in the order clients show them (`orderOf`), with `inbox`
+ * (the engine's, its messages only) and what waits on the box (`state`). */
+export function queueItems(inbox: InboxEntry[], state: QueueState): QueueItem[] {
+  return orderOf(inbox, state).flatMap((id): QueueItem[] => {
+    const held = state.held.includes(id);
+    const kept = state.waiting?.find(each => each.id === id);
+    if (kept) {
+      let delivery: "steer" | "queue" = "queue";
+      try { if (JSON.parse(fs.readFileSync(waitingFile(id), "utf8"))?.delivery === "steer") delivery = "steer"; } catch {}
+      return [{ id, words: kept.text, files: kept.files ?? [], keyword: kept.keyword ?? null, from: kept.from ?? null, on: "box", delivery, held }];
+    }
+    const entry = inbox.find(each => each.id === id);
+    return entry ? [{ id, ...shownOfInbox(entry), on: "engine", delivery: entry.delivery, held }] : [];
+  });
+}
+
+/** The files a message the engine holds brings, as a send takes them (`{uri, name}`), so they can
+ * go again: by where they are, or, sent in the message itself, with what's in them. */
+function sendableFiles(given: unknown): { uri: string; name?: string }[] {
+  return (Array.isArray(given) ? given : []).flatMap(file => {
+    if (!isObject(file)) return [];
+    const name = typeof file.name === "string" ? { name: file.name } : {};
+    const uri = isObject(file.source) && typeof file.source.uri === "string" ? file.source.uri : file.uri;
+    if (typeof uri === "string" && uri) return [{ uri, ...name }];
+    if (typeof file.data === "string") return [{ uri: `data:${typeof file.mime === "string" && file.mime ? file.mime : "application/octet-stream"};base64,${file.data}`, ...name }];
+    return [];
+  });
+}
+
+/** `item` taken back from what the engine (or the coding agents' bridge) holds for `session`
+ * (Edit, or Remove): as `DELETE …/queue/<item>` answers one waiting on the box (`removed`), with
+ * what came after it (`before`, as `orderOf` shows them). Null when it isn't waiting there (any
+ * more: the agent took it first). It throws when the engine doesn't answer, or keeps it. */
+export async function takeBackFromInbox(target: Target, session: string, item: string): Promise<{ id: string; text: string; files?: { uri: string; name?: string }[]; delivery: "steer" | "queue"; from?: string; words: string; before?: string } | null> {
+  const inbox = messagesIn(await inboxOf(target, session));
+  const entry = inbox.find(each => each.id === item);
+  if (!entry) return null;
+  const order = orderOf(inbox, queueOf(session));
+  const before = order[order.indexOf(item) + 1];
+  try {
+    await asked(target, "DELETE", `api/session/${address(session)}/inbox/${address(item)}`);
+  } catch (error) {
+    if (/ 404\.$/.test(String((error as Error | null)?.message))) return null;
+    throw error;
+  }
+  // (A cancel that comes too late changes nothing, and says nothing: what it holds now, and the
+  // conversation, say which won.)
+  if ((await inboxOf(target, session)).some(each => each.id === item)) throw new Error("It couldn't be taken back. Try again in a moment.");
+  const recent = await asked(target, "GET", `api/session/${address(session)}/message?limit=40&order=desc`).catch(() => null) as { data?: unknown } | null;
+  if (Array.isArray(recent?.data) && recent.data.some(message => isObject(message) && message.id === item)) return null;
+  changeQueue(session, state => ({ ...state, held: state.held.filter(id => id !== item) }));
+  const shown = shownOfInbox(entry);
+  const text = typeof entry.payload?.text === "string" ? entry.payload.text : typeof entry.text === "string" ? entry.text : "";
+  const files = sendableFiles(entry.payload?.files);
+  return { id: item, text, ...(files.length ? { files } : {}), delivery: entry.delivery, ...(shown.from ? { from: shown.from } : {}), words: shown.words, ...(before ? { before } : {}) };
+}
+
 /** `session`'s next waiting message started, unless its queue is paused or a run is under way: as
  * `orderOf` has them, one in the engine's inbox by steering it (which starts a run) if it's queued,
  * by resuming if it's for the next step; one waiting on the box, sent to go now. */
@@ -540,6 +630,8 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
   return event => {
     const session = event.data?.sessionID;
     if (!session) return;
+    // (What a client follows of the queue, read again.)
+    if (event.type.startsWith("session.inbox.")) for (const told of inboxFollowers) try { told(session); } catch {}
     switch (event.type) {
       case "session.execution.started":
         forget(drains, session);

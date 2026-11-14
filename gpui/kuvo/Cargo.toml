@@ -1,0 +1,37 @@
+[package]
+name = "kuvo"
+description = "Kuvo, the desktop client of a Kuvo box: its sessions, conversations and composer"
+edition.workspace = true
+version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+kuvo_ui.workspace = true
+kuvo_box = { path = "../kuvo_box" }
+anyhow = "1"
+serde_json = "1"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+# The tests run against the stand-in box.
+kuvo = { path = ".", features = ["stand-in"] }
+# Waiting on a view's notifications while the follows' threads hand on what they read.
+futures = "0.3"
+
+[features]
+# The made-up box (`--stand-in`), and reading it at once for shots and tests; not in the app shipped.
+stand-in = []
+# Offscreen rendering for the shots binary; pulls in GPUI's test support.
+shots = ["stand-in", "gpui/test-support", "gpui_platform/test-support"]
+
+[[bin]]
+name = "kuvo"
+path = "src/main.rs"
+
+[[bin]]
+name = "shots"
+path = "src/bin/shots.rs"
+required-features = ["shots"]

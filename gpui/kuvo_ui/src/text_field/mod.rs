@@ -68,7 +68,8 @@ actions!(
     ]
 );
 
-const CONTEXT: &str = "KuvoTextField";
+/// The key context a field sets, for bindings that apply in fields within something else.
+pub const CONTEXT: &str = "KuvoTextField";
 
 /// The keys a text field answers to. Called from [`crate::bind_keys`].
 pub fn bind_keys(cx: &mut App) {
@@ -231,6 +232,11 @@ impl TextField {
         }
     }
 
+    /// Changes what it says while it's empty.
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>) {
+        self.placeholder = text.into();
+    }
+
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = text.into();
         self
@@ -263,6 +269,11 @@ impl TextField {
     pub fn set_error(&mut self, error: Option<SharedString>, cx: &mut Context<Self>) {
         self.error = error;
         cx.notify();
+    }
+
+    /// What's wrong with the text, as shown under the field.
+    pub fn error(&self) -> Option<&SharedString> {
+        self.error.as_ref()
     }
 
     pub fn text(&self) -> &str {
@@ -361,8 +372,7 @@ impl TextField {
     fn previous_word(&self, offset: usize) -> usize {
         self.content
             .split_word_bound_indices()
-            .filter(|(ix, word)| *ix < offset && word.chars().any(char::is_alphanumeric))
-            .last()
+            .rfind(|(ix, word)| *ix < offset && word.chars().any(char::is_alphanumeric))
             .map(|(ix, _)| ix)
             .unwrap_or(0)
     }

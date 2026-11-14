@@ -29,6 +29,11 @@ import UsageKit
         var losesFirstAnswer: Int?
         /// Every change answered 400, as a part it can't take.
         var refuses = false
+        /// A bridge from before usage settings (an older app's keeper still runs this Mac's box):
+        /// everything answered 404, and counted.
+        var older = false
+        private var _olderAnswers = 0
+        var olderAnswers: Int { lock.withLock { _olderAnswers } }
         var puts: [[String: Any]] { lock.withLock { _puts } }
 
         /// Answers a request, but the first change while `holdsFirstChange`, whose answer waits.
@@ -51,6 +56,10 @@ import UsageKit
 
         func answer(_ request: URLRequest, _ body: Data) -> StubWeb.Answer {
             lock.withLock {
+                if older {
+                    _olderAnswers += 1
+                    return StubWeb.json(["message": "Not available for this agent."], status: 404)
+                }
                 var extra: [String: Any] = [:]
                 if request.httpMethod == "PUT" {
                     let given = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
@@ -96,7 +105,7 @@ import UsageKit
         // The box says its settings once.
         var host: HostSettings? = HostSettings(defaults: defaults)
         var first: UsageSettingsOnBox? = UsageSettingsOnBox(host: host!, defaults: defaults)
-        first?.connected(api: api(), box: BoxClient.mac)
+        first?.connected(api: api())
         try await until { first?.answered == 1 }
 
         // It stops answering; a notification is turned on, and the app quits.
@@ -110,12 +119,46 @@ import UsageKit
         // The app starts again, the box answering: the change goes first, made from the version it last said.
         let again = HostSettings(defaults: defaults)
         let second = UsageSettingsOnBox(host: again, defaults: defaults)
-        second.connected(api: api(), box: BoxClient.mac)
+        second.connected(api: api())
         try await until { second.answered == 1 }
         #expect(box.puts.count == 1)
         let sent = box.puts[0]
         #expect((sent["notifications"] as? [String: Bool])?["underTenPercent"] == true)
         #expect((sent["based"] as? [String: String])?["notifications"] == "1/dev-key")
+        #expect(defaults.bool(forKey: Self.underTen))
+    }
+
+    /// A change kept through a restart, which this Mac's box can't take yet: after an update an
+    /// older app's keeper still runs it (the update gate holds it), and its bridge has no usage
+    /// settings. The change isn't dropped: it goes once the bridge is this version's.
+    @Test func aChangeABridgeFromBeforeThemCantTakeGoesOnceItsUpdated() async throws {
+        let (defaults, folder) = try suite()
+        defer { StubWeb.stop(); try? FileManager.default.removeItem(at: folder) }
+        let box = Box()
+        StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
+        var host: HostSettings? = HostSettings(defaults: defaults)
+        var first: UsageSettingsOnBox? = UsageSettingsOnBox(host: host!, defaults: defaults)
+        first?.connected(api: api())
+        try await until { first?.answered == 1 }
+        first?.stopped()
+        defaults.set(true, forKey: Self.underTen)
+        host?.flush()
+        first = nil
+        host = nil
+
+        // The app starts again, its box's bridge an older one's: asked, it has none of them.
+        box.older = true
+        let again = HostSettings(defaults: defaults)
+        let second = UsageSettingsOnBox(host: again, defaults: defaults)
+        second.connected(api: api())
+        try await until { box.olderAnswers >= 1 }
+
+        // Its box updated, its bridge connects again: the change goes, and stays.
+        box.older = false
+        second.connected(api: api())
+        try await until { second.answered == 1 }
+        #expect(box.puts.count == 1)
+        #expect((box.puts.first?["notifications"] as? [String: Bool])?["underTenPercent"] == true)
         #expect(defaults.bool(forKey: Self.underTen))
     }
 
@@ -126,7 +169,7 @@ import UsageKit
         StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
         let host = HostSettings(defaults: defaults)
         let store = UsageSettingsOnBox(host: host, defaults: defaults)
-        store.connected(api: api(), box: BoxClient.mac)
+        store.connected(api: api())
         try await until { store.answered == 1 }
 
         // Another computer turned on "close to running out" meanwhile; this Mac's change is from before it.
@@ -149,7 +192,7 @@ import UsageKit
         StubWeb.hold(Self.box + "/api/kuvo/usage/settings") { request, body, reply in box.answer(request, body, reply: reply) }
         let host = HostSettings(defaults: defaults)
         let store = UsageSettingsOnBox(host: host, defaults: defaults)
-        store.connected(api: api(), box: BoxClient.mac)
+        store.connected(api: api())
         try await until { store.answered == 1 }
 
         // One notification turned on; its answer is slow. Another turned on meanwhile.
@@ -175,7 +218,7 @@ import UsageKit
         StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
         let host = HostSettings(defaults: defaults)
         let store = UsageSettingsOnBox(host: host, defaults: defaults)
-        store.connected(api: api(), box: BoxClient.mac)
+        store.connected(api: api())
         try await until { store.answered == 1 }
 
         // The box takes the first change, but its answer is lost on the way; another change follows.
@@ -200,7 +243,7 @@ import UsageKit
         StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
         let host = HostSettings(defaults: defaults)
         let store = UsageSettingsOnBox(host: host, defaults: defaults)
-        store.connected(api: api(), box: BoxClient.mac)
+        store.connected(api: api())
         try await until { store.answered == 1 }
         defaults.set(true, forKey: Self.underTen)
         host.flush()
@@ -218,7 +261,7 @@ import UsageKit
         StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
         let host = HostSettings(defaults: defaults)
         let store = UsageSettingsOnBox(host: host, defaults: defaults)
-        store.connected(api: api(), box: BoxClient.mac)
+        store.connected(api: api())
         try await until { store.answered == 1 }
         let a = ["underTenPercent": true, "healthyToClose": false, "closeToRunningOut": false]
 
@@ -230,7 +273,7 @@ import UsageKit
         // Another computer changes it (B), and this Mac shows it.
         box.notifications = ["underTenPercent": false, "healthyToClose": true, "closeToRunningOut": false]
         box.version = "3/dev-key"
-        store.connected(api: api(), box: BoxClient.mac)
+        store.connected(api: api())
         try await until { store.answered == 3 }
         // This Mac is away; the other computer puts A back, newer than all of it.
         store.stopped()
@@ -239,7 +282,7 @@ import UsageKit
         // A change made here meanwhile (C), from B.
         defaults.set(true, forKey: "openusage.notifications.closeToRunningOut")
         host.flush()
-        store.connected(api: api(), box: BoxClient.mac)
+        store.connected(api: api())
         // C is turned away (the other computer's A is newer), and the box's A shows: not taken for this Mac's own.
         try await until { store.answered == 5 }
         #expect(box.puts.count == 2)

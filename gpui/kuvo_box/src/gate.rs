@@ -15,7 +15,11 @@ pub const REQUIRED: &[&str] = &[
     "git.status",
     "messages.send",
     "models.offered",
+    "models.offered.sides",
+    "queue.items",
+    "sessions.asks",
     "sessions.list",
+    "sessions.mentions",
     "sessions.models",
     "sessions.start.empty",
     "typed",
@@ -34,12 +38,13 @@ pub fn missing<S: AsRef<str>>(features: &[S]) -> Vec<String> {
 }
 
 /// Whether a held box is still asked `path`: what it is (`kuvo/info`), its own update
-/// (`kuvo/update`, `kuvo/box/update`), its Mac's app registering with it (`kuvo/box/app`), and
+/// (`kuvo/update`, `kuvo/box/update`), its Mac's app registering with it (`kuvo/box/app`) and the
+/// keys it holds for that app (`kuvo/box/proof`, `kuvo/box/kept-keys`, as KuvoClient's gate), and
 /// what keeps work under way going: its engine (`api/…`), its coding agents' bridge
 /// (`kuvo/agents/…`), its agents' tool calls (`kuvo/agent-tools`), its asks and Auto's decisions.
 pub fn is_allowed(path: &str) -> bool {
     let route = path.split('?').next().unwrap_or(path);
-    if ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/box/app", "kuvo/agent-tools"].contains(&route) {
+    if ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/box/app", "kuvo/box/proof", "kuvo/box/kept-keys", "kuvo/agent-tools"].contains(&route) {
         return true;
     }
     if route.starts_with("api/") || route.starts_with("kuvo/agents/") {
@@ -51,7 +56,9 @@ pub fn is_allowed(path: &str) -> bool {
         }
     }
     let parts: Vec<&str> = route.split('/').filter(|part| !part.is_empty()).collect();
-    parts.len() == 4 && parts[0] == "kuvo" && parts[1] == "sessions" && parts[3] == "decisions"
+    // A conversation's decisions, and its asks (`…/asks`, `…/asks/events`, `…/asks/<ask>`).
+    let session = parts.len() >= 4 && parts[0] == "kuvo" && parts[1] == "sessions";
+    (session && parts.len() == 4 && parts[3] == "decisions") || (session && parts[3] == "asks" && parts.len() <= 5)
 }
 
 /// Where a box stands with this client.

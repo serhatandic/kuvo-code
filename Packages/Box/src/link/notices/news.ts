@@ -114,6 +114,13 @@ const offersAlways = (request: { resources?: unknown; save?: unknown }): boolean
 // What a permission's Always saves, as its button says it: "Always Allow Edits", "Always Allow git
 // push", "Always Allow ~/notes" (the Mac's and the phone's `AlwaysWords`, whose cases it matches).
 export function alwaysTitle(request: { action?: string; resources?: unknown; save?: unknown }, home: string | null): string {
+  const { title, named } = alwaysWords(request, home);
+  return named === null ? title : `${title} ${named}`;
+}
+
+// The same, as a card's button draws it (KuvoClient's `AlwaysWords`): its words, then what it names
+// (`named`, shown as code: a command's kind, a folder), null where it names nothing.
+export function alwaysWords(request: { action?: string; resources?: unknown; save?: unknown }, home: string | null): { title: string; named: string | null } {
   const strings = (value: unknown) => (Array.isArray(value) ? value : []).filter((each): each is string => typeof each === "string");
   const asked = strings(request.resources);
   const saved = Array.isArray(request.save) ? strings(request.save) : asked;
@@ -125,18 +132,19 @@ export function alwaysTitle(request: { action?: string; resources?: unknown; sav
   // Cut by what people see as characters, as Swift counts them.
   const characters = (text: string) => [...new Intl.Segmenter().segment(text)].map(each => each.segment);
   const short = (text: string) => characters(text).length > ALWAYS_LONGEST ? characters(text).slice(0, ALWAYS_LONGEST - 1).join("") + "…" : text;
+  const only = (title: string) => ({ title, named: null });
   switch (request.action) {
-    case "edit": case "patch": case "write": return "Always Allow Edits";
+    case "edit": case "patch": case "write": return only("Always Allow Edits");
     case "shell": case "bash":
-      if (!patterns.length || patterns.length === 1 && patterns[0] === "*") return "Always Allow Commands";
-      return patterns.length === 1 ? `Always Allow ${short(kind(patterns[0]))}` : "Always Allow These Commands";
+      if (!patterns.length || patterns.length === 1 && patterns[0] === "*") return only("Always Allow Commands");
+      return patterns.length === 1 ? { title: "Always Allow", named: short(kind(patterns[0])) } : only("Always Allow These Commands");
     case "external_directory": {
-      if (patterns.length !== 1) return "Always Allow These Folders";
+      if (patterns.length !== 1) return only("Always Allow These Folders");
       const shown = outsideShown(patterns[0], home);
-      return `Always Allow ${short(characters(shown).length > ALWAYS_LONGEST ? `…/${path.basename(shown)}` : shown)}`;
+      return { title: "Always Allow", named: short(characters(shown).length > ALWAYS_LONGEST ? `…/${path.basename(shown)}` : shown) };
     }
     default:
-      return patterns.length === 1 && patterns[0] !== "*" ? `Always Allow ${short(kind(patterns[0]))}` : "Always Allow";
+      return patterns.length === 1 && patterns[0] !== "*" ? { title: "Always Allow", named: short(kind(patterns[0])) } : only("Always Allow");
   }
 }
 const ALWAYS_LONGEST = 24;

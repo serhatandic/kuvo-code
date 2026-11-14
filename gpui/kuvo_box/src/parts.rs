@@ -118,11 +118,20 @@ impl Parts {
 
 /// A file a message carries, as the engine takes it: `file://` on the box's own disk, or `data:`
 /// inline (which the box keeps).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct File {
     pub uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+impl File {
+    /// A file on the box's own disk (this Mac's own box, beside the app): its `file://` address,
+    /// named as it's called. The box decides what the model reads of it, and notes the rest as paths.
+    pub fn at(path: &std::path::Path) -> File {
+        let encoded: Vec<String> = path.to_string_lossy().split('/').map(crate::paths::segment).collect();
+        File { uri: format!("file://{}", encoded.join("/")), name: path.file_name().map(|name| name.to_string_lossy().into_owned()) }
+    }
 }
 
 /// Where the files a message sent are, for its note: with their contents (`included`), as paths for

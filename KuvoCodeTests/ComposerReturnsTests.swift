@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import OpenCodeKit
 import Testing
@@ -129,36 +130,23 @@ import Testing
         #expect(model.reviewComments.map(\.text) == ["Rename x"])
     }
 
-    /// A conversation on a model whose account you signed out of: said at once, naming what to
-    /// sign in to, and nothing sent (the engine takes such a message and drops it without a
-    /// word); your message stays to send once you've signed in or picked another model.
-    @Test func aModelYouSignedOutOfSaysSoAndKeepsYourMessage() async throws {
+    /// A conversation on a model whose account needs something (here the engine's OpenAI model,
+    /// with no key, as its box says, `kuvo/sessions/models`): said at once, naming what to add, and
+    /// nothing sent (the engine takes such a message and drops it without a word); your message
+    /// stays to send once you've added it or picked another model.
+    @Test func aModelWhoseAccountNeedsAKeySaysSoAndKeepsYourMessage() async throws {
         defer { done() }
         try await withBox()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json([:]) }
-        let location = ["directory": "/"]
-        let model: [String: Any] = ["id": "luna", "modelID": "luna", "providerID": "openai", "name": "Luna",
-                                    "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [],
-                                    "time": ["released": 1], "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true,
-                                    "limit": ["context": 100_000, "output": 8_000]]
-        try StubWeb.answer(Self.engine + "/api/integration", json: ["location": location, "data": [["id": "openai", "name": "OpenAI", "methods": [["type": "key"]], "connections": []]]])
-        try StubWeb.answer(Self.engine + "/api/model", json: ["location": location, "data": [model]])
-        try StubWeb.answer(Self.engine + "/api/model/default", json: ["location": location, "data": NSNull()])
-        try StubWeb.answer(Self.engine + "/api/agent", json: ["location": location, "data": []])
-        try StubWeb.answer(Self.engine + "/api/command", json: ["location": location, "data": []])
         let catalog = Catalog()
-        catalog.api = workspace.api
-        await catalog.refresh()
         let luna = ModelRef(id: "luna", providerID: "openai")
-        #expect(catalog.needsSignIn(luna))
-        // One only missing from the list (a coding agent's, as it starts, lists a few at first)
-        // goes on to its agent, which says for itself if it can't run it.
-        #expect(!catalog.needsSignIn(ModelRef(id: "opus[1m]", providerID: "claude-code")))
-        #expect(!catalog.needsSignIn(ModelRef(id: "mystery", providerID: "elsewhere")))
+        let state = try JSONDecoder().decode(SessionModelState.self, from: Data(#"{"model":{"providerID":"openai","id":"luna"},"name":"Luna","runs":false,"missing":"key","account":{"id":"openai","name":"OpenAI"},"plan":{"name":"ChatGPT","agent":"Codex","provider":"codex-cli"}}"#.utf8))
+        // (What the conversation's view hands the composer: its box's word on its model.)
+        let refusal = catalog.refusal(luna, said: state)
 
         let conversation = try #require(workspace.model(for: id))
         conversation.draftText = "Summarize the release"
-        conversation.submitDraft(for: catalog.model(luna), queue: false, unavailable: catalog.unavailable(luna))
+        conversation.submitDraft(for: catalog.model(luna), queue: false, unavailable: refusal)
         #expect(conversation.draftText == "Summarize the release", "kept, to send once you can")
         let said = try #require(conversation.failure)
         #expect(said.contains("Luna") && said.contains("ChatGPT plan") && said.contains("Settings › Accounts"), "\(said)")
@@ -167,7 +155,7 @@ import Testing
         StubWeb.handle(Self.engine + "/api/session/\(id)/shell") { _, _ in StubWeb.json([:]) }
         await conversation.readKeywords()
         conversation.draftText = "!ls"
-        conversation.submitDraft(for: nil, queue: false, unavailable: catalog.unavailable(luna))
+        conversation.submitDraft(for: nil, queue: false, unavailable: refusal)
         #expect(conversation.failure == nil)
         try await until { StubWeb.asked.contains { $0.hasSuffix("/api/session/\(id)/shell") } }
         #expect(conversation.failure == nil)

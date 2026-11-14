@@ -1,4 +1,5 @@
 import AppKit
+import KuvoLink
 import OpenCodeKit
 import SwiftUI
 import Testing
@@ -7,18 +8,42 @@ import Testing
 /// The model picker's popover is as tall as the page it shows, after a longer one too: gone from a
 /// long list to a short one (fewer models, a search nothing matches, Custom Auto), it gets shorter
 /// with it, rather than keeping the long list's height with the short page sunk in its middle. The
-/// engine's answers are stubbed (StubWeb); the picker and its popover are real.
+/// engine's answers and its box's are stubbed (StubWeb, a box transport of the test's own); the
+/// picker and its popover are real.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct PopoverSizeTests {
     static let engine = "http://127.0.0.1:47998"
     let catalog = Catalog()
+    let box = OfferingBox()
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
 
     init() {
         TestEnvironment.prepare()
         StubWeb.start(hosts: ["127.0.0.1", "models.opencode.ai"])
         catalog.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: Self.engine)!, password: "test"))
+        catalog.box = BoxClient(box: BoxClient.mac, transport: box)
         window.isReleasedWhenClosed = false
+    }
+
+    /// Its box, saying every model the engine lists runs (`kuvo/models/offered`: its one account
+    /// signed in), newest first.
+    final class OfferingBox: BoxTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func offer(_ count: Int) { lock.withLock { self.count = count } }
+
+        func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+            let count = lock.withLock { self.count }
+            let offered: [String: Any] = ["models": stride(from: count, through: 1, by: -1).map { ["providerID": "anthropic", "id": "m\($0)", "name": "Model \($0)"] },
+                                          "known": ["engine": true, "agents": true]]
+            let body = request.path.hasPrefix("kuvo/models/offered") ? try? JSONSerialization.data(withJSONObject: offered) : nil
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: body == nil ? 404 : 200, headers: [:]))
+                continuation.yield(.body(body ?? Data()))
+                continuation.finish()
+            }
+        }
     }
 
     /// One provider you're signed in to, with `count` models.
@@ -37,6 +62,7 @@ import Testing
         try StubWeb.answer(Self.engine + "/api/model/default", json: ["location": location, "data": models[0]])
         try StubWeb.answer(Self.engine + "/api/agent", json: ["location": location, "data": []])
         try StubWeb.answer(Self.engine + "/api/command", json: ["location": location, "data": []])
+        box.offer(count)
         await catalog.refresh()
     }
 

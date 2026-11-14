@@ -158,7 +158,7 @@ export const namedFolders = (rules: readonly KitRule[] = []): string[] =>
 /** The other folders a session in `at` gets: as `foldersFor`, or, filed under a project that's the
  * same place by another name (`kuvo.filed`: a link, as its start found it), that project's. Null
  * where the box doesn't list its project: nothing it has is taken away. */
-function foldersOf(session: EngineSession, at: string, added = false): readonly string[] | null {
+export function foldersOf(session: EngineSession, at: string, added = false): readonly string[] | null {
   const filed = session.metadata?.kuvo?.filed;
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
   if (!project || project === at || realish(project) !== realish(at)) return listedFolders(at, readProjects(), added);

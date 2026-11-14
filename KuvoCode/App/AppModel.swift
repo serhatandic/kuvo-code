@@ -355,7 +355,6 @@ final class AppModel {
         workspace.boxes = { [weak self] id in self?.box(id) }
         // The update gate (#679): a box found older than this app needs, as it says what it has,
         // is held; let go, it's read again.
-        usageHistory.settings.features = boxFeatures
         boxFeatures.onSaid = { [weak self] box, features in
             guard let self else { return }
             machines.gates.said(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
@@ -991,22 +990,19 @@ final class AppModel {
         return BoxGate.isCurrent(features)
     }
 
-    /// The box here answered, without a chats folder: it's from before chats had one there.
-    struct ChatsNeedNewerBox: LocalizedError {
-        var errorDescription: String? { "This Mac’s box needs a newer Kuvo Code to start chats there. It updates by itself overnight." }
-    }
-
     /// The chats folder of the box attached in place, as it names it (`kuvo/info`'s `chats`), as a
-    /// machine's is read for a new chat there. Throws why not: it didn't answer, or it's from
-    /// before chats had a folder there.
+    /// machine's is read for a new chat there. Throws why not: it didn't answer, or the update gate
+    /// holds it (the gate's refusal: it starts nothing until it's up to date, and every box that
+    /// isn't held names its chats folder).
     func readChatsHere() async throws {
         guard attached != nil, workspace.attachedChats == nil else { return }
-        struct Info: Decodable { var chats: String? }
-        let info = try await box(SSHConnection.thisMac).value(Info.self, "GET", "kuvo/info")
+        let here = box(SSHConnection.thisMac)
+        if let held = BoxGates.refusalIfHeld(here.box) { throw held }
+        struct Info: Decodable { var chats: String }
+        let info = try await here.value(Info.self, "GET", "kuvo/info")
         // (Let go of meanwhile: nothing of it is kept.)
         guard attached != nil else { return }
-        guard let chats = info.chats else { throw ChatsNeedNewerBox() }
-        workspace.attachedChats = RemoteFolder.folder(chats, on: SSHConnection.thisMac)
+        workspace.attachedChats = RemoteFolder.folder(info.chats, on: SSHConnection.thisMac)
     }
 
     /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as
@@ -1281,7 +1277,7 @@ final class AppModel {
                 // before this Mac's engine (it usually is), they're read once the stores are told
                 // of each other (`wireStores`).
                 planLimits.connected(nil, api: agents.api)
-                usageHistory.connected(api: agents.api, box: BoxClient.mac)
+                usageHistory.connected(api: agents.api)
                 if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
                 await catalog.refreshAgents()
                 await workspace.refreshAgents()

@@ -88,5 +88,58 @@ export async function* followed(
   }
 }
 
+/** What `read` says (read from the engine or the coding agents' bridge as it is: `undefined` while
+ * it can't be, when what was said last stands), a line now and one each time it changes: read again
+ * as `listen`'s `told` says something changed in this process (and a moment after, so a few at once
+ * are one), as `look` (cheap, each second: what another process changes) says something else, and
+ * every `every` ms in any case. */
+export async function* followedLive(
+  read: () => Promise<unknown>,
+  listen: (told: () => void) => () => void,
+  signal: AbortSignal | undefined,
+  { look = () => "", every = 15_000, settle = 300 }: { look?: () => string; every?: number; settle?: number } = {},
+): AsyncGenerator<AnswerPiece> {
+  let wake: (() => void) | null = null;
+  let due = true;
+  let settling: ReturnType<typeof setTimeout> | undefined;
+  const told = () => {
+    if (settling) return;
+    settling = setTimeout(() => { settling = undefined; due = true; wake?.(); }, settle);
+  };
+  const stop = listen(told);
+  const woken = () => wake?.();
+  signal?.addEventListener("abort", woken, { once: true });
+  let last = "";
+  let looked = look();
+  let since = Date.now();
+  try {
+    while (!signal?.aborted) {
+      if (due) {
+        due = false;
+        since = Date.now();
+        const now = await read();
+        if (signal?.aborted) break;
+        const line = now === undefined ? null : JSON.stringify(now);
+        if (line !== null && line !== last) {
+          yield { body: Buffer.from(line + "\n") };
+          last = line;
+        }
+      }
+      await new Promise<void>(done => {
+        const timer = setTimeout(done, 1000);
+        wake = () => { clearTimeout(timer); done(); };
+      });
+      wake = null;
+      const seen = look();
+      if (seen !== looked || Date.now() - since >= every) due = true;
+      looked = seen;
+    }
+  } finally {
+    clearTimeout(settling);
+    stop();
+    signal?.removeEventListener("abort", woken);
+  }
+}
+
 // When a watch on folders may have started telling changes: looked at again then.
 const WATCH_SETTLES = [250, 1000, 5000];

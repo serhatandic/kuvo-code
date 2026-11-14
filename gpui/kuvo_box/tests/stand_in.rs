@@ -377,6 +377,14 @@ fn a_composer_sends_its_fields_and_asks_the_box_what_a_typed_text_means() {
     assert_eq!(answer.side_thread, Some(true));
     assert_eq!(stand_in.seen().len(), before);
 
+    // Both at once: the model that can't run is said first, as the box checks it first
+    // (typed/decide.ts), and the message is kept, not taken to the side thread.
+    side.refusal = Some("Sign in to Anthropic again.".into());
+    let Sent::Typed { answer, message: None } = client.send_draft("ses_1", &side, None).unwrap() else { panic!("kept") };
+    assert_eq!((answer.side_thread, answer.error.as_deref()), (None, Some("Sign in to Anthropic again.")));
+    assert_eq!(answer.restore.map(|restore| restore.text), Some("what about tests?".to_owned()));
+    assert_eq!(stand_in.seen().len(), before);
+
     // "!ls": the client's to run; nothing's sent.
     let before = stand_in.seen().len();
     let Sent::Typed { answer, message } = client.send_draft("ses_1", &Draft::new("msg_s", "!ls"), None).unwrap() else { panic!() };

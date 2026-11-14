@@ -6,11 +6,12 @@ import { isObject, parsed } from "../../shared/json";
 import { wakeMarkOf } from "../../shared/queues";
 import { MOVING } from "../bots/here";
 import { frozen, liveMoves } from "../moves/records";
-import { followed } from "../follow";
+import { followed, followedLive } from "../follow";
 import { isRefused, placeOfSession, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
-import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue } from "../engine/queue";
+import { dropWaiting, holdQueue, inboxFollowers, inboxFor, inboxNow, keepWaitingBefore, queueFollowers, queueItems, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue, takeBackFromInbox } from "../engine/queue";
+import type { QueueShown } from "../../shared/routes/sessions";
 import { forgetStopped } from "../work/background";
 import { stopConversation } from "../work/stopping";
 import { messageID } from "../engine/sessions";
@@ -24,7 +25,26 @@ import { answering, BUSY, collected, forgetSent, SENDING_PATIENCE, sentKey, sent
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
-export const QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add))?|queue\/([^/]+)(?:\/(now))?))$/;
+export const QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add|events))?|queue\/([^/]+)(?:\/(now))?))$/;
+
+// How long the queue's read waits for the engine, each time (where the session is, then its inbox):
+// a client draws it at once, and a busy engine's `items` are null rather than late.
+const ITEMS_WAIT = 2_000;
+
+/** `session`'s queue as a client shows it, with every message waiting (`items`, in their order;
+ * null while the engine or the coding agents' bridge, where it may be, can't be read). */
+async function queueShown(session: string, targets: Target[]): Promise<QueueShown> {
+  const state = queueOf(session);
+  let inbox: Awaited<ReturnType<typeof inboxNow>> | null = [];
+  try {
+    const place = targets.length ? await placeOfSession(session, targets, ITEMS_WAIT) : undefined;
+    if (place === undefined) inbox = null;
+    else if (place) inbox = await inboxNow(place.target, session, ITEMS_WAIT);
+  } catch {
+    inbox = null;
+  }
+  return { ...shownQueue(state), items: inbox === null ? null : queueItems(inbox, state) };
+}
 
 
 // `kuvo/sessions/queues/events`: every queue that's paused or holds something, a line now and one
@@ -45,7 +65,22 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   const session = decodeURIComponent(rawSession);
   if (action === "queue" && !step && !item) {
     if (method !== "GET") return yield* json(405, {});
-    return yield* json(200, shownQueue(queueOf(session)));
+    // Its items only when asked (`?items=1`): a client that doesn't draw them (the Mac's, a
+    // phone's) gets the box's own state at once, without the engine asked.
+    const wantsItems = new URLSearchParams(request.path.split("?")[1] ?? "").get("items") === "1";
+    return yield* json(200, wantsItems ? await queueShown(session, targetsOf({ readEngine, bridge })) : shownQueue(queueOf(session)));
+  }
+  // One session's queue followed, its items too: again as the box changes it, or the engine's
+  // inbox for it does (`session.inbox.*`), and a look each second at what another process changed.
+  if (step === "events") {
+    if (method !== "GET") return yield* json(405, {});
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followedLive(() => queueShown(session, targetsOf({ readEngine, bridge })), told => {
+      const heard = (changed: string) => { if (changed === session) told(); };
+      queueFollowers.add(told);
+      inboxFollowers.add(heard);
+      return () => { queueFollowers.delete(told); inboxFollowers.delete(heard); };
+    }, signal ?? undefined, { look: () => JSON.stringify(shownQueue(queueOf(session))) });
   }
   // One moving to or from another computer: what waits for it goes as it was read for the move. A
   // Stop still stops it while the box it leaves waits for its turn to end, before it's read.
@@ -55,9 +90,25 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   if (item && !now) {
     if (method !== "DELETE") return yield* json(405, {});
     // (The engine's inbox, for what came after it; none when it can't be read.)
-    const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => null);
+    // (Undefined: where it is couldn't be read.)
+    const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => undefined);
     const dropped = dropWaiting(session, decodeURIComponent(item), place ? await inboxFor(place.target, session) : []);
-    if (!dropped) return yield* json(404, { message: "That message isn't waiting any more." });
+    if (!dropped) {
+      if (place === undefined && targetsOf({ readEngine, bridge }).length) return yield* json(503, { message: "The engine isn't answering." });
+      // One the engine (or the coding agents' bridge) holds, taken back from its inbox, answered as
+      // one waiting on the box is, for Edit to put back in the composer.
+      let taken: Awaited<ReturnType<typeof takeBackFromInbox>> = null;
+      if (place) {
+        try {
+          taken = await takeBackFromInbox(place.target, session, decodeURIComponent(item));
+        } catch (error) {
+          return yield* json(502, { message: String((error as Error | null)?.message ?? error) });
+        }
+      }
+      if (!taken) return yield* json(404, { message: "That message isn't waiting any more." });
+      forgetSent(session, decodeURIComponent(item));
+      return yield* json(200, { ...shownQueue(queueOf(session)), removed: taken });
+    }
     // Put back with Undo under the same id, it's added again.
     forgetSent(session, decodeURIComponent(item));
     // What it was, whole, for Undo to add back as it was, where it was (`queue/add` with `kept`,

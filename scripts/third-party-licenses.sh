@@ -48,7 +48,7 @@ HEADER
         "KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar." \
         Licenses/mermaid.txt
     section browser-use 0.4.2 https://github.com/browser-use/browser-use \
-        "KuvoCode/Resources/buildDomTree.js, unchanged." \
+        "Packages/Box/src/browser/buildDomTree.js, unchanged." \
         Licenses/browser-use.txt
     section models.dev "(logos, 2026-11-01)" https://models.dev \
         "Providers' logos in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each logo is its owner's trademark, shown only to name its provider." \

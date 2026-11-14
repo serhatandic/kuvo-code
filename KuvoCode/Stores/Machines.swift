@@ -424,12 +424,13 @@ final class MachineEngine {
         var boxEnvironment: [String: String] = [:]
 
         /// Changes when what this Mac starts it with does, so an engine started with older
-        /// things is started over the next time it's idle: the launch script's, the watchdog's,
-        /// the browser helper's and the agents bridge's versions too. (The launch script's goes
+        /// things is started over the next time it's idle: this app's version, the launch script's,
+        /// the watchdog's, the browser helper's and the agents bridge's too (the helper, built from
+        /// the box's sources, no longer changes with every version). (The launch script's goes
         /// up when what it sets up changes: its folders, `kuvo-npx`, the commands' plugin, where
         /// its settings are.) Not its own settings, which it reloads as they change.
         var fingerprint: String {
-            let text = environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n") + "\nlaunch=12\nwatchdog=groups\nbrowser=\(helper.hash)\nagents=\(agents?.hash ?? "none")"
+            let text = environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n") + "\nversion=\(AppInfo.version)\nlaunch=12\nwatchdog=groups\nbrowser=\(helper.hash)\nagents=\(agents?.hash ?? "none")"
             return SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
         }
     }

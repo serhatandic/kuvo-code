@@ -16,6 +16,8 @@ import Testing
 /// on its way), and so are an event from where it went before that computer's list is read again,
 /// and Kuvo Code opened again with the list it kept from before the move.
 /// Both engines, both agents bridges and both boxes' answers are stand-ins; SSH answers nothing.
+/// A message goes through its computer's box (`kuvo/sessions/<id>/send`, #668 item 3), which hands
+/// it to its own agents bridge (that part: the box's tests, message-parts.test.ts).
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MovedAwayTests {
     let app = AppModel()
@@ -53,7 +55,6 @@ import Testing
         for (bridge, stands) in [(macBridge, "opus"), (miniBridge, "sonnet")] {
             bridge.on("GET", "/api/model", json: ["data": [Self.claudeModel("opus", "Opus 5.5", default: stands == "opus"), Self.claudeModel("sonnet", "Sonnet 5.5", default: stands == "sonnet")]])
             bridge.on("GET", "/api/integration", json: ["data": [["id": "claude-code", "name": "Claude Code", "methods": [], "connections": []]]])
-            bridge.on("POST", "/api/session/\(id)/prompt", json: [:])
         }
     }
 
@@ -138,6 +139,36 @@ import Testing
         }
     }
 
+    /// Each computer's box as a conversation's composer reaches it (`Workspace.boxes`): a message to
+    /// Foreman's conversation (`kuvo/sessions/<id>/send`) is taken there, and noted as sent to that
+    /// computer; anything else goes as the app sends it (here, nowhere: neither box is running).
+    private func sendingBoxes() {
+        let reach = app.workspace.boxes
+        app.workspace.boxes = { [said, id] box in
+            guard let through = reach?(box) else { return nil }
+            return BoxClient(box: box, transport: LocalBox { request in
+                AsyncThrowingStream { reply in
+                    guard request.method == "POST", request.path == "kuvo/sessions/\(id)/send" else {
+                        let task = Task { @MainActor in
+                            do {
+                                for try await part in through.transport.send(request) { reply.yield(part) }
+                                reply.finish()
+                            } catch {
+                                reply.finish(throwing: error)
+                            }
+                        }
+                        reply.onTermination = { _ in task.cancel() }
+                        return
+                    }
+                    said.sent(to: box)
+                    reply.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    reply.yield(.body(Data("{}".utf8)))
+                    reply.finish()
+                }
+            })
+        }
+    }
+
     /// Foreman's move as a box says it: `role` on that box, at `stage`, and away from there when
     /// it doesn't live there (a copy not switched to, an original switched away from).
     private func move(_ role: String, stage: String, toMac: Bool = false) -> String {
@@ -162,6 +193,7 @@ import Testing
         let boxes = boxes()
         app.bots.boxes = boxes
         app.moves.boxes = boxes
+        sendingBoxes()
         app.bots.reachable = { _ in true }
         said.botOn = place != nil
         lives(on: place, model: "default")
@@ -208,10 +240,11 @@ import Testing
     }
 
     /// After the move: one row, that computer's (nil: this Mac's); the sidebar there; its tab still
-    /// open; a message written in its open conversation goes to that computer's bridge alone; an
+    /// open; a message written in its open conversation goes to that computer's box alone; an
     /// event from there is read there.
     private func expectItLives(on place: String?) async throws {
         let (there, left) = place == nil ? (macBridge, miniBridge) : (miniBridge, macBridge)
+        let (thereBox, leftBox) = place == nil ? (BoxClient.thisMac, machine) : (machine, BoxClient.thisMac)
         do {
             try await until { rows.count == 1 && rows.first.map { RemoteFolder.machine(of: $0.location.directory) } == place }
         } catch {
@@ -226,12 +259,14 @@ import Testing
         let open = try #require(app.workspace.model(for: id))
         open.send("Hey, I moved you. All good?", for: nil)
         do {
-            try await until { !there.requests("POST", "/api/session/\(id)/prompt").isEmpty }
+            try await until { said.sends.contains(thereBox) }
         } catch {
-            Issue.record("asked \(there.asked.filter { $0.hasPrefix("POST") }) where it lives, \(left.asked.filter { $0.hasPrefix("POST") }) where it was; \(String(describing: open.failure))")
+            Issue.record("sent through \(said.sends), it lives on \(thereBox); \(String(describing: open.failure))")
             throw error
         }
-        #expect(left.requests("POST", "/api/session/\(id)/prompt").isEmpty, "nothing goes to the computer it left")
+        #expect(!said.sends.contains(leftBox), "nothing goes to the computer it left")
+        // (Its box hands it to the agents bridge there: the app never goes to either bridge itself.)
+        #expect(there.requests("POST", "/api/session/\(id)/prompt").isEmpty && left.requests("POST", "/api/session/\(id)/prompt").isEmpty)
 
         // Full Access switched on there, say: read there, not where it was.
         let readLeft = left.requests("GET", "/api/session/\(id)").count
@@ -425,6 +460,10 @@ nonisolated final class Said: @unchecked Sendable {
     private var bot = false
     private var mac = #"{"moves":[],"away":[]}"#
     private var machine = #"{"moves":[],"away":[]}"#
+    private var through: [String] = []
+    /// The boxes a message to Foreman went through, in order.
+    var sends: [String] { lock.withLock { through } }
+    func sent(to box: String) { lock.withLock { through.append(box) } }
     /// Foreman is on the machine.
     var botOn: Bool {
         get { lock.withLock { bot } }

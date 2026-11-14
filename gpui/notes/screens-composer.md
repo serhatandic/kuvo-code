@@ -1,0 +1,92 @@
+# The composer (Zed's message editor)
+
+Shots: `shots/screens-slash-*` ("/" offering what the box offers), `screens-conversation-*` (Stop
+while a run is under way, and the queue over the composer), `screens-attached-*` (a picture and a
+file attached), `screens-files-*` ("@"), `screens-agents-*` ("&").
+
+## What Zed does
+
+Read: `crates/agent_ui/src/message_editor.rs`, `crates/agent_ui/src/completion_provider.rs`,
+`crates/agent_ui/src/agent_model_selector.rs`, `language_model_selector.rs`, `mode_selector.rs`,
+`profile_selector.rs`, the composer in `thread_view.rs`, `assets/keymaps/default-macos.json`; for
+phase 3, `crates/agent_ui/src/mention_set.rs`, `completion_provider.rs` (`completion_for_path`,
+`completion_for_thread`), `conversation_view/message_queue.rs` and `thread_view.rs`'s
+`render_message_queue_summary` and `render_message_queue_entries`. Behaviour only.
+
+- A field that grows from one line, with a row of chips under it: the model (with its provider's
+  icon) and the thinking effort as small borderless buttons with a chevron, each opening a menu.
+- Send is a filled icon button: muted while empty, accent with text; while it generates with the
+  field empty it's Stop. Esc stops.
+- Return sends, Shift-Return adds a line.
+- "/" opens a completion list of commands with their descriptions; a pick fills the field.
+- Sending while it runs queues the message (or steers, by choice). The queue shows over the editor
+  ("2 Queued Messages", folding open), each entry with its dot (accent for the next), Edit (moves
+  it back into the editor), Steer, and Remove; Clear All.
+- "@" opens a completion list of files (and threads, symbols, fetches) matched fuzzily; a pick
+  inserts a mention that renders as a crease. Images paste or drop in as attachments.
+
+## What Kuvo takes
+
+- The text field block, bare in a card, growing to ten lines; Return sends, Shift-Return adds a
+  line.
+- What's written goes through `kuvo_box`'s typed send (#668): a plain message straight to the box
+  as fields (`kuvo/sessions/<id>/send`); "/" and "!" to the box first (`…/typed`), which says
+  what they mean and what's sent. What the box puts back goes back in the field, with its reason
+  under it; what it did shows as a line under the composer ("Switched to Plan.", a side question
+  asked, a handoff being written). What's this client's to do that it can't yet (a "!" command,
+  compacting, Autopilot, goals, side threads) says so plainly, and what was written stays in the
+  field.
+- "/" lists what the box offers there (`GET …/typed`), names starting with what's typed first,
+  then those containing it, each by name (as KuvoClient's `SlashCommands.matches`), scrolling
+  past eight: ↑↓
+  move, Tab or Return takes it ("/review "), Esc puts the list away. A keyword the text starts
+  with shows as a chip above the field ("/plan"), as the sent message shows it.
+- The model chip names the conversation's model as the box says (`kuvo/sessions/models`), "Choose
+  a Model" when it's gone or there's none (as KuvoClient's `SessionModelState.namesModel`), and
+  "Model" while the box hasn't said, so one can still be picked. Its menu lists what the box
+  offers (`kuvo/models/offered`, without retiring or hidden ones) on the conversation's own side,
+  as the box says each one's `side`: only those are picked in place (`api/session/<id>/model`).
+  Another side's models carry a conversation to a new session (`kuvo/sessions/<id>/agents`), which
+  this app doesn't do yet: the menu says so. The effort chip lists the model's `efforts`, as the box
+  offers them, titled as every client titles them; a model is matched by its id or one it's known
+  by (the box's `aliases`: Claude Code's `default`). A side the box couldn't say keeps what it said
+  before, and is asked again in a while, longer each time, while that composer is on screen; a
+  model whose state couldn't be read keeps what was said of it. A box from before it said each
+  model's side says to update it there, rather than offer nothing. The model is read again as the conversation opens, and as its box
+  says its accounts, models, settings or Custom Auto's lists changed (or this conversation's model
+  did), from the conversation's own events. A model that can't run keeps the message in the field,
+  saying why and pointing to Kuvo Code on your Mac or iPhone (worded as KuvoClient's
+  `SessionModelState`).
+- Each conversation keeps its own composer while you're in another: its draft, and a send still
+  on its way, whose failure puts the text back with why.
+- Send is an accent arrow; with nothing written while the session works, it's Stop (Esc too), which
+  asks the box to stop (`kuvo/sessions/<id>/stop`).
+- Sending while it runs steers, as the box's `send` does by default.
+
+- **Attachments** (phase 3): the paperclip opens the system's file picker, and files dropped on the
+  composer are attached. Pictures show as thumbnails, other files as chips, each with ×; folders
+  aren't attached. They go with the message as files on this Mac's box (`file://`), and the box
+  decides what the model reads of them (the rest goes as paths in its note). Files alone can be
+  sent; a send that fails puts them back with what was written.
+- **"@" and "&"** (phase 3): a mention being typed at the end of what's written ("@" a word with no
+  spaces; "&" a name, which runs to the line's end), each starting a word, opens the list over the
+  field with what the box suggests for it (`kuvo/sessions/<id>/mentions`: the folder's files,
+  ranked as the Mac ranks them; bots and sessions), each with what it is and what's beside it.
+  ↑↓, Tab or Return, Escape, as "/". A pick puts in what the box says (`@web/src/Form.tsx `,
+  `&Mira `); an agent picked is named when it's sent (`named`), while its name is still there.
+- **The queue** (phase 3): what waits its turn shows over the composer, as the box orders it
+  (`kuvo/sessions/<id>/queue`'s `items`, followed by its `…/events`): "2 waiting" (and "paused"),
+  each message as you wrote it (a clock for yours, the accent for the next; another agent's with
+  its name), its keyword and files. Under the pointer: Edit (yours: taken out of the queue, its
+  words and files back in the composer) and Remove.
+
+## Where we differ, and why
+
+- Mentions stay as plain text in the field (as on the Mac and the phone), not creases: the box
+  reads them as written.
+- No Steer or Send Now on a queued message yet, nor Undo after Remove, nor Resume for a paused
+  queue: the box has the routes; the app doesn't use them yet.
+- No pasting a picture from the clipboard yet.
+- The model menu isn't searchable yet (Zed's is): the box offers a short list today.
+- Picking another model while a run is under way takes effect from its next step. The Mac app also
+  stops the step and adds a note; that's logic the box should own, so it isn't copied here.
