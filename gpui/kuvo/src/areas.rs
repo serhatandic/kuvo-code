@@ -301,7 +301,7 @@ impl AreaView {
             Reading::Failed(why) => return vec![quiet(&format!("The Work Queue couldn’t be read: {why}"), false, cx)],
             Reading::Ready(queue) => queue,
         };
-        // BOX-NEEDED: the Work Queue's counts, `counts: {inProgress, categories: {<id>: n}}` in `GET kuvo/work-queue?owner=all&glance=1` (#711): no counts drawn until the box says them.
+        // BOX-NEEDED: the Work Queue's counts, `counts: {inProgress, categories: {<id>: n}}` in `GET kuvo/work-queue/categories` (#711): no counts drawn until the box says them.
         let counts = queue.counts.as_ref();
         let count = |n: Option<usize>| n.map(|n| div().text_ui(TypeSize::Caption).text_color(c.text_faint).child(n.to_string()).into_any_element());
         let mut rows = Vec::new();
