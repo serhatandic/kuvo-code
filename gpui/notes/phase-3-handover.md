@@ -39,6 +39,29 @@ now); the empty conversation said "Write below" under a card; mentions asked the
 (a 150 ms pause now); "Show all" past 400 lines overpromised. Left for the user: which steps open
 (Decisions).
 
+## Second review (the lead's)
+
+Fixed, each with a test: a held key answered the next ask (keys ignored while held, and until the
+card shown has been still 600 ms, as the Mac's `KeysTyped`); Return with nothing picked threw a
+question away; the card never had the keyboard in the app (it takes it as it comes, gives it back
+as it goes); your own answer racing the box's update swallowed the next key (gone with the quiet
+rule); Skip looped on a required question (off for one that needs an answer); the box's own asks
+blocked the conversation (they sit over a usable composer); the live follows were untested (the
+stand-in follows asks and queues, and a scenario runs the follows' threads, held steady 15 of 15).
+Box: a subagent listing that fails says the engine isn't answering, so asks don't seem gone; MCP
+servers' forms filed under no session show in the conversation whose step runs that server's
+tool; `GET …/queue` answers `items` only with `?items=1`, so the Mac's and the phone's reads are as
+before; a held box still answers a conversation's asks (`BoxGate`, `gate.rs`, PROTOCOL.md). NITs:
+an ask missing a field spoils none of the rest (held to `answers.json`'s shape); lines are cut at
+400 characters and patches read only once shown; Return in an empty search does nothing; old
+suggestions go as the mention changes; a shared "@" listing stops only once no request waits on
+it; a bridge test for `DELETE …/queue/<item>` taking back what the engine holds.
+
+**Decided (point 4):** which tool steps open is drawing, and stays in the client (`details()`).
+PROTOCOL.md has a "Tool steps" table (names and aliases, the target, what opens), and every
+client's samples are `Packages/KuvoLink/Vectors/tool-steps.json`, which gpui's tests read. **The
+phone should test its step rows against the same file** when it next touches them.
+
 ## Box changes
 
 All additive, each with its route shape, PROTOCOL.md section, feature name and tests
@@ -89,6 +112,10 @@ All additive, each with its route shape, PROTOCOL.md section, feature name and t
 - From phase 2, still open: commands shown as typed, machines, paging's jump, the follows' wiring
   untested at app level.
 
+- **Box costs left as they are** (cheap enough for now, worth a look later): any ask on the box has
+  every followed conversation read its asks again whole; a queue follow looks at `queues.json`
+  each second; `queueItems` reads one file per message waiting on the box.
+
 ## Decisions for the user
 
 Built without drafts (the user was away): each is the Mac's or Zed's behaviour in the phase 0 look,
@@ -104,13 +131,6 @@ and every colour and size is in `kuvo_ui/src/theme.rs` or the block, easy to cha
   and add Steer and Send Now next.
 - **Five new icons** (image, paperclip, pencil, question, shield), drawn in the set's style.
 - The keyboard's cursor in the sidebar is the accent's ring: the accent is still the user's call.
-- **Which tool steps open, and to what** (`entries.rs`, `details()`): an edit to its diffs
-  (`metadata.files`), a command to its output, a search to its results; a read or a step still
-  running to nothing. The reviewer counts this as client logic the box should state; I read it as
-  drawing (it changes no behaviour or data, as the Mac's step rows decide what they show, and
-  phase 2's `tool_label` does the same). Recommended: keep it in the client for now and move it to
-  KuvoClient-level shared views with the Swift apps; the alternative is the box annotating each
-  step with what it shows, which needs the box to rewrite the engine's messages. Your call.
-- **A card that just took another's place** (the one before answered on another device) shows a
-  line and waits for a second press of Return or a number, so a key meant for the first can't
-  answer it. Recommended: keep (the Mac doesn't do this yet).
+- **The card's keys** answer only once it's been still a moment (600 ms, as the Mac's `KeysTyped`),
+  and never from a held key; the keyboard goes to a card as it comes and back to the composer as it
+  goes. (Replaces the first review's "press again" line.)
