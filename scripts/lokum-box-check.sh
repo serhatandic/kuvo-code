@@ -83,5 +83,5 @@ COPYFILE_DISABLE=1 tar --no-xattrs -czf - \
     protocol/vectors swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json \
     box/bridge-tests swift/KuvoClient/Tests/ClientSessionsTests/BoxVectorsTests.swift \
     scripts/route-shapes.sh scripts/route-shapes.ts scripts/real-app-guard.sh \
-    scripts/build-browser.sh scripts/build-browser.ts swift/KuvoCode/Resources/kuvo-browser.js |
+    scripts/build-browser.sh scripts/build-browser.ts box/dist/kuvo-browser.js |
     ssh -o BatchMode=yes "$HOST" "$command"

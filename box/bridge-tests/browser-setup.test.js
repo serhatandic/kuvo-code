@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 import { makeRpm, makeZip, served, startSource } from "./browser-source-stand-in.js";
 
-const script = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const script = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 const link = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const kind = os.arch() === "arm64" ? "aarch64" : "x86_64";
 

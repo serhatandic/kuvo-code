@@ -1,14 +1,11 @@
 #!/bin/sh
-# Runs the app's tests (KuvoCodeTests): scenarios run on the app's own code, hosted by a copy of
-# the app that starts nothing (no window, engine or menu bar item) and keeps everything in the
-# temporary folder.
+# Runs the retired Swift Mac app's tests (KuvoCodeTests): scenarios run on the app's own code,
+# hosted by a copy of the app that starts nothing (no window, engine or menu bar item) and keeps
+# everything in the temporary folder. The Mac app is kept only to read (swift/MAC-APP-REFERENCE.md):
+# this stays for scripts/route-vectors.sh, which writes protocol/vectors/routes/box from the Mac's
+# code until the box writes those itself. It has no batch (scripts/batch-build.sh builds the
+# phone's alone), so it builds from this checkout.
 #   ONLY   suites or tests to run alone, separated by spaces, e.g. KuvoCodeTests/ChangesDiscardTests
-#   --from-batch   runs them from the newest batch (scripts/batch-build.sh: main, built once at
-#          04:00 and 16:00 for every session's runs) without building anything: ONLY is a must, and
-#          a name the batch hasn't (merged after it was built) is refused before it waits in line.
-#          While a batch is being built, it waits for it and tests that one; when the newest build
-#          failed, it refuses, saying why. It says which batch it tested (its stamp). The same test
-#          copy, settings and checks as a run that builds.
 #
 # It ends with what the run's result bundle counts, on a line of its own, then each failing test:
 #   RESULT: <passed> passed, <failed> failed[, <skipped> skipped]
@@ -23,20 +20,14 @@
 # Documents would wait on a privacy prompt nobody can answer while tests run. It has a bundle ID
 # of its own, so it never shares the app's settings or keychain items.
 set -eu
-CALLER=$PWD
 cd "$(dirname "$0")/.."
 
-# --from-batch, as given; --batch <folder> <pid>, as it runs: the batch it opened for that run.
-FROM_BATCH=
-BATCH=
-BATCH_RUN=
-case "${1:-}" in
-    "") ;;
-    --from-batch) [ $# -eq 1 ] && FROM_BATCH=1 ;;
-    --batch) [ $# -eq 3 ] && BATCH=$2 && BATCH_RUN=$3 ;;
-esac
-if [ $# -gt 0 ] && [ -z "$FROM_BATCH$BATCH" ]; then
-    echo "Usage: [ONLY=…] scripts/test-app.sh [--from-batch]" >&2
+if [ "${1:-}" = --from-batch ]; then
+    echo "The Swift Mac app is retired and has no batch (swift/MAC-APP-REFERENCE.md); the phone's tests run from one with ~/Projects/kuvo-code-ios/scripts/test-app.sh --from-batch." >&2
+    exit 64
+fi
+if [ $# -gt 0 ]; then
+    echo "Usage: [ONLY=…] scripts/test-app.sh" >&2
     exit 64
 fi
 
@@ -50,25 +41,6 @@ check_console() {
     return 1
 }
 check_console "$(stat -f %Su /dev/console 2>/dev/null || true)"
-
-# From a batch: the newest, kept open for this run (this process, which lives until the run is
-# over: heavy.sh and lockf take its place), and only if it has every test asked for.
-if [ -n "$FROM_BATCH" ]; then
-    if [ -z "${ONLY:-}" ]; then
-        echo "scripts/test-app.sh --from-batch runs only what ONLY names (ONLY=KuvoCodeTests/WindowTabsTests …)." >&2
-        exit 64
-    fi
-    BATCH=$(/bin/sh scripts/batch.sh open mac $$)
-    BATCH_RUN=$$
-    # shellcheck disable=SC2086 # (ONLY's names, one by one)
-    if ! /bin/sh scripts/batch.sh check "$BATCH" kuvo-ai/swift $ONLY; then
-        /bin/sh scripts/batch.sh close "$BATCH" $$
-        exit 1
-    fi
-    /bin/sh scripts/batch.sh behind "$BATCH" kuvo-ai "$CALLER" || true
-    echo "Testing from the $(/bin/sh scripts/batch.sh describe "$BATCH")." >&2
-    set -- --batch "$BATCH" $$
-fi
 
 # A heavy job of the Mac's (scripts/heavy.sh, kind mac: the one app suite that drives the UI, which
 # runs alone; builds and package tests are mac-build and run beside it). It waits for a busy Mac,
@@ -99,15 +71,7 @@ if lockf -ks -t 0 "$LOCK" true; then
     exit 1
 fi
 
-# The checks of the sources below look at the batch's, from a batch: the sources it exported and
-# built (its stamp's kuvo_ai_src; a stamp from before it said so, its src/kuvo-ai).
-SOURCES=.
-if [ -n "$BATCH" ]; then
-    SOURCES=$(sed -n 's/^kuvo_ai_src=//p' "$BATCH/stamp" | head -n 1)
-    [ -n "$SOURCES" ] || SOURCES="$BATCH/src/kuvo-ai"
-fi
-cd "$SOURCES"
-# And the tests that read the sources themselves (swift/KuvoCodeTests/Support/SourceRoot.swift) find them
+# The tests that read the sources themselves (swift/KuvoCodeTests/Support/SourceRoot.swift) find them
 # there: passed as KUVO_SOURCE_ROOT (xcodebuild hands TEST_RUNNER_ variables on).
 TEST_RUNNER_KUVO_SOURCE_ROOT=$(pwd)
 export TEST_RUNNER_KUVO_SOURCE_ROOT
@@ -128,7 +92,6 @@ if grep -rn '#filePath' --include='*.swift' swift/KuvoCode swift/KuvoCodeTests |
     echo "The app and its tests find their files through their bundles (and the sources through swift/KuvoCodeTests/Support/SourceRoot.swift), never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
     exit 1
 fi
-cd - >/dev/null
 
 TEMP="${TMPDIR:-/tmp}"
 # Built in this user's cache folder, kept from run to run: macOS clears files the temporary folder
@@ -136,29 +99,14 @@ TEMP="${TMPDIR:-/tmp}"
 CACHE="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || echo "$TEMP/")"
 BUILD="${CACHE%/}/KuvoCodeTests-build"
 BUNDLE=run.kuvo.code.tests
-if [ -n "$BATCH" ]; then
-    # From the batch's build, as it was built (scripts/batch-build.sh: these settings): its log and
-    # results in a folder of their own, beside KuvoCodeTests-build.
-    BUILD="${CACHE%/}/KuvoCodeTests-batch"
-    XCTESTRUN=$(sed -n 's/^xctestrun=//p' "$BATCH/stamp")
-    PRODUCTS=$(dirname "$XCTESTRUN")
-    if [ "$(plutil -extract KuvoCodeTests.TestHostBundleIdentifier raw -o - "$XCTESTRUN" 2>/dev/null)" != "$BUNDLE" ]; then
-        echo "The batch's tests aren't hosted by the test copy ($BUNDLE): $XCTESTRUN" >&2
-        exit 1
-    fi
-    set -- test-without-building -xctestrun "$XCTESTRUN" -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$BUILD"
-    # (Only this run's results: they'd pile up there otherwise.)
-    rm -rf "$BUILD/Logs" "$BUILD/TestResults"
-else
-    PRODUCTS="$BUILD/Build/Products"
-    # Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
-    # already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
-    . scripts/xcode-cache.sh
-    xcode_cache scripts
-    set -- test -project swift/KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
-        -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
-        APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
-fi
+PRODUCTS="$BUILD/Build/Products"
+# Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
+# already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
+. scripts/xcode-cache.sh
+xcode_cache scripts
+set -- test -project swift/KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
+    -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
+    APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 for only in ${ONLY:-}; do set -- "$@" -only-testing:"$only"; done
 # This run's result bundle, which its RESULT line counts (only this run's: none left from the last).
 RESULTS="$BUILD/Results.xcresult"
@@ -178,7 +126,7 @@ export TEST_RUNNER_KUVO_TEST_BUN="${KUVO_TEST_BUN:-}"
 # Never the real app's bundle ID, folders or engine, nor a Bun in the Desktop or Documents.
 real_app_guard "scripts/test-app.sh" "$BUNDLE" "$KUVO_TEST_BUN"
 desktop_guard "scripts/test-app.sh" "$KUVO_TEST_BUN"
-# (And a batch there: the test copy would wait on the same prompt.)
+# (And a build there: the test copy would wait on the same prompt.)
 case "$(printf '%s' "$PRODUCTS" | tr '[:upper:]' '[:lower:]')" in
     "$(printf '%s' "$HOME" | tr '[:upper:]' '[:lower:]')"/desktop/* | "$(printf '%s' "$HOME" | tr '[:upper:]' '[:lower:]')"/documents/*)
         echo "scripts/test-app.sh: refusing to start, because the test copy at $PRODUCTS is in your Desktop or Documents folder." >&2
@@ -248,7 +196,6 @@ cleanup_run() {
     kill "$caffeinate_pid" 2>/dev/null || true
     wait "$caffeinate_pid" 2>/dev/null || true
     clean
-    [ -z "$BATCH" ] || /bin/sh scripts/batch.sh close "$BATCH" "$BATCH_RUN"
     exit "$code"
 }
 trap cleanup_run EXIT
@@ -308,7 +255,6 @@ else
         echo "xcodebuild exited $xcode_status though no test failed (a crash between tests, or before they ran?)." >&2
     fi
 fi
-[ -z "$BATCH" ] || echo "Tested the $(/bin/sh scripts/batch.sh stamp "$BATCH")"
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
 # Last: the counts, and each failing test once (a test failing in several ways is listed once).
 echo "$result"

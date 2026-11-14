@@ -21,7 +21,7 @@ const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
-const tool = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const tool = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 write(path.join(home, "bin", "kuvo-link.js"), fs.readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url)));
 
 // The engine: the bot's conversation, a subagent it started, and what each was told.

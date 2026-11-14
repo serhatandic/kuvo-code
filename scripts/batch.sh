@@ -1,21 +1,22 @@
 #!/bin/sh
-# The batches: main built once for testing (scripts/batch-build.sh), which test runs then use without
-# building anything (scripts/test-app.sh --from-batch, and the phone's). A batch is a folder of its
-# own, <when>-<commit>, in $(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/<mac|phone>/: the sources it was
+# The batches: main built once for testing (scripts/batch-build.sh), which the phone's test runs then
+# use without building anything (kuvo-code-ios's scripts/test-app.sh --from-batch; the retired Swift
+# Mac app has none). A batch is a folder of its
+# own, <when>-<commit>, in $(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/phone/: the sources it was
 # built from (src/), the build (build/) and, once the build is done, its stamp (stamp: the commits,
 # when, the .xctestrun). A folder without a stamp is a build that isn't done, or never was; a build
 # that failed leaves failed-<when>-<commit>.stamp (its commit, why) and .log instead.
 #
-#   scripts/batch.sh open <mac|phone> <pid>          the newest batch, kept open for the run <pid>: no
+#   scripts/batch.sh open phone <pid>                the newest batch, kept open for the run <pid>: no
 #                                                    prune deletes it while that process runs (prints
 #                                                    its folder). While a batch is being built it waits
 #                                                    for it, and takes that one; when the newest build
 #                                                    failed or stopped, it refuses, saying why.
 #   scripts/batch.sh close <folder> <pid>            that run is over
 #   scripts/batch.sh check <folder> <repo> <name>…   whether the batch has these tests (ONLY's names,
-#                                                    like KuvoCodeTests/WindowTabsTests, whose target
-#                                                    is a folder of <repo>: kuvo-ai/swift for the Mac's,
-#                                                    kuvo-code-ios for the phone's): says which it
+#                                                    like KuvoCodeMobileTests/PairingTests, whose
+#                                                    target is a folder of <repo>: kuvo-code-ios
+#                                                    for the phone's): says which it
 #                                                    hasn't, and exits 1 then. It looks for each suite
 #                                                    and test by name in the batch's sources: a test
 #                                                    added to a suite the batch has, under another
@@ -24,7 +25,7 @@
 #   scripts/batch.sh behind <folder> <repo> <checkout>  warns when the checkout's HEAD isn't in the batch
 #   scripts/batch.sh describe <folder>               a line: the batch, its commits, when it was built
 #   scripts/batch.sh stamp <folder>                  the batch's name and its stamp, line by line
-#   scripts/batch.sh prune <mac|phone>               keeps the newest 2 batches, and deletes the others
+#   scripts/batch.sh prune phone                     keeps the newest 2 batches, and deletes the others
 #                                                    no run has open, and builds that aren't done (only
 #                                                    batch-build.sh runs it, holding the platform's
 #                                                    build lock, so none is being built)
@@ -49,7 +50,7 @@ usage() {
     exit 64
 }
 
-platform_ok() { case "${1:-}" in mac | phone) ;; *) usage ;; esac; }
+platform_ok() { case "${1:-}" in phone) ;; *) usage ;; esac; }
 
 # A value from a stamp ($1 a batch's folder, or a failed build's stamp file).
 field() {

@@ -1,5 +1,5 @@
 // The browser on a machine, when a page asks for a passkey (which it can't use yet): its keeper
-// (swift/KuvoCode/Resources/kuvo-browser.js) hears it from a world of its own, names the page's site,
+// (box/dist/kuvo-browser.js) hears it from a world of its own, names the page's site,
 // tells the Mac and the agent's tools once, marks the asks for that site, and says so again to a
 // client that connects later, until the page leaves the site. Chrome here is a stand-in that
 // speaks its DevTools protocol over the keeper's pipe, as Chrome does.

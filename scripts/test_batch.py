@@ -1,9 +1,9 @@
-"""The batches (scripts/batch-build.sh, scripts/batch.sh, scripts/test-app.sh --from-batch): a build of
-main is made once, in a folder of its own with its stamp, the newest two kept and older ones deleted
-once no test run has them open; two builds of one platform never run at once; a run from a batch
-tests it without building and prints its stamp, refuses tests the batch hasn't, waits for a batch
-being built and refuses when the newest build failed; and the compile check brings its one kept
-folder to main file by file.
+"""The batches (scripts/batch-build.sh, scripts/batch.sh), which the phone's test runs use (its
+scripts/test-app.sh --from-batch): a build of main is made once, in a folder of its own with its
+stamp, the newest two kept and older ones deleted once no test run has them open; two builds never
+run at once; a run opens the newest batch, waits for a batch being built, and refuses when the newest
+build failed or stopped; the check refuses tests the batch hasn't; and the compile check brings its
+one kept folder to main file by file. (The retired Swift Mac app has no batch.)
 
 Each test has a folder of its own: stand-in checkouts (git repositories in it), the batches
 (KUVO_BATCH_DIR), heavy.sh's locks (KUVO_HEAVY_DIR) and an xcodebuild stand-in first on PATH, which
@@ -11,7 +11,6 @@ makes what a build would and says what it was asked.
 
     cd scripts && python3 -m unittest test_batch
 """
-import json
 import os
 import shutil
 import signal
@@ -26,47 +25,12 @@ from test_heavy import clean_environment, without_background_priority
 SCRIPTS = Path(__file__).resolve().parent
 BUILD = str(SCRIPTS / "batch-build.sh")
 BATCH = str(SCRIPTS / "batch.sh")
-TEST_APP = str(SCRIPTS / "test-app.sh")
 
 # Makes what build-for-testing makes in its -derivedDataPath (the products, an .xctestrun, files
 # the tests don't use), unless FAKE_XCODE_FAIL; with FAKE_XCODE_HOLD, it says it's running and
 # waits until that fifo is written.
 XCODEBUILD = r"""#!/bin/sh
 echo "$*" >> "$FAKE_XCODE_LOG"
-echo "source root: ${TEST_RUNNER_KUVO_SOURCE_ROOT:-none}" >> "$FAKE_XCODE_LOG"
-# Its result bundle (-resultBundlePath), unless FAKE_XCODE_NO_BUNDLE: the summary xcresulttool reads
-# from it (the xcrun stand-in), FAKE_XCODE_SUMMARY's, else one test that passed (none, with
-# FAKE_XCODE_NO_TESTS).
-bundle=
-previous=
-for argument in "$@"; do
-    [ "$previous" != -resultBundlePath ] || bundle=$argument
-    previous=$argument
-done
-summary=${FAKE_XCODE_SUMMARY:-}
-if [ -z "$summary" ]; then
-    passed=1
-    [ -z "${FAKE_XCODE_NO_TESTS:-}" ] || passed=0
-    summary='{"passedTests": '$passed', "failedTests": 0, "skippedTests": 0, "expectedFailures": 0, "totalTestCount": '$passed', "testFailures": []}'
-fi
-if [ -n "$bundle" ] && [ -z "${FAKE_XCODE_NO_BUNDLE:-}" ]; then
-    mkdir -p "$bundle"
-    printf '%s\n' "$summary" > "$bundle/summary.json"
-fi
-if [ "$1" = test-without-building ]; then
-    if [ -n "${FAKE_XCODE_TEST_HOLD:-}" ]; then
-        : > "$FAKE_XCODE_TEST_HOLD.running"
-        read x < "$FAKE_XCODE_TEST_HOLD"
-    fi
-    # (FAKE_XCODE_OUTPUT: what it says of the tests instead.)
-    if [ -n "${FAKE_XCODE_OUTPUT:-}" ]; then
-        printf '%s\n' "$FAKE_XCODE_OUTPUT"
-    elif [ -z "${FAKE_XCODE_NO_TESTS:-}" ]; then
-        echo "✔ Test run with 1 test in 1 suite passed after 0.001 seconds."
-    fi
-    if [ "${FAKE_XCODE_STATUS:-0}" -eq 0 ]; then echo "** TEST EXECUTE SUCCEEDED **"; else echo "** TEST EXECUTE FAILED **"; fi
-    exit "${FAKE_XCODE_STATUS:-0}"
-fi
 if [ -n "${FAKE_XCODE_HOLD:-}" ]; then
     : > "$FAKE_XCODE_HOLD.running"
     read x < "$FAKE_XCODE_HOLD"
@@ -81,22 +45,12 @@ if [ -n "${FAKE_XCODE_FAIL:-}" ]; then
     echo "** TEST BUILD FAILED **"
     exit 65
 fi
-mkdir -p "$derived/Build/Products/Debug/Kuvo Code.app/Contents/MacOS" "$derived/Build/Intermediates.noindex/KuvoCode.build" "$derived/Index.noindex"
-printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>KuvoCodeTests</key><dict><key>TestHostBundleIdentifier</key><string>run.kuvo.code.tests</string></dict></dict></plist>\n' > "$derived/Build/Products/KuvoCode_macosx-arm64.xctestrun"
+mkdir -p "$derived/Build/Products/Debug-iphonesimulator/KuvoCodeMobile.app" "$derived/Build/Intermediates.noindex/KuvoCodeMobile.build" "$derived/Index.noindex"
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>KuvoCodeMobileTests</key><dict><key>TestHostBundleIdentifier</key><string>run.kuvo.code.ios.tests</string></dict></dict></plist>\n' > "$derived/Build/Products/KuvoCodeMobile_iphonesimulator-arm64.xctestrun"
 echo "** TEST BUILD SUCCEEDED **"
 """
 
-# xcresulttool's summary of a result bundle: what the xcodebuild stand-in left in it.
-XCRUN = r"""#!/bin/sh
-[ "$1 $2 $3 $4" = "xcresulttool get test-results summary" ] || exec /usr/bin/xcrun "$@"
-while [ $# -gt 0 ]; do
-    if [ "$1" = --path ]; then exec cat "$2/summary.json"; fi
-    shift
-done
-exit 1
-"""
-
-# The user's temporary and cache folders, the test's own (test-app.sh's lock and build folders).
+# The user's temporary and cache folders, the test's own.
 GETCONF = r"""#!/bin/sh
 case "$1" in
     DARWIN_USER_TEMP_DIR) echo "$FAKE_TEMP_DIR/" ;;
@@ -155,18 +109,19 @@ class Batches(unittest.TestCase):
         self.root = tempfile.mkdtemp(prefix="kuvo-batch-")
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.batches = os.path.join(self.root, "batches")
-        self.mac = self.repo("kuvo-ai", {
-            "swift/KuvoCode/App.swift": "struct App {}\n",
-            "swift/KuvoCodeTests/WindowTabsTests.swift": "@Suite struct WindowTabsTests {\n    @Test func opensATab() {}\n}\n",
-            "swift/KuvoCodeTests/WorkQueueTests.swift": "@MainActor final class WorkQueueTests: XCTestCase {\n    func testAdds() {}\n}\n",
-            "swift/KuvoCodeTests/Outer.swift": "@Suite struct Outer {\n    @Suite struct Inner {\n        @Test func deep() {}\n    }\n}\n\n@Test func freeTest() {}\n",
-            "Gone.txt": "removed in the next commit\n",
+        self.kuvo_ai = self.repo("kuvo-ai", {
+            "swift/KuvoClient/Package.swift": "// let package = Package(name: \"KuvoClient\")\n",
+            "swift/KuvoCode/App.swift": "struct MacApp {}\n",
         })
         self.phone = self.repo("kuvo-code-ios", {
-            "KuvoCodeMobileTests/PairingTests.swift": "@Suite struct PairingTests {}\n",
+            "KuvoCodeMobile/App.swift": "struct App {}\n",
+            "KuvoCodeMobileTests/PairingTests.swift": "@Suite struct PairingTests {\n    @Test func pairs() {}\n}\n",
+            "KuvoCodeMobileTests/QueueTests.swift": "@MainActor final class QueueTests: XCTestCase {\n    func testAdds() {}\n}\n",
+            "KuvoCodeMobileTests/Outer.swift": "@Suite struct Outer {\n    @Suite struct Inner {\n        @Test func deep() {}\n    }\n}\n\n@Test func freeTest() {}\n",
+            "Gone.txt": "removed in the next commit\n",
         })
         bin_folder = os.path.join(self.root, "bin")
-        for tool, script in [("xcodebuild", XCODEBUILD), ("xcrun", XCRUN), ("getconf", GETCONF)]:
+        for tool, script in [("xcodebuild", XCODEBUILD), ("getconf", GETCONF)]:
             write(os.path.join(bin_folder, tool), script)
             os.chmod(os.path.join(bin_folder, tool), 0o755)
         for folder in ["home", "tmp", "user-temp", "user-cache"]:
@@ -177,7 +132,7 @@ class Batches(unittest.TestCase):
                                                KUVO_XCODE_CACHE="0"))
         os.makedirs(env["KUVO_HEAVY_DIR"])
         self.env = dict(env, PATH=bin_folder + os.pathsep + env["PATH"], KUVO_BATCH_DIR=self.batches,
-                        KUVO_BATCH_MAC_REPO=self.mac, KUVO_BATCH_PHONE_REPO=self.phone,
+                        KUVO_BATCH_MAC_REPO=self.kuvo_ai, KUVO_BATCH_PHONE_REPO=self.phone,
                         KUVO_HEAVY_SH=str(SCRIPTS / "heavy.sh"), FAKE_XCODE_LOG=self.xcode_log,
                         FAKE_TEMP_DIR=os.path.join(self.root, "user-temp"), FAKE_CACHE_DIR=os.path.join(self.root, "user-cache"))
 
@@ -192,11 +147,11 @@ class Batches(unittest.TestCase):
         self.env = dict(self.env, PATH=bin_folder + os.pathsep + self.env["PATH"], FAKE_CLOCK=clock)
 
     def amend_until(self, wanted):
-        """Main's last commit, made again at other times (each a new hash) until its hash is one wanted."""
+        """The phone's main's last commit, made again at other times (each a new hash) until its hash is one wanted."""
         for second in range(64):
-            if wanted(git(self.mac, "rev-parse", "main")):
+            if wanted(git(self.phone, "rev-parse", "main")):
                 return True
-            git(self.mac, "commit", "-q", "--amend", "--no-edit", f"--date={1700000000 + second} +0000")
+            git(self.phone, "commit", "-q", "--amend", "--no-edit", f"--date={1700000000 + second} +0000")
         return False
 
     def repo(self, name, files):
@@ -209,16 +164,31 @@ class Batches(unittest.TestCase):
         git(path, "commit", "-q", "-m", "First")
         return path
 
+    def commit_to_phone(self, text, message):
+        write(os.path.join(self.phone, "KuvoCodeMobile/App.swift"), text)
+        git(self.phone, "commit", "-qam", message)
+        return git(self.phone, "rev-parse", "main")
+
     def build(self, *args, **env):
         return subprocess.run(["/bin/sh", BUILD, *args], env=dict(self.env, **env), capture_output=True, text=True, timeout=60)
 
-    def built(self, platform):
-        """The batches of a platform, oldest first."""
-        folder = os.path.join(self.batches, platform)
+    def start_build(self, hold, **extra):
+        """A build that waits, once its xcodebuild starts, until the fifo `hold` is written."""
+        build = subprocess.Popen(["/bin/sh", BUILD, "phone"], env=dict(self.env, FAKE_XCODE_HOLD=hold, **extra),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        wait_for(hold + ".running", "the build never started")
+        return build
+
+    def built(self):
+        """The phone's batches, oldest first."""
+        folder = os.path.join(self.batches, "phone")
         return sorted(name for name in os.listdir(folder) if os.path.isdir(os.path.join(folder, name))) if os.path.isdir(folder) else []
 
-    def stamp(self, platform, name):
-        with open(os.path.join(self.batches, platform, name, "stamp")) as f:
+    def folder(self, name):
+        return os.path.join(self.batches, "phone", name)
+
+    def stamp(self, name):
+        with open(os.path.join(self.folder(name), "stamp")) as f:
             return dict(line.rstrip("\n").split("=", 1) for line in f)
 
     def batch(self, *args):
@@ -229,438 +199,192 @@ class Batches(unittest.TestCase):
 
 
 class Building(Batches):
-    def test_a_batch_is_built_once_from_mains_commit_and_its_stamp_says_what_it_is(self):
-        done = self.build("mac")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        [name] = self.built("mac")
-        commit = git(self.mac, "rev-parse", "main")
-        self.assertTrue(name.endswith("-" + commit[:7]), name)
-        stamp = self.stamp("mac", name)
-        folder = os.path.join(self.batches, "mac", name)
-        self.assertEqual(stamp["kuvo_ai"], commit)
-        self.assertEqual(stamp["kuvo_ai_subject"], "First")
-        self.assertEqual(stamp["kuvo_ai_src"], os.path.join(folder, "src", "kuvo-ai"))
-        self.assertEqual(stamp["xctestrun"], os.path.join(folder, "build", "Build", "Products", "KuvoCode_macosx-arm64.xctestrun"))
-        self.assertTrue(os.path.isfile(stamp["xctestrun"]))
-        self.assertIn("built", stamp)
-        # Main's files, exported; the test copy's settings; what the tests don't use, gone.
-        self.assertTrue(os.path.isfile(os.path.join(folder, "src", "kuvo-ai", "swift", "KuvoCodeTests", "WindowTabsTests.swift")))
-        said = self.xcode_said()
-        self.assertEqual(said.count("build-for-testing"), 1)
-        for part in ["APP_BUNDLE_ID=run.kuvo.code.tests", "CODE_SIGN_IDENTITY=-", "-scheme KuvoCode",
-                     "-derivedDataPath " + os.path.join(folder, "build"), os.path.join(folder, "src", "kuvo-ai", "swift", "KuvoCode.xcodeproj")]:
-            self.assertIn(part, said)
-        self.assertFalse(os.path.exists(os.path.join(folder, "build", "Build", "Intermediates.noindex")))
-        self.assertFalse(os.path.exists(os.path.join(folder, "build", "Index.noindex")))
-        self.assertIn("Built the mac batch " + name, done.stdout)
-
-    def test_a_given_commit_is_built_instead_of_main(self):
-        first = git(self.mac, "rev-parse", "main")
-        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var later = 1 }\n")
-        git(self.mac, "commit", "-qam", "Later")
-        done = self.build("mac", KUVO_BATCH_MAC_REF=first)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.stamp("mac", self.built("mac")[0])["kuvo_ai"], first)
-        self.assertEqual(self.build("mac", KUVO_BATCH_MAC_REF="nothing-like-it").returncode, 1)
-
-    def test_the_phones_batch_is_built_with_kuvo_ai_beside_it(self):
+    def test_a_batch_is_built_once_from_both_mains_and_its_stamp_says_what_it_is(self):
         done = self.build("phone")
         self.assertEqual(done.returncode, 0, done.stderr)
-        [name] = self.built("phone")
-        stamp = self.stamp("phone", name)
-        self.assertEqual(stamp["kuvo_code_ios"], git(self.phone, "rev-parse", "main"))
-        self.assertEqual(stamp["kuvo_ai"], git(self.mac, "rev-parse", "main"))
-        src = os.path.join(self.batches, "phone", name, "src")
+        [name] = self.built()
+        commit = git(self.phone, "rev-parse", "main")
+        self.assertTrue(name.endswith("-" + commit[:7]), name)
+        stamp = self.stamp(name)
+        src = os.path.join(self.folder(name), "src")
+        self.assertEqual(stamp["kuvo_code_ios"], commit)
+        self.assertEqual(stamp["kuvo_code_ios_subject"], "First")
+        self.assertEqual(stamp["kuvo_ai"], git(self.kuvo_ai, "rev-parse", "main"))
         self.assertEqual(stamp["kuvo_code_ios_src"], os.path.join(src, "kuvo-code-ios"))
         self.assertEqual(stamp["kuvo_ai_src"], os.path.join(src, "kuvo-ai"))
-        # The phone's project finds kuvo-ai's packages at ../kuvo-ai.
-        self.assertTrue(os.path.isdir(os.path.join(src, "kuvo-code-ios", "KuvoCodeMobileTests")))
-        self.assertTrue(os.path.isdir(os.path.join(src, "kuvo-ai", "swift", "KuvoCode")))
+        self.assertEqual(stamp["xctestrun"], os.path.join(self.folder(name), "build", "Build", "Products", "KuvoCodeMobile_iphonesimulator-arm64.xctestrun"))
+        self.assertTrue(os.path.isfile(stamp["xctestrun"]))
+        self.assertIn("built", stamp)
+        # Both mains' files, exported side by side: the phone's project finds kuvo-ai's packages at ../kuvo-ai.
+        self.assertTrue(os.path.isfile(os.path.join(src, "kuvo-code-ios", "KuvoCodeMobileTests", "PairingTests.swift")))
+        self.assertTrue(os.path.isfile(os.path.join(src, "kuvo-ai", "swift", "KuvoClient", "Package.swift")))
         said = self.xcode_said()
-        self.assertIn("APP_BUNDLE_ID=run.kuvo.code.ios.tests", said)
-        self.assertIn("-scheme KuvoCodeMobile", said)
-        self.assertEqual(self.built("mac"), [], "phone builds only the phone's")
+        self.assertEqual(said.count("build-for-testing"), 1)
+        for part in ["APP_BUNDLE_ID=run.kuvo.code.ios.tests", "-scheme KuvoCodeMobile", "generic/platform=iOS Simulator",
+                     "-derivedDataPath " + os.path.join(self.folder(name), "build"),
+                     os.path.join(src, "kuvo-code-ios", "KuvoCodeMobile.xcodeproj")]:
+            self.assertIn(part, said)
+        self.assertNotIn("KuvoCode.xcodeproj", said, "never the retired Mac app")
+        self.assertFalse(os.path.exists(os.path.join(self.folder(name), "build", "Build", "Intermediates.noindex")))
+        self.assertFalse(os.path.exists(os.path.join(self.folder(name), "build", "Index.noindex")))
+        self.assertIn("Built the phone batch " + name, done.stdout)
 
-    def test_all_builds_both(self):
+    def test_given_commits_are_built_instead_of_main(self):
+        first_phone = git(self.phone, "rev-parse", "main")
+        first_ai = git(self.kuvo_ai, "rev-parse", "main")
+        self.commit_to_phone("struct App { var later = 1 }\n", "Later")
+        write(os.path.join(self.kuvo_ai, "swift/KuvoClient/Later.swift"), "struct Later {}\n")
+        git(self.kuvo_ai, "add", "-A")
+        git(self.kuvo_ai, "commit", "-qm", "Later")
+        done = self.build("phone", KUVO_BATCH_PHONE_REF=first_phone, KUVO_BATCH_MAC_REF=first_ai)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        stamp = self.stamp(self.built()[0])
+        self.assertEqual((stamp["kuvo_code_ios"], stamp["kuvo_ai"]), (first_phone, first_ai))
+        self.assertEqual(self.build("phone", KUVO_BATCH_PHONE_REF="nothing-like-it").returncode, 1)
+
+    def test_all_builds_the_phones_and_the_mac_has_none(self):
         done = self.build()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(len(self.built("mac")), 1)
-        self.assertEqual(len(self.built("phone")), 1)
+        self.assertEqual(len(self.built()), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.batches, "mac")))
+        done = self.build("mac")
+        self.assertEqual(done.returncode, 64)
+        self.assertIn("retired", done.stderr)
+        self.assertEqual(self.batch("open", "mac", str(os.getpid())).returncode, 64)
 
     def test_a_build_that_fails_leaves_no_batch_and_says_where_its_log_is(self):
-        done = self.build("mac", FAKE_XCODE_FAIL="1")
+        done = self.build("phone", FAKE_XCODE_FAIL="1")
         self.assertEqual(done.returncode, 1)
-        self.assertEqual(self.built("mac"), [])
+        self.assertEqual(self.built(), [])
         self.assertIn("error: it doesn't compile", done.stderr)
-        logs = [name for name in os.listdir(os.path.join(self.batches, "mac")) if name.startswith("failed-") and name.endswith(".log")]
+        logs = [name for name in os.listdir(os.path.join(self.batches, "phone")) if name.startswith("failed-") and name.endswith(".log")]
         self.assertEqual(len(logs), 1)
         self.assertIn(logs[0], done.stderr)
         # And no batch to test from.
-        opened = self.batch("open", "mac", str(os.getpid()))
+        opened = self.batch("open", "phone", str(os.getpid()))
         self.assertEqual(opened.returncode, 1)
-        self.assertIn("The newest mac batch didn't build", opened.stderr)
+        self.assertIn("The newest phone batch didn't build", opened.stderr)
 
     def test_builds_in_one_second_are_named_in_the_order_they_were_built(self):
         self.stop_the_clock()
         # A good commit whose name sorts in the upper half, so a few tries find one below it.
         self.assertTrue(self.amend_until(lambda commit: commit[0] >= "8"))
-        self.assertEqual(self.build("mac").returncode, 0)
-        good = git(self.mac, "rev-parse", "main")
+        self.assertEqual(self.build("phone").returncode, 0)
+        good = git(self.phone, "rev-parse", "main")
         # A broken commit whose name sorts before the good one's: in the same second, its failed
         # build would look older than the batch, and runs would test that.
-        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var broken }\n")
-        git(self.mac, "commit", "-qam", "Breaks it")
+        self.commit_to_phone("struct App { var broken }\n", "Breaks it")
         self.assertTrue(self.amend_until(lambda commit: commit[:7] < good[:7]))
-        broken = git(self.mac, "rev-parse", "main")
-        self.assertEqual(self.build("mac", FAKE_XCODE_FAIL="1").returncode, 1)
-        opened = self.batch("open", "mac", str(os.getpid()))
+        broken = git(self.phone, "rev-parse", "main")
+        self.assertEqual(self.build("phone", FAKE_XCODE_FAIL="1").returncode, 1)
+        opened = self.batch("open", "phone", str(os.getpid()))
         self.assertEqual(opened.returncode, 1, opened.stdout)
-        self.assertIn("The newest mac batch didn't build: kuvo-ai " + broken[:9], opened.stderr)
+        self.assertIn("The newest phone batch didn't build: kuvo-code-ios " + broken[:9] + " “Breaks it”", opened.stderr)
+        self.assertIn("error: it doesn't compile", opened.stderr)
         # Fixed and built, the next is the newest.
-        self.assertEqual(self.build("mac").returncode, 0)
-        [older, newer] = self.built("mac")
+        self.assertEqual(self.build("phone").returncode, 0)
+        [older, newer] = self.built()
         self.assertTrue(older.endswith(good[:7]) and newer.endswith(broken[:7]), (older, newer))
-        [failed] = [name[len("failed-"):-len(".stamp")] for name in os.listdir(os.path.join(self.batches, "mac"))
+        [failed] = [name[len("failed-"):-len(".stamp")] for name in os.listdir(os.path.join(self.batches, "phone"))
                     if name.startswith("failed-") and name.endswith(".stamp")]
         self.assertEqual(sorted([newer, failed, older]), [older, failed, newer], "named in the order they were built")
-        opened = self.batch("open", "mac", str(os.getpid()))
+        opened = self.batch("open", "phone", str(os.getpid()))
         self.assertEqual(opened.returncode, 0, opened.stderr)
-        self.assertEqual(opened.stdout.strip(), os.path.join(self.batches, "mac", newer))
+        self.assertEqual(opened.stdout.strip(), self.folder(newer))
 
-    def test_a_second_build_of_a_platform_while_one_runs_is_refused_and_another_platforms_goes_on(self):
+    def test_a_second_build_while_one_runs_is_refused(self):
         hold = os.path.join(self.root, "hold")
         os.mkfifo(hold)
-        first = subprocess.Popen(["/bin/sh", BUILD, "mac"], env=dict(self.env, FAKE_XCODE_HOLD=hold),
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        first = self.start_build(hold)
         try:
-            wait_for(hold + ".running", "the first build never started")
-            second = self.build("mac")
+            second = self.build("phone")
             self.assertEqual(second.returncode, 75)
-            self.assertIn("Another build of the mac batch is running", second.stderr)
-            self.assertEqual(self.build("phone").returncode, 0)
+            self.assertIn("Another build of the phone batch is running", second.stderr)
         finally:
             release(hold)
             out, err = first.communicate(timeout=60)
         self.assertEqual(first.returncode, 0, err)
-        self.assertEqual(len(self.built("mac")), 1, "the refused one made no batch")
+        self.assertEqual(len(self.built()), 1, "the refused one made no batch")
 
 
 class Pruning(Batches):
     def test_the_newest_two_are_kept_and_an_older_one_a_run_has_open_until_its_over(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        oldest = self.built("mac")[0]
+        self.assertEqual(self.build("phone").returncode, 0)
+        oldest = self.built()[0]
         # A test run (a process of its own) opens it.
         run = subprocess.Popen(["/bin/sh", "-c", "read x"], stdin=subprocess.PIPE)
         self.addCleanup(run.kill)
-        opened = self.batch("open", "mac", str(run.pid))
-        self.assertEqual(opened.stdout.strip(), os.path.join(self.batches, "mac", oldest))
+        opened = self.batch("open", "phone", str(run.pid))
+        self.assertEqual(opened.stdout.strip(), self.folder(oldest))
         # A build that never finished, left behind.
-        os.makedirs(os.path.join(self.batches, "mac", "20000101-000000-abcdef0", "src"))
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.build("mac")
+        os.makedirs(os.path.join(self.folder("20000101-000000-abcdef0"), "src"))
+        self.assertEqual(self.build("phone").returncode, 0)
+        done = self.build("phone")
         self.assertEqual(done.returncode, 0)
         self.assertIn("Kept " + oldest, done.stderr)
-        built = self.built("mac")
+        built = self.built()
         self.assertEqual(len(built), 3, "the two newest, and the one open")
         self.assertEqual(built[0], oldest)
         # Its run over, the next build deletes it.
         run.communicate(b"\n", timeout=10)
-        self.assertEqual(self.build("mac").returncode, 0)
-        built = self.built("mac")
+        self.assertEqual(self.build("phone").returncode, 0)
+        built = self.built()
         self.assertEqual(len(built), 2)
         self.assertNotIn(oldest, built)
 
     def test_a_run_opens_the_newest_and_closes_it(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        self.assertEqual(self.build("mac").returncode, 0)
-        newest = self.built("mac")[-1]
-        opened = self.batch("open", "mac", "12345")
-        folder = os.path.join(self.batches, "mac", newest)
+        self.assertEqual(self.build("phone").returncode, 0)
+        self.assertEqual(self.build("phone").returncode, 0)
+        newest = self.built()[-1]
+        opened = self.batch("open", "phone", "12345")
+        folder = self.folder(newest)
         self.assertEqual(opened.stdout.strip(), folder)
         self.assertTrue(os.path.exists(os.path.join(folder, "runs", "12345")))
         self.batch("close", folder, "12345")
         self.assertFalse(os.path.exists(os.path.join(folder, "runs", "12345")))
 
 
-class CompileOnly(Batches):
-    def test_the_compile_check_keeps_one_folder_and_rewrites_only_what_changed(self):
-        done = self.build("--compile-only", "mac")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("compiles for the mac", done.stdout)
-        src = os.path.join(self.batches, "compile", "src", "kuvo-ai")
-        kept, changed = os.path.join(src, "swift", "KuvoCodeTests", "WindowTabsTests.swift"), os.path.join(src, "swift", "KuvoCode", "App.swift")
-        old = os.stat(kept).st_mtime_ns
-        os.utime(changed, ns=(1, 1))
-        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var later = 1 }\n")
-        os.remove(os.path.join(self.mac, "Gone.txt"))
-        git(self.mac, "commit", "-qam", "Later")
-        done = self.build("--compile-only", "mac")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(os.stat(kept).st_mtime_ns, old, "a file that's the same isn't written again")
-        self.assertEqual(read(changed), "struct App { var later = 1 }\n")
-        self.assertNotEqual(os.stat(changed).st_mtime_ns, 1)
-        self.assertFalse(os.path.exists(os.path.join(src, "Gone.txt")))
-        # One folder for every check, and no batch.
-        self.assertEqual(self.xcode_said().count("-derivedDataPath " + os.path.join(self.batches, "compile", "mac-build")), 2)
-        self.assertEqual(self.built("mac"), [])
-        self.assertTrue(read(os.path.join(self.batches, "compile", "mac.last")).startswith("compiles " + git(self.mac, "rev-parse", "main")))
-        # The checkout itself is untouched.
-        self.assertEqual(git(self.mac, "status", "--porcelain"), "")
+class Opening(Batches):
+    """What a run from a batch is given (scripts/batch.sh open, check and behind, as the phone's
+    scripts/test-app.sh --from-batch asks)."""
 
-    def test_a_compile_that_fails_says_so(self):
-        done = self.build("--compile-only", "phone", FAKE_XCODE_FAIL="1")
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("doesn't compile for the phone", done.stderr)
-        self.assertTrue(read(os.path.join(self.batches, "compile", "phone.last")).startswith("failed "))
+    def test_without_a_batch_it_says_how_to_make_one(self):
+        opened = self.batch("open", "phone", str(os.getpid()))
+        self.assertEqual(opened.returncode, 1)
+        self.assertIn("There's no phone batch yet", opened.stderr)
 
-
-@unittest.skipUnless(os.path.exists("/dev/console") and os.stat("/dev/console").st_uid == os.getuid(),
-                     "the app's tests need this account on the Mac's screen")
-class FromBatch(Batches):
-    """scripts/test-app.sh --from-batch, all the way to the xcodebuild stand-in: in a home folder of
-    its own, with temporary and cache folders of its own (a getconf stand-in), so nothing of the
-    real test copy's, nor the real runs' lock, is touched."""
-
-    def env_for(self, only, **extra):
-        env = dict(self.env, HOME=os.path.join(self.root, "home"), TMPDIR=os.path.join(self.root, "tmp") + "/", **extra)
-        if only is not None:
-            env["ONLY"] = only
-        return env
-
-    def run_tests(self, only, *args, **extra):
-        return subprocess.run(["/bin/sh", TEST_APP, *args], env=self.env_for(only, **extra), cwd=self.mac,
-                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
-
-    def start_tests(self, only, **extra):
-        return subprocess.Popen(["/bin/sh", TEST_APP, "--from-batch"], env=self.env_for(only, **extra), cwd=self.mac,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    def start_tests_said_to(self, only, said):
-        """A run whose stderr goes to the file `said`, to see what it says as it goes."""
-        with open(said, "w") as err:
-            return subprocess.Popen(["/bin/sh", TEST_APP, "--from-batch"], env=self.env_for(only), cwd=self.mac,
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, text=True)
-
-    def runs(self, name):
-        folder = os.path.join(self.batches, "mac", name, "runs")
-        return os.listdir(folder) if os.path.isdir(folder) else []
-
-    def test_a_run_tests_the_newest_batch_without_building_and_prints_its_stamp(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        self.assertEqual(self.build("mac").returncode, 0)
-        name = self.built("mac")[-1]
-        stamp = self.stamp("mac", name)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests KuvoCodeTests/WorkQueueTests", "--from-batch")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        said = self.xcode_said()
-        self.assertEqual(said.count("build-for-testing"), 2, "only the batches were built")
-        self.assertIn("test-without-building -xctestrun " + stamp["xctestrun"] + " -destination platform=macOS", said)
-        self.assertIn("-only-testing:KuvoCodeTests/WindowTabsTests -only-testing:KuvoCodeTests/WorkQueueTests", said)
-        # The tests that read the sources read the batch's, as its stamp says.
-        self.assertEqual(stamp["kuvo_ai_src"], os.path.join(self.batches, "mac", name, "src", "kuvo-ai"))
-        self.assertIn("source root: " + stamp["kuvo_ai_src"] + "\n", said)
-        self.assertIn("Tested the batch " + name + ":", done.stdout)
-        self.assertIn("kuvo_ai=" + stamp["kuvo_ai"], done.stdout)
-        self.assertIn("xctestrun=" + stamp["xctestrun"], done.stdout)
-        self.assertEqual(self.runs(name), [], "it closed the batch")
-
-    def test_the_tests_read_the_sources_the_stamp_names(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        name = self.built("mac")[0]
-        elsewhere = os.path.join(self.root, "sources-elsewhere")
-        shutil.copytree(os.path.join(self.batches, "mac", name, "src", "kuvo-ai"), elsewhere)
-        stamp = os.path.join(self.batches, "mac", name, "stamp")
-        write(stamp, "".join(("kuvo_ai_src=" + elsewhere if line.startswith("kuvo_ai_src=") else line) + "\n"
-                             for line in read(stamp).splitlines()))
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("source root: " + elsewhere + "\n", self.xcode_said())
-
-    def test_a_run_that_builds_gives_the_tests_its_own_checkout(self):
-        done = self.run_tests("KuvoCodeTests/HeldMenuGuardTests")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        said = self.xcode_said()
-        self.assertIn("test -project swift/KuvoCode.xcodeproj", said)
-        self.assertIn("source root: " + str(SCRIPTS.parent) + "\n", said)
-
-    def test_a_batch_whose_stamp_names_no_sources_gives_the_tests_its_exported_ones(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        name = self.built("mac")[0]
-        stamp = os.path.join(self.batches, "mac", name, "stamp")
-        write(stamp, "".join(line + "\n" for line in read(stamp).splitlines() if not line.startswith("kuvo_ai_src=")))
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("source root: " + os.path.join(self.batches, "mac", name, "src", "kuvo-ai") + "\n", self.xcode_said())
-
-    def test_a_batch_a_run_has_open_is_kept_while_it_waits_or_runs(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        name = self.built("mac")[0]
+    def test_a_run_started_while_a_batch_is_built_waits_for_it_and_takes_that_one(self):
+        self.assertEqual(self.build("phone").returncode, 0)
+        older = self.built()[0]
+        self.commit_to_phone("struct App { var later = 1 }\n", "Later")
         hold = os.path.join(self.root, "hold")
         os.mkfifo(hold)
-        run = self.start_tests("KuvoCodeTests/WindowTabsTests", FAKE_XCODE_TEST_HOLD=hold)
+        build = self.start_build(hold)
+        said = os.path.join(self.root, "said")
         try:
-            wait_for(hold + ".running", "the run never started its tests")
-            for _ in range(3):
-                done = self.build("mac")
-                self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertIn("Kept " + name, done.stderr)
-            self.assertIn(name, self.built("mac"))
-        finally:
-            release(hold)
-            out, err = run.communicate(timeout=60)
-        self.assertEqual(run.returncode, 0, err)
-        self.assertIn("Tested the batch " + name, out)
-        self.assertEqual(self.runs(name), [])
-        self.assertEqual(self.build("mac").returncode, 0)
-        self.assertNotIn(name, self.built("mac"), "once it's over, the next build deletes it")
-
-    def test_a_run_inside_a_job_that_holds_the_turn_and_the_runs_lock_closes_its_batch_too(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        name = self.built("mac")[0]
-        # Inside heavy.sh's mac job, and holding the app tests' own lock: it runs on as it is.
-        lock = os.path.join(self.env["FAKE_TEMP_DIR"], f"kuvo-code-tests-{os.getuid()}.lock")
-        done = subprocess.run(["lockf", "-k", lock, self.env["KUVO_HEAVY_SH"], "mac", "/bin/sh", TEST_APP, "--from-batch"],
-                              env=self.env_for("KuvoCodeTests/WindowTabsTests", KUVO_TESTS_LOCK=lock),
-                              cwd=self.mac, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("test-without-building", self.xcode_said())
-        self.assertNotIn("rm:", done.stderr)
-        self.assertEqual(self.runs(name), [])
-
-    def test_a_run_where_no_test_ran_fails(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_NO_TESTS="1")
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("No tests ran", done.stderr)
-
-    def result(self, done):
-        """Its RESULT line and the failing tests listed under it, as the run ends."""
-        lines = done.stdout.splitlines()
-        start = max(i for i, line in enumerate(lines) if line.startswith("RESULT: "))
-        return lines[start:]
-
-    def test_a_run_that_passes_ends_saying_so_from_its_results(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.result(done), ["RESULT: 1 passed, 0 failed"])
-        self.assertIn("-resultBundlePath ", self.xcode_said())
-
-    def test_after_a_restart_whose_last_launch_passed_the_run_still_fails_and_lists_what_failed(self):
-        # A test ran out of time, the test copy started again, and its last launch's tests passed:
-        # the bundle counts every launch.
-        failures = [{"testIdentifierString": "SlowTests/waits()", "failureText": "Time limit was exceeded"},
-                    {"testIdentifierString": "SlowTests/waits()", "failureText": "Test exceeded execution time allowance"},
-                    {"testIdentifierString": "OtherTests/breaks()", "failureText": "Expectation failed"}]
-        summary = json.dumps({"passedTests": 7, "failedTests": 2, "skippedTests": 1, "expectedFailures": 0, "totalTestCount": 10, "testFailures": failures})
-        output = ("✘ Test waits() recorded an issue at SlowTests.swift:3:6: Time limit was exceeded: 60.000 seconds\n"
-                  "Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.\n"
-                  "✔ Test run with 8 tests in 1 suite passed after 1.000 seconds.")
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch",
-                              FAKE_XCODE_SUMMARY=summary, FAKE_XCODE_OUTPUT=output, FAKE_XCODE_STATUS="65")
-        self.assertEqual(done.returncode, 65)
-        self.assertIn("Restarting after unexpected exit", done.stdout)
-        self.assertEqual(self.result(done), ["RESULT: 7 passed, 2 failed, 1 skipped", "  SlowTests/waits()", "  OtherTests/breaks()"])
-
-    def test_a_failure_in_the_results_fails_the_run_though_xcodebuild_passed(self):
-        summary = json.dumps({"passedTests": 3, "failedTests": 1, "skippedTests": 0, "expectedFailures": 0, "totalTestCount": 4,
-                              "testFailures": [{"testIdentifierString": "OtherTests/breaks()", "failureText": "Expectation failed"}]})
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_SUMMARY=summary)
-        self.assertEqual(done.returncode, 1)
-        self.assertEqual(self.result(done), ["RESULT: 3 passed, 1 failed", "  OtherTests/breaks()"])
-
-    def test_xcodebuild_failing_with_no_test_failing_fails_and_says_so(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_STATUS="65")
-        self.assertEqual(done.returncode, 65)
-        self.assertIn("xcodebuild exited 65 though no test failed", done.stderr)
-        self.assertEqual(self.result(done), ["RESULT: 1 passed, 0 failed"])
-
-    def test_a_run_whose_tests_never_ran_says_there_are_no_results(self):
-        # As a bundle reads when the build failed, or the test copy never started.
-        summary = json.dumps({"passedTests": 0, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0, "totalTestCount": 0,
-                              "testFailures": []})
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_SUMMARY=summary, FAKE_XCODE_STATUS="65",
-                              FAKE_XCODE_OUTPUT="Testing cancelled because the build failed.")
-        self.assertEqual(done.returncode, 65)
-        self.assertEqual(self.result(done), ["RESULT: no results, xcodebuild exited 65"])
-        self.assertNotIn("though no test failed", done.stderr)
-
-    def test_a_run_stopped_before_its_tests_are_over_ends_saying_so(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        hold = os.path.join(self.root, "hold")
-        os.mkfifo(hold)
-        run = subprocess.Popen(["/bin/sh", TEST_APP, "--from-batch"], env=self.env_for("KuvoCodeTests/WindowTabsTests", FAKE_XCODE_TEST_HOLD=hold),
-                               cwd=self.mac, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                               start_new_session=True)
-        wait_for(hold + ".running", "the run never started its tests")
-        # As heavy.sh's time limit, or a caller's TERM, stops it: its process group.
-        os.killpg(run.pid, signal.SIGTERM)
-        out, err = run.communicate(timeout=60)
-        self.assertNotEqual(run.returncode, 0)
-        self.assertIn("Stopped before the tests were over", err)
-        self.assertEqual(out.splitlines()[-1], "RESULT: no results, stopped before the tests were over (exit 143)")
-
-    def test_a_run_with_no_results_to_read_fails(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_NO_BUNDLE="1")
-        self.assertEqual(done.returncode, 1)
-        self.assertEqual(self.result(done), ["RESULT: no results, xcodebuild exited 0"])
-
-    def test_a_run_started_while_a_batch_is_built_waits_for_it_and_tests_that_one(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        older = self.built("mac")[0]
-        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var later = 1 }\n")
-        git(self.mac, "commit", "-qam", "Later")
-        hold = os.path.join(self.root, "hold")
-        os.mkfifo(hold)
-        build = subprocess.Popen(["/bin/sh", BUILD, "mac"], env=dict(self.env, FAKE_XCODE_HOLD=hold),
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            wait_for(hold + ".running", "the build never started")
-            said = os.path.join(self.root, "said")
-            run = self.start_tests_said_to("KuvoCodeTests/WindowTabsTests", said)
-            wait_for(said, "the run never waited for the build", "Waiting for the mac batch being built now")
-            self.assertNotIn("test-without-building", self.xcode_said())
+            with open(said, "w") as err:
+                run = subprocess.Popen(["/bin/sh", BATCH, "open", "phone", str(os.getpid())], env=self.env,
+                                       stdout=subprocess.PIPE, stderr=err, text=True)
+            wait_for(said, "the run never waited for the build", "Waiting for the phone batch being built now")
         finally:
             release(hold)
             build.communicate(timeout=60)
         out, _ = run.communicate(timeout=60)
         self.assertEqual(run.returncode, 0, read(said))
-        newer = [name for name in self.built("mac") if name != older][0]
-        self.assertIn("-xctestrun " + self.stamp("mac", newer)["xctestrun"], self.xcode_said())
-        self.assertIn("Tested the batch " + newer, out)
+        [newer] = [name for name in self.built() if name != older]
+        self.assertEqual(out.strip(), self.folder(newer))
 
-    def test_when_the_newest_batch_failed_a_run_refuses_saying_which_commit_and_why(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var broken }\n")
-        git(self.mac, "commit", "-qam", "Breaks it")
-        broken = git(self.mac, "rev-parse", "main")
-        self.assertEqual(self.build("mac", FAKE_XCODE_FAIL="1").returncode, 1)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("The newest mac batch didn't build: kuvo-ai " + broken[:9] + " “Breaks it”", done.stderr)
-        self.assertIn("error: it doesn't compile", done.stderr)
-        self.assertIn("failed-", done.stderr)
-        self.assertNotIn("test-without-building", self.xcode_said(), "never the older batch")
-        # Fixed and built, it tests again.
-        self.assertEqual(self.build("mac").returncode, 0)
-        self.assertEqual(self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch").returncode, 0)
-
-    def test_a_run_waiting_for_a_build_that_is_stopped_refuses_rather_than_test_the_older_batch(self):
-        self.assertEqual(self.build("mac").returncode, 0)
+    def test_a_run_waiting_for_a_build_that_is_stopped_refuses_rather_than_take_the_older_batch(self):
+        self.assertEqual(self.build("phone").returncode, 0)
         hold = os.path.join(self.root, "hold")
         os.mkfifo(hold)
-        build = subprocess.Popen(["/bin/sh", BUILD, "mac"], env=dict(self.env, FAKE_XCODE_HOLD=hold), start_new_session=True,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        build = self.start_build(hold)
+        said = os.path.join(self.root, "said")
         try:
-            wait_for(hold + ".running", "the build never started")
-            said = os.path.join(self.root, "said")
-            run = self.start_tests_said_to("KuvoCodeTests/WindowTabsTests", said)
-            wait_for(said, "the run never waited for the build", "Waiting for the mac batch being built now")
+            with open(said, "w") as err:
+                run = subprocess.Popen(["/bin/sh", BATCH, "open", "phone", str(os.getpid())], env=self.env,
+                                       stdout=subprocess.PIPE, stderr=err, text=True)
+            wait_for(said, "the run never waited for the build", "Waiting for the phone batch being built now")
             # Stopped, as by Ctrl-C or a caller's TERM: the build's own process group.
             os.killpg(build.pid, signal.SIGTERM)
             build.communicate(timeout=60)
@@ -672,65 +396,100 @@ class FromBatch(Batches):
                     os.close(fd)
                 except OSError:
                     pass
-        run.communicate(timeout=60)
-        self.assertEqual(run.returncode, 1)
+        out, _ = run.communicate(timeout=60)
+        self.assertEqual(run.returncode, 1, out)
         # (Its failed stamp, or its folder still there as it looked: either way it says so.)
         self.assertIn("stopped before it was built", read(said))
-        self.assertNotIn("test-without-building", self.xcode_said(), "never the older batch")
-        self.assertEqual(len(self.built("mac")), 1, "it left no batch behind")
+        self.assertEqual(len(self.built()), 1, "it left no batch behind")
 
     def test_when_the_newest_build_stopped_before_it_was_built_a_run_refuses(self):
-        self.assertEqual(self.build("mac").returncode, 0)
+        self.assertEqual(self.build("phone").returncode, 0)
         # (Killed outright, it couldn't say so: its folder without a stamp is what's left.)
-        os.makedirs(os.path.join(self.batches, "mac", "29991231-000000-abcdef0", "src"))
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("29991231-000000-abcdef0, stopped before it was built", done.stderr)
+        os.makedirs(os.path.join(self.folder("29991231-000000-abcdef0"), "src"))
+        opened = self.batch("open", "phone", str(os.getpid()))
+        self.assertEqual(opened.returncode, 1)
+        self.assertIn("29991231-000000-abcdef0, stopped before it was built", opened.stderr)
 
-    def test_tests_the_batch_hasnt_are_refused_before_it_waits_in_line(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        name = self.built("mac")[0]
-        for only in ["KuvoCodeTests/NewerTests", "KuvoCodeTests/WindowTabsTests KuvoCodeTests/NewerTests",
-                     "KuvoCodeTests/WindowTabsTests/aNewerTest()", "SomeOtherTests", "KuvoCodeTests/Window.*",
-                     "KuvoCodeTests/Outer/Missing"]:
+    def test_the_batchs_tests_pass_the_check(self):
+        self.assertEqual(self.build("phone").returncode, 0)
+        folder = self.folder(self.built()[0])
+        for only in [["KuvoCodeMobileTests"], ["KuvoCodeMobileTests/PairingTests", "KuvoCodeMobileTests/QueueTests"],
+                     ["KuvoCodeMobileTests/PairingTests/pairs()"], ["KuvoCodeMobileTests/QueueTests/testAdds"],
+                     ["KuvoCodeMobileTests/Outer/Inner"], ["KuvoCodeMobileTests/Outer/Inner/deep()"], ["KuvoCodeMobileTests/freeTest()"]]:
             with self.subTest(only=only):
-                done = self.run_tests(only, "--from-batch")
+                done = self.batch("check", folder, "kuvo-code-ios", *only)
+                self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_tests_the_batch_hasnt_are_refused(self):
+        self.assertEqual(self.build("phone").returncode, 0)
+        name = self.built()[0]
+        for only in ["KuvoCodeMobileTests/NewerTests", "KuvoCodeMobileTests/PairingTests KuvoCodeMobileTests/NewerTests",
+                     "KuvoCodeMobileTests/PairingTests/aNewerTest()", "SomeOtherTests", "KuvoCodeMobileTests/Pair.*",
+                     "KuvoCodeMobileTests/Outer/Missing"]:
+            with self.subTest(only=only):
+                done = self.batch("check", self.folder(name), "kuvo-code-ios", *only.split())
                 self.assertEqual(done.returncode, 1, done.stderr)
                 self.assertIn("Not in the batch " + name, done.stderr)
                 self.assertIn(only.split()[-1], done.stderr)
                 self.assertIn("next batch", done.stderr)
-        self.assertEqual(self.xcode_said().count("test-without-building"), 0)
-        self.assertFalse(os.path.exists(os.path.join(self.env["KUVO_HEAVY_DIR"], f"kuvo-code-heavy-mac-{os.getuid()}.queue")), "it never queued")
-        self.assertEqual(self.runs(name), [], "and it closed the batch")
-
-    def test_the_batchs_tests_pass_the_check(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        folder = os.path.join(self.batches, "mac", self.built("mac")[0])
-        for only in [["KuvoCodeTests"], ["KuvoCodeTests/WindowTabsTests", "KuvoCodeTests/WorkQueueTests"],
-                     ["KuvoCodeTests/WindowTabsTests/opensATab()"], ["KuvoCodeTests/WorkQueueTests/testAdds"],
-                     ["KuvoCodeTests/Outer/Inner"], ["KuvoCodeTests/Outer/Inner/deep()"], ["KuvoCodeTests/freeTest()"]]:
-            with self.subTest(only=only):
-                done = self.batch("check", folder, "kuvo-ai/swift", *only)
-                self.assertEqual(done.returncode, 0, done.stderr)
-
-    def test_without_only_or_a_batch_it_says_what_it_needs(self):
-        done = self.run_tests(None, "--from-batch")
-        self.assertEqual(done.returncode, 64)
-        self.assertIn("ONLY", done.stderr)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("There's no mac batch yet", done.stderr)
-        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--something")
-        self.assertEqual(done.returncode, 64)
 
     def test_it_says_when_the_callers_head_isnt_in_the_batch(self):
-        self.assertEqual(self.build("mac").returncode, 0)
-        folder = os.path.join(self.batches, "mac", self.built("mac")[0])
-        self.assertEqual(self.batch("behind", folder, "kuvo-ai", self.mac).stderr, "")
-        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var mine = 1 }\n")
-        git(self.mac, "commit", "-qam", "Mine")
-        said = self.batch("behind", folder, "kuvo-ai", self.mac).stderr
+        self.assertEqual(self.build("phone").returncode, 0)
+        folder = self.folder(self.built()[0])
+        self.assertEqual(self.batch("behind", folder, "kuvo-code-ios", self.phone).stderr, "")
+        self.commit_to_phone("struct App { var mine = 1 }\n", "Mine")
+        said = self.batch("behind", folder, "kuvo-code-ios", self.phone).stderr
         self.assertIn("isn't in this batch", said)
+
+
+class CompileOnly(Batches):
+    def test_the_compile_check_keeps_one_folder_and_rewrites_only_what_changed(self):
+        done = self.build("--compile-only", "phone")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("compiles for the phone", done.stdout)
+        src = os.path.join(self.batches, "compile", "src", "kuvo-code-ios")
+        self.assertTrue(os.path.isfile(os.path.join(self.batches, "compile", "src", "kuvo-ai", "swift", "KuvoClient", "Package.swift")))
+        kept, changed = os.path.join(src, "KuvoCodeMobileTests", "PairingTests.swift"), os.path.join(src, "KuvoCodeMobile", "App.swift")
+        old = os.stat(kept).st_mtime_ns
+        os.utime(changed, ns=(1, 1))
+        write(os.path.join(self.phone, "KuvoCodeMobile/App.swift"), "struct App { var later = 1 }\n")
+        os.remove(os.path.join(self.phone, "Gone.txt"))
+        git(self.phone, "commit", "-qam", "Later")
+        done = self.build("--compile-only", "phone")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(os.stat(kept).st_mtime_ns, old, "a file that's the same isn't written again")
+        self.assertEqual(read(changed), "struct App { var later = 1 }\n")
+        self.assertNotEqual(os.stat(changed).st_mtime_ns, 1)
+        self.assertFalse(os.path.exists(os.path.join(src, "Gone.txt")))
+        # One folder for every check, and no batch.
+        self.assertEqual(self.xcode_said().count("-derivedDataPath " + os.path.join(self.batches, "compile", "phone-build")), 2)
+        self.assertEqual(self.built(), [])
+        self.assertTrue(read(os.path.join(self.batches, "compile", "phone.last")).startswith("compiles " + git(self.phone, "rev-parse", "main")))
+        # The checkouts themselves are untouched.
+        self.assertEqual(git(self.phone, "status", "--porcelain"), "")
+        self.assertEqual(git(self.kuvo_ai, "status", "--porcelain"), "")
+
+    def test_the_retired_mac_app_is_still_compile_checked_and_all_checks_both(self):
+        # (release.yml still builds it for the box release: a shared package's change that breaks it shows here.)
+        done = self.build("--compile-only", "mac")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("compiles for the mac", done.stdout)
+        said = self.xcode_said()
+        for part in ["-scheme KuvoCode ", "build-for-testing", "-derivedDataPath " + os.path.join(self.batches, "compile", "mac-build"),
+                     os.path.join(self.batches, "compile", "src", "kuvo-ai", "swift", "KuvoCode.xcodeproj")]:
+            self.assertIn(part, said)
+        self.assertTrue(read(os.path.join(self.batches, "compile", "mac.last")).startswith("compiles " + git(self.kuvo_ai, "rev-parse", "main")))
+        self.assertFalse(os.path.exists(os.path.join(self.batches, "mac")), "a compile check, never a batch")
+        done = self.build("--compile-only")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("compiles for the mac", done.stdout)
+        self.assertIn("compiles for the phone", done.stdout)
+
+    def test_a_compile_that_fails_says_so(self):
+        done = self.build("--compile-only", "phone", FAKE_XCODE_FAIL="1")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("doesn't compile for the phone", done.stderr)
+        self.assertTrue(read(os.path.join(self.batches, "compile", "phone.last")).startswith("failed "))
 
 
 if __name__ == "__main__":

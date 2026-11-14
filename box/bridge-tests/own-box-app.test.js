@@ -23,7 +23,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-own-box-app-")));
 removeAtEnd(home);
 const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
-const browserScript = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const browserScript = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

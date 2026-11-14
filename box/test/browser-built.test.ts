@@ -1,4 +1,4 @@
-// The browser's keeper and tools every box runs (swift/KuvoCode/Resources/kuvo-browser.js) are what
+// The browser's keeper and tools every box runs (box/dist/kuvo-browser.js) are what
 // src/browser builds, as scripts/build-browser.sh --check says: a change made to the sources without
 // building the file again, or to the file itself, fails here, wherever the box's suite runs (Linux
 // too), not only in CI's.

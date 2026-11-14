@@ -27,7 +27,7 @@ const test = (name, run) => nodeTest(name, { timeout: 60_000 }, t => {
 
 const bun = testBun();
 assert.ok(bun, NO_BUN);
-const bridgeScript = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const bridgeScript = fileURLToPath(new URL("../dist/kuvo-agents.js", import.meta.url));
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-lanes-races-")));
 removeAtEnd(support);
 const home = path.join(support, "mac"), bots = path.join(support, "bots"), agents = path.join(support, "agents"), claude = path.join(support, "claude");

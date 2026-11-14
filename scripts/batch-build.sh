@@ -1,14 +1,16 @@
 #!/bin/sh
-# Builds main once for testing: a batch (scripts/batch.sh), which test runs then use without building
-# anything (scripts/test-app.sh --from-batch, and the phone's). At 04:00 and 16:00 the sessions' runs
-# take turns on that one build instead of each building the app again from its own worktree.
+# Builds main once for testing: a batch (scripts/batch.sh), which the phone's test runs then use
+# without building anything (kuvo-code-ios's scripts/test-app.sh --from-batch). At 04:00 and 16:00
+# the sessions' runs take turns on that one build instead of each building the app again from its
+# own worktree. (The Swift Mac app is retired, kept only to read: swift/MAC-APP-REFERENCE.md. It
+# has no batch, only the compile check below, as the release still builds it.)
 #
-#   scripts/batch-build.sh [mac|phone|all]
-#       A batch of each (all, the default: the Mac's, then the phone's): main's sources exported
-#       into a new folder, $(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/<mac|phone>/<when>-<commit>/,
+#   scripts/batch-build.sh [phone|all]
+#       The phone's batch (all, the default, is the phone's alone): main's sources exported
+#       into a new folder, $(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/phone/<when>-<commit>/,
 #       and built there from nothing with `xcodebuild build-for-testing`, as the tests' own copy
-#       (run.kuvo.code.tests, run.kuvo.code.ios.tests: the settings scripts/test-app.sh builds
-#       with), in a slot of heavy.sh's build lane (mac-build, phone-build). Once it's built, its
+#       (run.kuvo.code.ios.tests: the settings the phone's scripts/test-app.sh builds with), in a
+#       slot of heavy.sh's build lane (phone-build). Once it's built, its
 #       stamp says from which commits, when, and where its .xctestrun is; a build that fails
 #       leaves failed-<when>-<commit>.stamp (its commits, its first error) and .log instead, and
 #       runs from a batch refuse until the next one builds. The phone's batch is built
@@ -17,14 +19,18 @@
 #   scripts/batch-build.sh --compile-only [mac|phone|all]
 #       Only whether main compiles, the app and its tests (build-for-testing): in one folder kept
 #       from run to run (KuvoBatch/compile), whose sources are brought to main's file by file, so
-#       only what changed since the last check is compiled again. For after each merge.
+#       only what changed since the last check is compiled again. For after each merge. all is
+#       the Mac app's (in heavy.sh's mac-build lane) and the phone's: the retired Mac app still
+#       has to compile against the shared packages, as release.yml builds it for the box release
+#       machines update from.
 #
-#   KUVO_BATCH_MAC_REF, KUVO_BATCH_PHONE_REF    the commits to build (each checkout's main by default)
+#   KUVO_BATCH_MAC_REF, KUVO_BATCH_PHONE_REF    the commits to build, kuvo-ai's and the phone's (each
+#                                               checkout's main by default)
 #   KUVO_BATCH_MAC_REPO, KUVO_BATCH_PHONE_REPO  the checkouts (~/Projects/kuvo-ai, ~/Projects/kuvo-code-ios)
 #   KUVO_BATCH_DIR                              where the batches go, instead (for its tests)
 #
-# One build of each platform's batches at a time, and one compile check: a second one started
-# meanwhile says so and stops (KuvoBatch/<mac|phone>/build.lock, KuvoBatch/compile/build.lock),
+# One build of the batches at a time, and one compile check: a second one started
+# meanwhile says so and stops (KuvoBatch/phone/build.lock, KuvoBatch/compile/build.lock),
 # before it waits for anything. Nothing it does touches the checkouts: it only reads them.
 set -eu
 cd "$(dirname "$0")/.."
@@ -36,7 +42,7 @@ MAC_REPO="${KUVO_BATCH_MAC_REPO:-$HOME/Projects/kuvo-ai}"
 PHONE_REPO="${KUVO_BATCH_PHONE_REPO:-$HOME/Projects/kuvo-code-ios}"
 
 usage() {
-    echo "Usage: scripts/batch-build.sh [--compile-only] [mac|phone|all]" >&2
+    echo "Usage: scripts/batch-build.sh [phone|all], or --compile-only [mac|phone|all]" >&2
     exit 64
 }
 
@@ -88,10 +94,8 @@ record_failed() {
         echo "platform=$platform"
         echo "kuvo_ai=$mac_commit"
         echo "kuvo_ai_subject=$(git --no-optional-locks -C "$MAC_REPO" log -1 --format=%s "$mac_commit")"
-        if [ "$platform" = phone ]; then
-            echo "kuvo_code_ios=$phone_commit"
-            echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
-        fi
+        echo "kuvo_code_ios=$phone_commit"
+        echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
         echo "failed=$(date +%Y-%m-%dT%H:%M:%S%z)"
         echo "why=$1"
         echo "log=${2:-none}"
@@ -105,8 +109,8 @@ one() {
     mac_commit=$3
     phone_commit=$4
     started=$(date +%s)
-    commit=$mac_commit
-    [ "$platform" = mac ] || commit=$phone_commit
+    commit=$phone_commit
+    [ "$platform" = phone ] || commit=$mac_commit
     if [ "$mode" = batch ]; then
         # Names sort by when they were built (scripts/batch.sh: the newest is the last), and within
         # one second by their commit: so one second has one build of a platform. A build in the same
@@ -132,7 +136,7 @@ one() {
         trap 'exit 130' INT
         trap 'exit 143' TERM
         export_tree "$MAC_REPO" "$mac_commit" "$src/kuvo-ai"
-        [ "$platform" = mac ] || export_tree "$PHONE_REPO" "$phone_commit" "$src/kuvo-code-ios"
+        export_tree "$PHONE_REPO" "$phone_commit" "$src/kuvo-code-ios"
     else
         dir="$ROOT/compile"
         src="$dir/src"
@@ -145,6 +149,7 @@ one() {
         [ "$platform" = mac ] || update_tree "$PHONE_REPO" "$phone_commit" "$src/kuvo-code-ios" "$dir/kuvo-code-ios.index"
     fi
     if [ "$platform" = mac ]; then
+        # (Only ever a compile check: the retired Mac app has no batch.)
         lane=mac-build
         what="kuvo-ai $(short "$mac_commit")"
         set -- -project "$src/kuvo-ai/swift/KuvoCode.xcodeproj" -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
@@ -201,13 +206,11 @@ one() {
         echo "platform=$platform"
         echo "kuvo_ai=$mac_commit"
         echo "kuvo_ai_subject=$(git --no-optional-locks -C "$MAC_REPO" log -1 --format=%s "$mac_commit")"
-        if [ "$platform" = phone ]; then
-            echo "kuvo_code_ios=$phone_commit"
-            echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
-        fi
+        echo "kuvo_code_ios=$phone_commit"
+        echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
         # (The sources it was built from: test-app.sh gives them to the tests that read them.)
         echo "kuvo_ai_src=$src/kuvo-ai"
-        [ "$platform" = mac ] || echo "kuvo_code_ios_src=$src/kuvo-code-ios"
+        echo "kuvo_code_ios_src=$src/kuvo-code-ios"
         echo "built=$(date +%Y-%m-%dT%H:%M:%S%z)"
         echo "build_seconds=$((ended - from))"
         echo "xctestrun=$xctestrun"
@@ -232,10 +235,15 @@ if [ "${1:-}" = --compile-only ]; then
     shift
 fi
 [ $# -le 1 ] || usage
-case "${1:-all}" in
-    mac) platforms=mac ;;
-    phone) platforms=phone ;;
-    all) platforms="mac phone" ;;
+# (A batch is the phone's alone: the retired Mac app has only its compile check.)
+case "$mode ${1:-all}" in
+    "batch phone" | "batch all" | "compile phone") platforms=phone ;;
+    "compile mac") platforms=mac ;;
+    "compile all") platforms="mac phone" ;;
+    "batch mac")
+        echo "The Swift Mac app is retired and has no batch (swift/MAC-APP-REFERENCE.md): scripts/batch-build.sh builds the phone's; --compile-only mac checks the Mac app still compiles." >&2
+        exit 64
+        ;;
     *) usage ;;
 esac
 

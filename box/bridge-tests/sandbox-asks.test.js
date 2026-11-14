@@ -242,7 +242,7 @@ function machineTools() {
   // (Which runs the box's script where a machine keeps it.)
   fs.mkdirSync(path.join(home, "bin"), { recursive: true });
   fs.copyFileSync(script, path.join(home, "bin", "kuvo-link.js"));
-  const server = spawn(process.execPath, [fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url)), "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
+  const server = spawn(process.execPath, [fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url)), "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
   const answers = new Map();
   let buffer = "";
   let next = 1;

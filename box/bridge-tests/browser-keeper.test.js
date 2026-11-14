@@ -19,7 +19,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 // (Short: the keeper's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvk-")));
-const script = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const script = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 const env = { ...process.env, KUVO_HOME: home, HOME: home, KUVO_BROWSER_IDLE: "600" };
 const socketFile = path.join(home, "run", "browser.sock");
 

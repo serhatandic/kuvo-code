@@ -32,7 +32,7 @@ const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
-const tool = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const tool = fileURLToPath(new URL("../dist/kuvo-browser.js", import.meta.url));
 const script = path.join(home, "bin", "kuvo-link.js");
 write(script, fs.readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url)));
 const env = { ...process.env, KUVO_HOME: home, HOME: home, KUVO_VAULT_AGENTS: "1" };

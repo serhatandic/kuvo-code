@@ -1,5 +1,5 @@
 // The browser's data on a machine (PROTOCOL.md, "The browser's data"): the real keeper
-// (swift/KuvoCode/Resources/kuvo-browser.js) with Chrome as a stand-in, and the box's own routes asked as
+// (box/dist/kuvo-browser.js) with Chrome as a stand-in, and the box's own routes asked as
 // a Mac asks them over SSH (`kuvo-link.js box route`). A page that loads is kept in the history,
 // with its site's icon as Chrome fetched it; removing a site's data while Chrome runs signs the
 // browser out of it, through Chrome, as `kuvo/integrations` then says.
