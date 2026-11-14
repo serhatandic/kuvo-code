@@ -134,8 +134,9 @@ final class BoxPlanLimits {
     }
 
     /// Every account across your computers, one row each: this Mac's box's list, as it is, when it
-    /// has every computer this Mac reaches (this Mac's first, then each machine's by name).
-    // COMPAT(0.7 limits-merge): each box is still asked, so one from before rows is merged in. Goes 3 months after 0.8.0.
+    /// has every computer this Mac reaches (this Mac's first, then each machine's by name). Each box
+    /// is still asked, so a computer this Mac's box hasn't heard from lately (just added, the relay
+    /// down), or one whose answer has no `rows`, is merged in (`UsageListing.listing`).
     private var listing: UsageListing.Listing {
         let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
         return UsageListing.listing(keys.compactMap { key in boxes[key].map { UsageListing.Answer(key: key, name: key.isEmpty ? nil : key, limits: $0) } })

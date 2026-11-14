@@ -1472,9 +1472,9 @@ start on a model by the same rule.
   has answered, a client offers none of a side not said yet, and a new conversation is on the model
   named, as it is. Clients draw it from ClientSessions' `OfferedModels`, and start a new conversation
   on `starting` (the Mac for the model picked last there; the phone, which keeps none, for none
-  named: the default, else the first that runs, a coding agent's too, which its box starts there). A box without `models.offered` (answering 404, or a
-  machine's bridge 403) leaves the Mac deciding from its accounts and models as it did before; the
-  phone says to update Kuvo Code there rather than offer nothing.
+  named: the default, else the first that runs, a coding agent's too, which its box starts there). A box without `models.offered` is held
+  by the update gate, which requires it ("The update gate"): no client decides which models run
+  itself, and until its box has said, a client offers none and starts on the model named, as above.
 - An engine provider counts as ready when the engine lists it so (`api/provider`), as it does for a
   key of its own in its settings or environment (`OPENAI_API_KEY` in the computer's environment): its models are
   offered though Accounts shows no sign-in, as they run. Without one, a provider whose plan goes
@@ -8220,16 +8220,6 @@ before connects (the box notes one: `run/attached`).
   for a read of an account lists it there with that reading's numbers (`accounts`, "Plan limits"),
   so such a client doesn't show it stale or empty.
   <!-- compat: 0.7 limits-own-numbers -->
-- **Boxes from before `rows`**: a client asks each box it reaches and merges their `accounts`
-  itself while one of them answers without `rows` ("Plan limits", "Listing them"). The same merge
-  covers a computer the first box doesn't hear from now (the relay down); removing the fallback
-  needs an answer for that first.
-  <!-- compat: 0.7 limits-merge -->
-- **Usage settings from before the box kept them** (#631 piece F): a Mac whose own box doesn't list
-  `usage.settings` in its features (one from before, still running as the Mac updates) keeps its
-  panel's settings in its own stores, as before, and shares none, until #679 updates its box
-  ("Usage settings").
-  <!-- compat: 0.7 usage-settings-box -->
 - **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
   and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
   answers that once the update is done (the same update every client sees, "Installing and
@@ -8238,12 +8228,6 @@ before connects (the box notes one: `run/attached`).
   they move to the new one, answer `404`, which a client says as "haven't moved to this version
   yet", asking no program the old way.)
   <!-- compat: 0.7 update-answer -->
-- **Which models run**: a box from before `models.offered` and `sessions.models` (the bridges of
-  0.7.x and 0.8.0-beta.1 Macs) doesn't say which models run nor what a new session starts on, so a
-  Mac works them out itself from the box's accounts and models, as it did ("The models offered").
-  The update gate holds such a box now, so only a catalog with no box yet takes this way; it goes
-  once the Mac's tests give theirs a box.
-  <!-- compat: 0.7 model-rule -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
 app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves

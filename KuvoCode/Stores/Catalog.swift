@@ -115,45 +115,27 @@ final class Catalog {
     /// provider has deprecated (it's retired soon) isn't, as the engine's own picker leaves it out;
     /// a conversation already on one carries on (`usable`).
     var offered: [Model] {
-        guard boxDecides else { return usable.filter { !$0.isDeprecated } }
-        return usable.filter { offeredSaid?.offers($0.ref) == true }
+        usable.filter { offeredSaid?.offers($0.ref) == true }
     }
 
     /// The models you can run now, as its box says: those offered, and deprecated ones of the same
-    /// accounts. None of a side (the engine's, or the coding agents') its box hasn't said yet.
+    /// accounts. None of a side (the engine's, or the coding agents') its box hasn't said yet, and
+    /// none at all before it has a box to ask.
     private var usable: [Model] {
-        guard boxDecides else { return reckonedUsable }
         askOffered(LastModel.current)
         guard let said = offeredSaid else { return [] }
         return models.filter { said.runs($0.ref, isAgent: OutsideAgents.runsInBridge) == true }
     }
 
-    // COMPAT(0.7 model-rule): which models run, worked out here for a box without `models.offered` (0.7.x and 0.8.0-beta.1 Macs' bridges). Goes 3 months after 0.8.0.
-    /// Those of an account you connected, OpenCode Zen's free ones (they need no account), and those
-    /// of a provider with nothing to sign in to (a local one).
-    private var reckonedUsable: [Model] {
-        let byID = Dictionary(integrations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return models.filter { model in
-            guard model.enabled else { return false }
-            if model.providerID == "opencode", model.isFree { return true }
-            guard let provider = byID[model.providerID] else { return true }
-            return provider.isConnected || provider.methods.isEmpty
-        }
-    }
-
-    /// The engine's models grouped by provider, providers in the order people tend to look for them.
+    /// The engine's models grouped by provider, in the order its box gives them (its featured
+    /// providers first, each one's newest first); none until it has said what runs.
     var modelsByProvider: [(provider: String, models: [Model])] {
+        guard let said = offeredSaid else { return [] }
         let groups = Dictionary(grouping: offered.filter { !OutsideAgents.isAgent($0.providerID) }, by: \.providerID)
-        // In the order its box gives them (its featured providers first, each one's newest first).
-        if boxDecides, let said = offeredSaid {
-            let place = { (model: Model) in said.place(model.ref) ?? .max }
-            return groups.values.map { $0.sorted { place($0) < place($1) } }
-                .sorted { place($0[0]) < place($1[0]) }
-                .map { (providerName($0[0].providerID), $0) }
-        }
-        return groups.keys
-            .sorted { (Self.featuredOrder[$0] ?? 99, $0) < (Self.featuredOrder[$1] ?? 99, $1) }
-            .map { id in (providerName(id), groups[id]!.sorted { $0.time.released > $1.time.released }) }
+        let place = { (model: Model) in said.place(model.ref) ?? .max }
+        return groups.values.map { $0.sorted { place($0) < place($1) } }
+            .sorted { place($0[0]) < place($1[0]) }
+            .map { (providerName($0[0].providerID), $0) }
     }
 
     /// A provider in the model picker's rail: one of your accounts with a coding agent, or one of
@@ -245,10 +227,6 @@ final class Catalog {
     @ObservationIgnored private var offeredRetryWait: Duration?
     @ObservationIgnored var offeredRetryAfter = Duration.seconds(2)
 
-    /// Its box decides which models run and which one a new session starts on. Without a box
-    /// (nothing to ask), this Mac works them out from the lists it has.
-    private var boxDecides: Bool { box != nil }
-
     private static func startKey(_ wanted: ModelRef?) -> String { OfferedModels.path(wanted: wanted) }
 
     /// Asks its box what it offers, and what a new session would start on for `wanted`, where what
@@ -256,7 +234,7 @@ final class Catalog {
     /// meanwhile, and the answer shows once it comes.
     private func askOffered(_ wanted: ModelRef?) {
         let key = Self.startKey(wanted), lists = listsKey
-        guard boxDecides, offeredAsked[key] != lists else { return }
+        guard box != nil, offeredAsked[key] != lists else { return }
         offeredAsked[key] = lists
         // (What's asked now is newer than what the one waiting would ask.)
         offeredRetry?.cancel()
@@ -303,13 +281,11 @@ final class Catalog {
 
     /// Auto can be picked: one of your lists runs, as its box says (the bridge up, models in it).
     var isAutoAvailable: Bool {
-        guard boxDecides else { return outsideAgents?.api != nil && auto.all.contains { !$0.entries.isEmpty } }
-        return offeredSaid?.models.contains { $0.providerID == OutsideAgents.autoProvider } == true
+        offeredSaid?.models.contains { $0.providerID == OutsideAgents.autoProvider } == true
     }
 
     /// That Auto list can be picked, as its box says.
     func isAutoAvailable(_ id: String?) -> Bool {
-        guard boxDecides else { return outsideAgents?.api != nil && auto.list(id)?.entries.isEmpty == false }
         guard let list = auto.list(id) else { return false }
         return offeredSaid?.runs(ModelRef(id: list.id, providerID: OutsideAgents.autoProvider), isAgent: OutsideAgents.runsInBridge) == true
     }
@@ -334,54 +310,13 @@ final class Catalog {
     static var autoRef: ModelRef { ModelRef(id: AutoList.firstID, providerID: OutsideAgents.autoProvider) }
 
     /// A model picked that you can't use now (gone from its provider, or its account signed out
-    /// of): it would only fail. Not before the models are known.
+    /// of), as its box says: it would only fail. Not before its box has said.
     func isUnavailable(_ ref: ModelRef?) -> Bool {
         guard let ref else { return false }
-        guard boxDecides else { return isKnown(ref) && offeredModel(ref) == nil }
         // As its box says, by the id it lists it by (one this Mac doesn't list, Codex's hidden ones,
         // too); a Custom Auto list deleted is your first, as it runs.
         let listed = ref.providerID == OutsideAgents.autoProvider ? ModelRef(id: auto.list(ref.id)?.id ?? ref.id, providerID: ref.providerID) : model(ref)?.ref ?? ref
         return offeredSaid?.runs(listed, isAgent: OutsideAgents.runsInBridge) == false
-    }
-
-    /// A model whose account you signed out of (its provider has a sign-in, and isn't signed in):
-    /// the engine would drop a message on it without a word, so it's said before it's sent.
-    /// Only then: a model missing from a list for a moment (a coding agent's, as it starts) goes
-    /// to its agent, which says for itself if it can't run it.
-    /// The old-box path, with `refusal`, `unavailable`, `chipModel` and `signInHelp`: a box with
-    /// `sessions.models` says this itself (`SessionModelState`, the `said:` versions below), and
-    /// one with `models.offered` says which run (`offeredSaid`), the chip going by that alone.
-    // COMPAT(0.7 model-rule): a conversation's model worked out here for a box without `sessions.models` and `models.offered`. Goes 3 months after 0.8.0.
-    func needsSignIn(_ ref: ModelRef?) -> Bool {
-        guard let ref, isUnavailable(ref) else { return false }
-        return integrations.contains { $0.id == ref.providerID && !$0.isConnected && !$0.methods.isEmpty }
-    }
-
-    /// Why a message on `ref` can't be sent (on the machine named `on`), said before it's sent;
-    /// nil when it can go.
-    /// A model gone from an account the engine has (retired, turned off) is said too, as the engine
-    /// would only fail it. Not one of a provider it doesn't list here (one a project's own settings
-    /// add, listed only in that project), nor a coding agent's missing from their list while its
-    /// account is signed in: those go to the engine or the agents.
-    func refusal(_ ref: ModelRef, on machine: String? = nil) -> String? {
-        guard isUnavailable(ref), integrations.contains(where: { $0.id == ref.providerID }) else { return nil }
-        if OutsideAgents.runsInBridge(ref.providerID), !needsSignIn(ref) { return nil }
-        return unavailable(ref, on: machine)
-    }
-
-    /// Why `ref` can't run here, and what to do, for one `isUnavailable` turned down: its account
-    /// to sign in to (on the machine named `on`, as Settings › Accounts lists it), or another
-    /// model. Without it, the engine takes the message and drops it without a word.
-    func unavailable(_ ref: ModelRef, on machine: String? = nil) -> String {
-        let name = model(ref)?.name ?? ref.id
-        let there = machine.map { " on \($0)" } ?? ""
-        if let provider = integrations.first(where: { $0.id == ref.providerID }), !provider.isConnected, !provider.methods.isEmpty {
-            // A ChatGPT or SuperGrok plan is signed in to as its coding agent, which never makes
-            // the engine's own OpenAI or xAI models run: those need a key.
-            if let key = PlanSignIns.needsKey(model: name, provider: ref.providerID, providerName: provider.name, there: there, accounts: "Settings › Accounts") { return key }
-            return "\(name) needs a sign-in\(there): sign in to \(signInName(ref.providerID)) in Settings › Accounts, or choose another model."
-        }
-        return "\(name) isn’t available\(there) now: choose another model."
     }
 
     /// Whether a run that failed with `type` (the engine's kind of error) and `message` was turned
@@ -404,7 +339,6 @@ final class Catalog {
     /// (this Mac's, or the machine's beside its engine), as its box has said them.
     private func isKnown(_ ref: ModelRef) -> Bool {
         let listed = OutsideAgents.runsInBridge(ref.providerID) ? areAgentsLoaded : isLoaded
-        guard boxDecides else { return listed }
         return listed && offeredSaid?.runs(ref, isAgent: OutsideAgents.runsInBridge) != nil
     }
 
@@ -425,35 +359,17 @@ final class Catalog {
     /// account needs a sign-in (its card says so, and how), or while a coding agent signed in
     /// doesn't list it (its agent says whether it can run it); nil for one that's gone, which asks
     /// you to choose another; nothing picked, the default.
-    /// With a box that decides (`models.offered`), by what it offers alone: the model while it runs
-    /// there, else "Choose a Model" (a conversation's own chip names it as its box says, `said:`).
+    /// By what its box offers alone: the model while it runs there, else "Choose a Model" (a
+    /// conversation's own chip names it as its box says, `said:`).
     func chipModel(_ ref: ModelRef?) -> Model? {
-        if boxDecides, let ref {
-            guard !isUnavailable(ref) else { return nil }
-            if let model = model(ref) ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)] { return model }
-            var placeholder = Self.autoTemplate
-            placeholder.id = ref.id
-            placeholder.providerID = ref.providerID
-            placeholder.name = offeredSaid?.name(of: ref) ?? (ref.providerID == OutsideAgents.autoProvider ? "Custom Auto" : ref.id)
-            return placeholder
-        }
-        if !boxDecides, needsSignIn(ref) || goesToItsAgent(ref), let ref {
-            if let model = model(ref) ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)] { return model }
-            var placeholder = Self.autoTemplate
-            placeholder.id = ref.id
-            placeholder.providerID = ref.providerID
-            placeholder.name = ref.id
-            return placeholder
-        }
-        return isUnavailable(ref) ? nil : shownModel(ref) ?? defaultModel
-    }
-
-    /// A coding agent's model missing from its list while its account is signed in and its program
-    /// installed (one it dropped after an update, say): it's sent, and the agent says for itself
-    /// whether it can run it, as `refusal` lets it go.
-    private func goesToItsAgent(_ ref: ModelRef?) -> Bool {
-        guard let ref, OutsideAgents.isAgent(ref.providerID), isUnavailable(ref) else { return false }
-        return integrations.contains { $0.id == ref.providerID && $0.isConnected && $0.metadata?["installed"]?.bool != false }
+        guard let ref else { return defaultModel }
+        guard !isUnavailable(ref) else { return nil }
+        if let model = model(ref) ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)] { return model }
+        var placeholder = Self.autoTemplate
+        placeholder.id = ref.id
+        placeholder.providerID = ref.providerID
+        placeholder.name = offeredSaid?.name(of: ref) ?? (ref.providerID == OutsideAgents.autoProvider ? "Custom Auto" : ref.id)
+        return placeholder
     }
 
     /// The same, for a chip that offers `scope`'s models: none for one outside them.
@@ -466,8 +382,7 @@ final class Catalog {
     /// What a conversation's chip shows for `ref`, from what its box says of its model (`said`,
     /// `kuvo/sessions/models`): the model while it runs or its account needs something; nil for
     /// one gone, or none chosen, which asks for another. Where the box hasn't said it of `ref` (a
-    /// box from before `sessions.models`, not read yet, or another model just picked), the old-box
-    /// path: as this Mac works it out (`chipModel`).
+    /// box not read yet, or another model just picked): by what its box offers (`chipModel`).
     func chipModel(_ ref: ModelRef?, in scope: ModelScope, said: SessionModelState?) -> Model? {
         guard let said, said.isAbout(ref) else { return chipModel(ref, in: scope) }
         // None of its own, and none it runs on: "Choose a Model" (one it can't say yet, as here).
@@ -483,7 +398,7 @@ final class Catalog {
 
     /// The model a conversation's composer is given: its own; else the one its box says it runs on
     /// (`said`); none where its box says it has none, so the chip asks for one, as the phone's does;
-    /// else (a box from before `sessions.models`, or not read yet) the one a new one would start on.
+    /// else (not read yet) the one a new one would start on.
     func composerModel(_ own: ModelRef?, said: SessionModelState?, lastModel: ModelRef?) -> ModelRef? {
         if let own { return own }
         if said?.missing == .model { return nil }
@@ -491,35 +406,34 @@ final class Catalog {
     }
 
     /// Why a message on `ref` can't be sent (on the machine named `on`), from what its box says
-    /// (`said`); nil when it can go. Where the box hasn't said it of `ref`, the old-box path
-    /// (`refusal`).
+    /// (`said`); nil when it can go, or where the box hasn't said it of `ref` (yet).
     func refusal(_ ref: ModelRef, on machine: String? = nil, said: SessionModelState?) -> String? {
-        guard let said, said.isAbout(ref) else { return boxDecides ? nil : refusal(ref, on: machine) }
+        guard let said, said.isAbout(ref) else { return nil }
         return said.refusal(there: machine.map { " on \($0)" } ?? "", accounts: "Settings › Accounts", shownName: shownName(ref))
     }
 
     /// The chip's help for `ref`: why it can't run and what to do, else what it is. Where the box
-    /// hasn't said it of `ref`, the old-box path.
+    /// hasn't said it of `ref`, by what it offers.
     func chipHelp(_ ref: ModelRef?, in scope: ModelScope, on machine: String? = nil, said: SessionModelState?) -> String {
         if let said, said.isAbout(ref), let shown = ref ?? said.model, scope.allows(shown.providerID) {
             return said.refusal(there: machine.map { " on \($0)" } ?? "", accounts: "Settings › Accounts", shownName: shownName(shown)) ?? "Model and effort"
         }
         if let said, ref == nil, said.model == nil, !said.namesModel { return said.refusal(accounts: "Settings › Accounts") ?? "Model and effort" }
-        if !boxDecides, let ref, needsSignIn(ref) { return unavailable(ref, on: machine) }
         let unavailable = isUnavailable(ref) || ref.map { !scope.allows($0.providerID) } == true
         return unavailable && chipModel(ref, in: scope) == nil ? "\(model(ref)?.name ?? ref?.id ?? "") isn't available now: choose another model" : "Model and effort"
     }
 
     /// What a sign-in card's Sign In for `id` does (on the machine named `on`), from what the
-    /// box says of the conversation's model where that's this account's; else the old-box path.
+    /// box says of the conversation's model where that's this account's; else as its account's
+    /// ways in have it (a card for another account than the model's).
     func signInHelp(_ id: String, on machine: String? = nil, said: SessionModelState?) -> String {
         said?.signInHelp(id, there: machine.map { " on \($0)" } ?? "") ?? signInHelp(id, on: machine)
     }
 
     /// Whether `ref`'s account needs a sign-in, a key or its agent installed now, from what the
-    /// box says where it's said of `ref`; else the old-box path (`needsSignIn`).
+    /// box says where it's said of `ref`; not where it hasn't.
     func needsAccount(_ ref: ModelRef, said: SessionModelState?) -> Bool {
-        guard let said, said.isAbout(ref) else { return boxDecides ? false : needsSignIn(ref) }
+        guard let said, said.isAbout(ref) else { return false }
         return said.needsAccount
     }
 
@@ -543,28 +457,14 @@ final class Catalog {
     /// The model a new session or bot starts on, as its box decides it for `wanted` (the one
     /// picked last; of several, the first given): that one where it runs there, else the engine's
     /// default, else the first model that runs (`kuvo/models/offered`'s `starting`). Until its box
-    /// says (just after launch, a model just picked, its engine still loading), `wanted` as it is.
+    /// says (just after launch, a model just picked, its engine still loading, no box yet), `wanted`
+    /// as it is.
     func startingModel(_ wanted: ModelRef?..., scope: ModelScope = .all) -> ModelRef? {
-        guard boxDecides else { return reckonedStartingModel(wanted, scope: scope) }
         // (With its bridge gone for good, not one of the coding agents'.)
         let wanted = wanted.compactMap(\.self).first { scope.allows($0.providerID) && !(agentsGone && OutsideAgents.runsInBridge($0.providerID)) }
         askOffered(wanted)
         if let said = startingSaid[Self.startKey(wanted)] { return said.flatMap { scope.allows($0.providerID) ? $0 : nil } }
         return wanted ?? defaultModel?.ref
-    }
-
-    // COMPAT(0.7 model-rule): a new session's model, worked out here for a box without `models.offered`. Goes 3 months after 0.8.0.
-    private func reckonedStartingModel(_ wanted: [ModelRef?], scope: ModelScope) -> ModelRef? {
-        // Under the id the box lists it by, one picked by another name (Claude Code's `default`).
-        let wanted = wanted.compactMap(\.self).filter { scope.allows($0.providerID) }.map { ref in
-            ref.providerID == OutsideAgents.autoProvider ? ref : model(ref).map { ModelRef(id: $0.id, providerID: $0.providerID, variant: ref.variant) } ?? ref
-        }
-        guard isLoaded else { return wanted.first ?? defaultModel?.ref }
-        // Not one being retired, for a new conversation.
-        if let ref = wanted.first(where: { offeredModel($0).map { !$0.isDeprecated } ?? !isKnown($0) }) { return ref }
-        if let model = offeredModel(defaultModel?.ref), !model.isDeprecated { return model.ref }
-        // Only coding agents' accounts: one of theirs.
-        return modelsByProvider.first?.models.first?.ref ?? offered.first { OutsideAgents.isAgent($0.providerID) && scope.allows($0.providerID) }?.ref
     }
 
     /// What to sign in to again for an account opencode had: a ChatGPT or SuperGrok plan is
@@ -1027,7 +927,6 @@ final class Catalog {
     /// Shown first, in this order. Everything else follows alphabetically.
     /// (The outside agents have their own place, before these: `OutsideAgents.order`.)
     static let featured = ["openai", "github-copilot", "anthropic", "google", "xai", "openrouter", "opencode", "deepseek", "mistral", "groq"]
-    static let featuredOrder = Dictionary(uniqueKeysWithValues: featured.enumerated().map { ($1, $0) })
 }
 
 /// Which models a picker offers: the engine's (a session on it, a bot, a machine's), or every

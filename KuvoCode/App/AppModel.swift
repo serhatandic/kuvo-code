@@ -355,7 +355,6 @@ final class AppModel {
         workspace.boxes = { [weak self] id in self?.box(id) }
         // The update gate (#679): a box found older than this app needs, as it says what it has,
         // is held; let go, it's read again.
-        usageHistory.settings.features = boxFeatures
         boxFeatures.onSaid = { [weak self] box, features in
             guard let self else { return }
             machines.gates.said(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
@@ -1278,7 +1277,7 @@ final class AppModel {
                 // before this Mac's engine (it usually is), they're read once the stores are told
                 // of each other (`wireStores`).
                 planLimits.connected(nil, api: agents.api)
-                usageHistory.connected(api: agents.api, box: BoxClient.mac)
+                usageHistory.connected(api: agents.api)
                 if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
                 await catalog.refreshAgents()
                 await workspace.refreshAgents()

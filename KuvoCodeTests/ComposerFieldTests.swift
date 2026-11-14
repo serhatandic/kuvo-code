@@ -1,6 +1,7 @@
 import AppKit
 import ClientSessions
 import ClientText
+import KuvoLink
 import OpenCodeKit
 import SwiftUI
 import Testing
@@ -484,7 +485,19 @@ extension ComposerFieldTests {
         engine.on("GET", "/api/agent", json: ["location": location, "data": []])
         engine.on("GET", "/api/command", json: ["location": location, "data": []])
         catalog.api = engine.api
+        // Its box, saying what runs there: the one model the engine lists, not the retired one.
+        let offered = #"{"models":[{"providerID":"deepseek","id":"v4.1-flash","name":"DeepSeek V4.1 Flash"}],"known":{"engine":true,"agents":true}}"#
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
+                continuation.finish()
+            }
+        })
         await catalog.refresh()
+        _ = catalog.offered
+        try await until { catalog.offeredSaid != nil }
         look.model = ModelRef(id: "v3-retired", providerID: "deepseek")
         try await until { editing == "composer" }
         let field = try #require(field)

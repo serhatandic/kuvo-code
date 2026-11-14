@@ -463,7 +463,8 @@ public enum UsageListing {
 
     /// Every box's accounts, one row per account across them (`accounts(_:)`), placed where the
     /// panel (the client's own computer's, or the first Mac's) says each service goes, as the Mac's
-    /// menu bar lists this Mac's and its machines'. COMPAT(0.7 limits-merge): for boxes from before rows. Goes 3 months after 0.8.0.
+    /// menu bar lists this Mac's and its machines': for boxes whose lists don't cover each other
+    /// (`listing`'s merge).
     public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, boxes: [Box]) -> [Item<Panel>] {
         place(Self.accounts(boxes), panel: panel, covers: covers)
     }
@@ -560,8 +561,9 @@ extension UsageListing {
     /// first): the first box's rows, as they are (it works them out with your other computers'
     /// boxes, PROTOCOL.md "Plan limits"), when they have every account each other box it reached
     /// says is signed in there, from that computer as it hears it now (not away); else (a box from
-    /// before rows, #210, or one the first hasn't heard from lately) each box's own, merged here.
-    /// COMPAT(0.7 limits-merge): the merge for boxes from before rows. Goes 3 months after 0.8.0.
+    /// before rows, #210, or one the first hasn't heard from lately: just added, or the relay down)
+    /// each box's own, merged here. The merge isn't only for older boxes: it stays while a box can
+    /// be out of the first one's hearing.
     public static func listing(_ answers: [Answer]) -> Listing {
         if let first = answers.first, let rows = first.limits.rows {
             let byID = Dictionary(rows.compactMap { row in row.rowID.map { ($0, row) } }, uniquingKeysWith: { first, _ in first })
@@ -592,7 +594,8 @@ extension UsageListing {
 
     /// One row per account across the boxes, in their order (the client's own computer first): rows
     /// of one service that say they're one account (`identity`) are one, from any box, whatever each
-    /// calls it; a row that doesn't say is its box's own, as before. COMPAT(0.7 limits-merge): for boxes from before rows (the box merges them now, `limits-rows.ts`). Goes 3 months after 0.8.0.
+    /// calls it; a row that doesn't say is its box's own, as before. The same rule the box merges
+    /// its rows by (`limits-rows.ts`), for when a client merges them itself (`listing`).
     public static func accounts(_ boxes: [Box]) -> [Account] {
         var groups: [(id: String, members: [(box: Box, account: LimitsAccount)])] = []
         var found: [String: Int] = [:]
