@@ -33,11 +33,11 @@ nonisolated enum AppInfo {
     }
 
     /// The usage panel's screen a demo copy opens for screenshots (`KUVO_DEMO_USAGE`, any value but
-    /// `off` and `sample`), or nil. Asked for by name, the panel starts in a copy that never prompts
+    /// `off`), or nil. Asked for by name, the panel starts in a copy that never prompts
     /// too: its Keychain reads fail at once there rather than ask.
     static func demoUsageScreen(_ environment: [String: String]) -> String? {
         #if DEBUG
-        guard let screen = environment["KUVO_DEMO_USAGE"], !["off", "sample"].contains(screen) else { return nil }
+        guard let screen = environment["KUVO_DEMO_USAGE"], screen != "off" else { return nil }
         return screen
         #else
         return nil

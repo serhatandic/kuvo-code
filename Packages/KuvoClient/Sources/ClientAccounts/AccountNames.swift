@@ -7,6 +7,11 @@ public enum AccountNames {
     /// The engine's sign-ins, by what they're the limits of (a box's limits' `service`).
     public static let services = ["codex": "ChatGPT", "grok": "SuperGrok", "copilot": "Copilot", "openrouter": "OpenRouter", "zai": "Z.ai", "ollama": "Ollama", "opencode": "OpenCode Go"]
 
+    /// The usage panel's cards, by service: a card that shows a service's spend alone, with no
+    /// account of it to name (OpenCode's Zen use, with no Go plan).
+    public static let cards = ["claude": "Claude", "codex": "Codex", "cursor": "Cursor", "antigravity": "Antigravity", "copilot": "Copilot",
+                               "grok": "Grok", "opencode": "OpenCode", "openrouter": "OpenRouter", "zai": "Z.ai", "ollama": "Ollama"]
+
     /// Each coding agent's kind, by its own sign-in's provider.
     static let agentKinds = ["claude-code": "claude", "codex-cli": "codex", "grok-cli": "grok", "cursor": "cursor", "antigravity": "antigravity"]
     /// The engine's plans named apart from their provider's own name, by provider. (Not `openai` or

@@ -234,8 +234,7 @@ struct SkillsSettings: View {
         }
         #endif
         .settingsDetail(item: $writing, title: { $0.name ?? "New Skill" }) { draft in
-            SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: here.taken(listed: skills ?? []),
-                        recentlyDeleted: deleted?.isOffered == true) {
+            SkillEditor(name: draft.name, routes: routes, folder: box.machine == nil ? here.folder : nil, taken: here.taken(listed: skills ?? [])) {
                 writing = nil
                 Task { await refresh() }
             }
@@ -527,8 +526,6 @@ private struct SkillEditor: View {
     let folder: String?
     /// Names other skills have.
     let taken: Set<String>
-    /// Its box has Recently Deleted (`skills.trash`), where a deleted skill goes.
-    let recentlyDeleted: Bool
     let done: () -> Void
 
     @State private var newName = ""
@@ -613,7 +610,7 @@ private struct SkillEditor: View {
         .confirmationDialog("Delete \(id)?", isPresented: $confirmsRemoval) {
             Button("Delete", role: .destructive, action: delete)
         } message: {
-            Text(RecentlyDeletedSkills.deletionNote(recentlyDeleted: recentlyDeleted))
+            Text(RecentlyDeletedSkills.deletionNote)
         }
     }
 

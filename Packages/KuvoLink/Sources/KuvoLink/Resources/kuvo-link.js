@@ -4033,8 +4033,7 @@ var MAC_FEATURES = [
   "accounts.ended",
   "hosts",
   "mac",
-  "machines",
-  "usage"
+  "machines"
 ];
 var MACHINE_FEATURES = [
   "browser",
@@ -40277,7 +40276,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1855e0574e9c";
+var BRIDGE_VERSION = "a93b1acd3631";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -51112,7 +51111,7 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
 }
 
 // Packages/Box/src/link/mac/relay.ts
-var MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
+var MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
 var macAppAnswers = (route) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`));
 var boxAnswers = (route) => route === "kuvo/engine/restart" && keeperRuns();
 function keeperRuns() {

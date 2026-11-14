@@ -39,7 +39,6 @@ import UserNotifications
         #expect(AppInfo.demoUsageScreen(["KUVO_DEMO_BACKGROUND": "1", "KUVO_DEMO_USAGE": "dashboard"]) == "dashboard")
         #expect(AppInfo.demoUsageScreen(["KUVO_DEMO_BACKGROUND": "1", "KUVO_DEMO_USAGE": "settings"]) == "settings")
         #expect(AppInfo.demoUsageScreen(["KUVO_DEMO_USAGE": "off"]) == nil)
-        #expect(AppInfo.demoUsageScreen(["KUVO_DEMO_USAGE": "sample"]) == nil)
         #expect(AppInfo.demoUsageScreen(["KUVO_DEMO_BACKGROUND": "1"]) == nil)
     }
 }

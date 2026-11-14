@@ -453,8 +453,6 @@ final class SessionModel {
     @ObservationIgnored var approvalChanges = 0
     /// Its Autopilot as its box shows it (`readAutopilot`); nil until read.
     var autopilotShown: AutopilotShown?
-    /// Its box is from before Autopilot: the Mode menu says so instead of offering it.
-    var autopilotUnavailable = false
     /// Switches of Autopilot asked for so far, and still on their way to its box.
     @ObservationIgnored var autopilotChanges = 0
     @ObservationIgnored var autopilotPending = 0
@@ -464,11 +462,6 @@ final class SessionModel {
     @ObservationIgnored private var queueRead: Task<Void, Never>?
     /// Changes asked of the box's queue so far (`queueRoute`).
     @ObservationIgnored private var queueChanges = 0
-    /// Whether its box carries the queue (`carriesQueue`); unknown until read.
-    @ObservationIgnored private var boxCarriesQueue: Bool?
-    /// The next waiting message started here a moment from now, on a box that doesn't carry the
-    /// queue (`drainHere`).
-    @ObservationIgnored private var drainTask: Task<Void, Never>?
     /// Stops asked for so far (`stop`): a Resume that waited meanwhile doesn't go.
     @ObservationIgnored private var stops = 0
     var failure: String?
@@ -751,9 +744,6 @@ final class SessionModel {
     /// failed on the old connection is past.
     func reconnect(_ api: OpenCodeAPI) {
         self.api = api
-        // Its box may have been updated meanwhile: whether it carries the queue is read again.
-        boxCarriesQueue = nil
-        readFeatures = nil
         waitsForEngine = false
         failure = nil
     }
@@ -844,7 +834,7 @@ final class SessionModel {
             prepareCode(in: page.data)
             if transcript.isStale { scheduleReload() }
             // Whether its queue waits for Resume, and what's held, as its box says.
-            readQueue(then: isLoaded ? .read : .opened)
+            readQueue()
             // A subagent's session is the engine's to set up; it only gets shown.
             if !isLoaded, !isSubagent { await syncFolders() }
             isLoaded = true
@@ -916,18 +906,14 @@ final class SessionModel {
         case "session.execution.succeeded", "session.execution.interrupted", "session.execution.failed":
             keepCopy()
             // The box decides a moment after (whether it was a Stop, a failed run pausing it).
-            let ended: QueueMoment = event.type == "session.execution.failed" ? .runFailed : .runEnded
-            if boxCarriesQueue == false { carryHere(ended) } else { readQueue(after: .seconds(2), then: ended) }
+            readQueue(after: .seconds(2))
         case "session.inbox.enqueued", "session.inbox.delivery.changed":
-            let moment: QueueMoment = event.type == "session.inbox.enqueued" ? .queued : .other
-            if boxCarriesQueue == false { carryHere(moment) } else { readQueue(after: .milliseconds(300), then: moment) }
+            readQueue(after: .milliseconds(300))
         case "session.inbox.cancelled", "session.inbox.delivered":
             if let id = try? event.payload(as: EventPayload.InboxChanged.self).inboxID {
                 move(id, to: event.type == "session.inbox.delivered" ? .delivered : .cancelled)
             }
-            if boxCarriesQueue != false { readQueue(after: .milliseconds(300)) }
-        case "session.execution.started":
-            drainTask?.cancel()
+            readQueue(after: .milliseconds(300))
         case "session.revert.committed":
             // Final: there's nothing left to redo, and the conversation no longer ends at the undo.
             session.revert = nil
@@ -950,8 +936,6 @@ final class SessionModel {
         default:
             break
         }
-        // (A box that carries the queue says when it's paused: a Stop holds it though nothing waits.)
-        if boxCarriesQueue == false, transcript.pending.isEmpty { isQueuePaused = false }
     }
 
     /// Shows what streamed in: in a moment, with what comes meanwhile, or after `streamInterval`
@@ -1161,7 +1145,7 @@ final class SessionModel {
                 // For after this run: to the box, which holds it while the queue is paused, as anything
                 // arriving then (the engine would run all it holds the moment it had one more), and
                 // decides that itself: a Stop from another client may not have reached here yet.
-                if asked == .queue, await holdsOnBox() {
+                if asked == .queue, box() != nil {
                     sending.delivery = .queue
                     sending.before = placesBack[id]
                     try await holdOnBox(id, sending: sending, written: (written, files))
@@ -1197,7 +1181,7 @@ final class SessionModel {
         // Held as it went: the box holds it now, ahead of what was queued (not reached, it's in
         // the queue at least).
         if outgoing[message]?.heldAt != nil, state != .delivered, state != .cancelled {
-            let boxHeld = await carriesQueue() ? await queueRoute("queue/hold", items: [message]) != nil : false
+            let boxHeld = await queueRoute("queue/hold", items: [message]) != nil
             if !boxHeld, asked == .steer { try? await api.setDelivery(session: id, item: message, delivery: .queue) }
         }
         if outgoing[message]?.state == .cancelled { try? await api.cancelInbox(session: id, item: message) }
@@ -1837,12 +1821,8 @@ final class SessionModel {
                 await wait(for: message, until: deadline) { $0.request != nil }
             }
             // Its box not reached: the run stopped here all the same, and the box, hearing it, holds
-            // what waits. One that doesn't carry the queue: held here.
-            if await carriesQueue() {
-                guard await queueRoute("stop") == nil else { return }
-            } else {
-                await holdHere()
-            }
+            // what waits.
+            guard await queueRoute("stop") == nil else { return }
             try? await api.interrupt(session: id)
         }
     }
@@ -1851,7 +1831,7 @@ final class SessionModel {
     /// isn't started as the run ends (undo, or moving the session to a coding agent).
     func holdQueue() async {
         _ = holdOnTheirWay()
-        if await carriesQueue() { _ = await queueRoute("queue/hold") } else { await holdHere() }
+        _ = await queueRoute("queue/hold")
     }
 
     /// Before a Stop: messages for the agent's next step still on their way from here are held,
@@ -1953,13 +1933,6 @@ final class SessionModel {
         for message in held where outgoing[message]?.heldAt != nil { outgoing[message]?.heldAt = nil }
     }
 
-    /// Whether its box keeps what arrives while the queue is paused (`queue.waits`): this Mac's
-    /// does, and a machine's says so.
-    private func holdsOnBox() async -> Bool {
-        guard await carriesQueue() else { return false }
-        return await boxFeatures().contains("queue.waits")
-    }
-
     /// `message` (with `files`, as the engine takes them) for after this run, to the box: held there
     /// for Resume while the queue is paused, shown in the queue as the box lists it, `written` kept
     /// for Edit; otherwise the box sends it to the engine, as asked. `before`: Undo's, put back ahead
@@ -2058,147 +2031,28 @@ final class SessionModel {
         }
     }
 
-    /// The queue read again from the box, `after` a moment (what it does on an event comes then);
-    /// on a box that doesn't carry it, what `moment` does here (`carryHere`).
-    private func readQueue(after delay: Duration = .zero, then moment: QueueMoment = .other) {
+    /// The queue read again from the box, `after` a moment (what it does on an event comes then).
+    private func readQueue(after delay: Duration = .zero) {
         queueRead?.cancel()
         queueRead = Task {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            guard await carriesQueue() else { return carryHere(moment) }
             await queueRoute("queue", method: "GET")
         }
     }
-
-    /// Whether its box carries the queue: this Mac's does, and a machine's says so (`queue` in its
-    /// `kuvo/info`). One whose update to this version didn't get through doesn't: this Mac carries
-    /// its queue then, as it did before (`carryHere`). True when it can't be read: its routes say why.
-    private func carriesQueue() async -> Bool {
-        if let boxCarriesQueue { return boxCarriesQueue }
-        guard let box = box() else { return true }
-        guard !BoxClient.hasEveryFeature(box.box) else {
-            boxCarriesQueue = true
-            return true
-        }
-        let features = await boxFeatures()
-        guard !features.isEmpty else { return true }
-        boxCarriesQueue = features.contains("queue")
-        return boxCarriesQueue ?? true
-    }
-
-    /// What its box answers (`kuvo/info`'s `features`), once read; this Mac's has all of them.
-    @ObservationIgnored private var readFeatures: Set<String>?
 
     /// Reads what its box says of its model again (`modelState`): as it opens, as its model
     /// changes, and as its box's accounts, models or Custom Auto lists do. One the box can't say
     /// about yet (it leaves it out) is as this Mac works it out, as from an older box; what can't
     /// be read keeps what was.
     func readModelState() async {
-        guard let box = box(), await boxHas("sessions.models") else {
+        guard let box = box() else {
             modelState = nil
             return
         }
         guard let read = try? await box.value(SessionModelStates.self, "GET", SessionModelState.path([id])), !Task.isCancelled else { return }
         let state = read.sessions[id]
         if modelState != state { modelState = state }
-    }
-    /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
-    func boxHas(_ feature: String) async -> Bool {
-        await boxSays(feature) == true
-    }
-
-    /// Whether its box answers `feature`, as `boxHas`; nil where it has one whose features couldn't
-    /// be read just now (its link still starting, say).
-    func boxSays(_ feature: String) async -> Bool? {
-        guard let box = box() else { return false }
-        guard !BoxClient.hasEveryFeature(box.box) else { return true }
-        return await readBoxFeatures()?.contains(feature)
-    }
-
-    private func boxFeatures() async -> Set<String> {
-        await readBoxFeatures() ?? []
-    }
-
-    private func readBoxFeatures() async -> Set<String>? {
-        if let readFeatures { return readFeatures }
-        guard let box = box() else { return nil }
-        if BoxClient.hasEveryFeature(box.box) { return ["queue", "queue.waits"] }
-        struct Info: Decodable { var features: [String]? }
-        // (One that answers it hasn't `kuvo/info`, 404 or 405, is from before: none. Any other
-        // answer but its features, or none: can't tell, and asked again next time.)
-        guard let answer = try? await box.send("GET", "kuvo/info") else { return nil }
-        let (status, data) = answer
-        if status == 404 || status == 405 {
-            readFeatures = []
-        } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
-            readFeatures = Set(info.features ?? [])
-        } else {
-            return nil
-        }
-        return readFeatures
-    }
-
-    // A box that doesn't carry the queue: this Mac carries it, as before. Once a run ends, a moment
-    // later, the next one goes; a failed run pauses it, holding what was for the next step; a queue
-    // found waiting as the session opens waits for Resume, and goes on when read again later.
-
-    /// What happened, as the queue a Mac carries reads it.
-    private enum QueueMoment {
-        /// The session read as it opens, or again later.
-        case opened, read
-        /// A run that ended (well, or stopped), or failed.
-        case runEnded, runFailed
-        /// A message queued.
-        case queued
-        case other
-    }
-
-    /// What `moment` does to the queue here.
-    private func carryHere(_ moment: QueueMoment) {
-        switch moment {
-        case .runEnded, .read:
-            if !transcript.isRunning, !transcript.pending.isEmpty { drainHere() }
-        case .runFailed:
-            Task { await holdHere() }
-        case .queued:
-            // Queued while nothing runs: the engine waits for a run to end, so it's nudged.
-            if !transcript.isRunning, hasQueue { drainHere() }
-        case .opened:
-            // Left waiting (the app quit mid-run, say): it waits for Resume, what was for the next
-            // step held ahead of it.
-            if !transcript.isRunning, !transcript.pending.filter({ !$0.isLocal }).isEmpty { Task { await holdHere() } }
-        case .other:
-            break
-        }
-    }
-
-    /// What's for the agent's next step moved to the queue, ahead of it, and the queue paused:
-    /// before a Stop, after a failed run. (One whose request is on its way: see `requestDone`.)
-    private func holdHere() async {
-        drainTask?.cancel()
-        let steering = transcript.pending.filter { $0.delivery == .steer && !$0.isLocal && outgoing[$0.id]?.request == nil }
-        if hasQueue || !steering.isEmpty { isQueuePaused = true }
-        let first = (outgoing.values.compactMap(\.heldAt).min() ?? 0) - steering.count
-        for (index, item) in steering.enumerated() {
-            outgoing[item.id, default: Outgoing(state: .waiting, isOurs: false)].heldAt = first + index
-            try? await api.setDelivery(session: id, item: item.id, delivery: .queue)
-        }
-    }
-
-    /// The next waiting message, `after` a moment, unless the queue's paused or a run started
-    /// meanwhile: a queued one steered in (which starts a run), one for the next step by resuming.
-    private func drainHere(after delay: Duration = .seconds(1.5)) {
-        drainTask?.cancel()
-        drainTask = Task {
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, !isQueuePaused, !transcript.isRunning,
-                  let next = waiting.first(where: { !$0.isLocal }) ?? transcript.pending.first(where: { !$0.isLocal }) else { return }
-            if next.delivery == .queue {
-                try? await api.setDelivery(session: id, item: next.id, delivery: .steer)
-            } else {
-                try? await api.interrupt(session: id, resume: true)
-            }
-        }
     }
 
     func cancelPending(_ item: Transcript.Pending) {
@@ -2252,18 +2106,7 @@ final class SessionModel {
         Analytics.shared.track("message_sent_now")
         guard !item.isLocal else { return }
         isQueuePaused = false
-        let running = transcript.isRunning
         Task {
-            guard await carriesQueue() else {
-                // Steering wakes an idle session; a running one gets it once the step stops.
-                do {
-                    if item.delivery == .queue { try await api.setDelivery(session: id, item: item.id, delivery: .steer) }
-                    if running || item.delivery == .steer { try await api.interrupt(session: id, resume: true) }
-                } catch {
-                    fail(error)
-                }
-                return
-            }
             guard await queueRoute("queue/\(item.id)/now") == nil else { return }
             // Not reached (or it went meanwhile): as it was.
             readQueue()
@@ -2593,10 +2436,6 @@ final class SessionModel {
                 for each in puttingBack { await each.value }
                 guard stops == stopped else { return true }
             }
-            guard await carriesQueue() else {
-                drainHere(after: .zero)
-                return true
-            }
             guard await queueRoute("queue/resume") == nil else { return true }
             isQueuePaused = true
             failure = "The queue couldn't be resumed: its computer didn't answer. Try again in a moment."
@@ -2653,44 +2492,15 @@ final class SessionModel {
 
     func failApproval(_ error: any Error) { fail(error) }
 
-    /// Gives the agent the project's folders as they're set now, if it doesn't have them yet:
-    /// allowed in its permissions, and named in its instructions.
+    /// Gives the agent the project's folders as they're set now, if it doesn't have them yet: its
+    /// box gives them (where they've changed), now it's opened, before you write to it.
     func syncFolders() async {
-        // Its box gives them (where they've changed), now it's opened, before you write to it.
-        // (Where it can't be told whether it does, nothing: its next opening or run gives them,
-        // never rules this app makes without its box's Settings.)
-        let onBox = await boxSays(ProjectFoldersOnBox.feature)
-        guard let onBox else { return }
-        if onBox {
-            struct Given: Decodable { var session: String }
-            do {
-                _ = try await box()?.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
-            } catch is CancellationError {
-            } catch {
-                fail(error)
-            }
-            return
-        }
-        // A box from before `projects.folders` doesn't give its sessions their project's folders:
-        // the app gives an open one them.
-        // As the engine knows them: a machine's folders are plain paths there.
-        let folders = projectFolders().map(api.enginePath)
-        let machine = RemoteFolder.machine(of: session.location.directory)
-        // Its computer's rules not known yet: once they are (they're read as it's reached).
-        guard EngineConfig.knowsRules(on: machine) else { return }
-        let current = session.permissions ?? []
-        // Its folders only: its box makes the rest from its approval and Settings › Permissions,
-        // and keeps these as it does.
-        let rules = ProjectFolders.permissions(current, folders: folders)
-        guard rules != current else { return }
+        struct Given: Decodable { var session: String }
+        // (Held for its update: given on its next run or opening once it's up to date.)
+        guard let box = box(), !BoxGates.isHeld(box.box) else { return }
         do {
-            try await api.setPermissions(session: id, rules: rules)
-            session.permissions = rules
-            if folders.isEmpty {
-                try await api.removeInstruction(session: id, key: ProjectFolders.instructionKey)
-            } else {
-                try await api.setInstruction(session: id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: api.enginePath(session.location.directory), folders: folders))
-            }
+            _ = try await box.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
+        } catch is CancellationError {
         } catch {
             fail(error)
         }

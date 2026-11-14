@@ -3426,9 +3426,6 @@
            },
            {
             "literal": "machines"
-           },
-           {
-            "literal": "usage"
            }
           ]
          }
@@ -6178,20 +6175,6 @@
   },
   {
    "route": "DELETE kuvo/hosts/:machine",
-   "answers": {
-    "200": {
-     "object": {}
-    }
-   }
-  },
-  {
-   "route": "GET kuvo/usage",
-   "answers": {
-    "200": "any"
-   }
-  },
-  {
-   "route": "POST kuvo/usage/refresh",
    "answers": {
     "200": {
      "object": {}

@@ -54,8 +54,6 @@ final class HostLimitsTests: XCTestCase {
             HostLimitRow(id: "claude#b2", providerID: "claude", name: "Claude · Athas", meters: [], isLocal: false, place: "mini-local"),
         ], covered: ["claude"])
         XCTAssertEqual(names(limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }), ["Claude +spend", "Claude · Athas", "panel:cursor"])
-        // A phone gets Claude's place for them too.
-        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") }, ["claude>claude", "cursor"])
         // With no bar of that name, just its name.
         XCTAssertEqual(names(limits.entries(groups: [group("cursor")]) { _ in false }), ["panel:cursor", "Claude", "Claude · Athas"])
 
@@ -74,16 +72,6 @@ final class HostLimitsTests: XCTestCase {
         let limits = HostLimits()
         limits.update(rows: [HostLimitRow(id: "mini/codex-cli", providerID: "codex", name: "Codex", meters: [], isLocal: false, place: "mini-local")], covered: ["codex"])
         XCTAssertEqual(names(limits.entries(groups: [group("codex"), group("cursor")]) { _ in false }), ["panel:codex", "Codex · mini-local", "panel:cursor"])
-        XCTAssertEqual(limits.phoneGroups([group("codex")]).map { $0.covers }, [nil])
-    }
-
-    func testAPhoneGetsThePanelInOrderWithWhereThisMacsBoxRowsGo() {
-        let limits = HostLimits()
-        limits.update(rows: [row("this Mac/claude-code", "claude", "Claude"), row("this Mac/openrouter", "openrouter", "OpenRouter")], covered: ["claude", "openrouter", "copilot"])
-        // Claude's place (once for its account cards) and OpenRouter's, marked; Copilot, covered with
-        // no row here, as the panel's own.
-        XCTAssertEqual(limits.phoneGroups([group("cursor"), group("claude"), group("claude@ab12cd34"), group("copilot"), group("openrouter")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") },
-                       ["cursor", "claude>claude", "copilot", "openrouter>openrouter"])
     }
 
     func testACoveredProviderTheHostHasNoRowForYetKeepsItsOwnBar() {
@@ -232,20 +220,6 @@ final class HostLimitsTests: XCTestCase {
         let later = limits.applied(to: ["cursor": empty], now: now)["cursor"]
         XCTAssertNil(later?.lines.first { $0.label == "On-demand" }, "started over since it was read: not known now")
         XCTAssertEqual(later?.lines.first { $0.label == "Credits" }, .values(label: "Credits", values: [MetricValue(number: 18, kind: .dollars)]))
-    }
-
-    /// What a phone gets of a covered card: not the lines it has from the rows (Cursor's credits and
-    /// on-demand spend), which the phone draws from each row, under its own account; another card's
-    /// credits (OpenRouter's) are its own, and go.
-    func testThePhoneDrawsCursorsCreditsAndSpendFromItsRowsNotTheCards() {
-        let limits = HostLimits()
-        limits.update(rows: [
-            HostLimitRow(id: "cursor#a", providerID: "cursor", name: "Cursor", meters: [], balance: .init(left: 18, unit: "usd"), extras: [.init(id: "on_demand", name: "On-demand", amount: 4, unit: "usd")]),
-            HostLimitRow(id: "openrouter#b", providerID: "openrouter", name: "OpenRouter", meters: [], balance: .init(left: 2, unit: "usd")),
-        ], covered: ["cursor", "openrouter"])
-        XCTAssertEqual(limits.rowLines(for: "cursor"), ["Credits", "On-demand"])
-        // (OpenRouter's credits are the box's too since #631 E: the phone draws them from its row.)
-        XCTAssertEqual(limits.rowLines(for: "openrouter"), ["Balance", "Credits"])
     }
 
     /// What a plan has beyond its windows, as the box states it (#631 E), under its bar: a capped

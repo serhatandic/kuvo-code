@@ -175,32 +175,4 @@ import Testing
         config.set(.string("anthropic/sonnet"), at: ["model"])
         #expect(config.value(at: ["model"]) == nil)
     }
-
-    /// A session made on a machine gets that machine's rules (what its Settings › Permissions
-    /// deny), not this Mac's.
-    @Test func aSessionOnAMachineGoesByThatMachinesRules() async throws {
-        let engine = StubEngine(port: 47977)
-        defer { engine.stop() }
-        let machine = "rules-box"
-        let box = Box(["permissions": .array([Self.rule("git push *")])])
-        let config = EngineConfig(remote: box)
-        config.took(box.settings)
-        let previous = EngineConfig.machine
-        EngineConfig.machine = { $0 == machine ? config : previous($0) }
-        defer { EngineConfig.machine = previous }
-
-        let workspace = Workspace()
-        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: machine))
-        workspace.machineAPI = { $0 == machine ? api : nil }
-        engine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_box", directory: "/srv/app")])
-        _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: machine), model: nil, agent: "build", approval: .auto)
-        let sent = try #require(engine.requests("POST", "/api/session").last?.body["permissions"] as? [[String: Any]])
-        #expect(sent.contains { $0["resource"] as? String == "git push *" && $0["effect"] as? String == "deny" })
-
-        // Its rules changed there: what a session there asks for next follows.
-        config.set(.array([Self.rule("git push *"), Self.rule("docker *")]), at: ["permissions"])
-        _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: machine), model: nil, agent: "build", approval: .auto)
-        let next = try #require(engine.requests("POST", "/api/session").last?.body["permissions"] as? [[String: Any]])
-        #expect(next.contains { $0["resource"] as? String == "docker *" })
-    }
 }

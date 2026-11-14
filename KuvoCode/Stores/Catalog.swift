@@ -23,7 +23,6 @@ final class Catalog {
     @ObservationIgnored var box: BoxClient? {
         didSet {
             guard box?.box != oldValue?.box else { return }
-            boxOffers = nil
             offeredAsked = [:]
             offeredSaid = nil
             startingSaid = [:]
@@ -234,8 +233,6 @@ final class Catalog {
     private(set) var offeredSaid: OfferedModels?
     /// The model a new session starts on, as its box said it, by the model wanted (`startKey`).
     private(set) var startingSaid: [String: ModelRef?] = [:]
-    /// Its box answers `models.offered`: nil until known.
-    @ObservationIgnored private var boxOffers: Bool?
     /// The lists (`listsKey`) its box was last asked about, by the model wanted.
     @ObservationIgnored private var offeredAsked: [String: Int] = [:]
     /// Its box's answers asked for, and the newest one shown: one that lands after a newer one
@@ -248,13 +245,9 @@ final class Catalog {
     @ObservationIgnored private var offeredRetryWait: Duration?
     @ObservationIgnored var offeredRetryAfter = Duration.seconds(2)
 
-    /// Its box decides which models run and which one a new session starts on: one with
-    /// `models.offered`, or not known yet. Without a box (nothing to ask), or with one from before
-    /// it, this Mac works them out as it did (the 0.7 model-rule path, PROTOCOL.md "For released Macs").
-    private var boxDecides: Bool {
-        guard let box else { return false }
-        return BoxClient.hasEveryFeature(box.box) || boxOffers != false
-    }
+    /// Its box decides which models run and which one a new session starts on. Without a box
+    /// (nothing to ask), this Mac works them out from the lists it has.
+    private var boxDecides: Bool { box != nil }
 
     private static func startKey(_ wanted: ModelRef?) -> String { OfferedModels.path(wanted: wanted) }
 
@@ -272,31 +265,8 @@ final class Catalog {
         Task { await readOffered(wanted, key: key) }
     }
 
-    /// A box found to be from before `models.offered` is asked again as the lists are read anew
-    /// (a machine's, updated since): once it answers it, its word is taken from then on. Until
-    /// then, nothing changes, so the picker doesn't empty while it's asked.
-    private func recheckOlderBox() async {
-        guard boxOffers == false, let box else { return }
-        struct Info: Decodable { var features: [String]? }
-        guard let info = try? await box.value(Info.self, "GET", "kuvo/info"), info.features?.contains(OfferedModels.feature) == true,
-              self.box?.box == box.box else { return }
-        boxOffers = true
-        offeredAsked = [:]
-        listsRead += 1
-    }
-
     private func readOffered(_ wanted: ModelRef?, key: String) async {
         guard let box else { return }
-        if boxOffers == nil, !BoxClient.hasEveryFeature(box.box) {
-            struct Info: Decodable { var features: [String]? }
-            guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return askAgain(wanted, key: key) }
-            boxOffers = info.features?.contains(OfferedModels.feature) == true
-            // (From before it: drawn as this Mac works them out, from the lists it has.)
-            guard boxOffers == true else {
-                listsRead += 1
-                return
-            }
-        }
         offeredReads += 1
         let order = offeredReads
         guard let said = try? await box.value(OfferedModels.self, "GET", OfferedModels.path(wanted: wanted)) else { return askAgain(wanted, key: key) }
@@ -656,7 +626,6 @@ final class Catalog {
     }
 
     func refresh() async {
-        await recheckOlderBox()
         await refreshEngine()
         // Apart from the engine's: an agent slow to answer (Codex starting) isn't the engine
         // still loading.

@@ -4,7 +4,6 @@ import Foundation
 import KuvoLink
 import OpenCodeKit
 import os
-import UsageKit
 import Security
 import SystemConfiguration
 
@@ -955,9 +954,6 @@ final class PhoneLink {
                 }
             }
         }
-        // Open while the panel comes up (it takes a moment after the app starts), so the phone hears
-        // it the moment it's there.
-        if route == "kuvo/usage/events" { return Self.following(waits: true) { link?.usageJSON() } }
         return AsyncThrowingStream { [routed] continuation in
             Task { @MainActor in
                 let (status, body) = link?.answer(routed) ?? (503, Data())
@@ -1140,7 +1136,7 @@ final class PhoneLink {
     /// This Mac's own areas, which the app answers itself: what its box hands it of a phone's
     /// (the box's `MAC_APP_ROUTES`, the one list of them, which a test holds this to). Everything
     /// else, a phone's or the app's own (`BoxClient`), is its box's (`BoxProcess`).
-    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"]
+    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/asks", "kuvo/mac", "kuvo/engine"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1218,14 +1214,6 @@ final class PhoneLink {
             return (200, Data("{}".utf8))
         case "kuvo/asks":
             return (200, asksJSON())
-        case "kuvo/usage":
-            guard let usage = usageJSON() else { return (404, Data()) }
-            return (200, usage)
-        case "kuvo/usage/refresh" where request.method.uppercased() == "POST":
-            #if DEBUG
-            if Self.usageSample { return (200, Data("{}".utf8)) }
-            #endif
-            return UsageMenuBar.shared.refreshAll() ? (200, Data("{}".utf8)) : (404, Data())
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
@@ -1368,44 +1356,6 @@ final class PhoneLink {
         return (200, Data("{}".utf8))
     }
 
-    // MARK: Usage
-
-    /// The menu bar's usage panel, as its Bars view lists it; nil while it isn't running (a phone
-    /// then hides Usage).
-    private func usageJSON() -> Data? {
-        #if DEBUG
-        if Self.usageSample { return Data(Self.sampleUsage.utf8) }
-        #endif
-        return usagePanel()
-    }
-
-    /// What the panel reports (a test's panel in its place: the real one puts an item in the menu bar).
-    var usagePanel: @MainActor () -> Data? = { UsageMenuBar.shared.phoneUsage() }
-
-    #if DEBUG
-    /// KUVO_DEMO_USAGE=sample: the usage tracker stays out (as with `off`), and phones get these
-    /// numbers instead of your accounts'.
-    static var usageSample: Bool { ProcessInfo.processInfo.environment["KUVO_DEMO_USAGE"] == "sample" }
-
-    private static var sampleUsage: String {
-        let now = Int(Date.now.timeIntervalSince1970)
-        // The providers' own marks, as the real panel sends them.
-        let icon = { (id: String) in UsageMenuBar.phoneMark(for: id).map { #""icon":"\#($0)","iconIsTemplate":true,"# } ?? "" }
-        return """
-        {"providers":[\
-        {"id":"claude",\(icon("claude"))"name":"Claude","plan":"Max","color":"#DE7356","refreshed":\(now - 40),"lines":[\
-        {"type":"progress","label":"Session","used":42,"limit":100,"format":{"kind":"percent"},"resetsAt":\(now + 7_200),"periodDurationMs":18000000},\
-        {"type":"progress","label":"Weekly","used":67,"limit":100,"format":{"kind":"percent"},"resetsAt":\(now + 259_200),"periodDurationMs":604800000}]},\
-        {"id":"codex",\(icon("codex"))"name":"Codex","plan":"Pro","color":"#10A37F","refreshed":\(now - 95),"lines":[\
-        {"type":"progress","label":"Session","used":18,"limit":100,"format":{"kind":"percent"},"resetsAt":\(now + 12_600),"periodDurationMs":18000000},\
-        {"type":"text","label":"Credits","value":"$12.40"}]},\
-        {"id":"cursor",\(icon("cursor"))"name":"Cursor","color":"#13120A","refreshed":\(now - 900),"notice":"Not logged in. Sign in to Cursor to see its usage.","stale":true,"lines":[\
-        {"type":"badge","label":"Error","text":"Not logged in"}]}],\
-        "refreshing":false,"refreshed":\(now - 40)}
-        """
-    }
-    #endif
-
     // MARK: Bots
 
     /// A conversation's wake-ups as its box has them now, for what the app shows of them.
@@ -1425,25 +1375,20 @@ final class PhoneLink {
 
     /// A response that doesn't end: `current()` now, as a line of JSON, and again each time it
     /// changes, until the phone stops reading. 404 when there's nothing to follow (no such chat), as
-    /// reading it once answers; `waits`, it's something that comes later: open meanwhile, with
-    /// an empty line and then nothing until it does.
-    nonisolated private static func following(waits: Bool = false, _ current: @escaping @MainActor () -> Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
+    /// reading it once answers.
+    nonisolated private static func following(_ current: @escaping @MainActor () -> Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
-                guard waits || current() != nil else {
+                guard current() != nil else {
                     continuation.yield(.head(status: 404, headers: [:]))
                     continuation.finish()
                     return
                 }
                 continuation.yield(.head(status: 200, headers: ["content-type": "application/x-ndjson"]))
-                // An empty line when it has nothing yet: what passes it on holds the head back
-                // until the first bytes, and the phone hears the app's there.
-                if waits, current() == nil { continuation.yield(.body(Data("\n".utf8))) }
                 var last: Data?
                 while !Task.isCancelled {
-                    let now = current()
-                    guard now != nil || waits else { break }
-                    if let now, now != last {
+                    guard let now = current() else { break }
+                    if now != last {
                         continuation.yield(.body(now + Data("\n".utf8)))
                         last = now
                     }

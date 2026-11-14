@@ -1693,7 +1693,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
   for (const [feature, [method, route]] of Object.entries(routes)) assert.ok(await isRoute(method, route), `${feature}: ${method} ${route}`);
   // The Mac's own aren't here: a route this box doesn't have.
-  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac", "kuvo/usage"]) assert.equal(await status("GET", route), 404, route);
+  for (const route of ["kuvo/hosts", "kuvo/machines", "kuvo/mac"]) assert.equal(await status("GET", route), 404, route);
   fs.rmSync(path.join(home, "chats"), { recursive: true, force: true });
 });
 

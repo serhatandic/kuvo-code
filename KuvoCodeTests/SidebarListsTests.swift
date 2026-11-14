@@ -144,8 +144,7 @@ import Testing
         defer { UserDefaults.standard.removeObject(forKey: "removedWorktreesHandedOver." + machine) }
         let gates = BoxGates()
         defer { gates.letGo(machine) }
-        workspace.onOlderBox = { box, features in gates.foundOlder(box, features: features, name: "lab") }
-        workspace.onCurrentBox = { box, features in gates.foundCurrent(box, features: features) }
+        workspace.features.onSaid = { box, features in gates.said(box, features: features, name: "lab") }
         let readAgain = BoxClient.readAgainAfter
         BoxClient.readAgainAfter = .milliseconds(50)
         defer { BoxClient.readAgainAfter = readAgain }
@@ -175,8 +174,7 @@ import Testing
         let machine = "m_lists_typed"
         let gates = BoxGates()
         defer { gates.letGo(machine) }
-        workspace.onOlderBox = { box, features in gates.foundOlder(box, features: features, name: "lab") }
-        workspace.onCurrentBox = { box, features in gates.foundCurrent(box, features: features) }
+        workspace.features.onSaid = { box, features in gates.said(box, features: features, name: "lab") }
         let old = OlderBox(before: BoxGate.required.filter { $0 != "typed" })
         workspace.boxes = { id in id == machine ? BoxClient(box: id, transport: old) : nil }
         let following = Task { await workspace.followSessionList(on: machine) }

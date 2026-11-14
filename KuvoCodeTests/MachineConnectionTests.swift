@@ -192,6 +192,12 @@ import Testing
         #expect(app.workspace.session("ses_trip").map { RemoteFolder.machine(of: $0.location.directory) == id } == true)
 
         try await until { open.transcript.messages.map(\.id) == ["msg_02"] }
+        // What's sent goes through the machine's box (`kuvo/sessions/<id>/send`), the real one,
+        // reaching the machine's engine: its SSH here answers nothing.
+        let box = try await ConversationBox(engine: machine)
+        defer { box.stop() }
+        let client = box.machine.client
+        app.workspace.boxes = { [id] place in place == id ? client : nil }
         let sentHere = here.asked.count
         open.send("Book the hotel too", for: nil)
         try await until { machine.asked.contains { $0.hasPrefix("POST /api/session/ses_trip/") } }
@@ -275,11 +281,15 @@ import Testing
         // Its box answers each route with this: the list of sessions with wake-ups, and the
         // session's own (each read takes what it knows of it).
         let answer = WakesThere()
-        SSHConnection.standIn = { [ssh] address, script in
+        SSHConnection.fedStandIn = { [ssh] address, script, input in
             ssh.note(script, to: address)
-            if script.contains(" box route") { return answer.routed }
-            return script.contains("timezone") ? "" : nil
+            guard script.contains(" box route") else { return script.contains("timezone") ? "" : nil }
+            // (What it has, as a box of this version says it.)
+            let asked = input.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if asked?["path"] as? String == "kuvo/info" { return Self.currentInfo }
+            return answer.routed
         }
+        defer { SSHConnection.fedStandIn = nil }
         let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
         answer.set(["sessions": [["session": session.id, "next": 1, "watching": false]], "wakes": [["id": due, "note": "Check the deploy"]], "watches": [], "paused": false])
         await app.wakeUps.share(with: engine)
@@ -289,6 +299,12 @@ import Testing
         await app.wakeUps.share(with: engine)
         #expect(app.wakeUps.wakes[session.id]?.isEmpty != false)
     }
+
+    /// A machine's box's `kuvo/info` over SSH, as one of this version answers it: all the app needs.
+    private nonisolated static let currentInfo: String = {
+        let body = String(decoding: try! JSONSerialization.data(withJSONObject: ["kind": "machine", "features": BoxGate.required]), as: UTF8.self)
+        return String(decoding: try! JSONSerialization.data(withJSONObject: ["status": 200, "body": body]), as: UTF8.self)
+    }()
 
     /// A machine's sessions with wake-ups, looked at each minute while it's connected: one call
     /// there for all of them, not one more for each session.
@@ -310,6 +326,8 @@ import Testing
                 routed.withLock { $0.append(path) }
                 // (Its session list, read as the sidebar follows it: not this one's to answer.)
                 if path.hasPrefix("kuvo/sessions/list") { return #"{"status":503,"body":"{}"}"# }
+                // (What it has, as a box of this version says it.)
+                if path == "kuvo/info" { return Self.currentInfo }
             }
             return answer.routed
         }
@@ -323,7 +341,7 @@ import Testing
         await app.wakeUps.share(with: engine)
 
         #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
-        let asked = routed.withLock { Array($0.dropFirst(before)) }.filter { !$0.hasPrefix("kuvo/sessions/list") }
+        let asked = routed.withLock { Array($0.dropFirst(before)) }.filter { !$0.hasPrefix("kuvo/sessions/list") && $0 != "kuvo/info" }
         #expect(asked.count == 1 && asked.allSatisfy { $0.hasPrefix("kuvo/wakes") }, "one read of them all: \(asked)")
     }
 
@@ -564,40 +582,6 @@ import Testing
         #expect(link.setupFailed[id] != nil)
         app.removeMachine(id)
         #expect(link.setupFailed[id] == nil)
-    }
-
-    /// The machine's box from before `kuvo/info` (and so `sessions.start.empty`, `sessions.move`):
-    /// it answers its routes, without that one, so this Mac makes and moves its sessions itself.
-    private func machinesBoxIsFromBefore() {
-        SSHConnection.standIn = { [ssh] address, script in
-            ssh.note(script, to: address)
-            return script.contains(" box route") ? #"{"status":404,"body":"{}"}"# : nil
-        }
-    }
-
-    /// A chat on a machine moved into one of its projects that has other folders works in them
-    /// there: its rules and what its agent is told name the machine's own paths, never this Mac's
-    /// names for them (`ssh://…`), which nothing on the machine matches.
-    @Test func aChatMovedIntoAMachinesProjectWorksInItsOtherFoldersThere() async throws {
-        defer { done() }
-        let id = Self.name()
-        let prefix = RemoteFolder.prefix(for: id)
-        machine.list([StubEngine.session("ses_mchat", title: "Question", directory: "/home/tests/.kuvo-code/chats")])
-        await app.connect(add(id, at: machine)).value
-        try await until { app.workspace.session("ses_mchat") != nil }
-        app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
-        machine.on("GET", "/api/session/ses_mchat", json: ["data": StubEngine.session("ses_mchat", title: "Question", directory: "/home/tests/app")])
-        machine.on("POST", "/api/session/ses_mchat/move", json: [:])
-        machine.on("PATCH", "/api/session/ses_mchat", json: ["data": [:]])
-        machine.on("PUT", "/api/experimental/session/ses_mchat/instructions/entries/*", json: [:])
-        machinesBoxIsFromBefore()
-        try await app.workspace.move("ses_mchat", toProject: prefix + "/home/tests/app")
-
-        let rules = try #require(machine.requests("PATCH", "/api/session/ses_mchat").last?.body["permissions"] as? [[String: Any]])
-        #expect(rules.contains { $0["action"] as? String == "external_directory" && $0["resource"] as? String == "/home/tests/shared/*" })
-        #expect(!rules.contains { ($0["resource"] as? String)?.contains("ssh://") == true })
-        let told = try #require(machine.requests("PUT", "/api/experimental/session/ses_mchat/instructions/entries/\(ProjectFolders.instructionKey)").last?.body["value"] as? String)
-        #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
     }
 
     /// A machine uninstalled while it's still being set up for your phones and other computers
@@ -1067,30 +1051,11 @@ import Testing
         try await until { app.workspace.session("ses_mwait") != nil }
         machine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_mnone", title: "New", directory: "/home/tests/app")])
         machine.on("POST", "/api/session/ses_mwait/move", json: [:])
-        await #expect(throws: BoxRefusal.self) { _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil) }
-        await #expect(throws: BoxRefusal.self) { try await app.workspace.move("ses_mwait", toProject: prefix + "/home/tests/app") }
+        // (As any route of a box out of reach: its connection's words.)
+        await #expect(throws: RemoteEngineError.self) { _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil) }
+        await #expect(throws: RemoteEngineError.self) { try await app.workspace.move("ses_mwait", toProject: prefix + "/home/tests/app") }
         #expect(machine.requests("POST", "/api/session").isEmpty)
         #expect(machine.requests("POST", "/api/session/ses_mwait/move").isEmpty)
-    }
-
-    /// A new session in a machine's project that has other folders works in them there from its
-    /// start: its rules and what its agent is told name the machine's own paths.
-    @Test func aNewSessionInAMachinesProjectWorksInItsOtherFoldersThere() async throws {
-        defer { done() }
-        let id = Self.name()
-        let prefix = RemoteFolder.prefix(for: id)
-        await app.connect(add(id, at: machine)).value
-        app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
-        machine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_mnew", title: "New", directory: "/home/tests/app")])
-        machine.on("PUT", "/api/experimental/session/ses_mnew/instructions/entries/*", json: [:])
-        machinesBoxIsFromBefore()
-        _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil)
-
-        let rules = try #require(machine.requests("POST", "/api/session").last?.body["permissions"] as? [[String: Any]])
-        #expect(rules.contains { $0["action"] as? String == "external_directory" && $0["resource"] as? String == "/home/tests/shared/*" })
-        #expect(!rules.contains { ($0["resource"] as? String)?.contains("ssh://") == true })
-        let told = try #require(machine.requests("PUT", "/api/experimental/session/ses_mnew/instructions/entries/\(ProjectFolders.instructionKey)").last?.body["value"] as? String)
-        #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
     }
 
     /// A machine's session waiting on you keeps counting while the machine is away and this Mac's
