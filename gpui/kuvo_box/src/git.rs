@@ -46,6 +46,13 @@ pub struct ChangedFile {
     pub additions: Option<u32>,
     #[serde(default)]
     pub deletions: Option<u32>,
+    /// What its discard does (`trash`, `unstaged`, `head`); none for one that isn't discarded (a
+    /// conflict, which is resolved).
+    #[serde(default)]
+    pub discard: Option<String>,
+    /// A repository of its own inside this one, whose commits go with it.
+    #[serde(default)]
+    pub repository: bool,
 }
 
 impl ChangedFile {
@@ -82,12 +89,15 @@ pub struct GitFiles {
     pub files: Vec<ChangedFile>,
     #[serde(default)]
     pub uncommitted: bool,
+    /// What a commit takes now: `staged`, or `all` of the folder's changes.
+    #[serde(default)]
+    pub commits: String,
 }
 
 impl GitFiles {
-    /// Whether anything is staged: a commit then takes only that, else everything in the folder.
-    pub fn has_staged(&self) -> bool {
-        self.files.iter().any(|file| file.group == Group::Staged)
+    /// Whether a commit now takes only what's staged (the box says), not everything in the folder.
+    pub fn commits_staged(&self) -> bool {
+        self.commits == "staged"
     }
 }
 
@@ -287,14 +297,14 @@ mod tests {
     #[test]
     fn a_file_listed_twice_is_two_rows_and_named_by_its_folder() {
         let listed: GitFiles = serde_json::from_str(
-            r#"{"repository":true,"root":"/r","branch":"main","uncommitted":true,"files":[
+            r#"{"repository":true,"root":"/r","branch":"main","uncommitted":true,"commits":"staged","files":[
               {"path":"app/Form.tsx","group":"staged","status":"modified","scope":"staged","additions":1,"deletions":1},
               {"path":"app/Form.tsx","group":"unstaged","status":"modified","scope":"unstaged","additions":2,"deletions":0},
               {"path":"app/new.ts","oldPath":"app/old.ts","group":"staged","status":"renamed","scope":"staged"},
               {"path":"README.md","group":"untracked","status":"added","scope":"unstaged"}]}"#,
         )
         .unwrap();
-        assert!(listed.has_staged());
+        assert!(listed.commits_staged());
         assert_ne!(listed.files[0].key(), listed.files[1].key());
         assert_eq!((listed.files[0].name(), listed.files[0].folder()), ("Form.tsx", "app"));
         assert_eq!((listed.files[3].name(), listed.files[3].folder()), ("README.md", ""));

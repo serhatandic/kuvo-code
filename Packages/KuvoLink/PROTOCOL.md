@@ -3517,19 +3517,25 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     for a path that isn't one in the repository.
   - `GET kuvo/git/files?directory=<folder>` (`git.files`): the folder's changed files as a Changes
     panel groups them, what `git status` says of each → `{"repository": false}`, or `{"repository":
-    true, root, branch, files, uncommitted}`: `branch` the one checked out (null on none); `files`
+    true, root, branch, files, uncommitted, commits}`: `branch` the one checked out (null on none);
+    `commits`, what `kuvo/git/commit` takes now (`staged`, else `all` of the folder's); `files`
     in the order they show, conflicts, then staged, unstaged and new files (`group`: `conflicted`,
     `staged`, `unstaged`, `untracked`), by name in each; each `{path, oldPath?, group, status,
-    scope, additions?, deletions?}`, `path` in the repository (`oldPath` where a staged move came
-    from), `status` and `scope` what its stage, unstage, discard and diff (with `path`) take (a
-    staged one `staged`, a conflicted one `uncommitted`, the rest `unstaged`), and git's count of its
-    lines (none for a binary file, a new one or a conflicted one). A file partly staged is in both
+    scope, additions?, deletions?, discard?, repository?}`, `path` in the repository (`oldPath` where
+    a staged move came from), `status` and `scope` what its stage, unstage, discard and diff (with
+    `path`) take (a staged one `staged`, a conflicted one `uncommitted`, the rest `unstaged`), git's
+    count of its lines (none for a binary file, a new one or a conflicted one), what its discard does
+    (`trash`, a new file to the Trash; `unstaged`, what isn't staged thrown away; `head`, back to the
+    last commit, what's staged too; none for a conflict), and `repository` for a repository of its
+    own inside this one ("web/"), whose commits go with it. A file partly staged is in both
     groups; one in conflict only in `conflicted`. A client stages an `unstaged` or `untracked` one,
     unstages a `staged` one, and marks a conflicted one resolved by staging it. `404` for a folder
     that isn't there, `500 {"message"}` when git couldn't say. `GET kuvo/git/files/events?directory=`
-    (`application/x-ndjson`): the same now, and again as it changes: git is asked every 3 seconds
-    (what an agent edits), and within a second of the repository's index or `HEAD` changing
-    (staged, committed, switched); when git can't say, what was said last stands. Through `box
+    (`application/x-ndjson`): the same now, and again as it changes: within a second of the
+    repository's index or `HEAD` changing (staged, committed, switched); for what an agent edits, on a
+    Mac as the system says the folder's files change (and every 30 seconds for a change it missed),
+    on Linux every 10 seconds (a watch there would take one of the system's watches per folder);
+    when git can't say, what was said last stands. Through `box
     route` it answers its first line.
   - `POST kuvo/git/changes/count {"directory", "scope"?, "base"?}` (`git.changes.count`, bridge
     0.9.211): how much `kuvo/git/changes` would show, without the diff, for a count (the phone's

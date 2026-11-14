@@ -59,13 +59,13 @@ test("a folder's changes come grouped, a file partly staged in both groups, each
 
   const listed = await files(top)
   expect(listed).toEqual({
-    repository: true, root: top, branch: "main", uncommitted: true,
+    repository: true, root: top, branch: "main", uncommitted: true, commits: "staged",
     files: [
-      { path: "app/Form.tsx", group: "staged", status: "modified", scope: "staged", additions: 1, deletions: 1 },
-      { path: "app/new.ts", oldPath: "app/old.ts", group: "staged", status: "renamed", scope: "staged", additions: 0, deletions: 0 },
-      { path: "app/Form.tsx", group: "unstaged", status: "modified", scope: "unstaged", additions: 1, deletions: 0 },
-      { path: "README.md", group: "unstaged", status: "deleted", scope: "unstaged", additions: 0, deletions: 1 },
-      { path: "docs/Plan 2.md", group: "untracked", status: "added", scope: "unstaged" },
+      { path: "app/Form.tsx", group: "staged", status: "modified", scope: "staged", additions: 1, deletions: 1, discard: "head" },
+      { path: "app/new.ts", oldPath: "app/old.ts", group: "staged", status: "renamed", scope: "staged", additions: 0, deletions: 0, discard: "head" },
+      { path: "app/Form.tsx", group: "unstaged", status: "modified", scope: "unstaged", additions: 1, deletions: 0, discard: "unstaged" },
+      { path: "README.md", group: "unstaged", status: "deleted", scope: "unstaged", additions: 0, deletions: 1, discard: "unstaged" },
+      { path: "docs/Plan 2.md", group: "untracked", status: "added", scope: "unstaged", discard: "trash" },
     ],
   })
 
@@ -75,7 +75,7 @@ test("a folder's changes come grouped, a file partly staged in both groups, each
 
   // Nothing changed: an empty list, nothing uncommitted; outside a repository, none.
   const clean = repository("clean")
-  expect(await files(clean)).toEqual({ repository: true, root: clean, branch: "main", files: [], uncommitted: false })
+  expect(await files(clean)).toEqual({ repository: true, root: clean, branch: "main", files: [], uncommitted: false, commits: "all" })
   mkdirSync(join(box, "plain"))
   expect(await files(join(box, "plain"))).toEqual({ repository: false })
   expect((await ask(handler, "GET", `kuvo/git/files?directory=${encodeURIComponent(join(box, "gone"))}`)).status).toBe(404)
@@ -93,6 +93,28 @@ test("a file both sides changed in a merge is a conflict, once, and nothing else
 
   const listed = await files(top)
   expect(listed.files).toEqual([{ path: "app/Form.tsx", group: "conflicted", status: "modified", scope: "uncommitted" }])
+})
+
+test("names with spaces are read whole, a move's both sides; a new file staged goes to the Trash; a repository inside says so", async () => {
+  const top = repository("spaces")
+  writeFileSync(join(top, "app", "My Form.tsx"), "a\n")
+  git(top, "add", "-A")
+  git(top, "commit", "-q", "-m", "Spaces")
+  git(top, "mv", "app/My Form.tsx", "app/Your  Form.tsx")
+  writeFileSync(join(top, "a b.ts"), "x\n")
+  git(top, "add", "a b.ts")
+  mkdirSync(join(top, "web"))
+  git(join(top, "web"), "init", "-q")
+  writeFileSync(join(top, "web", "index.html"), "<p>hi</p>\n")
+  git(join(top, "web"), "add", "-A")
+  git(join(top, "web"), "commit", "-q", "-m", "Web")
+
+  const listed = await files(top)
+  expect(listed.files).toEqual([
+    { path: "a b.ts", group: "staged", status: "added", scope: "staged", additions: 1, deletions: 0, discard: "trash" },
+    { path: "app/Your  Form.tsx", oldPath: "app/My Form.tsx", group: "staged", status: "renamed", scope: "staged", additions: 0, deletions: 0, discard: "head" },
+    { path: "web/", group: "untracked", status: "added", scope: "unstaged", discard: "trash", repository: true },
+  ])
 })
 
 test("one file's diff comes alone, a move with where it was, and a new file as all its lines", async () => {
@@ -116,6 +138,12 @@ test("one file's diff comes alone, a move with where it was, and a new file as a
   const added = await diff({ scope: "unstaged", path: "notes.txt" })
   expect(added.patch).toContain("new file mode")
   expect(added.patch).toContain("+first\n+second\n")
+
+  // Binary, and too big to show.
+  writeFileSync(join(top, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 13, 0, 1]))
+  expect((await diff({ scope: "unstaged", path: "logo.png" })).patch).toContain("Binary files")
+  writeFileSync(join(top, "huge.txt"), "x".repeat(5 * 1024 * 1024))
+  expect(await diff({ scope: "unstaged", path: "huge.txt" })).toMatchObject({ patch: "", big: true })
 
   // Not one in the repository: refused, saying so.
   expect((await ask(handler, "POST", "kuvo/git/changes", { directory: top, path: "../elsewhere" })).status).toBe(400)

@@ -59,7 +59,16 @@ fn file(path: &str, group: &str, status: &str, lines: Option<(u32, u32)>) -> Val
         "conflicted" => "uncommitted",
         _ => "unstaged",
     };
+    let discard = match (group, status) {
+        ("conflicted", _) => None,
+        (_, "added") => Some("trash"),
+        ("staged", _) => Some("head"),
+        _ => Some("unstaged"),
+    };
     let mut file = json!({ "path": path, "group": group, "status": status, "scope": scope });
+    if let Some(discard) = discard {
+        file["discard"] = json!(discard);
+    }
     if let Some((added, removed)) = lines {
         file["additions"] = json!(added);
         file["deletions"] = json!(removed);
@@ -134,7 +143,8 @@ impl Git {
         match self.repo_of(directory) {
             Some(root) => {
                 let repo = &self.repos[root];
-                json!({ "repository": true, "root": root, "branch": repo.branch, "files": repo.files, "uncommitted": !repo.files.is_empty() })
+                let commits = if repo.files.iter().any(|file| file["group"] == json!("staged")) { "staged" } else { "all" };
+                json!({ "repository": true, "root": root, "branch": repo.branch, "files": repo.files, "uncommitted": !repo.files.is_empty(), "commits": commits })
             }
             None => json!({ "repository": false }),
         }
@@ -168,6 +178,9 @@ impl Git {
                         repo.files.retain(|file| !(file["path"] == json!(path) && file["group"] == json!("staged")));
                         moved["group"] = json!("staged");
                         moved["scope"] = json!("staged");
+                        if moved["status"] != json!("added") {
+                            moved["discard"] = json!("head");
+                        }
                         repo.files.push(moved);
                     }
                     "kuvo/git/unstage" => {
@@ -175,6 +188,7 @@ impl Git {
                         let new = moved["status"] == json!("added");
                         moved["group"] = json!(if new { "untracked" } else { "unstaged" });
                         moved["scope"] = json!("unstaged");
+                        moved["discard"] = json!(if new { "trash" } else { "unstaged" });
                         repo.files.push(moved);
                     }
                     // Back to the last commit (staged), or to what's staged.

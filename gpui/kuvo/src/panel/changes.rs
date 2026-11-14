@@ -8,6 +8,7 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement,
     Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, actions, div, prelude::FluentBuilder as _, px,
+    uniform_list,
 };
 use kuvo_box::follow::{Follow, Followed, Timing};
 use kuvo_box::git::{ChangedFile, Committed, FileDiff, GitFiles, Group};
@@ -49,6 +50,8 @@ pub struct ChangesView {
     place: Option<Place>,
     shown: bool,
     files: Load<GitFiles>,
+    /// The list's rows, worked out as the files change (a header for each group, then its files).
+    lines: Rc<Vec<Line>>,
     /// Reading again failed after a first read: what was read stays, with this.
     stale: Option<String>,
     opened: Option<Opened>,
@@ -85,6 +88,7 @@ impl ChangesView {
             place: None,
             shown: false,
             files: Load::Loading,
+            lines: Rc::default(),
             stale: None,
             opened: None,
             confirming: None,
@@ -126,6 +130,7 @@ impl ChangesView {
         let moved = self.place.as_ref().map(|place| &place.directory) != place.as_ref().map(|place| &place.directory);
         if moved {
             self.files = Load::Loading;
+            self.lines = Rc::default();
             self.opened = None;
             self.confirming = None;
             self.failed = None;
@@ -183,15 +188,25 @@ impl ChangesView {
     pub fn take(&mut self, read: kuvo_box::Result<GitFiles>, cx: &mut Context<Self>) {
         match read {
             Ok(files) => {
-                // A file opened that's no longer listed as it was (staged, committed, discarded):
-                // the one it became, if it's still there, else back to the list.
+                let changed = self.files.ready() != Some(&files);
+                // The file open, as the list has it now: the same row, else the same file in another
+                // group (staged, unstaged); read again as the list changes (an agent's edit), its
+                // lines kept meanwhile. Gone from the list (committed, discarded): back to it.
                 if let Some(opened) = &self.opened {
-                    let same = files.files.iter().find(|file| file.key() == opened.file.key()).cloned();
+                    let same = files
+                        .files
+                        .iter()
+                        .find(|file| file.key() == opened.file.key())
+                        .or_else(|| files.files.iter().find(|file| file.path == opened.file.path))
+                        .cloned();
                     match same {
-                        Some(file) if file != opened.file => self.open(file, cx),
+                        Some(file) if changed => self.reload(file, cx),
                         Some(_) => {}
                         None => self.opened = None,
                     }
+                }
+                if changed {
+                    self.lines = Rc::new(lines_of(&files));
                 }
                 self.files = Load::Ready(files);
                 self.stale = None;
@@ -210,9 +225,19 @@ impl ChangesView {
 
     /// Opens `file` to its diff, as the box sends it.
     pub fn open(&mut self, file: ChangedFile, cx: &mut Context<Self>) {
-        let Some(root) = self.root() else { return };
         self.confirming = None;
         self.opened = Some(Opened { file: file.clone(), diff: Load::Loading, unshown: None, expanded: Rc::default() });
+        self.reload(file, cx);
+        cx.notify();
+    }
+
+    /// Reads the open file's diff again, as the box lists it now: what showed stays until it's in,
+    /// and the stretches opened stay open.
+    fn reload(&mut self, file: ChangedFile, cx: &mut Context<Self>) {
+        let Some(root) = self.root().or_else(|| self.files.ready().and_then(|files| files.root.clone())) else { return };
+        if let Some(opened) = self.opened.as_mut() {
+            opened.file = file.clone();
+        }
         let client = self.client.clone();
         let key = file.key();
         run(self, self.live, cx, move || client.file_diff(&root, &file), move |this, diff, cx| {
@@ -223,6 +248,7 @@ impl ChangesView {
                     opened.unshown = Some("Too big to show here.");
                 }
                 Ok(FileDiff { patch, .. }) => {
+                    opened.unshown = None;
                     let lines = parse_patch(&patch);
                     opened.unshown = (lines.is_empty() && patch.lines().any(|line| line.starts_with("Binary files "))).then_some("A binary file: no lines to show.");
                     opened.diff = Load::Ready(Rc::new(lines));
@@ -231,7 +257,6 @@ impl ChangesView {
             }
             cx.notify();
         });
-        cx.notify();
     }
 
     pub fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -424,7 +449,7 @@ impl ChangesView {
     fn actions(&self, file: &ChangedFile, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let key = file.key();
         let mut actions = Vec::new();
-        if file.group != Group::Conflicted {
+        if file.discard.is_some() {
             let discard = file.clone();
             actions.push(
                 Button::icon_only(SharedString::from(format!("discard-{key}")), IconName::Undo, "Discard Changes")
@@ -456,51 +481,45 @@ impl ChangesView {
         actions
     }
 
-    fn list(&self, files: &GitFiles, cx: &mut Context<Self>) -> AnyElement {
+    /// One of the list's rows: a group's header, or a file.
+    fn line(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let c = cx.theme().colors.clone();
-        let mut groups: Vec<(Group, Vec<&ChangedFile>)> = Vec::new();
-        for file in &files.files {
-            match groups.last_mut() {
-                Some((group, list)) if *group == file.group => list.push(file),
-                _ => groups.push((file.group, vec![file])),
-            }
-        }
-        let mut children: Vec<AnyElement> = Vec::new();
-        for (group, list) in groups {
-            let title = match group {
-                Group::Conflicted => "Conflicts",
-                Group::Staged => "Staged",
-                Group::Unstaged => "Unstaged",
-                Group::Untracked => "New Files",
-            };
-            children.push(
-                div()
+        let file = match self.lines.get(ix) {
+            Some(Line::Header(group, count)) => {
+                let title = match group {
+                    Group::Conflicted => "Conflicts",
+                    Group::Staged => "Staged",
+                    Group::Unstaged => "Unstaged",
+                    Group::Untracked => "New Files",
+                };
+                return div()
                     .flex()
-                    .items_center()
+                    .items_end()
                     .gap(space::S1)
                     .h(px(28.))
-                    .pt(space::S2)
+                    .pb(space::S1)
                     .px(space::S2)
                     .text_ui(TypeSize::Caption)
-                    .text_color(if group == Group::Conflicted { c.warning } else { c.text_faint })
+                    .text_color(if *group == Group::Conflicted { c.warning } else { c.text_faint })
                     .child(title)
-                    .child(div().text_color(c.text_faint).child(list.len().to_string()))
-                    .into_any_element(),
-            );
-            for file in list {
-                children.push(self.row(file, cx));
+                    .child(div().text_color(c.text_faint).child(count.to_string()))
+                    .into_any_element();
             }
+            Some(Line::File(at)) => self.files.ready().and_then(|files| files.files.get(*at)).cloned(),
+            None => None,
+        };
+        match file {
+            Some(file) => self.row(&file, cx),
+            None => div().h(px(28.)).into_any_element(),
         }
-        div()
-            .id("changes-list")
-            .flex()
-            .flex_col()
+    }
+
+    fn list(&self, cx: &mut Context<Self>) -> AnyElement {
+        uniform_list("changes-list", self.lines.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| range.map(|ix| this.line(ix, cx)).collect::<Vec<_>>()))
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
             .px(space::S2)
             .pb(space::S3)
-            .children(children)
             .into_any_element()
     }
 
@@ -510,13 +529,17 @@ impl ChangesView {
         if let Some(file) = &self.confirming {
             return self.confirm(file, cx);
         }
-        let staged = files.files.iter().filter(|file| file.group == Group::Staged).count();
-        let distinct: HashSet<&str> = files.files.iter().map(|file| file.path.as_str()).collect();
-        let takes = match (staged, distinct.len()) {
-            (1, _) => "Commits the staged file.".to_owned(),
-            (0, 1) => "Commits the one change.".to_owned(),
-            (0, all) => format!("Commits all {all} changed files."),
-            (staged, _) => format!("Commits the {staged} staged files."),
+        // What the box says a commit takes now, counted.
+        let takes = if files.commits_staged() {
+            match files.files.iter().filter(|file| file.group == Group::Staged).count() {
+                1 => "Commits the staged file.".to_owned(),
+                staged => format!("Commits the {staged} staged files."),
+            }
+        } else {
+            match files.files.iter().map(|file| file.path.as_str()).collect::<HashSet<_>>().len() {
+                1 => "Commits the one changed file.".to_owned(),
+                all => format!("Commits all {all} changed files."),
+            }
         };
         let written = !self.message.read(cx).text().trim().is_empty();
         let said = self.said.clone().map(|said| {
@@ -580,11 +603,13 @@ impl ChangesView {
     fn confirm(&self, file: &ChangedFile, cx: &mut Context<Self>) -> AnyElement {
         let c = cx.theme().colors.clone();
         let name = file.name().to_owned();
-        let (title, detail, button) = match (file.group, file.status.as_str()) {
-            (Group::Untracked, _) => (format!("Move {name} to the Trash?"), "It’s a new file, so nothing of it is kept in git.".to_owned(), "Move to Trash"),
-            (Group::Staged, _) => (format!("Discard every change to {name}?"), "What’s staged and what isn’t goes back to the last commit. This can’t be undone.".to_owned(), "Discard"),
-            (_, "deleted") => (format!("Restore {name}?"), "It comes back as it was staged, or as it was last committed.".to_owned(), "Restore"),
-            _ => (format!("Discard the changes to {name}?"), "Its changes that aren’t staged are thrown away. This can’t be undone.".to_owned(), "Discard"),
+        // Worded by what the box says the discard does.
+        let (title, detail, button) = match (file.discard.as_deref(), file.repository, file.status.as_str()) {
+            (Some("trash"), true, _) => (format!("Move the repository {name} to the Trash?"), "It’s a repository of its own: its commits go with it, pushed or not.".to_owned(), "Move to Trash"),
+            (Some("trash"), false, _) => (format!("Move {name} to the Trash?"), "It’s a new file, so git keeps nothing of it.".to_owned(), "Move to Trash"),
+            (_, _, "deleted") => (format!("Restore {name}?"), "It comes back as it was last staged or committed.".to_owned(), "Restore"),
+            (Some("head"), _, _) => (format!("Discard every change to {name}?"), "It goes back to the last commit, what’s staged too. This can’t be undone.".to_owned(), "Discard"),
+            _ => (format!("Discard the changes to {name}?"), "What isn’t staged is thrown away. This can’t be undone.".to_owned(), "Discard"),
         };
         let file = file.clone();
         div()
@@ -664,6 +689,29 @@ impl ChangesView {
             .child(div().id("file-diff-scroll").flex_1().min_h_0().overflow_y_scroll().p(space::S3).child(body))
             .into_any_element()
     }
+}
+
+/// A row of the list.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Line {
+    /// A group's header, with how many it has.
+    Header(Group, usize),
+    /// A file, by where it is in the box's list.
+    File(usize),
+}
+
+/// The list's rows: each group's header, then its files, in the box's order.
+fn lines_of(files: &GitFiles) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut at = 0;
+    while at < files.files.len() {
+        let group = files.files[at].group;
+        let count = files.files[at..].iter().take_while(|file| file.group == group).count();
+        lines.push(Line::Header(group, count));
+        lines.extend((at..at + count).map(Line::File));
+        at += count;
+    }
+    lines
 }
 
 /// What can be done to a file from its row.
@@ -747,7 +795,7 @@ impl Render for ChangesView {
                     let body = if files.files.is_empty() {
                         empty("No Changes", "Everything in this folder is committed.", None, cx)
                     } else {
-                        self.list(&files, cx)
+                        self.list(cx)
                     };
                     div()
                         .flex()

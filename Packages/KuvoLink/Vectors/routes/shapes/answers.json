@@ -5882,11 +5882,37 @@
             ]
            },
            "additions?": "number",
-           "deletions?": "number"
+           "deletions?": "number",
+           "discard?": {
+            "oneOf": [
+             {
+              "literal": "trash"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "head"
+             }
+            ]
+           },
+           "repository?": {
+            "literal": true
+           }
           }
          }
         },
-        "uncommitted": "bool"
+        "uncommitted": "bool",
+        "commits": {
+         "oneOf": [
+          {
+           "literal": "staged"
+          },
+          {
+           "literal": "all"
+          }
+         ]
+        }
        }
       }
      ]
@@ -5978,11 +6004,37 @@
             ]
            },
            "additions?": "number",
-           "deletions?": "number"
+           "deletions?": "number",
+           "discard?": {
+            "oneOf": [
+             {
+              "literal": "trash"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "head"
+             }
+            ]
+           },
+           "repository?": {
+            "literal": true
+           }
           }
          }
         },
-        "uncommitted": "bool"
+        "uncommitted": "bool",
+        "commits": {
+         "oneOf": [
+          {
+           "literal": "staged"
+          },
+          {
+           "literal": "all"
+          }
+         ]
+        }
        }
       }
      ]

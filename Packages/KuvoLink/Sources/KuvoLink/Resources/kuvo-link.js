@@ -36649,7 +36649,8 @@ async function uncommittedIn(root, scope) {
   const status = scope === "branch" ? await text4(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
   return status === null || status.length > 0;
 }
-var FILES_EVERY = 3000;
+var FILES_EVERY = 1e4;
+var FILES_WATCHED_EVERY = 30000;
 var ONE_FILE_MOST = 4 * 1024 * 1024;
 async function changesIn(directory, scope, base, only) {
   const found = await scoped(directory, scope, base);
@@ -36736,7 +36737,8 @@ async function filesIn2(directory) {
   const add = (group, path, status, oldPath) => {
     const scope = group === "staged" ? "staged" : group === "conflicted" ? "uncommitted" : "unstaged";
     const lines = group === "staged" ? staged.get(path) : group === "unstaged" ? unstaged.get(path) : undefined;
-    files.push({ path, ...oldPath ? { oldPath } : {}, group, status, scope, ...lines ?? {} });
+    const discard = group === "conflicted" ? undefined : status === "added" ? "trash" : scope === "unstaged" ? "unstaged" : "head";
+    files.push({ path, ...oldPath ? { oldPath } : {}, group, status, scope, ...lines ?? {}, ...discard ? { discard } : {}, ...path.endsWith("/") ? { repository: true } : {} });
   };
   const records = status.out.toString("utf8").split("\x00");
   for (let at = 0;at < records.length; at++) {
@@ -36760,7 +36762,8 @@ async function filesIn2(directory) {
       add("unstaged", name, y === "A" ? "added" : changeOf(y));
   }
   files.sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" }));
-  return { repository: true, root, branch: await branchOf(root), files, uncommitted: files.length > 0 };
+  const commits = files.some((file) => file.group === "staged") ? "staged" : "all";
+  return { repository: true, root, branch: await branchOf(root), files, uncommitted: files.length > 0, commits };
 }
 async function countIn(directory, scope, base) {
   const found = await scoped(directory, scope, base);
@@ -37237,8 +37240,15 @@ async function* changesRoute(context) {
       }
     };
     const look = () => gitDir ? stamp(path124.join(gitDir, "index")) + "/" + stamp(path124.join(gitDir, "HEAD")) : "";
+    const watched = process.platform === "darwin";
+    const listen = (told) => {
+      if (!watched)
+        return () => {};
+      const watch = watchFolders([directory], told);
+      return () => watch.close();
+    };
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followedLive(async () => await filesIn2(directory) ?? undefined, () => () => {}, signal ?? undefined, { look, every: FILES_EVERY });
+    return yield* followedLive(async () => await filesIn2(directory) ?? undefined, listen, signal ?? undefined, { look, every: watched ? FILES_WATCHED_EVERY : FILES_EVERY });
   }
   if (method !== "POST")
     return yield* json(405, {});
@@ -40577,7 +40587,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1b7aa34fa932";
+var BRIDGE_VERSION = "5d28cdc1bcdb";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

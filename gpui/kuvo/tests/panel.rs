@@ -90,6 +90,41 @@ fn the_panel_opens_beside_the_conversation_and_keeps_its_width(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn a_session_started_with_the_panel_open_shows_its_folder_once_the_box_lists_it(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        Theme::init(Appearance::Light, cx);
+        kuvo::bind_keys(cx);
+    });
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let client = BoxClient::new(stand_in.clone());
+    let window = cx.add_window(move |window, cx| Workspace::new(client, false, window, cx));
+    let workspace = window.root(cx).unwrap();
+    let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
+    cx.simulate_resize(size(px(1280.), px(820.)));
+    workspace.update(cx, |workspace, cx| {
+        workspace.set_now(NOW);
+        workspace.read_at_once(cx);
+        workspace.toggle_panel(cx);
+    });
+    let place = |workspace: &Entity<Workspace>, cx: &mut VisualTestContext| workspace.read_with(cx, |workspace, cx| workspace.panel().read(cx).place().map(|place| place.directory.clone()));
+    // On the landing view, the project a new one starts in; picking another moves it there.
+    assert_eq!(place(&workspace, cx).as_deref(), Some("/Users/sam/Projects/website"));
+    workspace.update(cx, |workspace, cx| workspace.pick_place(kuvo_box::models::StartIn::Project("/Users/sam/Projects/api".into()), cx));
+    assert_eq!(place(&workspace, cx).as_deref(), Some("/Users/sam/Projects/api"));
+
+    let field = workspace.read_with(cx, |workspace, cx| workspace.landing().read(cx).field().clone());
+    cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+    cx.simulate_input("Add a health check route");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(workspace.read_with(cx, |workspace, _| workspace.opened().is_some()), "it opens before the box lists it");
+    // The box's list comes, with the new session in it: the panel shows its folder.
+    workspace.update(cx, |workspace, cx| workspace.read_at_once(cx));
+    cx.run_until_parked();
+    assert_eq!(place(&workspace, cx).as_deref(), Some("/Users/sam/Projects/api"));
+}
+
+#[gpui::test]
 fn a_file_opens_to_its_diff_as_the_box_sends_it(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
     let (_workspace, cx) = open(cx, stand_in.clone(), "ses_signup");
@@ -110,7 +145,11 @@ fn a_file_opens_to_its_diff_as_the_box_sends_it(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(bounds(cx, "file-diff").is_none(), "Escape goes back");
+    // Staged while open, it stays open as the staged file it became.
     click(cx, "change-Unstaged:src/lib/validate.ts");
+    click(cx, "stage-Unstaged:src/lib/validate.ts");
+    assert!(bounds(cx, "file-diff").is_some(), "still open");
+    assert_eq!(sent(&stand_in, "kuvo/git/changes").last().unwrap()["scope"], json!("staged"), "read again in its new scope");
     click(cx, "changes-back");
     assert!(bounds(cx, "file-diff").is_none());
     assert!(bounds(cx, "change-Staged:src/components/SignupForm.tsx").is_some());
@@ -189,7 +228,7 @@ fn files_open_a_folder_at_a_time_and_one_that_cant_be_read_says_why(cx: &mut Tes
 
     click(cx, &format!("tree-{root}/secrets"));
     assert!(bounds(cx, &format!("unreadable-{root}/secrets")).is_some(), "never shown as empty");
-    let rows = workspace.read_with(cx, |workspace, cx| workspace.panel().read(cx).files().read(cx).rows());
+    let rows = workspace.read_with(cx, |workspace, cx| workspace.panel().read(cx).files().read(cx).rows().to_vec());
     assert!(rows.iter().any(|row| matches!(row, kuvo::panel::files::Row::Note { read: kuvo::panel::files::Read::Unreadable(why), .. } if why.reason.as_deref() == Some("Permission denied"))));
 
     click(cx, &format!("tree-{root}/src/components"));

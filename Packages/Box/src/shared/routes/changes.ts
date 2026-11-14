@@ -30,20 +30,24 @@ export type GitChangesCount = Infer<typeof GIT_CHANGES_COUNT>;
  * what changed (the status the stage, unstage and discard routes take), the scope its diff, its
  * stage or unstage and its discard take, and git's count of lines added and removed (none for a
  * binary file, a new one git doesn't know, or a conflicted one). A file partly staged is listed
- * twice: staged and unstaged. */
+ * twice: staged and unstaged. What its discard does (`discard`, none for a conflict, which is
+ * resolved, not discarded): `trash`, a new file to the Trash; `unstaged`, what isn't staged thrown
+ * away; `head`, back to the last commit, what's staged too. `repository`: a repository of its own
+ * inside this one ("web/"), whose commits go with it to the Trash. */
 export const LISTED_FILE = object({
   path: string, "oldPath?": string, group: words("conflicted", "staged", "unstaged", "untracked"),
   status: words("added", "deleted", "modified", "renamed"), scope: words("uncommitted", "unstaged", "staged"),
-  "additions?": number, "deletions?": number,
+  "additions?": number, "deletions?": number, "discard?": words("trash", "unstaged", "head"), "repository?": literal(true),
 });
 
 /** A folder's repository's changed files, grouped as a Changes panel shows them (`kuvo/git/files`):
  * outside one `repository: false`; in one, its top folder, the branch checked out (null on none),
- * the files in the order they show (conflicts, staged, unstaged, new; by name in each), and whether
- * anything isn't committed. */
+ * the files in the order they show (conflicts, staged, unstaged, new; by name in each), whether
+ * anything isn't committed, and what a commit takes now (`commits`: what's staged, or all of the
+ * folder's changes when nothing is). */
 export const GIT_FILES = oneOf(
   object({ repository: literal(false) }),
-  object({ repository: literal(true), root: string, branch: nullable(string), files: list(LISTED_FILE), uncommitted: bool }),
+  object({ repository: literal(true), root: string, branch: nullable(string), files: list(LISTED_FILE), uncommitted: bool, commits: words("staged", "all") }),
 );
 export type GitFiles = Infer<typeof GIT_FILES>;
 

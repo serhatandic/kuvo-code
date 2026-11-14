@@ -244,6 +244,9 @@ impl Workspace {
                 // Sessions started here are in the list now: what their box said of them goes.
                 let listing = &self.listing;
                 self.started.retain(|session, _| listing.facts(session).is_none());
+                // The panel's folder, as the list says it now (a session opened before the list had
+                // it, a worktree's folder said later).
+                self.place_panel(cx);
             }
             ListUpdate::Waiting(why) => self.lists = Lists::Waiting(why),
             ListUpdate::Held { .. } => {
@@ -422,6 +425,7 @@ impl Workspace {
     pub fn pick_place(&mut self, place: StartIn, cx: &mut Context<Self>) {
         self.landing_place = Some(place.clone());
         self.landing_picked = true;
+        self.place_panel(cx);
         self.landing.update(cx, |composer, cx| {
             composer.set_start(place, cx);
             composer.read_models(cx);
@@ -824,7 +828,14 @@ impl Render for Workspace {
             // A drag of the panel's edge, wherever the pointer goes meanwhile.
             .when(self.resizing.is_some(), |d| {
                 d.cursor_col_resize()
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| this.resize_to(event.position.x, window.viewport_size().width, cx)))
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        // Let go outside the window: the drag ends as the pointer comes back.
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            this.end_resize(cx);
+                        } else {
+                            this.resize_to(event.position.x, window.viewport_size().width, cx);
+                        }
+                    }))
                     .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_resize(cx)))
             })
             .on_action(cx.listener(|_, _: &ToggleAppearance, _, cx| {

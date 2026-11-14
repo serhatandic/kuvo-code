@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::{
     AnyElement, App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder as _, px,
+    StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 use kuvo_box::BoxClient;
 use kuvo_box::folders::{Folder, Unreadable};
@@ -59,12 +59,14 @@ pub struct FilesView {
     folders: HashMap<String, Read>,
     open: HashSet<String>,
     opened: Option<(String, Load<Shown>)>,
+    /// The tree's rows, worked out as folders are read, opened or closed (not on each frame).
+    rows: std::rc::Rc<Vec<Row>>,
     focus: FocusHandle,
 }
 
 impl FilesView {
     pub fn new(client: BoxClient, live: bool, cx: &mut Context<Self>) -> FilesView {
-        FilesView { client, live, place: None, shown: false, folders: HashMap::new(), open: HashSet::new(), opened: None, focus: cx.focus_handle() }
+        FilesView { client, live, place: None, shown: false, folders: HashMap::new(), open: HashSet::new(), opened: None, rows: Default::default(), focus: cx.focus_handle() }
     }
 
     pub fn opened(&self) -> Option<&(String, Load<Shown>)> {
@@ -80,6 +82,7 @@ impl FilesView {
             self.folders.clear();
             self.open.clear();
             self.opened = None;
+            self.rebuild();
         }
         // As it shows (again): its open folders read again, so what the agent made since is there.
         if (moved || showing) && shown {
@@ -101,6 +104,7 @@ impl FilesView {
     fn read(&mut self, folder: String, cx: &mut Context<Self>) {
         // What showed stays while it's read again.
         self.folders.entry(folder.clone()).or_insert(Read::Loading);
+        self.rebuild();
         let client = self.client.clone();
         let asked = folder.clone();
         run(self, self.live, cx, move || client.folder(&asked), move |this, read, cx| {
@@ -110,6 +114,7 @@ impl FilesView {
                 Err(Err(error)) => Read::Failed(error.to_string()),
             };
             this.folders.insert(folder, read);
+            this.rebuild();
             cx.notify();
         });
     }
@@ -122,12 +127,13 @@ impl FilesView {
                 self.read(folder.to_owned(), cx);
             }
         }
+        self.rebuild();
         cx.notify();
     }
 
     /// Reads a folder that couldn't be read again.
     pub fn retry(&mut self, folder: &str, cx: &mut Context<Self>) {
-        self.folders.remove(folder);
+        self.folders.insert(folder.to_owned(), Read::Loading);
         self.read(folder.to_owned(), cx);
         cx.notify();
     }
@@ -161,12 +167,16 @@ impl FilesView {
     }
 
     /// The tree as rows: each open folder's folders, then its files, under it.
-    pub fn rows(&self) -> Vec<Row> {
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    fn rebuild(&mut self) {
         let mut rows = Vec::new();
         if let Some(place) = &self.place {
             self.walk(&place.directory, 0, &mut rows);
         }
-        rows
+        self.rows = std::rc::Rc::new(rows);
     }
 
     fn walk(&self, folder: &str, depth: usize, rows: &mut Vec<Row>) {
@@ -246,7 +256,8 @@ impl FilesView {
     }
 
     /// An open folder the box couldn't read, in its files' place: why, as the computer says it, and
-    /// Try Again, so it never looks empty.
+    /// Try Again, so it never looks empty (one line, as every row of the tree is; the whole reason
+    /// on hover).
     fn unreadable(&self, folder: &str, depth: usize, why: String, cx: &mut Context<Self>) -> AnyElement {
         let c = cx.theme().colors.clone();
         let again = folder.to_owned();
@@ -255,29 +266,19 @@ impl FilesView {
             .id(SharedString::from(format!("unreadable-{folder}")))
             .debug_selector(move || selector)
             .flex()
-            .items_start()
+            .items_center()
             .gap(space::S1_5)
-            .py(space::S1)
+            .h(px(26.))
             .pl(space::S2 + px(14. * depth as f32) + px(18.))
-            .pr(space::S2)
+            .pr(space::S1)
             .text_ui(TypeSize::Caption)
-            .child(div().pt(px(1.)).child(Icon::new(IconName::Warning).size(IconSize::Nav).color(c.text_faint)))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_w_0()
-                    .child(div().text_color(c.text_muted).child("Couldn’t read this folder"))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(space::S2)
-                            .child(div().text_color(c.text_faint).child(why))
-                            .child(Button::new(SharedString::from(format!("retry-{folder}")), "Try Again").ghost().size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.retry(&again, cx)))),
-                    ),
-            )
+            .tooltip({
+                let said: SharedString = format!("Couldn’t read this folder: {why}").into();
+                move |_, cx| kuvo_ui::menu::Tooltip::new(said.clone()).build(cx)
+            })
+            .child(Icon::new(IconName::Warning).size(IconSize::Nav).color(c.text_faint))
+            .child(div().flex_1().min_w_0().truncate().text_color(c.text_muted).child(format!("Couldn’t read it: {why}")))
+            .child(Button::new(SharedString::from(format!("retry-{folder}")), "Try Again").ghost().size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.retry(&again, cx))))
             .into_any_element()
     }
 
@@ -373,10 +374,13 @@ impl Render for FilesView {
                     Some(Button::new("files-again", "Try Again").size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.retry(&top, cx))).into_any_element()),
                     cx,
                 ),
-                _ => {
-                    let rows: Vec<AnyElement> = self.rows().iter().map(|row| self.row(row, cx)).collect();
-                    div().id("files-tree").flex().flex_col().size_full().overflow_y_scroll().p(space::S2).children(rows).into_any_element()
-                }
+                _ => uniform_list("files-tree", self.rows.len(), cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                    let rows = this.rows.clone();
+                    range.filter_map(|ix| rows.get(ix)).map(|row| this.row(row, cx)).collect::<Vec<_>>()
+                }))
+                .size_full()
+                .p(space::S2)
+                .into_any_element(),
             }
         };
         div()

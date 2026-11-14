@@ -19,7 +19,7 @@ import { FILE_LIMIT } from "./file";
 import { commitPrompt, moveGitSettings, pullRequestPrompt } from "./git-words";
 import { readWorktrees } from "./worktree-records";
 import { linkPull } from "../glance/pulls";
-import { followedLive } from "../follow";
+import { followedLive, watchFolders } from "../follow";
 
 // git's empty tree: what a repository with no commits yet is compared with.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -136,8 +136,10 @@ async function uncommittedIn(root: string, scope: Scope) {
   return status === null || status.length > 0;
 }
 
-/** How often a followed `kuvo/git/files` asks git again by itself (ms). */
-const FILES_EVERY = 3_000;
+/** How often a followed `kuvo/git/files` asks git again by itself (ms): where the folder isn't
+ * watched (Linux), and where it is, for a change the watch missed. */
+const FILES_EVERY = 10_000;
+const FILES_WATCHED_EVERY = 30_000;
 
 /** The most of one file's diff `kuvo/git/changes` sends (with `path`): past it, `big`. */
 const ONE_FILE_MOST = 4 * 1024 * 1024;
@@ -252,7 +254,10 @@ export async function filesIn(directory: string): Promise<GitFiles | null> {
   const add = (group: Group, path: string, status: Status, oldPath?: string) => {
     const scope = group === "staged" ? "staged" : group === "conflicted" ? "uncommitted" : "unstaged";
     const lines = group === "staged" ? staged.get(path) : group === "unstaged" ? unstaged.get(path) : undefined;
-    files.push({ path, ...(oldPath ? { oldPath } : {}), group, status, scope, ...(lines ?? {}) });
+    // What `perform`'s discard does to it in its scope: a new file to the Trash, else back to what's
+    // staged (unstaged) or to the last commit; a conflict is resolved, not discarded.
+    const discard = group === "conflicted" ? undefined : status === "added" ? "trash" : scope === "unstaged" ? "unstaged" : "head";
+    files.push({ path, ...(oldPath ? { oldPath } : {}), group, status, scope, ...(lines ?? {}), ...(discard ? { discard } : {}), ...(path.endsWith("/") ? { repository: true as const } : {}) });
   };
   const records = status.out.toString("utf8").split("\0");
   for (let at = 0; at < records.length; at++) {
@@ -275,7 +280,9 @@ export async function filesIn(directory: string): Promise<GitFiles | null> {
     if (y !== ".") add("unstaged", name, y === "A" ? "added" : changeOf(y));
   }
   files.sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" }));
-  return { repository: true, root, branch: await branchOf(root), files, uncommitted: files.length > 0 };
+  // What `commit` takes: what's staged, else everything in the folder.
+  const commits = files.some(file => file.group === "staged") ? "staged" : "all";
+  return { repository: true, root, branch: await branchOf(root), files, uncommitted: files.length > 0, commits };
 }
 
 /** How much changed in `directory`'s repository in `scope`, as `changesIn` would list it but
@@ -805,14 +812,22 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
       const found = await filesIn(directory);
       return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
     }
-    // Followed: now, and again as it changes. git is asked each few seconds (an agent's edits), and
-    // at once as its index or HEAD changes (staged, committed, switched); when it can't say, what it
-    // said last stands.
+    // Followed: now, and again as it changes. git is asked again within a second of the repository's
+    // index or HEAD changing (staged, committed, switched); for the folder's files (an agent's
+    // edits), on a Mac as the system says they change (its watch of a whole tree is cheap), and on
+    // Linux every 10 seconds (a watch there takes one of the system's watches for each folder, which
+    // an install's thousands would use up). When git can't say, what it said last stands.
     const gitDir = (await text(directory, ["rev-parse", "--absolute-git-dir"]))?.trim();
     const stamp = (file: string) => { try { return String(fs.statSync(file).mtimeMs); } catch { return ""; } };
     const look = () => (gitDir ? stamp(path.join(gitDir, "index")) + "/" + stamp(path.join(gitDir, "HEAD")) : "");
+    const watched = process.platform === "darwin";
+    const listen = (told: () => void) => {
+      if (!watched) return () => {};
+      const watch = watchFolders([directory], told);
+      return () => watch.close();
+    };
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followedLive(async () => (await filesIn(directory)) ?? undefined, () => () => {}, signal ?? undefined, { look, every: FILES_EVERY });
+    return yield* followedLive(async () => (await filesIn(directory)) ?? undefined, listen, signal ?? undefined, { look, every: watched ? FILES_WATCHED_EVERY : FILES_EVERY });
   }
   if (method !== "POST") return yield* json(405, {});
   const body = (parsed(request.body) ?? {}) as Record<string, unknown>;
