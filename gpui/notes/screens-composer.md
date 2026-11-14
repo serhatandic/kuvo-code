@@ -41,9 +41,11 @@ Behaviour only.
   as the box says each one's `side`: only those are picked in place (`api/session/<id>/model`).
   Another side's models carry a conversation to a new session (`kuvo/sessions/<id>/agents`), which
   this app doesn't do yet: the menu says so. The effort chip lists the model's `efforts`, as the box
-  offers them, titled as every client titles them. A side the box couldn't say keeps what it said
-  before, and is asked again in a while, longer each time; a model whose state couldn't be read
-  keeps what was said of it. The model is read again as the conversation opens, and as its box
+  offers them, titled as every client titles them; a model is matched by its id or one it's known
+  by (the box's `aliases`: Claude Code's `default`). A side the box couldn't say keeps what it said
+  before, and is asked again in a while, longer each time, while that composer is on screen; a
+  model whose state couldn't be read keeps what was said of it. A box from before it said each
+  model's side says to update it there, rather than offer nothing. The model is read again as the conversation opens, and as its box
   says its accounts, models, settings or Custom Auto's lists changed (or this conversation's model
   did), from the conversation's own events. A model that can't run keeps the message in the field,
   saying why and pointing to Kuvo Code on your Mac or iPhone (worded as KuvoClient's

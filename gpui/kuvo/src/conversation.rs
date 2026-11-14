@@ -71,7 +71,8 @@ impl ConversationView {
             session: session.clone(),
             read: false,
             earlier: None,
-            models_changed: None,
+            // (From the box's first word: a change heard before the first update counts too.)
+            models_changed: Some(0),
             asking: false,
             entries: Vec::new(),
             revisions: Vec::new(),

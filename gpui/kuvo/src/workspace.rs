@@ -183,6 +183,9 @@ impl Workspace {
                     self.landing_place = Some(place.clone());
                     self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
                 }
+                // Sessions started here are in the list now: what their box said of them goes.
+                let listing = &self.listing;
+                self.started.retain(|session, _| listing.facts(session).is_none());
                 // Whether the conversation open waits on you.
                 if let Open::Conversation { view, session } = &self.open {
                     let asking = self.listing.facts(session).is_some_and(|facts| facts.asked.is_some());
@@ -289,6 +292,8 @@ impl Workspace {
         }
         let (client, live) = (self.client.clone(), self.live);
         let composer = self.composer_for(session, window, cx);
+        // Only the composer on screen asks again for what the box couldn't say.
+        self.show_composer(Some(&composer), cx);
         let view = cx.new(|cx| ConversationView::new(client, session.to_owned(), composer, live, cx));
         let asking = self.listing.facts(session).is_some_and(|facts| facts.asked.is_some());
         view.update(cx, |view, cx| view.set_asking(asking, cx));
@@ -310,6 +315,8 @@ impl Workspace {
         let (client, live) = (self.client.clone(), self.live);
         let composer = cx.new(|cx| Composer::new(client, Target::Session { id: session.to_owned(), place: Where::Engine }, live, cx));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
+        // Not on screen until its conversation opens.
+        composer.update(cx, |composer, cx| composer.set_shown(false, cx));
         self.composers.insert(session.to_owned(), (composer.clone(), subscription));
         composer
     }
@@ -325,9 +332,20 @@ impl Workspace {
         }
         let place = self.landing_place();
         self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
+        let landing = self.landing.clone();
+        self.show_composer(Some(&landing), cx);
         self.open = Open::Landing;
         window.focus(&self.landing.focus_handle(cx), cx);
         cx.notify();
+    }
+
+    /// Marks `shown` as the composer on screen, and every other as not.
+    fn show_composer(&mut self, shown: Option<&Entity<Composer>>, cx: &mut Context<Self>) {
+        let all: Vec<Entity<Composer>> = self.composers.values().map(|(composer, _)| composer.clone()).chain([self.landing.clone()]).collect();
+        for composer in all {
+            let on = shown == Some(&composer);
+            composer.update(cx, |composer, cx| composer.set_shown(on, cx));
+        }
     }
 
     /// Where a new conversation starts before one's picked: the newest project's, else a chat.
@@ -359,8 +377,10 @@ impl Workspace {
                 self.started.insert(session.clone(), project.clone());
                 let composer = self.composer_for(session, window, cx);
                 composer.update(cx, |composer, cx| composer.take_sent(written, sent.clone(), cx));
-                // Opened, unless you've gone to another conversation meanwhile.
-                if self.is_landing() {
+                // Opened, unless you've gone to another conversation meanwhile, or started
+                // writing the next one.
+                let writing_next = !self.landing.read(cx).field().read(cx).text().trim().is_empty();
+                if self.is_landing() && !writing_next {
                     self.open_session(session, window, cx);
                 }
             }

@@ -7,7 +7,7 @@
 //! the screens is read at once from the stand-in and handed over the same way, so nothing waits on
 //! a clock or another thread.
 
-use gpui::{Bounds, Entity, Focusable as _, Modifiers, Pixels, TestAppContext, VisualTestContext, px, size};
+use gpui::{AppContext as _, Bounds, Entity, Focusable as _, Modifiers, Pixels, TestAppContext, VisualTestContext, px, size};
 use kuvo::composer::{Composer, Models};
 use kuvo::conversation::read_now;
 use kuvo::entries::Entry;
@@ -490,4 +490,63 @@ fn a_page_that_couldnt_be_read_isnt_asked_again_as_words_stream(cx: &mut TestApp
     let conversation = read_now(&client, "ses_lighthouse").unwrap();
     view.update(cx, |view, cx| view.take(ConversationUpdate::Conversation(conversation), cx));
     assert_eq!(view.read_with(cx, |view, _| view.earlier_failed().map(str::to_owned)), Some("The box didn’t answer.".to_owned()));
+}
+
+#[gpui::test]
+fn a_side_the_box_cant_say_now_is_asked_again_until_it_can(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        Theme::init(Appearance::Light, cx);
+        kuvo::bind_keys(cx);
+    });
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let client = BoxClient::new(stand_in.clone());
+    // A composer that reads the box itself, as the app's does.
+    let composer = cx.new(|cx| Composer::new(client, kuvo::composer::Target::Session { id: "ses_limits".into(), place: Where::Engine }, true, cx));
+    cx.run_until_parked();
+    let asked = || stand_in.seen_at("GET", "kuvo/models/offered").len();
+    assert_eq!(asked(), 1);
+    // The bridge starts again: its side isn't said, though what it said before is kept.
+    stand_in.agents_known(false);
+    composer.update(cx, |composer, cx| composer.read_models(cx));
+    cx.run_until_parked();
+    assert_eq!(asked(), 2);
+    // Asked again in a while, and again (longer each time) while it still can't say.
+    cx.executor().advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(asked(), 3);
+    cx.executor().advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(asked(), 3, "the second wait is longer");
+    cx.executor().advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(asked(), 4);
+    // It can say again: no more asking.
+    stand_in.agents_known(true);
+    cx.executor().advance_clock(std::time::Duration::from_secs(4));
+    cx.run_until_parked();
+    assert_eq!(asked(), 5);
+    cx.executor().advance_clock(std::time::Duration::from_secs(60));
+    cx.run_until_parked();
+    assert_eq!(asked(), 5);
+}
+
+#[gpui::test]
+fn a_model_named_by_another_id_is_the_one_offered(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    // A coding agent's conversation on Claude Code's `default`, which it lists as `opus`.
+    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "claude-code", "id": "default" }, "name": "Opus", "runs": true }));
+    let (workspace, cx) = open(cx, stand_in);
+    let composer = open_session(&workspace, "ses_limits", cx);
+    assert_eq!(composer.read_with(cx, |composer, _| composer.efforts()), ["low", "medium", "high"]);
+}
+
+#[gpui::test]
+fn a_box_from_before_sides_says_to_update_it_rather_than_offer_nothing(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.without_sides();
+    let (workspace, cx) = open(cx, stand_in);
+    let composer = open_session(&workspace, "ses_limits", cx);
+    assert!(composer.read_with(cx, |composer, _| composer.box_too_old_to_pick() && !composer.left_out()));
+    // The chip still names its model.
+    assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Claude Opus 5.5".to_owned()));
 }

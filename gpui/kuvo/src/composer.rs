@@ -107,6 +107,10 @@ pub struct Composer {
     /// How long before what the box couldn't say is asked again (longer each time).
     retry: Duration,
     retrying: Option<Task<()>>,
+    /// Whether the box couldn't say all of it last time: asked again in a while, while it's shown.
+    unsaid: bool,
+    /// Whether it's on screen (a kept conversation's isn't): only then is it asked again.
+    shown: bool,
     offers: Option<Offers>,
     slash_scroll: ScrollHandle,
     slash_at: usize,
@@ -163,6 +167,8 @@ impl Composer {
             reads: 0,
             retry: RETRY_FIRST,
             retrying: None,
+            unsaid: false,
+            shown: true,
             offers: None,
             slash_scroll: ScrollHandle::new(),
             slash_at: 0,
@@ -249,6 +255,26 @@ impl Composer {
         models.iter().filter(|model| model.is_offered() && side.is_none_or(|side| model.side == Some(side))).cloned().collect()
     }
 
+    /// Whether the box is from before it said each model's side: a conversation's model can't be
+    /// changed here until it's updated (a new one may still start on any).
+    pub fn box_too_old_to_pick(&self) -> bool {
+        matches!(self.target, Target::Session { .. }) && self.models.offered.as_ref().is_some_and(|offered| !offered.says_sides())
+    }
+
+    /// Whether it's on screen. A kept conversation's composer isn't asked again in the background;
+    /// shown again, what the box couldn't say is asked for at once.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.shown == shown {
+            return;
+        }
+        self.shown = shown;
+        if !shown {
+            self.retrying = None;
+        } else if self.unsaid && self.live {
+            self.read_models(cx);
+        }
+    }
+
     /// What the model chip says: the model's name, "Choose a Model", or (its model not said yet, or
     /// not read) "Model", so one can still be picked; none before the box has said anything.
     pub fn chip_label(&self) -> Option<String> {
@@ -268,6 +294,9 @@ impl Composer {
     /// put on in place.
     pub fn left_out(&self) -> bool {
         let Target::Session { place, .. } = &self.target else { return false };
+        if self.box_too_old_to_pick() {
+            return false;
+        }
         let models = self.models.offered.as_ref().map(|offered| offered.models.as_slice()).unwrap_or_default();
         models.iter().any(|model| model.is_offered() && model.side != Some(Side::of(*place)))
     }
@@ -319,16 +348,16 @@ impl Composer {
         self.reads += 1;
         let read = self.reads;
         let (client, target, picked, before) = (self.client.clone(), self.target.clone(), self.picked.clone(), self.models.offered.clone());
-        self.spawn(cx, move || models_of(&client, &target, picked.as_ref(), before.as_ref()), move |this, (offered, state), cx| {
+        self.spawn(cx, move || models_of(&client, &target, picked.as_ref(), before.as_ref()), move |this, (offered, said_all, state), cx| {
             if this.reads == read {
-                this.took_models(offered, state, cx);
+                this.took_models(offered, said_all, state, cx);
             }
         });
     }
 
-    /// What a read of the models said, taken: a failed part keeps what was there.
-    fn took_models(&mut self, offered: Option<Offered>, state: Option<ModelState>, cx: &mut Context<Self>) {
-        let whole = offered.as_ref().is_some_and(Offered::is_whole);
+    /// What a read of the models said, taken: a failed part keeps what was there. `said_all`:
+    /// whether the box itself could say both sides (before what it said earlier was kept).
+    fn took_models(&mut self, offered: Option<Offered>, said_all: bool, state: Option<ModelState>, cx: &mut Context<Self>) {
         if let Some(offered) = offered {
             if self.picked.is_none() {
                 self.picked = offered.starting.clone().flatten();
@@ -338,11 +367,13 @@ impl Composer {
         if state.is_some() {
             self.models.state = state;
         }
-        // A side that couldn't say (or a read that failed): asked again in a while, longer each time.
-        if whole {
+        // A side that couldn't say (or a read that failed): asked again in a while, longer each
+        // time, while it's on screen.
+        self.unsaid = !said_all;
+        if said_all {
             self.retry = RETRY_FIRST;
             self.retrying = None;
-        } else if self.live {
+        } else if self.live && self.shown {
             let wait = self.retry;
             self.retry = (self.retry * 2).min(RETRY_MOST);
             self.retrying = Some(cx.spawn(async move |this, cx| {
@@ -356,8 +387,8 @@ impl Composer {
     /// Reads what the chips and "/" show at once, on this thread (shots and tests, against a stand-in).
     #[cfg(feature = "stand-in")]
     pub fn read_at_once(&mut self, cx: &mut Context<Self>) {
-        let (offered, state) = models_of(&self.client, &self.target, self.picked.as_ref(), self.models.offered.as_ref());
-        self.took_models(offered, state, cx);
+        let (offered, said_all, state) = models_of(&self.client, &self.target, self.picked.as_ref(), self.models.offered.as_ref());
+        self.took_models(offered, said_all, state, cx);
         if let Target::Session { id, .. } = &self.target
             && let Ok(offers) = self.client.typed_offers(id)
         {
@@ -393,6 +424,8 @@ impl Composer {
                 self.read_models(cx);
             }
             Target::Session { id, place } => {
+                // A read already on its way says what was before: it's left.
+                self.reads += 1;
                 // Shown at once; what its box says of it comes with the next read.
                 // As without the box's word on it, until it's asked again.
                 let name = self.menu_models().into_iter().find(|offered| offered.is(&model)).map(|offered| offered.name);
@@ -613,16 +646,19 @@ impl Composer {
         let model = self.model();
         let offered = self.menu_models();
         let left_out = self.left_out();
+        let too_old = self.box_too_old_to_pick();
         let this = cx.entity().downgrade();
         let current = model.clone();
         let trigger = Button::new("model-chip", name).ghost().size(ButtonSize::Small).icon_after(IconName::ChevronDown);
         Some(
             PopoverMenu::new("model-menu", trigger, move |_, cx| {
                 let (offered, current, this) = (offered.clone(), current.clone(), this.clone());
-                let left_out = left_out;
+                let (left_out, too_old) = (left_out, too_old);
                 cx.new(|cx| {
                     let mut menu = Menu::new(cx).width(px(260.));
-                    if offered.is_empty() {
+                    if too_old {
+                        menu = menu.entry(MenuEntry::new("Update Kuvo Code on this computer").detail("to change models here").disabled(true));
+                    } else if offered.is_empty() {
                         menu = menu.entry(MenuEntry::new("No models to offer yet").disabled(true));
                     }
                     for model in offered {
@@ -675,15 +711,18 @@ impl Composer {
     }
 }
 
-/// What the box offers (kept, for a side it couldn't say now, as it said before) and what it says
-/// of the conversation's model; none for a read that failed (what's shown stays).
-fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, before: Option<&Offered>) -> (Option<Offered>, Option<ModelState>) {
-    let offered = client.offered_models(picked).ok().map(|offered| offered.keeping(before));
+/// What the box offers (kept, for a side it couldn't say now, as it said before), whether it
+/// could say all of it itself, and what it says of the conversation's model; none for a read that
+/// failed (what's shown stays).
+fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, before: Option<&Offered>) -> (Option<Offered>, bool, Option<ModelState>) {
+    let offered = client.offered_models(picked).ok();
+    let said_all = offered.as_ref().is_some_and(Offered::is_whole);
+    let offered = offered.map(|offered| offered.keeping(before));
     let state = match target {
         Target::Session { id, .. } => client.session_models(&[id.as_str()]).ok().and_then(|mut all| all.remove(id)),
         Target::New(_) => None,
     };
-    (offered, state)
+    (offered, said_all, state)
 }
 
 /// `front` put back ahead of what's written since, as one text.

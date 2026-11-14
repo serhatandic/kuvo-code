@@ -30,9 +30,14 @@
   engine session): that's `POST kuvo/sessions/<id>/agents`, which opens a new session; the menu
   offers only its own side's models (the box's `side` on `kuvo/models/offered`, added in phase 2's
   second review, with each model's `efforts`) and says the rest aren't here yet.
-- What a session's model can't do is worded in the client (a port of KuvoClient's
-  `SessionModelState.refusal`), as on the Mac and phone. Better: the box sends the words with
-  `kuvo/sessions/models` (it already decides what's missing), so no client words it.
+- **Left to move to the box:** whether a message may go on a session's model, and the words
+  saying why not, are worked out in the client (a port of KuvoClient's `SessionModelState`
+  `namesModel` and `refusal`), as on the Mac and phone. The box already knows `missing`, `account`
+  and `plan`: its typed send (and `kuvo/sessions/models`) could decide and word it, so no client
+  needs either. Until then the Rust port mirrors Swift's conditions, except Swift's fallback to the
+  picker's name for a model gone from its list.
+- `kuvo/models/offered` takes no folder, so a model only a project's own settings add has no
+  efforts on the landing view (the box's gap).
 - Left from the second review: the earlier page is asked for from the list's render (pages shorter
   than the window load one after another without scrolling); composers are kept for every
   conversation opened, never freed; the sidebar's times refresh only as something else redraws, and
@@ -43,6 +48,11 @@
 
 ## Decisions for the user
 
+- New words and a new line, built without drafts (the user was away): the line above the composer
+  of a session waiting on you ("It’s waiting on you for an answer this app can’t give yet: answer
+  it in Kuvo Code on your Mac or iPhone."), and a model refusal's "in Kuvo Code on your Mac or
+  iPhone" in place of "Settings › Accounts", which this app hasn't. Recommended: keep both until
+  this app answers asks and has Accounts; the refusal's words should come from the box.
 - The look follows the Capy references the user gave (nested threads, landing with the project chip
   above the composer). The block shots aren't approved yet; the screens use the theme's tokens, so
   changes there flow through.

@@ -73,6 +73,8 @@ struct State {
     agents_unknown: bool,
     /// Its sessions' models can't be read now (`503`).
     models_fail: bool,
+    /// A box from before `kuvo/models/offered` said each model's side, efforts and aliases.
+    no_sides: bool,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -141,6 +143,11 @@ impl StandIn {
     /// Whether its sessions' models can be read (`kuvo/sessions/models` answers `503` while not).
     pub fn models_readable(&self, readable: bool) {
         self.state().models_fail = !readable;
+    }
+
+    /// From now on, it answers as a box from before it said each offered model's side.
+    pub fn without_sides(&self) {
+        self.state().no_sides = true;
     }
 
     /// Whether the coding agents' bridge can say its models (`known.agents`).
@@ -377,7 +384,7 @@ fn models() -> Vec<(Value, Vec<&'static str>)> {
 
 /// The coding agents' models, as their bridge lists them.
 fn agents_models() -> Vec<(Value, Vec<&'static str>)> {
-    vec![(json!({ "providerID": "claude-code", "id": "opus", "name": "Claude Code · Opus" }), vec!["low", "medium", "high"])]
+    vec![(json!({ "providerID": "claude-code", "id": "opus", "name": "Claude Code · Opus", "aliases": ["default"] }), vec!["low", "medium", "high"])]
 }
 
 fn model_name(model: &Value) -> Option<String> {
@@ -455,11 +462,19 @@ impl StandIn {
                     return answer(200, json!({ "models": [], "known": { "engine": true, "agents": true }, "starting": null }));
                 }
                 // Each with its side and its efforts, as the box says them.
-                fn with(side: &'static str, (mut model, efforts): (Value, Vec<&str>)) -> Value {
-                    model["side"] = json!(side);
-                    model["efforts"] = json!(efforts);
+                let old = state.no_sides;
+                let with = |side: &'static str, (mut model, efforts): (Value, Vec<&str>)| -> Value {
+                    if !old {
+                        model["side"] = json!(side);
+                        model["efforts"] = json!(efforts);
+                        if model.get("aliases").is_none() {
+                            model["aliases"] = json!([]);
+                        }
+                    } else if let Some(model) = model.as_object_mut() {
+                        model.remove("aliases");
+                    }
                     model
-                }
+                };
                 let mut listed: Vec<Value> = models().into_iter().map(|model| with("engine", model)).collect();
                 if !state.agents_unknown {
                     listed.extend(agents_models().into_iter().map(|model| with("agents", model)));

@@ -146,6 +146,9 @@ pub struct OfferedModel {
     /// Its efforts (variants), as its side lists them.
     #[serde(default)]
     pub efforts: Vec<String>,
+    /// Other ids a conversation may name it by (Claude Code's `default`).
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Its provider is retiring it: a picker leaves it out.
     #[serde(default)]
     pub retiring: bool,
@@ -164,9 +167,9 @@ impl OfferedModel {
         !self.retiring && !self.hidden
     }
 
-    /// Whether it's `model` (the same provider and id).
+    /// Whether it's `model`: the same provider, and its id or one it's known by.
     pub fn is(&self, model: &ModelRef) -> bool {
-        self.provider_id == model.provider_id && self.id == model.id
+        self.provider_id == model.provider_id && (self.id == model.id || self.aliases.contains(&model.id))
     }
 }
 
@@ -196,6 +199,11 @@ pub struct Offered {
 }
 
 impl Offered {
+    /// Whether it says which side each model is on: a box from before `side` doesn't.
+    pub fn says_sides(&self) -> bool {
+        self.models.is_empty() || self.models.iter().any(|model| model.side.is_some())
+    }
+
     /// Whether both sides could say their models.
     pub fn is_whole(&self) -> bool {
         self.known.engine && self.known.agents
