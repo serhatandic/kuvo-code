@@ -54,7 +54,7 @@ test("pace near empty and projection gate", () => { const w = { id: "weekly", us
 test("notice peers preserve facts, strip from vouched boxes", async () => {
   const f = fixture(); await f.limits.tick(); f.advance(0.95); await f.limits.tick()
   const sent: {to: string; mail: LimitsMail}[] = []
-  const directory = { told: true, setup: "set_test", own: () => ({key:"own",name:"own"}), peerBoxes: () => [{key:"peer",name:"peer"},{key:"vouched",name:"vouched"}], listen: () => {}, isPeer: (key: string) => key === "peer" }
+  const directory = { told: true, setup: "set_test", own: () => ({key:"own",name:"own"}), peerBoxes: () => [{key:"peer",name:"peer"},{key:"vouched",name:"vouched"}], listen: () => {}, isYours: (key: string) => key === "peer", isPeer: (key: string) => key === "peer" }
   new LimitsPeers(f.limits, { followed: true, send: (to, mail) => { sent.push({to,mail}) } }, directory, undefined, () => reset - 599000).tell(true)
   expect(sent.find(s => s.to === "peer")?.mail.accounts[0].notices).toHaveLength(2)
   expect(sent.find(s => s.to === "vouched")?.mail.accounts[0].notices).toBeUndefined()
@@ -68,7 +68,7 @@ test("large notice history cannot evict the current limits account from peer mai
   account.notices = Array.from({length:100}, (_,i) => ({ ...f.limits.notices()[0], id:`usage_${i}`, row:"a".repeat(300),window:"w".repeat(200) }))
   const sent: LimitsMail[] = []
   const limits = { list: () => [account] } as unknown as Limits
-  new LimitsPeers(limits, {followed:true,send:(_,mail)=>{sent.push(mail)}}, {told:true,setup:"set_test",own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isPeer:()=>true}).tell(true)
+  new LimitsPeers(limits, {followed:true,send:(_,mail)=>{sent.push(mail)}}, {told:true,setup:"set_test",own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isYours:()=>true,isPeer:()=>true}).tell(true)
   expect(sent[0].accounts).toHaveLength(1)
   expect(sent[0].accounts[0].windows).toEqual(account.windows)
   expect(Buffer.byteLength(JSON.stringify(sent[0]))).toBeLessThan(40000)
@@ -81,7 +81,7 @@ test("turn-only Mac Claude inherits peer window dedup without checked timestamps
   heard(f,0.5); heard(g,0.5)
   f.advance(0.95); heard(f,0.95)
   expect(f.limits.list(false)[0].checked).toBeUndefined()
-  const peers = new LimitsPeers(g.limits,{followed:true,send:()=>{}},{told:true,setup:"set_test",own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isPeer:()=>true},undefined,()=>reset-599000)
+  const peers = new LimitsPeers(g.limits,{followed:true,send:()=>{}},{told:true,setup:"set_test",own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isYours:()=>true,isPeer:()=>true},undefined,()=>reset-599000)
   peers.take("peer",{kind:"limits",noticeSetup:"set_test",at:reset-599000,accounts:f.limits.list(false)})
   g.advance(0.95); heard(g,0.95)
   expect(g.limits.list(false)[0].notices ?? []).toEqual([])
@@ -113,7 +113,7 @@ test("peer handoff timestamps are normalized to the receiver clock", async () =>
   for (const state of Object.values(accounts[0].noticeState!)) state.read! += 3600000
   for (const notice of accounts[0].notices!) notice.at += 3600000
   const g = fixture()
-  const peers = new LimitsPeers(g.limits,{followed:true,send:()=>{}},{told:true,setup:"set_test",own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isPeer:()=>true},undefined,()=>reset-599000)
+  const peers = new LimitsPeers(g.limits,{followed:true,send:()=>{}},{told:true,setup:"set_test",own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isYours:()=>true,isPeer:()=>true},undefined,()=>reset-599000)
   peers.take("peer",{kind:"limits",noticeSetup:"set_test",at:reset-599000+3600000,accounts})
   expect(peers.noticeStates("claude",accounts[0].identity!)[0].seven_day.read).toBe(reset-599000)
   expect(peers.notices()).toHaveLength(2)
@@ -121,7 +121,7 @@ test("peer handoff timestamps are normalized to the receiver clock", async () =>
 })
 test("one direct account holder forwards even a received peer decision", async () => {
   const a = fixture(), z = fixture(); await a.limits.tick(); await z.limits.tick()
-  const directory = (own: string, other: string) => ({told:true,setup:"set_test",own:()=>({key:own,name:own}),peerBoxes:()=>[{key:other,name:other},{key:"vouched",name:"vouched"}],listen:()=>{},isPeer:(key:string)=>key!=="vouched"})
+  const directory = (own: string, other: string) => ({told:true,setup:"set_test",own:()=>({key:own,name:own}),peerBoxes:()=>[{key:other,name:other},{key:"vouched",name:"vouched"}],listen:()=>{},isYours:(key:string)=>key!=="vouched",isPeer:(key:string)=>key!=="vouched"})
   const ap = new LimitsPeers(a.limits,{followed:true,send:()=>{}},directory("a","z"),undefined,()=>reset-599000)
   const zp = new LimitsPeers(z.limits,{followed:true,send:()=>{}},directory("z","a"),undefined,()=>reset-599000)
   ap.take("z",{kind:"limits",noticeSetup:"set_test",at:reset-600000,accounts:z.limits.list(false)})
@@ -148,7 +148,7 @@ test("a shared machine never relays one person's notices or dedup to another set
   const shared = fixture(), b = fixture()
   const mail: LimitsMail = {kind:"limits",at:reset-599000,noticeSetup:"set_a",accounts:a.limits.list(false)}
   const sent: LimitsMail[] = []
-  const sharedDirectory = {told:true,inNoSetup:true,own:()=>({key:"shared",name:"shared"}),peerBoxes:()=>[{key:"a",name:"a"},{key:"b",name:"b"}],listen:()=>{},isPeer:()=>true}
+  const sharedDirectory = {told:true,inNoSetup:true,own:()=>({key:"shared",name:"shared"}),peerBoxes:()=>[{key:"a",name:"a"},{key:"b",name:"b"}],listen:()=>{},isYours:()=>true,isPeer:()=>true}
   const sharedPeers = new LimitsPeers(shared.limits,{followed:true,send:(_,m)=>{sent.push(m)}},sharedDirectory,undefined,()=>reset-599000)
   sharedPeers.take("a",mail)
   expect(sharedPeers.notices()).toEqual([])
@@ -158,7 +158,7 @@ test("a shared machine never relays one person's notices or dedup to another set
   sharedPeers.tell(true)
   expect(sent.every(m=>m.accounts.every(account=>!account.notices && !account.noticeState))).toBe(true)
   expect(sent.every(m=>m.noticeSetup===undefined)).toBe(true)
-  const bp = new LimitsPeers(b.limits,{followed:true,send:()=>{}},{told:true,setup:"set_b",own:()=>({key:"b",name:"b"}),peerBoxes:()=>[{key:"shared",name:"shared"}],listen:()=>{},isPeer:()=>true},undefined,()=>reset-599000)
+  const bp = new LimitsPeers(b.limits,{followed:true,send:()=>{}},{told:true,setup:"set_b",own:()=>({key:"b",name:"b"}),peerBoxes:()=>[{key:"shared",name:"shared"}],listen:()=>{},isYours:()=>true,isPeer:()=>true},undefined,()=>reset-599000)
   bp.take("shared",mail)
   expect(bp.notices()).toEqual([])
   expect(bp.rows([]).every(row=>!(row as any).notices?.length)).toBe(true)
@@ -167,7 +167,7 @@ test("a shared machine never relays one person's notices or dedup to another set
 test("setup changes invalidate notice caches while preserving ordinary limit readings", async () => {
   const a = fixture(); await a.limits.tick(); a.advance(0.95); await a.limits.tick()
   const b = fixture(); let changed = () => {}
-  const directory = {told:true,setup:"set_a",own:()=>({key:"b",name:"b"}),peerBoxes:()=>[{key:"a",name:"a"}],listen:(f:()=>void)=>{changed=f},isPeer:()=>true}
+  const directory = {told:true,setup:"set_a",own:()=>({key:"b",name:"b"}),peerBoxes:()=>[{key:"a",name:"a"}],listen:(f:()=>void)=>{changed=f},isYours:()=>true,isPeer:()=>true}
   const peers = new LimitsPeers(b.limits,{followed:true,send:()=>{}},directory,undefined,()=>reset-599000)
   peers.take("a",{kind:"limits",at:reset-599000,noticeSetup:"set_a",accounts:a.limits.list(false)})
   expect(peers.notices()).toHaveLength(2)
@@ -201,7 +201,7 @@ test("without layout settings only default meters can decide notices", async () 
 
 test("a decision waits for the directory and pins a forwarder only once", async () => {
   const f = fixture(); let changed = () => {}; let known = false
-  const directory = {told:false,setup:"set_test",own:()=>known?{key:"z",name:"z"}:undefined,peerBoxes:()=>[{key:"a",name:"a"}],listen:(f:()=>void)=>{changed=f},isPeer:()=>true}
+  const directory = {told:false,setup:"set_test",own:()=>known?{key:"z",name:"z"}:undefined,peerBoxes:()=>[{key:"a",name:"a"}],listen:(f:()=>void)=>{changed=f},isYours:()=>true,isPeer:()=>true}
   const peers = new LimitsPeers(f.limits,{followed:true,send:()=>{}},directory,undefined,()=>reset-599000)
   await f.limits.tick(); f.advance(0.95); await f.limits.tick()
   expect(f.limits.notices().every(n=>!n.forwarder)).toBe(true)
@@ -250,7 +250,7 @@ test("notice wording carries the same named account and window as the panel", as
 test("learning the setup immediately shares pending facts despite a recent unscoped limits mail", async () => {
   const f=fixture(); f.limits.ownKey=()=>"own"; await f.limits.tick(); f.advance(0.95); await f.limits.tick()
   let changed=()=>{}
-  const directory:{told:boolean;setup?:string;own:()=>{key:string;name:string};peerBoxes:()=>{key:string;name:string}[];listen:(f:()=>void)=>void;isPeer:()=>boolean}={told:true,own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:(f)=>{changed=f},isPeer:()=>true}
+  const directory:{told:boolean;setup?:string;own:()=>{key:string;name:string};peerBoxes:()=>{key:string;name:string}[];listen:(f:()=>void)=>void;isYours:()=>boolean;isPeer:()=>boolean}={told:true,own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:(f)=>{changed=f},isYours:()=>true,isPeer:()=>true}
   const sent:LimitsMail[]=[]
   const peers=new LimitsPeers(f.limits,{followed:true,send:(_,m)=>{sent.push(m)}},directory,undefined,()=>reset-599000)
   peers.tell(true)
@@ -260,4 +260,14 @@ test("learning the setup immediately shares pending facts despite a recent unsco
   expect(sent).toHaveLength(2)
   expect(sent[1].noticeSetup).toBe("set_test")
   expect(sent[1].accounts[0].notices).toHaveLength(2)
+})
+
+test("a direct peer excluded by the private peer boundary receives no notices", async () => {
+  const f = fixture(); await f.limits.tick(); f.advance(0.95); await f.limits.tick()
+  const sent: LimitsMail[] = []
+  const peers = new LimitsPeers(f.limits, {followed:true,send:(_,mail)=>sent.push(mail)}, {told:true,setup:"set_test",own:()=>({key:"a",name:"a"}),peerBoxes:()=>[{key:"shared",name:"shared"}],listen:()=>{},isPeer:()=>true,isYours:()=>false}, undefined, () => reset-599000)
+  peers.tell(true)
+  expect(sent[0].accounts[0].notices).toBeUndefined()
+  peers.take("shared", {kind:"limits",at:reset-599000,noticeSetup:"set_test",accounts:f.limits.list(false)})
+  expect(peers.notices()).toEqual([])
 })

@@ -287,7 +287,7 @@ export class LimitsPeers {
 
   /** Same boundary as usage/settings-peers: only own computers within one known setup. */
   private noticeOurs(key: string) {
-    return !!this.directory.told && !!this.directory.setup && this.directory.isPeer?.(key) === true
+    return !!this.directory.told && !!this.directory.setup && this.ours(key) && this.directory.isPeer?.(key) === true
   }
 
   private noticePeer(key: string, kept: Kept) {
