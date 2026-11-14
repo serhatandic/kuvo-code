@@ -1,3 +1,4 @@
+import { takeNotices } from "../../agents/usage/notices";
 import { usageNotices, usageSnapshot } from "../notices/usage";
 // Watching this box's engine and its coding agents' bridge: their events followed, and what the
 // box does as they come (its bots kept told, ended sign-ins noted, news for your phones, a message
@@ -463,14 +464,15 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (typeof settled === "string") settleAskReview(settled);
         // A run's end takes what it asked with it, with no word of each, and so does its session deleted.
         if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
-        if (event.type === "kuvo.usage.notices") {
+        if (event.type === "kuvo.usage.notices" || event.type === "kuvo.limits.updated") {
+          const data = (event.data ?? {}) as Record<string, unknown>;
           usageRevision++;
-          if (event.data?.push === false) hold?.reconcileUsage([], (event.data.notices ?? []).map((n: any) => n.id));
-          usageNotices(event.data ?? {}, tell);
-        }
-        if (event.type === "kuvo.limits.updated" && event.data?.ownNotices) {
-          usageRevision++;
-          usageSnapshot(event.data, tell, hold);
+          if (event.type === "kuvo.usage.notices") {
+            if (data.push === false) hold?.reconcileUsage([], takeNotices(data.notices).map(n => n.id));
+            usageNotices(data, tell);
+          } else if (Array.isArray(data.ownNotices)) {
+            usageSnapshot(data, tell, hold);
+          }
         }
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
