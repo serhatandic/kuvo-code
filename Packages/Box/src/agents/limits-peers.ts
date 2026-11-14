@@ -94,6 +94,7 @@ export class LimitsPeers {
   private told = new Map<string, { json: string; at: number }>()
   /** When each peer's ask (or its coming back) was last answered. */
   private answered = new Map<string, number>()
+  private noticeBoundary = ""
 
   constructor(
     private readonly limits: Limits,
@@ -104,6 +105,8 @@ export class LimitsPeers {
     private readonly now: () => number = Date.now,
   ) {
     this.load()
+    this.noticeBoundary = this.boundary()
+    if (directory.told) this.yoursBefore = new Set(directory.peerBoxes().filter(({ key }) => this.ours(key)).map(({ key }) => key))
     limits.peers = this
     directory.listen(() => this.directorySaid())
     // The link carries what goes again (it started, or followed anew): what went meanwhile was
@@ -336,7 +339,16 @@ export class LimitsPeers {
    * of your own keeps only what such a box is told, one new to this box is told now, and one that
    * has just become yours (again) is told all and asked for all of its own.
    */
+  private boundary(): string {
+    return JSON.stringify([this.directory.told, this.directory.setup ?? null,
+      this.directory.peerBoxes().filter(({ key }) => this.noticeOurs(key)).map(({ key }) => key).sort()])
+  }
+
+  /** The link said who your computers are: those no longer among them go, and one new to this box is told now. */
   private directorySaid() {
+    const boundary = this.boundary()
+    const urgent = boundary !== this.noticeBoundary
+    this.noticeBoundary = boundary
     const here = new Set(this.directory.peerBoxes().map((box) => box.key))
     const yours = new Set([...here].filter((key) => this.ours(key)))
     // (Told again as if never told: with `ask`, so it tells this box all of its own at once.)
@@ -370,8 +382,7 @@ export class LimitsPeers {
       this.save()
       this.limits.peersChanged()
     }
-    // (One that's no longer one of your own is told only what such a box is, now.)
-    this.tell(true)
+    this.tell(urgent)
   }
 
   private load() {

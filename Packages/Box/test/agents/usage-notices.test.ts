@@ -316,3 +316,19 @@ test("conflicting pins for the same occurrence converge to the smallest forwarde
   expect(z.limits.pushableNotices()).toEqual([])
 })
 
+
+test("unrelated directory heartbeats do not bypass the heard-mail throttle", async () => {
+  const f=fixture(); f.account.limits.read=undefined; await f.limits.tick()
+  const heard=(used:number)=>f.account.limits.heard!({id:"seven_day",used,minutes:100,resetsAt:reset})
+  heard(0.5)
+  let changed=()=>{},now=reset-600000
+  const sent:LimitsMail[]=[]
+  const directory={told:true,setup:"set_test",own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:(f:()=>void)=>{changed=f},isYours:()=>true,isPeer:()=>true}
+  const peers=new LimitsPeers(f.limits,{followed:true,send:(_,mail)=>{sent.push(mail)}},directory,undefined,()=>now)
+  peers.tell(true); expect(sent).toHaveLength(1)
+  f.advance(0.51); now+=1000; heard(0.51)
+  expect(sent).toHaveLength(1)
+  changed()
+  expect(sent).toHaveLength(1)
+})
+
