@@ -17,7 +17,7 @@ export function usageNotices(data: Record<string, unknown>, tell: (notice: Notic
     const [title, body] = wording[fact.milestone];
     const notice: Notice = { category: "usage", title, subtitle: `${fact.accountName ?? noticeAccountName(fact.service)} ${fact.windowName ?? "Limit"}`, body, thread: `usage:${fact.row}`, data: { notice: fact.id, row: fact.row, at: String(fact.at), ...(fact.resetsAt !== undefined ? { expires: String(fact.resetsAt) } : {}) } };
     // Keep stable native delivery facts first, independently of whether a phone is reachable.
-    keepTold(notice, { now: fact.at });
+    keepTold(notice, { at: fact.at });
     // Queue acceptance is not successful phone delivery. The hold journals only after sending;
     // a minute's catch-up retries an unconsumed fact while its short replay window is current.
     if (data.push === true && !usageDelivered(notice)) tell(notice);
