@@ -40276,7 +40276,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "421972cabda7";
+var BRIDGE_VERSION = "4c822219f898";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45860,14 +45860,17 @@ async function* modelsOfferedRoute(context) {
   } catch {}
   const agents = bridge();
   const lists = await listsHere(engine, agents);
-  const starting = startingModel([wantedIn(request.path)], lists);
+  return yield* json(200, offeredAnswer(lists, wantedIn(request.path)));
+}
+function offeredAnswer(lists, wanted) {
+  const starting = startingModel([wanted], lists);
   const listing = stillListing(lists);
-  return yield* json(200, {
-    models: offeredHere(lists).map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, ...model.retiring ? { retiring: true } : {}, ...model.hidden ? { hidden: true } : {} })),
+  return {
+    models: offeredHere(lists).map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, side: model.agents ? "agents" : "engine", efforts: model.efforts, ...model.retiring ? { retiring: true } : {}, ...model.hidden ? { hidden: true } : {} })),
     known: { engine: lists.engine !== null, agents: lists.bridge !== null },
     ...listing.length ? { listing } : {},
     ...starting !== undefined ? { starting: starting?.model ?? null } : {}
-  });
+  };
 }
 
 // Packages/Box/src/link/areas/read-all.ts

@@ -9266,6 +9266,19 @@
          "providerID": "string",
          "id": "string",
          "name": "string",
+         "side": {
+          "oneOf": [
+           {
+            "literal": "engine"
+           },
+           {
+            "literal": "agents"
+           }
+          ]
+         },
+         "efforts": {
+          "list": "string"
+         },
          "retiring?": "bool",
          "hidden?": "bool"
         }
