@@ -216,13 +216,11 @@ impl Composer {
 
     /// Where a new conversation starts (the landing view's project chip).
     pub fn set_start(&mut self, place: StartIn, cx: &mut Context<Self>) {
+        // (Its models are read again by what moved it: opening the landing view, or a pick.)
         if let Target::New(was) = &self.target
             && *was != place
         {
             self.target = Target::New(place);
-            if self.live {
-                self.read_models(cx);
-            }
             cx.notify();
         }
     }
@@ -398,6 +396,12 @@ impl Composer {
         cx.notify();
     }
 
+    /// What its box says of the conversation's model, handed in as a read would bring it (tests).
+    #[cfg(feature = "stand-in")]
+    pub fn take_state(&mut self, state: ModelState, cx: &mut Context<Self>) {
+        self.took_models(None, true, Some(Said::Is(Box::new(state))), cx);
+    }
+
     /// Reads what the chips and "/" show at once, on this thread (shots and tests, against a stand-in).
     #[cfg(feature = "stand-in")]
     pub fn read_at_once(&mut self, cx: &mut Context<Self>) {
@@ -441,7 +445,7 @@ impl Composer {
     }
 
     /// Picks a model (and effort) for the conversation, or for the new one.
-    fn pick(&mut self, model: ModelRef, cx: &mut Context<Self>) {
+    pub fn pick(&mut self, model: ModelRef, cx: &mut Context<Self>) {
         match self.target.clone() {
             Target::New(_) => {
                 self.picked = Some(model);
@@ -464,8 +468,13 @@ impl Composer {
                 }
                 cx.notify();
                 let client = self.client.clone();
-                self.spawn(cx, move || client.select_model(&id, place, &model), |this, result, cx| {
-                    this.picking = None;
+                let picked = model.clone();
+                self.spawn(cx, move || client.select_model(&id, place, &model), move |this, result, cx| {
+                    // (Only the latest pick's change ends the wait: an earlier one's coming back
+                    // first leaves the latest's.)
+                    if this.picking.as_ref() == Some(&picked) {
+                        this.picking = None;
+                    }
                     if let Err(error) = result {
                         this.set_note(Note { text: format!("The model wasn’t changed: {error}").into(), warning: true }, cx);
                     }

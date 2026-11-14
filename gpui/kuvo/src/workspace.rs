@@ -344,7 +344,8 @@ impl Workspace {
         self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
         let landing = self.landing.clone();
         self.show_composer(Some(&landing), cx);
-        // What's offered may have changed since it was last open (an account signed in elsewhere).
+        // What's offered may have changed since it was last open (an account signed in elsewhere),
+        // or (another project) a new one there starts on another: read again, once.
         landing.update(cx, |composer, cx| composer.read_models(cx));
         self.open = Open::Landing;
         window.focus(&self.landing.focus_handle(cx), cx);
@@ -372,7 +373,10 @@ impl Workspace {
     pub fn pick_place(&mut self, place: StartIn, cx: &mut Context<Self>) {
         self.landing_place = Some(place.clone());
         self.landing_picked = true;
-        self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
+        self.landing.update(cx, |composer, cx| {
+            composer.set_start(place, cx);
+            composer.read_models(cx);
+        });
         cx.notify();
     }
 
@@ -394,7 +398,9 @@ impl Workspace {
                 let writing_next = !self.landing.read(cx).field().read(cx).text().trim().is_empty();
                 if self.is_landing() && !writing_next {
                     self.open_session(session, window, cx);
-                } else if composer.read(cx).field().read(cx).error().is_some() || !composer.read(cx).field().read(cx).text().is_empty() {
+                } else if self.opened() != Some(session.as_str())
+                    && (composer.read(cx).field().read(cx).error().is_some() || !composer.read(cx).field().read(cx).text().is_empty())
+                {
                     // You're elsewhere: what didn't go waits there, marked in the sidebar.
                     self.unsent.insert(session.clone());
                 }

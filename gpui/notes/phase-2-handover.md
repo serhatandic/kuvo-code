@@ -48,6 +48,11 @@
 
 ## Decisions for the user
 
+- A new sidebar mark, built without drafts: a red dot before a session started from the landing
+  view whose first message didn't go while you were elsewhere (it waits in that conversation's
+  composer, with why). Recommended: keep the dot and add words beside it once the sidebar has room
+  for a second line; it has no VoiceOver label yet (GPUI has no accessibility here yet).
+
 - New words and a new line, built without drafts (the user was away): the line above the composer
   of a session waiting on you ("It’s waiting on you for an answer this app can’t give yet: answer
   it in Kuvo Code on your Mac or iPhone."), and a model refusal's "in Kuvo Code on your Mac or

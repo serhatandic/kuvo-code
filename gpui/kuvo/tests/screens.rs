@@ -587,3 +587,43 @@ fn a_conversations_model_waits_to_be_changed_until_its_known_where_it_runs(cx: &
     view.update(cx, |view, cx| view.take(ConversationUpdate::Conversation(conversation), cx));
     assert!(composer.read_with(cx, |composer, _| composer.can_pick()));
 }
+
+#[gpui::test]
+fn a_new_session_whose_message_didnt_go_while_you_were_elsewhere_is_marked(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    stand_in.fail_sends();
+    let landing = workspace.read_with(cx, |workspace, _| workspace.landing().clone());
+    let field = landing.read_with(cx, |composer, _| composer.field().clone());
+    field.update(cx, |field, cx| field.set_text("Add a health check route", cx));
+    // Sent, and before it's done, another conversation opened.
+    landing.update(cx, |composer, cx| composer.send(cx));
+    workspace.update_in(cx, |workspace, window, cx| workspace.open_session("ses_recipes", window, cx));
+    cx.run_until_parked();
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_recipes".to_owned()), "you stay where you went");
+    let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
+    let started = client.session_list(None).unwrap().sessions.into_keys().find(|id| id.starts_with("ses_new")).expect("it was started");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_unsent(&started)));
+    // Opened, what didn't go is there, with why; the mark goes.
+    let composer = open_session(&workspace, &started, cx);
+    assert!(!workspace.read_with(cx, |workspace, _| workspace.is_unsent(&started)));
+    assert_eq!(typed(&composer, cx), ("Add a health check route".to_owned(), Some("The engine isn't answering. Try again in a moment.".to_owned())));
+}
+
+#[gpui::test]
+fn what_is_said_of_the_model_before_a_pick_comes_back_is_left(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let sonnet = kuvo_box::typed::ModelRef { provider_id: "anthropic".into(), id: "claude-sonnet-5-5".into(), variant: None };
+    let opus: ModelState = serde_json::from_value(json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5", "variant": "high" }, "name": "Claude Opus 5.5", "runs": true })).unwrap();
+    // Sonnet picked; before its change comes back, a read still says Opus: left.
+    composer.update(cx, |composer, cx| {
+        composer.pick(sonnet.clone(), cx);
+        composer.take_state(opus.clone(), cx);
+    });
+    assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Claude Sonnet 5.5".to_owned()));
+    // Once it's come back, what the box says goes.
+    cx.run_until_parked();
+    composer.update(cx, |composer, cx| composer.take_state(opus, cx));
+    assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Claude Opus 5.5".to_owned()));
+}

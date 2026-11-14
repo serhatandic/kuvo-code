@@ -1400,6 +1400,7 @@ box decides it from what its engine and coding agents list, so every client show
   lists changed (`integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
   `global.disposed`, `kuvo.auto.updated`), or hears them again after it couldn't; what one of them
   couldn't wholly say (its default, Custom Auto's lists) isn't kept.
+- A session left out is asked about again in a while, as a side of "The models offered" not said is.
 - A client asks again as what it's drawn from changes: the session opens, its model changes, or its
   box's accounts, models, default model or Custom Auto lists do (as it reads them again on
   `integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
@@ -2287,7 +2288,8 @@ before it uses it, and meanwhile says so. A box is older than a client needs whe
 `agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
 `models.offered`, `models.offered.sides`, `sessions.list`, `sessions.models`, `sessions.start.empty`
 and `typed`
-(KuvoClient's `BoxGate.required`; a box with `sessions.list` and `typed` has what came before them
+(KuvoClient's `BoxGate.required`, and the same list in every client, gpui's `kuvo_box` too, so
+every client holds the same boxes; a box with `sessions.list` and `typed` has what came before them
 too). A client adds a name there as it drops its fallback for a box without it, or its words that
 such a box needs a newer Kuvo Code.
 
