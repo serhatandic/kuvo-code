@@ -35694,8 +35694,8 @@ class LimitsPeers {
     const mine = this.shared();
     const theirs = forVouched(mine);
     for (const { key } of this.directory.peerBoxes()) {
-      const accounts = this.ours(key) ? mine : theirs;
-      const json = JSON.stringify(accounts);
+      const accounts = this.forPeer(key, this.ours(key) ? mine : theirs);
+      const json = JSON.stringify([this.noticeEnvelope(key), accounts]);
       const last = this.told.get(key);
       const due = !last || now - last.at >= TELL_AGAIN3 || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
       if (!due)
@@ -35770,7 +35770,7 @@ class LimitsPeers {
     this.answered.set(key, now);
     const accounts = this.forPeer(key, this.ours(key) ? this.shared() : forVouched(this.shared()));
     this.transport.send(key, { kind: "limits", at: now, accounts, ...this.noticeEnvelope(key) }, false);
-    this.told.set(key, { json: JSON.stringify(accounts), at: now });
+    this.told.set(key, { json: JSON.stringify([this.noticeEnvelope(key), accounts]), at: now });
   }
   forPeer(key, accounts) {
     return this.noticeOurs(key) ? accounts : withoutNotices(accounts);
@@ -35828,7 +35828,7 @@ class LimitsPeers {
       this.save();
       this.limits.peersChanged();
     }
-    this.tell();
+    this.tell(true);
   }
   load() {
     if (!this.file)
@@ -36328,4 +36328,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e1e9a1d48b776e84b9874c9a41cc6507671e49239d193f93bae8428fddb5619c
+// Built from Packages/Box/src/agents a04224098d1f5946afe87ff872ae2609b280032368b8e432d39ce76ed08abf14

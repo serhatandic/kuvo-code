@@ -4555,16 +4555,22 @@ without alerting; recovery re-arms a later worsening, meaningful reset advances 
 and reset jitter of at most one second does not. Failed or refused reads never decide notices.
 
 Account readings carry `noticeState` per window and recent `notices` in limits peer mail so a
-new reader inherits the baseline/dedup. Only your direct own computers send or receive those
-fields: accounts on computers a peer vouches for still show their limits, but never notices.
-Peers preserve the original ID and decision; they do not decide it again. The current account
-holder with the smallest link key among online direct peers forwards decided facts to phones,
-including facts received from another holder. Each fact pins that selection in `forwarder`,
-so a later ownership change never replays old pushes; an unavailable selected holder catches
-up when back, while the 24-hour fact is retained. This avoids duplicate pushes from known parallel
-readers; disconnected computers without a shared current peer view cannot guarantee exactly
-once background push delivery under an arbitrary network partition. Decisions
-and dedup survive box restarts. Facts are retained for 24 hours (at most 100 per account).
+new reader inherits the baseline/dedup. These fields cross only between direct own computers
+within one known setup, the same boundary as usage settings: the sender includes `noticeSetup`,
+and the receiver takes the fields only when it follows that setup. A shared machine following
+no setup never sends or takes the fields, and a cached peer's notices/state stop applying when
+the setup changes. Accounts on computers a peer vouches for still show their limits, never
+notices. Peers preserve the original ID and decision; they do not decide it again. The current
+account holder with the smallest link key among online same-setup direct peers forwards decided
+facts to phones, including facts received from another holder. Once the link has named this box,
+each fact pins that selection in `forwarder`; before then, push waits. A later ownership change
+never replays old pushes. An unavailable selected holder catches up only while the fact is current:
+at most ten minutes from the decision and never past its reset. Disconnected computers without
+a shared current peer view cannot guarantee exactly-once background push delivery under an
+arbitrary network partition. Decisions and dedup survive box restarts. Answers and peer mail
+expose at most 100 current facts per account. With no layout part yet, the default visible meters
+apply, including optional meters remaining off. Ordinary turn samples retain the thirty-second
+disk-save limit; new notice decisions are persisted before delivery.
 
 The bridge emits `kuvo.usage.notices` `{notices, push}`: `push:true` when this box is the
 selected forwarder, false otherwise. The link delivers them on the existing
