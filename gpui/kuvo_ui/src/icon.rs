@@ -75,6 +75,7 @@ icons! {
     File => "file",
     Folder => "folder",
     Globe => "globe",
+    Image => "image",
     Info => "info",
     Link => "link",
     Message => "message",
@@ -82,10 +83,14 @@ icons! {
     Minus => "minus",
     Moon => "moon",
     More => "more",
+    Paperclip => "paperclip",
+    Pencil => "pencil",
     Pin => "pin",
     Plus => "plus",
+    Question => "question",
     Return => "return",
     Search => "search",
+    Shield => "shield",
     Sidebar => "sidebar",
     Sliders => "sliders",
     Sparkle => "sparkle",
@@ -163,7 +168,7 @@ mod tests {
     #[test]
     fn every_icon_loads_as_an_svg() {
         for icon in IconName::ALL {
-            let bytes = Assets.load(icon.path()).unwrap().expect(icon.name());
+            let bytes = Assets.load(icon.path()).unwrap().unwrap_or_else(|| panic!("{}", icon.name()));
             let text = std::str::from_utf8(&bytes).unwrap();
             assert!(text.starts_with("<svg") && text.contains("viewBox=\"0 0 16 16\""));
         }

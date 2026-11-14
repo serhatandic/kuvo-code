@@ -18,6 +18,8 @@ serde_json = "1"
 gpui = { workspace = true, features = ["test-support"] }
 # The tests run against the stand-in box.
 kuvo = { path = ".", features = ["stand-in"] }
+# Waiting on a view's notifications while the follows' threads hand on what they read.
+futures = "0.3"
 
 [features]
 # The made-up box (`--stand-in`), and reading it at once for shots and tests; not in the app shipped.

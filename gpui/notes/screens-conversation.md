@@ -34,8 +34,7 @@ Read: `crates/agent_ui/src/conversation_view/thread_view.rs`, `crates/agent_ui/s
   Again.
 - A conversation that can't be read says why and is tried again; one that's gone says so and the
   composer goes.
-- One waiting on you says so above the composer: answering its asks isn't built yet, so it points
-  to Kuvo Code on your Mac or iPhone.
+- What it waits on you for shows as a card in the composer's place: `screens-asks.md`.
 - Streaming redraws only what changed: each message carries a revision from `kuvo_box` (compared
   off the UI's thread), and the rows are moved in, not copied.
 - Column 720 px, centred; your messages right-aligned in a soft bubble (the chat list block's look).
@@ -43,5 +42,5 @@ Read: `crates/agent_ui/src/conversation_view/thread_view.rs`, `crates/agent_ui/s
 ## Where we differ, and why
 
 - Your message isn't editable in place (Zed's is): the box has no route for it yet.
-- Tool steps don't expand yet; their output comes in phase 3, with permission asks as cards.
+- Tool steps open to their output, diffs and results: `screens-tool-output.md`.
 - Paging exists because the box pages (`api/session/<id>/message` with a cursor).

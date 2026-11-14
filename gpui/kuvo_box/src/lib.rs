@@ -10,6 +10,7 @@
 //! only to the box's server once the process that record names is that server, and never shown
 //! (`Debug` leaves it out).
 
+pub mod asks;
 pub mod client;
 pub mod error;
 pub mod follow;
@@ -17,12 +18,15 @@ pub mod gate;
 pub mod ids;
 pub mod info;
 pub mod lines;
+pub mod mentions;
 pub mod local;
 pub mod messages;
 pub mod models;
 pub mod parts;
 pub mod paths;
 pub mod place;
+pub mod queue;
+pub mod search;
 pub mod sessions;
 pub mod ssh;
 pub mod transport;

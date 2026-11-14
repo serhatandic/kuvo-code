@@ -191,7 +191,10 @@ test("Stop holds what was for the next step ahead of the queue and pauses it; a 
   b.hear("session.execution.succeeded");
   b.wait(5000);
   assert.equal(asked.length, 2, "nothing started while it's paused");
+  const item = (id, held) => ({ id, words: "", files: [], keyword: null, from: null, on: "engine", delivery: "queue", held });
   assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json, { paused: true, held: ["msg_s1"] });
+  // (Every message waiting, as clients that draw them ask: what Stop held first, `queue.items`.)
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue?items=1")).json, { paused: true, held: ["msg_s1"], items: [item("msg_s1", true), item("msg_q1", false)] });
   const resumed = await ask("POST", "kuvo/sessions/ses_1/queue/resume");
   assert.equal(resumed.status, 200);
   assert.deepEqual(asked.slice(2), ["ses_1 msg_s1 steer"], "what Stop held goes first");
@@ -868,4 +871,16 @@ test("an engine whose record outlived it (nothing listens there) is said not to 
   } finally {
     target.port = was;
   }
+});
+
+test("a message the engine holds for the queue is taken back with what it was, as one waiting on the box is; one waiting nowhere is 404", async () => {
+  inboxes.ses_1 = [{ id: "msg_e1", sessionID: "ses_1", type: "user", delivery: "queue", payload: { text: "Then the docs." } }];
+  const taken = await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_e1");
+  assert.equal(taken.status, 200);
+  assert.equal(taken.json.removed.id, "msg_e1");
+  assert.equal(taken.json.removed.words, "Then the docs.");
+  assert.equal(taken.json.removed.delivery, "queue");
+  assert.ok(asked.includes("ses_1 msg_e1 gone"), "out of the engine's inbox");
+  assert.deepEqual(inboxes.ses_1, []);
+  assert.equal((await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_none")).status, 404);
 });

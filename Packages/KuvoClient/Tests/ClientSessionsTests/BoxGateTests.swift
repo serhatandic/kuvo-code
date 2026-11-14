@@ -60,6 +60,11 @@ struct BoxGateTests {
         #expect(BoxGate.isAllowed("kuvo/sandbox/asks/ask_1"))
         #expect(BoxGate.isAllowed("kuvo/asks"))
         #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/decisions"))
+        #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/asks"))
+        #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/asks/events"))
+        #expect(BoxGate.isAllowed("kuvo/sessions/ses_1/asks/per_1"))
+        #expect(!BoxGate.isAllowed("kuvo/sessions/ses_1/asks/per_1/more"))
+        #expect(!BoxGate.isAllowed("kuvo/sessions/ses_1/queue"))
         #expect(!BoxGate.isAllowed("kuvo/sessions"))
         #expect(!BoxGate.isAllowed("kuvo/askslater"))
     }

@@ -114,7 +114,10 @@ static CONFIGS: LazyLock<HashMap<&'static str, HighlightConfiguration>> = LazyLo
 /// Highlights already worked out, by language and text, so a block drawn again unchanged isn't
 /// parsed again. (A streaming block is new text each time and is parsed each time; the cache
 /// is simply emptied when it grows past 256 entries.)
-static CACHE: LazyLock<Mutex<HashMap<(String, u64), Vec<(Range<usize>, Kind)>>>> =
+/// Highlighted spans, by the code's language and a hash of it.
+type Spans = HashMap<(String, u64), Vec<(Range<usize>, Kind)>>;
+
+static CACHE: LazyLock<Mutex<Spans>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The coloured stretches of `code` in `language`; empty for languages we don't know.

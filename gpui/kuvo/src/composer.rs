@@ -7,17 +7,20 @@
 //! sends the same way.
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, actions,
-    div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, ObjectFit, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    StyledImage as _, Subscription, Task, Window, actions, div, img, prelude::FluentBuilder as _, px,
 };
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kuvo_box::models::{ModelState, Offered, OfferedModel, Side, StartIn, effort_title};
 use kuvo_box::typed::{self, Answer, ModelRef, Offers};
+use kuvo_box::mentions::{For, Mention};
+use kuvo_box::parts::File;
 use kuvo_box::{BoxClient, Draft, Sent, Where};
 use kuvo_ui::{
-    ActiveTheme, Button, ButtonSize, IconName, StyledType, TextField, TextFieldEvent, TypeSize,
+    ActiveTheme, Button, ButtonSize, Icon, IconName, IconSize, StyledType, TextField, TextFieldEvent, TypeSize,
     menu::{Menu, MenuEntry, PopoverMenu},
     small::{Chip, ChipTone},
     theme::{radius, space},
@@ -32,6 +35,8 @@ const ACCOUNTS: &str = "Kuvo Code on your Mac or iPhone";
 /// How long before what the box couldn't say of its models is asked again, at first and at most.
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MOST: Duration = Duration::from_secs(30);
+/// How long typing a mention pauses before the box is asked what it suggests.
+const MENTION_PAUSE: Duration = Duration::from_millis(150);
 /// How many of "/"'s offers show at once (the rest scroll).
 const SLASH_MOST: usize = 8;
 
@@ -88,6 +93,8 @@ pub struct Note {
 pub struct Offer {
     pub name: String,
     pub summary: String,
+    /// What it is, for a mention: a file, a folder, a bot or a session.
+    pub icon: Option<IconName>,
 }
 
 pub struct Composer {
@@ -125,6 +132,18 @@ pub struct Composer {
     note: Option<Note>,
     /// What the field held as the note was shown: the note goes once that changes.
     noted: String,
+    /// Files and pictures that go with what's written, in the order they were added.
+    attached: Vec<PathBuf>,
+    /// What "@" or "&" suggests for the mention being typed (the box's, `sessions.mentions`), and
+    /// which mention that was; which read of them is the latest.
+    mentions: Vec<Mention>,
+    mentions_for: Option<(For, String)>,
+    mention_reads: u64,
+    /// A mention's suggestions asked for and not answered yet.
+    mention_pending: bool,
+    /// The agents and sessions picked from "&"'s list, by what went in the message: the send names
+    /// those still in it.
+    named: Vec<(String, String)>,
     tasks: Vec<Task<()>>,
     _field: Subscription,
 }
@@ -155,6 +174,7 @@ impl Composer {
             }
             TextFieldEvent::Changed => {
                 this.slash_at = 0;
+                this.read_mentions(cx);
                 if this.note.is_some() && this.text(cx) != this.noted {
                     this.note = None;
                 }
@@ -183,6 +203,12 @@ impl Composer {
             slash_dismissed: None,
             note: None,
             noted: String::new(),
+            attached: Vec::new(),
+            mentions: Vec::new(),
+            mentions_for: None,
+            mention_reads: 0,
+            mention_pending: false,
+            named: Vec::new(),
             tasks: Vec::new(),
             _field: subscription,
         };
@@ -487,12 +513,18 @@ impl Composer {
     /// Sends what's written (or, in a new conversation, starts it on the box and sends it there).
     pub fn send(&mut self, cx: &mut Context<Self>) {
         let text = self.text(cx);
-        if text.trim().is_empty() || self.sending {
+        if (text.trim().is_empty() && self.attached.is_empty()) || self.sending {
             return;
         }
         let mut draft = Draft::new(BoxClient::new_id(), text.clone());
+        let files = std::mem::take(&mut self.attached);
+        draft.files = files.iter().map(|path| File::at(path)).collect();
+        // The agents picked from "&"'s list that are still named in it.
+        draft.named = self.named.iter().filter(|(text, _)| mentioned(&draft.text, text)).map(|(_, session)| session.clone()).collect();
+        draft.named.dedup();
         draft.refusal = self.models.state.as_ref().and_then(|state| state.refusal(ACCOUNTS));
         if self.needs_model() {
+            self.attached = files;
             self.set_note(Note { text: "Choose a model to send it.".into(), warning: true }, cx);
             cx.notify();
             return;
@@ -512,7 +544,10 @@ impl Composer {
                     this.sending = false;
                     match result {
                         Ok(sent) => this.sent(sent, &text, cx),
-                        Err(error) => this.put_back(&text, Some(error.to_string()), cx),
+                        Err(error) => {
+                            this.attach(files, cx);
+                            this.put_back(&text, Some(error.to_string()), cx)
+                        }
                     }
                     cx.notify();
                 });
@@ -538,7 +573,10 @@ impl Composer {
                                 written: text.clone(),
                                 sent,
                             }),
-                            Err(error) => this.put_back(&text, Some(error.to_string()), cx),
+                            Err(error) => {
+                                this.attach(files, cx);
+                                this.put_back(&text, Some(error.to_string()), cx)
+                            }
                         }
                         cx.notify();
                     },
@@ -594,6 +632,91 @@ impl Composer {
         });
     }
 
+    /// A message taken back from the queue to edit: its words ahead of anything written since, and
+    /// its files (those on this Mac's box; one sent inline can't come back as a file).
+    pub fn restore(&mut self, words: &str, files: &[File], cx: &mut Context<Self>) {
+        let paths: Vec<PathBuf> = files.iter().filter_map(|file| file.uri.strip_prefix("file://")).map(|path| PathBuf::from(percent_decoded(path))).collect();
+        self.attach(paths, cx);
+        self.put_back(words, None, cx);
+        cx.notify();
+    }
+
+    /// What goes with what's written: files and pictures, in order.
+    pub fn attached(&self) -> &[PathBuf] {
+        &self.attached
+    }
+
+    /// Files and pictures to go with what's written (picked, or dropped on it). Folders aren't
+    /// files to send; one already here isn't added twice.
+    pub fn attach(&mut self, paths: impl IntoIterator<Item = PathBuf>, cx: &mut Context<Self>) {
+        for path in paths {
+            if !path.is_dir() && !self.attached.contains(&path) {
+                self.attached.push(path);
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn detach(&mut self, at: usize, cx: &mut Context<Self>) {
+        if at < self.attached.len() {
+            self.attached.remove(at);
+            cx.notify();
+        }
+    }
+
+    /// The system's file picker, for files and pictures to attach.
+    fn pick_files(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picked.await {
+                this.update(cx, |this, cx| this.attach(paths, cx)).ok();
+            }
+        }));
+    }
+
+    /// What's attached, above the field: pictures as thumbnails, other files as chips, each with ×.
+    fn attachments(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.attached.is_empty() {
+            return None;
+        }
+        let c = cx.theme().colors.clone();
+        let items = self.attached.iter().enumerate().map(|(at, path)| {
+            let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            let remove = cx.listener(move |this, _, _, cx| this.detach(at, cx));
+            if is_picture(path) {
+                div()
+                    .id(("attached", at))
+                    .relative()
+                    .size(px(52.))
+                    .flex_none()
+                    .rounded(radius::NAV)
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(c.border)
+                    .bg(c.sunken)
+                    .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover).with_fallback(|| Icon::new(IconName::Image).size(IconSize::Card).into_any_element()))
+                    .child(
+                        div()
+                            .id(("detach", at))
+                            .absolute()
+                            .top(px(3.))
+                            .right(px(3.))
+                            .rounded(radius::PILL)
+                            .bg(c.elevated)
+                            .border_1()
+                            .border_color(c.border)
+                            .cursor_pointer()
+                            .on_click(remove)
+                            .child(Icon::new(IconName::Close).size(IconSize::Nav).color(c.text_muted)),
+                    )
+                    .into_any_element()
+            } else {
+                Chip::new(("attached", at), name).icon(IconName::File).on_remove(move |window, cx| remove(&gpui::ClickEvent::default(), window, cx)).into_any_element()
+            }
+        });
+        Some(div().debug_selector(|| "attachments".into()).flex().flex_wrap().items_center().gap(space::S1_5).children(items).into_any_element())
+    }
+
     /// "/"'s offers for what's written: shown while it's "/" and a name being typed.
     pub fn slash_offers(&self, cx: &App) -> Vec<Offer> {
         let text = self.text(cx);
@@ -603,8 +726,8 @@ impl Composer {
         }
         let Some(offers) = &self.offers else { return Vec::new() };
         let typed = typed.to_lowercase();
-        let keywords = offers.keywords.iter().map(|keyword| Offer { name: keyword.name.clone(), summary: keyword.summary.clone() });
-        let commands = offers.commands.iter().map(|command| Offer { name: command.name.clone(), summary: command.description.clone().unwrap_or_default() });
+        let keywords = offers.keywords.iter().map(|keyword| Offer { name: keyword.name.clone(), summary: keyword.summary.clone(), icon: None });
+        let commands = offers.commands.iter().map(|command| Offer { name: command.name.clone(), summary: command.description.clone().unwrap_or_default(), icon: None });
         // Names starting with what's typed first, then those containing it, each by name, as
         // KuvoClient's `SlashCommands.matches` orders them.
         let mut matched: Vec<(bool, Offer)> = keywords
@@ -618,8 +741,91 @@ impl Composer {
         matched.into_iter().map(|(_, offer)| offer).collect()
     }
 
+    /// The mention being typed, if one is, and what the box suggests for it: read as it changes.
+    fn read_mentions(&mut self, cx: &mut Context<Self>) {
+        let Target::Session { id, .. } = &self.target else { return };
+        let text = self.text(cx);
+        let typed = mention_query(&text).map(|(wanted, _, query)| (wanted, query.to_owned()));
+        if typed == self.mentions_for {
+            return;
+        }
+        self.mentions_for = typed.clone();
+        self.mention_reads += 1;
+        // What was suggested for what was typed before goes: the list waits for the box's answer.
+        self.mentions.clear();
+        let read = self.mention_reads;
+        let Some((wanted, query)) = typed else {
+            self.mention_pending = false;
+            return;
+        };
+        // Until the box answers, Return and Tab wait with the list rather than send the mention
+        // half typed.
+        self.mention_pending = true;
+        let (client, id) = (self.client.clone(), id.clone());
+        if self.live {
+            // Asked once typing pauses a moment, not on every key.
+            self.tasks.retain(|task| !task.is_ready());
+            self.tasks.push(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(MENTION_PAUSE).await;
+                if this.read_with(cx, |this, _| this.mention_reads != read).unwrap_or(true) {
+                    return;
+                }
+                let found = cx.background_executor().spawn(async move { client.mentions(&id, wanted, &query) }).await;
+                this.update(cx, |this, cx| {
+                    if this.mention_reads == read {
+                        this.mentions = found.unwrap_or_default();
+                        this.mention_pending = false;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }));
+        } else {
+            // (Tests and shots: at once, as the box would answer.)
+            self.mentions = client.mentions(&id, wanted, &query).unwrap_or_default();
+            self.mention_pending = false;
+        }
+    }
+
+    /// What the list over the field offers now: what "@" or "&" suggests while a mention's being
+    /// typed, else "/"'s. Each as it shows: its name, and what's beside it.
+    pub fn shown_offers(&self, cx: &App) -> (Vec<Offer>, bool) {
+        let text = self.text(cx);
+        if mention_query(&text).is_some() && self.slash_dismissed.as_deref() != Some(text.as_str()) {
+            let offers = self.mentions.iter().map(|mention| Offer {
+                    name: mention.title.clone(),
+                    summary: mention.detail.clone().unwrap_or_default(),
+                    icon: Some(match mention.kind.as_str() {
+                        "folder" => IconName::Folder,
+                        "bot" => IconName::Bot,
+                        "session" => IconName::Message,
+                        _ => IconName::File,
+                    }),
+                }).collect();
+            return (offers, true);
+        }
+        let offers = self.slash_offers(cx).into_iter().map(|offer| Offer { name: format!("/{}", offer.name), summary: offer.summary, icon: None }).collect();
+        (offers, false)
+    }
+
+    /// Puts mention `at` in place of the one being typed, and a space after it; an agent picked is
+    /// named when it's sent.
+    fn mention_pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.text(cx);
+        let Some((_, start, _)) = mention_query(&text) else { return };
+        let Some(mention) = self.mentions.get(at.min(self.mentions.len().saturating_sub(1))).cloned() else { return };
+        if let Some(session) = &mention.session {
+            self.named.retain(|(text, _)| text != &mention.text);
+            self.named.push((mention.text.clone(), session.clone()));
+        }
+        let joined = format!("{}{} ", &text[..start], mention.text);
+        self.field.update(cx, |field, cx| field.set_text(joined, cx));
+        window.focus(&self.field.focus_handle(cx), cx);
+        cx.notify();
+    }
+
     fn slash_step(&mut self, by: isize, cx: &mut Context<Self>) {
-        let count = self.slash_offers(cx).len() as isize;
+        let count = self.shown_offers(cx).0.len() as isize;
         if count > 0 {
             self.slash_at = (self.slash_at as isize + by).rem_euclid(count) as usize;
             self.slash_scroll.scroll_to_item(self.slash_at);
@@ -629,6 +835,9 @@ impl Composer {
 
     /// Puts offer `at` in the field, ready for what follows it.
     fn slash_pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shown_offers(cx).1 {
+            return self.mention_pick(at, window, cx);
+        }
         let offers = self.slash_offers(cx);
         let Some(offer) = offers.get(at.min(offers.len().saturating_sub(1))) else { return };
         let text = format!("/{} ", offer.name);
@@ -654,7 +863,8 @@ impl Composer {
                 .when(selected, |d| d.bg(c.selected))
                 .hover(|s| s.bg(c.hover))
                 .on_click(cx.listener(move |this, _, window, cx| this.slash_pick(ix, window, cx)))
-                .child(div().flex_none().text_ui(TypeSize::Small).medium().text_color(c.text).child(format!("/{}", offer.name)))
+                .children(offer.icon.map(|icon| Icon::new(icon).size(IconSize::Nav).color(c.text_muted)))
+                .child(div().flex_none().text_ui(TypeSize::Small).medium().text_color(c.text).child(offer.name.clone()))
                 .child(div().min_w_0().truncate().text_ui(TypeSize::Small).text_color(c.text_muted).child(offer.summary.clone()))
         });
         div()
@@ -770,6 +980,58 @@ fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, bef
     (offered, said_all, state)
 }
 
+/// The mention being typed at the end of `text`: "@" a file (a word with no spaces), or "&" an
+/// agent or session (names have spaces, so it runs on to the line's end), each starting a word.
+/// Which, where its mark is, and what's typed after it. As the Mac's `Mentions.query` and
+/// `AgentReferences.query` read it.
+pub fn mention_query(text: &str) -> Option<(For, usize, &str)> {
+    let starts_word = |at: usize| at == 0 || text[..at].chars().next_back().is_some_and(char::is_whitespace);
+    let file = text.rfind('@').filter(|at| starts_word(*at)).filter(|at| !text[at + 1..].contains(char::is_whitespace));
+    let agent = text.rfind('&').filter(|at| starts_word(*at)).filter(|at| {
+        let rest = &text[at + 1..];
+        !rest.starts_with(char::is_whitespace) && !rest.contains('\n')
+    });
+    match (file, agent) {
+        (Some(file), Some(agent)) if agent > file => Some((For::Agents, agent, &text[agent + 1..])),
+        (Some(file), _) => Some((For::Files, file, &text[file + 1..])),
+        (None, Some(agent)) => Some((For::Agents, agent, &text[agent + 1..])),
+        (None, None) => None,
+    }
+}
+
+/// Whether `name` (as "&" put it in) is still in `text`, as a word of its own.
+fn mentioned(text: &str, name: &str) -> bool {
+    text.match_indices(name).any(|(at, _)| {
+        let after = text[at + name.len()..].chars().next();
+        after.is_none_or(|c| !c.is_alphanumeric())
+    })
+}
+
+/// A `file://` path's escapes decoded.
+fn percent_decoded(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%'
+            && let Some(byte) = path.get(at + 1..at + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            out.push(byte);
+            at += 3;
+            continue;
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Whether a file is a picture, shown as one while it waits to go.
+fn is_picture(path: &Path) -> bool {
+    let extension = path.extension().map(|extension| extension.to_string_lossy().to_lowercase()).unwrap_or_default();
+    matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "bmp" | "tiff")
+}
+
 /// `front` put back ahead of what's written since, as one text.
 fn ahead_of(front: &str, now: &str) -> String {
     if now.is_empty() {
@@ -846,8 +1108,8 @@ impl Render for Composer {
         let theme = cx.theme().clone();
         let c = &theme.colors;
         let text = self.text(cx);
-        let empty = text.trim().is_empty();
-        let offers = self.slash_offers(cx);
+        let empty = text.trim().is_empty() && self.attached.is_empty();
+        let (offers, _) = self.shown_offers(cx);
         self.slash_at = self.slash_at.min(offers.len().saturating_sub(1));
         // The keyword it starts with, as the box will read it (and as the sent message shows it).
         let keyword = typed::keyword(&text).map(|(keyword, _)| Chip::new("typed-keyword", format!("/{keyword}")).icon(IconName::Sparkle).tone(ChipTone::Accent));
@@ -870,7 +1132,9 @@ impl Render for Composer {
                 .text_color(if note.warning { c.warning } else { c.text_muted })
                 .child(note.text)
         });
-        let context = if offers.is_empty() { CONTEXT.to_owned() } else { format!("{CONTEXT} {SLASH}") };
+        // The list's keys while it shows, and while a mention's suggestions are on their way.
+        let waiting = self.mention_pending && mention_query(&text).is_some();
+        let context = if offers.is_empty() && !waiting { CONTEXT.to_owned() } else { format!("{CONTEXT} {SLASH}") };
         let card = div()
             .relative()
             .flex()
@@ -884,6 +1148,7 @@ impl Render for Composer {
             .border_color(c.border_strong)
             .shadow(theme.card_shadow())
             .when(!offers.is_empty(), |d| d.child(self.slash_list(&offers, cx)))
+            .children(self.attachments(cx))
             .children(keyword.map(|chip| div().flex().child(chip)))
             .child(div().pt(space::S1).pr(space::S1).child(self.field.clone()))
             .child(
@@ -892,6 +1157,7 @@ impl Render for Composer {
                     .items_center()
                     .gap(space::S1)
                     .ml(-space::S2)
+                    .child(Button::icon_only("attach", IconName::Paperclip, "Attach Files").ghost().size(ButtonSize::Small).on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))))
                     .children(self.model_chip(cx))
                     .children(self.effort_chip(cx))
                     .child(div().flex_1())
@@ -907,10 +1173,34 @@ impl Render for Composer {
                 this.slash_dismissed = Some(this.text(cx));
                 cx.notify();
             }))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach(paths.paths().to_vec(), cx)))
             .w_full()
             .flex()
             .flex_col()
             .child(div().debug_selector(|| "composer-card".into()).child(card))
             .children(note)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mention_being_typed_is_read_from_the_end() {
+        assert_eq!(mention_query("look at @sche").map(|(w, at, q)| (w, at, q.to_owned())), Some((For::Files, 8, "sche".into())));
+        assert!(mention_query("look at @schema.ts now").is_none(), "a file's word ended");
+        assert!(mention_query("me@example").is_none(), "not a word's start");
+        // An agent's name runs over spaces, to the line's end.
+        assert_eq!(mention_query("ask &Rate lim").map(|(w, _, q)| (w, q.to_owned())), Some((For::Agents, "Rate lim".into())));
+        assert!(mention_query("& then").is_none());
+        assert_eq!(mention_query("@a.ts and &Mi").map(|(w, _, _)| w), Some(For::Agents), "the later one");
+    }
+
+    #[test]
+    fn an_agent_picked_is_named_while_its_name_stays() {
+        assert!(mentioned("ask &Mira about it", "&Mira"));
+        assert!(!mentioned("ask &Miranda", "&Mira"));
+        assert!(!mentioned("ask her", "&Mira"));
     }
 }

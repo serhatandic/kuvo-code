@@ -11,8 +11,10 @@ public enum BoxGate {
     /// What this client uses with no way around it on a box that hasn't it. A name goes in here
     /// when the client drops its fallback for a box without it, or would say it needs a newer
     /// Kuvo Code. `messages.send` (#668 item 3: a message sent as fields, the box writing what the
-    /// agent reads) came last: a box that has it has what came before it too (`sessions.list`,
-    /// `typed`, plan limits' `rows`, `kuvo/updates`, Cursor's limits, `kuvo/sessions/read`).
+    /// agent reads) came before the last: a box that has it has what came before it too
+    /// (`sessions.list`, `typed`, plan limits' `rows`, `kuvo/updates`, Cursor's limits,
+    /// `kuvo/sessions/read`). `sessions.asks`, `queue.items` and `sessions.mentions` came last, for
+    /// the desktop client (gpui), which draws asks, the queue and "@" and "&" as the box says them.
     public static let required: [String] = [
         "agent-tools.own",
         "folders.tree",
@@ -23,7 +25,10 @@ public enum BoxGate {
         "messages.send",
         "models.offered",
         "models.offered.sides",
+        "queue.items",
+        "sessions.asks",
         "sessions.list",
+        "sessions.mentions",
         "sessions.models",
         "sessions.start.empty",
         "typed",
@@ -56,7 +61,9 @@ public enum BoxGate {
         if route.hasPrefix("api/") || route.hasPrefix("kuvo/agents/") { return true }
         for asks in ["kuvo/asks", "kuvo/sandbox/asks", "kuvo/vault/asks", "kuvo/work/asks"] where route == asks || route.hasPrefix(asks + "/") { return true }
         let parts = route.split(separator: "/")
-        return parts.count == 4 && parts[0] == "kuvo" && parts[1] == "sessions" && parts[3] == "decisions"
+        // A conversation's decisions, and its asks (`…/asks`, `…/asks/events`, `…/asks/<ask>`).
+        let session = parts.count >= 4 && parts[0] == "kuvo" && parts[1] == "sessions"
+        return (session && parts.count == 4 && parts[3] == "decisions") || (session && parts[3] == "asks" && parts.count <= 5)
     }
 
     /// What both apps say of a box that's older than they need.

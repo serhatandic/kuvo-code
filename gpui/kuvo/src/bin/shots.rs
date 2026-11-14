@@ -23,15 +23,29 @@ struct Screen {
     /// What's typed in the composer.
     typed: Option<&'static str>,
     empty: bool,
+    /// Tool steps opened (a step's id, and which of its blocks), and outputs shown whole.
+    opens: &'static [(&'static str, usize)],
+    /// What's typed in the sidebar's search, and how many rows the keyboard walks down.
+    search: Option<&'static str>,
+    walks: usize,
+    /// Files attached in the composer (from `gpui/`).
+    attach: &'static [&'static str],
 }
 
 const SCREENS: &[Screen] = &[
-    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false },
-    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false },
-    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false },
-    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false },
-    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false },
-    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true },
+    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "question", width: 1280., height: 820., session: Some("ses_cms"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)], search: None, walks: 0, attach: &[] },
+    Screen { slug: "search", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: Some("redis"), walks: 1, attach: &[] },
+    Screen { slug: "walking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 3, attach: &[] },
+    Screen { slug: "attached", width: 1280., height: 820., session: Some("ses_dark"), typed: Some("This is how the settings look in dark mode now: the cards blend into the page."), empty: false, opens: &[], search: None, walks: 0, attach: &["shots/theme-dark.png", "kuvo_ui/src/theme.rs"] },
+    Screen { slug: "files", width: 1280., height: 820., session: Some("ses_lighthouse"), typed: Some("Look at @Form"), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "agents", width: 1280., height: 820., session: Some("ses_lighthouse"), typed: Some("Ask &"), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[], search: None, walks: 0, attach: &[] },
 ];
 
 fn main() -> anyhow::Result<()> {
@@ -51,6 +65,10 @@ fn main() -> anyhow::Result<()> {
         for appearance in [Appearance::Light, Appearance::Dark] {
             cx.update(|cx| Theme::set_appearance(appearance, cx));
             let stand_in = if screen.empty { StandIn::empty(Replies::Never) } else { StandIn::at(Replies::Never, NOW) };
+            // The rate limits' conversation waits on a permission; another one waits behind it.
+            let mut second = kuvo::stand_in::redis_permission();
+            second["id"] = serde_json::json!("per_push");
+            stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
             let client = BoxClient::new(stand_in);
             let window = cx.open_window(size(px(screen.width), px(screen.height)), |window, cx| cx.new(|cx| Workspace::new(client, false, window, cx)))?;
             let any = window.into();
@@ -62,15 +80,36 @@ fn main() -> anyhow::Result<()> {
                     if let Some(session) = screen.session {
                         workspace.open_read_at_once(session, window, cx);
                     }
+                    if let Some(view) = workspace.conversation() {
+                        for (step, n) in screen.opens {
+                            view.update(cx, |view, cx| view.toggle(kuvo::entries::Fold::Step((*step).to_owned(), *n), cx));
+                        }
+                    }
                     let composer = match workspace.conversation() {
                         Some(view) => view.read(cx).composer().clone(),
                         None => workspace.landing().clone(),
                     };
                     let field = composer.read(cx).field().clone();
+                    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+                    composer.update(cx, |composer, cx| composer.attach(screen.attach.iter().map(|path| root.join(path)), cx));
                     if let Some(typed) = screen.typed {
                         field.update(cx, |field, cx| field.set_text(typed, cx));
                     }
                     window.focus(&field.focus_handle(cx), cx);
+                    if let Some(search) = screen.search {
+                        workspace.search().clone().update(cx, |field, cx| field.set_text(search, cx));
+                        workspace.focus_search(window, cx);
+                    }
+                });
+            })?;
+            cx.run_until_parked();
+            // (After the search's change has come through, which leaves the list.)
+            cx.update_window(any, |root, window, cx| {
+                let workspace = root.downcast::<Workspace>().expect("the workspace");
+                workspace.update(cx, |workspace, cx| {
+                    for _ in 0..screen.walks {
+                        workspace.walk(1, window, cx);
+                    }
                 });
             })?;
             cx.run_until_parked();

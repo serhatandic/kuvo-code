@@ -38,6 +38,13 @@ pub struct Seen {
     pub body: Option<Value>,
 }
 
+/// What a conversation's follower follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Followed {
+    Asks,
+    Queue,
+}
+
 /// The stand-in box. Cheap to clone: clones share it.
 #[derive(Clone)]
 pub struct StandIn {
@@ -60,6 +67,9 @@ struct State {
     models: HashMap<String, Value>,
     /// Open followed routes: the session list's and the engine's events, by an id of their own.
     lists: HashMap<u64, Sender<String>>,
+    /// Those following a conversation's asks or queue (`…/asks/events`, `…/queue/events`): its
+    /// session, which, and where its lines go.
+    followers: HashMap<u64, (String, Followed, Sender<String>)>,
     events: HashMap<u64, Sender<String>>,
     next: u64,
     seen: Vec<Seen>,
@@ -73,6 +83,10 @@ struct State {
     agents_unknown: bool,
     /// Its sessions' models can't be read now (`503`).
     models_fail: bool,
+    /// What each conversation waits on you for, as the box words it (`kuvo/sessions/<id>/asks`).
+    asks: HashMap<String, Vec<Value>>,
+    /// Each conversation's queue, in the order the box shows it (`kuvo/sessions/<id>/queue`).
+    queues: HashMap<String, Vec<Value>>,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -148,6 +162,20 @@ impl StandIn {
         self.state().agents_unknown = !known;
     }
 
+    /// What `session` waits on you for, from now on (as the box words each ask).
+    pub fn set_asks(&self, session: &str, asks: Vec<Value>) {
+        let mut state = self.state();
+        state.asks.insert(session.to_owned(), asks);
+        state.told(session, Followed::Asks);
+    }
+
+    /// `session`'s queue from now on, in the box's order (each as `items` lists it).
+    pub fn set_queue(&self, session: &str, items: Vec<Value>) {
+        let mut state = self.state();
+        state.queues.insert(session.to_owned(), items);
+        state.told(session, Followed::Queue);
+    }
+
     /// An engine event, to those following the engine's events.
     pub fn emit(&self, kind: &str, data: Value) {
         self.state().emit(kind, data);
@@ -195,7 +223,55 @@ impl StandIn {
         state.messages.insert("ses_limits".into(), limits(now));
         state.messages.insert("ses_lighthouse".into(), long_history(now));
         state.messages.insert("ses_recipes".into(), recipes(now));
+        state.asks.insert("ses_cms".into(), vec![cms_question()]);
+        state.queues.insert("ses_signup".into(), signup_queue());
     }
+}
+
+/// A permission waiting in the rate limits' conversation: to install Redis's client.
+pub fn redis_permission() -> Value {
+    json!({
+        "id": "per_redis", "kind": "permission", "session": "ses_limits", "title": "Allow running this command?",
+        "message": null, "command": "npm install ioredis@5 --save", "files": [], "resources": ["npm install ioredis@5 --save"],
+        "choices": [
+            { "answer": "once", "title": "Allow Once", "named": null, "placeholder": null },
+            { "answer": "always", "title": "Always Allow", "named": "npm install", "placeholder": null },
+            { "answer": "reject", "title": "Don’t Allow", "named": null, "placeholder": null },
+            { "answer": "instead", "title": "Tell It What to Do Instead…", "named": null, "placeholder": "Tell it what to do instead…" }
+        ]
+    })
+}
+
+/// What waits behind the sign-up fix's run: one of yours, and a letter from a bot.
+fn signup_queue() -> Vec<Value> {
+    vec![
+        json!({ "id": "msg_q1", "words": "Then do the same for the password field: keep it, and say what's wrong with it", "files": [], "keyword": null, "from": null, "on": "engine", "delivery": "queue", "held": false }),
+        json!({ "id": "msg_q2", "words": "The design review is at 3: the error copy should match the new tone guide.", "files": ["tone-guide.pdf"], "keyword": null, "from": "Mira", "on": "box", "delivery": "queue", "held": false }),
+    ]
+}
+
+/// The files "@" finds in a session's folder.
+const FILES: &[&str] = &["web/src/signup/Form.tsx", "web/src/signup/Form.test.tsx", "web/src/signup/schema.ts", "web/src/settings/Profile.tsx", "web/src/api/client.ts", "web/package.json", "README.md"];
+
+/// The agents and sessions "&" names: bots, then sessions with titles.
+fn named() -> Vec<(&'static str, &'static str, &'static str, Option<&'static str>)> {
+    vec![("Mira", "bot", "ses_mira", Some("Design reviews")), ("Scout", "bot", "ses_scout", Some("Watches CI")), ("Rate limits per API key", "session", "ses_limits", Some("API")), ("Move the blog to the new CMS", "session", "ses_cms", Some("Website"))]
+}
+
+/// The agent's question in the CMS move.
+pub fn cms_question() -> Value {
+    json!({
+        "id": "frm_cms", "kind": "question", "session": "ses_cms", "title": "Question",
+        "questions": [{
+            "key": "q0", "title": "Old posts", "question": "The blog has 214 posts. Should the old URLs keep working once they move?",
+            "options": [
+                { "value": "redirect", "label": "Redirect them", "description": "301s from each old URL to its new one" },
+                { "value": "keep", "label": "Keep the old URLs", "description": "the CMS serves them as they are" },
+                { "value": "drop", "label": "Let them go", "description": null }
+            ],
+            "multiple": false, "custom": true, "required": true
+        }]
+    })
 }
 
 /// The messages of the session at work: a finished turn, then one under way.
@@ -206,15 +282,16 @@ fn signup(now: f64) -> Vec<Value> {
         json!({ "type": "assistant", "id": "msg_s2", "time": { "created": t + 1000.0, "completed": t + 25_000.0 }, "agent": "build", "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "finish": "stop", "content": [
             { "type": "reasoning", "text": "The form likely resets its state on any error from the server, not only on success.", "time": { "created": t + 1000.0, "completed": t + 3000.0 } },
             tool("call_1", "read", "completed", json!({ "filePath": "web/src/signup/Form.tsx" })),
-            tool("call_2", "grep", "completed", json!({ "pattern": "reset\\(" })),
+            tool_with("call_2", "grep", "completed", json!({ "pattern": "reset\\(" }), json!({ "content": [{ "type": "text", "text": "Found 3 matches\nweb/src/signup/Form.tsx:\n  Line 48:     reset();\n  Line 71:   const { reset, setError } = useForm();\nweb/src/settings/Profile.tsx:\n  Line 33:     reset(profile);" }] })),
             { "type": "text", "text": "Found it. When the server answers **409** (the email is taken), the error path calls `reset()` before it shows the message, so every field is cleared:\n\n```tsx\n} catch (error) {\n  reset();\n  setError(error.message);\n}\n```\n\nMoving `reset()` into the success path keeps what was typed. Want me to do that, and put the error under the email field?" }
         ] }),
         json!({ "type": "idle", "id": "msg_s3", "time": { "created": t + 25_000.0 }, "outcome": "succeeded" }),
         user("msg_s4", t + 120_000.0, "Keep what they typed, and say which field is wrong", Some("/plan")),
         json!({ "type": "assistant", "id": "msg_s5", "time": { "created": t + 121_000.0 }, "agent": "build", "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "content": [
-            tool("call_3", "edit", "completed", json!({ "filePath": "web/src/signup/Form.tsx" })),
-            tool("call_4", "shell", "running", json!({ "command": "npm test -- signup" })),
-            { "type": "text", "text": "Moved the reset into the success path, and the 409 now sets the error on the email field. Running the sign-up tests" }
+            tool_with("call_3", "edit", "completed", json!({ "filePath": "web/src/signup/Form.tsx" }), json!({ "metadata": { "files": [{ "file": "web/src/signup/Form.tsx", "additions": 4, "deletions": 2, "status": "modified", "patch": SIGNUP_PATCH }] } })),
+            tool_with("call_4", "shell", "completed", json!({ "command": "npm test -- signup" }), json!({ "content": [{ "type": "text", "text": test_output() }], "metadata": { "exit": 0 } })),
+            { "type": "text", "text": "Moved the reset into the success path, and the 409 now sets the error on the email field. The sign-up tests pass; checking the lint" },
+            tool("call_5", "shell", "running", json!({ "command": "npm run lint" }))
         ] }),
     ]
 }
@@ -273,9 +350,47 @@ fn tool(id: &str, name: &str, status: &str, input: Value) -> Value {
     json!({ "type": "tool", "id": id, "name": name, "state": { "status": status, "input": input } })
 }
 
+/// A tool step with more to its state: what it printed (`content`), what it changed (`metadata`).
+fn tool_with(id: &str, name: &str, status: &str, input: Value, more: Value) -> Value {
+    let mut step = tool(id, name, status, input);
+    if let (Some(state), Some(more)) = (step["state"].as_object_mut(), more.as_object()) {
+        state.extend(more.clone());
+    }
+    step
+}
+
+/// The sign-up form's fix, as the engine keeps an edit's changes.
+const SIGNUP_PATCH: &str = "Index: web/src/signup/Form.tsx\n===================================================================\n--- web/src/signup/Form.tsx\n+++ web/src/signup/Form.tsx\n@@ -44,9 +44,11 @@ export function SignupForm() {\n   async function save(values: Values) {\n     try {\n       await api.post(\"/accounts\", values);\n+      reset();\n     } catch (error) {\n-      reset();\n-      setError(error.message);\n+      if (error.status === 409) {\n+        setError(\"email\", { message: \"That email already has an account.\" });\n+      }\n     }\n   }\n \n";
+
+/// What the sign-up tests printed: long enough to fold.
+fn test_output() -> String {
+    let mut lines = vec!["> web@2.4.0 test".to_owned(), "> vitest run signup".to_owned(), String::new(), " RUN  v3.2.4 /Users/sam/Projects/website/web".to_owned(), String::new()];
+    let cases = ["keeps what was typed when the email is taken", "says which field is wrong", "clears the form once the account is made", "shows the server's message for other errors", "doesn't send twice on a double click", "trims spaces around the email", "accepts a plus in the email", "asks for a longer password", "remembers the plan picked", "focuses the first field with an error"];
+    for (n, case) in cases.iter().enumerate() {
+        lines.push(format!(" ✓ signup/Form.test.tsx > SignupForm > {case} {}ms", 12 + n * 7));
+    }
+    lines.extend([String::new(), " Test Files  1 passed (1)".to_owned(), "      Tests  10 passed (10)".to_owned(), "   Start at  10:42:17".to_owned(), "   Duration  1.84s (transform 210ms, setup 0ms, collect 640ms, tests 96ms)".to_owned()]);
+    lines.join("\n")
+}
+
 impl State {
     fn line(&self, full: bool) -> Value {
         json!({ "at": self.at.to_string(), "full": full, "sessions": self.sessions, "projects": self.projects })
+    }
+
+    /// A conversation's asks, or its queue, as its follower reads them.
+    fn followed(&self, session: &str, what: Followed) -> String {
+        match what {
+            Followed::Asks => json!({ "asks": self.asks.get(session).cloned().unwrap_or_default() }),
+            Followed::Queue => json!({ "paused": false, "held": [], "items": self.queues.get(session).cloned().unwrap_or_default() }),
+        }
+        .to_string()
+    }
+
+    /// Those following `session`'s asks or queue hear it as it is now.
+    fn told(&mut self, session: &str, what: Followed) {
+        let line = self.followed(session, what);
+        self.followers.retain(|_, (followed, which, sender)| followed != session || *which != what || sender.send(line.clone()).is_ok());
     }
 
     fn list_changed(&mut self) {
@@ -437,6 +552,23 @@ impl StandIn {
                 answer(200, json!({ "kind": "mac", "name": NAME, "app": "1.0.0", "engine": "2.3.0", "features": features, "agents": true, "started": 1.0, "chats": format!("{HOME}/.kuvo-code/chats") }))
             }
             ("GET", ["kuvo", "sessions", "list"]) => answer(200, state.line(true)),
+            ("GET", ["kuvo", "search"]) => {
+                let Some(query) = query(path, "q").map(decoded).map(|q| q.replace('+', " ")).filter(|q| !q.trim().is_empty()) else {
+                    return answer(400, json!({ "message": "Say what to search for: q=<words>." }));
+                };
+                let wanted = query.trim().to_lowercase();
+                // The latest first, each with the words around where they were found.
+                let mut results: Vec<(f64, Value)> = Vec::new();
+                for (session, messages) in &state.messages {
+                    let said = messages.iter().flat_map(said_in).find(|text| text.to_lowercase().contains(&wanted));
+                    if let Some(text) = said {
+                        let updated = state.sessions.get(session).and_then(|facts| facts["updated"].as_f64()).unwrap_or(0.0);
+                        results.push((updated, json!({ "session": session, "snippet": snippet(&text, &wanted), "info": { "id": session } })));
+                    }
+                }
+                results.sort_by(|a, b| b.0.total_cmp(&a.0));
+                answer(200, json!({ "results": results.into_iter().map(|(_, result)| result).collect::<Vec<_>>() }))
+            }
             ("GET", ["kuvo", "sessions", "models"]) if state.models_fail => answer(503, json!({ "message": "The engine isn't answering." })),
             ("GET", ["kuvo", "sessions", "models"]) => {
                 let asked = query(path, "sessions").map(decoded).unwrap_or_default();
@@ -506,6 +638,55 @@ impl StandIn {
                 answer(200, json!({}))
             }
             ("GET", ["kuvo", "sessions", session, "typed"]) if state.sessions.contains_key(*session) => answer(200, offers()),
+            ("GET", ["kuvo", "sessions", session, "mentions"]) if state.sessions.contains_key(*session) => {
+                let wanted = query(path, "q").map(decoded).unwrap_or_default().to_lowercase();
+                let mentions: Vec<Value> = match query(path, "for") {
+                    Some("files") => FILES
+                        .iter()
+                        .filter(|file| file.to_lowercase().contains(&wanted))
+                        .take(8)
+                        .map(|file| {
+                            let (folder, name) = file.rsplit_once('/').unwrap_or(("", file));
+                            json!({ "text": format!("@{file}"), "title": name, "detail": if folder.is_empty() { Value::Null } else { json!(folder) }, "kind": "file", "session": null })
+                        })
+                        .collect(),
+                    Some("agents") => named()
+                        .into_iter()
+                        .filter(|(name, _, id, _)| *id != *session && name.to_lowercase().contains(&wanted))
+                        .map(|(name, kind, id, detail)| json!({ "text": format!("&{name}"), "title": name, "detail": detail, "kind": kind, "session": id }))
+                        .collect(),
+                    _ => return answer(400, json!({ "message": "Say which: for=files or for=agents." })),
+                };
+                answer(200, json!({ "mentions": mentions }))
+            }
+            ("GET", ["kuvo", "sessions", session, "queue"]) if state.sessions.contains_key(*session) => {
+                answer(200, json!({ "paused": false, "held": [], "items": state.queues.get(*session).cloned().unwrap_or_default() }))
+            }
+            ("DELETE", ["kuvo", "sessions", session, "queue", item]) => {
+                let Some(queue) = state.queues.get_mut(*session) else { return answer(404, json!({})) };
+                let Some(at) = queue.iter().position(|each| each["id"] == json!(item)) else { return answer(404, json!({})) };
+                let removed = queue.remove(at);
+                let session = (*session).to_owned();
+                let files: Vec<Value> = removed["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|name| json!({ "uri": format!("file://{HOME}/Downloads/{name}"), "name": name })).collect();
+                let words = removed["words"].clone();
+                state.told(&session, Followed::Queue);
+                answer(200, json!({ "paused": false, "held": [], "removed": { "id": item, "text": words, "words": words, "files": files, "delivery": removed["delivery"] } }))
+            }
+            ("GET", ["kuvo", "sessions", session, "asks"]) if state.sessions.contains_key(*session) => answer(200, json!({ "asks": state.asks.get(*session).cloned().unwrap_or_default() })),
+            ("POST", ["kuvo", "sessions", session, "asks", ask]) => {
+                let Some(asks) = state.asks.get_mut(*session) else { return answer(404, json!({})) };
+                let Some(at) = asks.iter().position(|each| each["id"] == json!(ask)) else { return answer(404, json!({})) };
+                asks.remove(at);
+                let asking = (*session).to_owned();
+                if asks.is_empty()
+                    && let Some(facts) = state.sessions.get_mut(*session)
+                {
+                    facts.as_object_mut().map(|facts| facts.remove("asked"));
+                }
+                state.list_changed();
+                state.told(&asking, Followed::Asks);
+                answer(200, json!({}))
+            }
             ("POST", ["kuvo", "sessions", session, "typed"]) if state.sessions.contains_key(*session) => {
                 let text = request.body.as_ref().and_then(|body| body["text"].as_str()).unwrap_or("");
                 answer(200, decide(text))
@@ -527,7 +708,13 @@ impl StandIn {
                     Some(command) => json!({ "type": "user", "id": id, "time": { "created": now }, "text": format!("Run the project's {command} command. {words}").trim().to_owned() }),
                     None => {
                         let keyword = body["keyword"].as_str();
-                        user(&id, now, &words, keyword)
+                        let mut message = user(&id, now, &words, keyword);
+                        // The files it brought, as the box keeps them with its parts.
+                        let paths: Vec<String> = body["files"].as_array().into_iter().flatten().filter_map(|file| file["uri"].as_str()).map(|uri| decoded(uri.trim_start_matches("file://"))).collect();
+                        if !paths.is_empty() {
+                            message["metadata"]["kuvo"]["parts"]["paths"] = json!(paths);
+                        }
+                        message
                     }
                 };
                 state.messages.entry(session.clone()).or_default().push(message);
@@ -635,6 +822,28 @@ impl StandIn {
     }
 }
 
+/// What a message says, as the box's search reads it: your words, the agent's text.
+fn said_in(message: &Value) -> Vec<String> {
+    let mut said: Vec<String> = message["text"].as_str().map(str::to_owned).into_iter().collect();
+    for block in message["content"].as_array().into_iter().flatten() {
+        if block["type"] == "text"
+            && let Some(text) = block["text"].as_str()
+        {
+            said.push(text.to_owned());
+        }
+    }
+    said
+}
+
+/// A line's worth of `text` around where `wanted` is.
+fn snippet(text: &str, wanted: &str) -> String {
+    let flat = text.replace(['*', '`'], "").split_whitespace().collect::<Vec<_>>().join(" ");
+    let at = flat.to_lowercase().find(wanted).unwrap_or(0);
+    let start = flat.get(..at).unwrap_or("").char_indices().rev().nth(40).map_or(0, |(ix, _)| ix);
+    let rest: String = flat[start..].chars().take(110).collect();
+    if start > 0 { format!("…{rest}") } else { rest }
+}
+
 /// A new session's title, from its first words (the box asks a model for one; the stand-in cuts).
 fn title_from(words: &str) -> String {
     let line = words.lines().next().unwrap_or("").trim();
@@ -652,6 +861,29 @@ impl Transport for StandIn {
 
     fn open(&self, request: &Request, hold: &dyn Fn(Closer) -> bool) -> Result<Stream> {
         let route = request.route();
+        // A conversation's asks or queue, followed: as it is now, then a line as it changes.
+        let parts: Vec<&str> = route.split('/').collect();
+        if let ["kuvo", "sessions", session, which @ ("asks" | "queue"), "events"] = parts.as_slice() {
+            let what = if *which == "asks" { Followed::Asks } else { Followed::Queue };
+            let (sender, receiver) = channel();
+            let id = {
+                let mut state = self.state();
+                state.seen.push(Seen { method: request.method.clone(), path: request.path.clone(), body: None });
+                let id = state.next;
+                state.next += 1;
+                let _ = sender.send(state.followed(session, what));
+                state.followers.insert(id, ((*session).to_owned(), what, sender));
+                id
+            };
+            let inner = self.inner.clone();
+            let closer = Closer::new(move || {
+                inner.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).followers.remove(&id);
+            });
+            if !hold(closer.clone()) {
+                closer.close();
+            }
+            return Ok(Stream { status: 200, content_type: Some("application/x-ndjson".into()), reader: Box::new(Pieces { receiver, piece: Vec::new(), at: 0, sse: false }), closer });
+        }
         let lists = route == "kuvo/sessions/list/events";
         if !lists && route != "api/event" {
             let response = self.route(request)?;

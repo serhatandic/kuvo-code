@@ -1,8 +1,10 @@
 // A conversation carried on with the coding agents (PROTOCOL.md, `kuvo/sessions/<id>/agents`), as
 // picking one of their models in it does; a session started with a task (`kuvo/sessions`), and the
-// agents' tools every box answers (`kuvo/agent-tools`; PROTOCOL.md, "Agents' tools").
+// agents' tools every box answers (`kuvo/agent-tools`; PROTOCOL.md, "Agents' tools"). A
+// conversation's queue, what it asks you ("A conversation's asks") and what "@" and "&" suggest in
+// it ("Mentions").
 
-import { any, bool, type Infer, list, literal, map, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
+import { any, bool, type Infer, list, literal, map, NOTHING, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
 
 /** The coding agents' session it goes on in now. */
 export const CARRIED = object({ session: string });
@@ -44,6 +46,71 @@ const ADDED = object({ paused: bool, held: list(string), "waiting?": list(WAITIN
 const REMOVED = object({ id: string, text: string, "files?": list(any), delivery: oneOf(literal("steer"), literal("queue")), "from?": string, words: string, "before?": string });
 
 export type SessionQueue = Infer<typeof QUEUE>;
+
+/** One message waiting, as clients show it in the queue (`queue.items`): what you wrote (without
+ * what the box added for the agent), its files' names, the keyword it was sent with, who it's from
+ * (null for yours), where it waits (the engine's or the coding agents' bridge's inbox, or the box),
+ * how it goes, and whether Stop held it. */
+export const QUEUE_ITEM = object({
+  id: string, words: string, files: list(string), keyword: nullable(string), from: nullable(string),
+  on: words("engine", "box"), delivery: words("steer", "queue"), held: bool,
+});
+
+/** A session's queue with every message waiting, in the order clients show them (`items`: null
+ * while the place it runs can't be read). */
+export const QUEUE_SHOWN = object({ paused: bool, held: list(string), "waiting?": list(WAITING), items: nullable(list(QUEUE_ITEM)) });
+/** A session's queue as `GET …/queue` answers it: `items` only when asked (`?items=1`). */
+export const QUEUE_READ = object({ paused: bool, held: list(string), "waiting?": list(WAITING), "items?": nullable(list(QUEUE_ITEM)) });
+
+export type QueueItem = Infer<typeof QUEUE_ITEM>;
+export type QueueShown = Infer<typeof QUEUE_SHOWN>;
+
+/** An answer a permission's card offers, in its order: its words (`named`, what Always names, shown
+ * as code after them), and the line Instead opens. */
+export const ASK_CHOICE = object({ answer: words("once", "always", "reject", "instead"), title: string, named: nullable(string), placeholder: nullable(string) });
+
+/** A permission waiting (`sessions.asks`): the session asking (a subagent's own), the card's title,
+ * the engine's words, the whole command line it would run, the changes it would make, what it
+ * covers as the card shows it, and its answers. */
+export const PERMISSION_ASK = object({
+  id: string, kind: literal("permission"), session: string, title: string, message: nullable(string), command: nullable(string),
+  files: list(object({ file: string, patch: string, additions: number, deletions: number, status: nullable(words("added", "deleted", "modified")) })),
+  resources: list(string), choices: list(ASK_CHOICE),
+});
+
+/** One of a question's: what it asks, its choices, whether it takes several, words of your own,
+ * and an answer. */
+export const ASKED_QUESTION = object({
+  key: string, title: nullable(string), question: string,
+  options: list(object({ value: string, label: string, description: nullable(string) })),
+  multiple: bool, custom: bool, required: bool,
+});
+
+/** The agent's questions, answered with choices or in words. */
+export const QUESTION_ASK = object({ id: string, kind: literal("question"), session: string, title: string, questions: list(ASKED_QUESTION) });
+
+/** Anything else it waits on you for: a form a card can't take (an MCP server's, fields a client
+ * can't take), or what the box asks you for it (a command outside the sandbox, something from the
+ * vault). What it asks, answered on the Mac or a phone; `dismiss`: whether it can be put away
+ * unanswered from here (a form can; the box's own asks can't). */
+export const OTHER_ASK = object({ id: string, kind: literal("other"), session: string, title: string, message: string, dismiss: bool });
+
+export const SESSION_ASK = oneOf(PERMISSION_ASK, QUESTION_ASK, OTHER_ASK);
+/** What a conversation waits on you for, oldest first. */
+export const SESSION_ASKS = object({ asks: list(SESSION_ASK) });
+
+export type SessionAsk = Infer<typeof SESSION_ASK>;
+export type PermissionAsk = Infer<typeof PERMISSION_ASK>;
+export type QuestionAsk = Infer<typeof QUESTION_ASK>;
+export type AskedQuestion = Infer<typeof ASKED_QUESTION>;
+
+/** What "@" (files) and "&" (agents) suggest as you type (`sessions.mentions`): what goes in the
+ * message, the name shown, beside it (a file's folder, an agent's project), what it is, and an
+ * agent's session (for the send's `named`). */
+export const MENTION = object({ text: string, title: string, detail: nullable(string), kind: words("file", "folder", "bot", "session"), session: nullable(string) });
+export const MENTIONS = object({ mentions: list(MENTION) });
+
+export type Mention = Infer<typeof MENTION>;
 
 /** A pull request's checks as the box counts them from GitHub's: skipped and neutral ones count as
  * passed, cancelled, timed out and the like as failed, the rest still under way. */
@@ -169,11 +236,16 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/list/events", answers: { 200: SESSION_LIST, 405: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/models", answers: { 200: SESSION_MODELS, 400: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/models/offered", answers: { 200: MODELS_OFFERED, 503: REFUSED } },
-  { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE } },
+  { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE_READ } },
+  { route: "GET kuvo/sessions/:id/queue/events", answers: { 200: QUEUE_SHOWN } },
+  { route: "GET kuvo/sessions/:id/asks", answers: { 200: SESSION_ASKS, 404: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/sessions/:id/asks/events", answers: { 200: SESSION_ASKS, 404: REFUSED, 503: REFUSED } },
+  { route: "POST kuvo/sessions/:id/asks/:ask", answers: { 200: NOTHING, 400: REFUSED, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/sessions/:id/mentions", answers: { 200: MENTIONS, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/stop", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/hold", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/resume", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/:item/now", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/add", answers: { 200: ADDED, 400: REFUSED, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
-  { route: "DELETE kuvo/sessions/:id/queue/:item", answers: { 200: object({ paused: bool, held: list(string), "waiting?": list(WAITING), "removed?": REMOVED }), 404: REFUSED } },
+  { route: "DELETE kuvo/sessions/:id/queue/:item", answers: { 200: object({ paused: bool, held: list(string), "waiting?": list(WAITING), "removed?": REMOVED }), 404: REFUSED, 502: REFUSED, 503: REFUSED } },
 ];

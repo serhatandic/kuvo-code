@@ -16,7 +16,10 @@ pub const REQUIRED: &[&str] = &[
     "messages.send",
     "models.offered",
     "models.offered.sides",
+    "queue.items",
+    "sessions.asks",
     "sessions.list",
+    "sessions.mentions",
     "sessions.models",
     "sessions.start.empty",
     "typed",
@@ -53,7 +56,9 @@ pub fn is_allowed(path: &str) -> bool {
         }
     }
     let parts: Vec<&str> = route.split('/').filter(|part| !part.is_empty()).collect();
-    parts.len() == 4 && parts[0] == "kuvo" && parts[1] == "sessions" && parts[3] == "decisions"
+    // A conversation's decisions, and its asks (`…/asks`, `…/asks/events`, `…/asks/<ask>`).
+    let session = parts.len() >= 4 && parts[0] == "kuvo" && parts[1] == "sessions";
+    (session && parts.len() == 4 && parts[3] == "decisions") || (session && parts[3] == "asks" && parts.len() <= 5)
 }
 
 /// Where a box stands with this client.
