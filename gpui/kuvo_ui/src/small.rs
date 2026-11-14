@@ -146,7 +146,9 @@ impl RenderOnce for Checkbox {
                     d.bg(c.surface).border_1().border_color(c.border_strong)
                 }
             });
+        let selector = self.id.to_string();
         let mut root = div()
+            .debug_selector(move || selector)
             .id(self.id)
             .group("checkbox")
             .flex()

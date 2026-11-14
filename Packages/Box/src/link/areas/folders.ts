@@ -126,11 +126,15 @@ async function withDates(tree: FolderTree, dated: boolean): Promise<FolderTree> 
   return { ...tree, modified };
 }
 
+/** What a Files panel's folder leaves out (`files=1`): version control's own folders. */
+const VERSION_CONTROL = new Set([".git", ".hg", ".svn"]);
+
 /** `kuvo/folders?path=`: the folders in one of this box's folders (none: the home folder; `~/`
  * starts there), as a client shows them to choose one: `{path, home, parent, folders: [{name,
  * repository?}]}`, ordered as Finder orders names, hidden ones (starting with ".") only with
  * `hidden=1`. `repository`: a git repository's own checkout. With `files=1`, its files too
- * (`files`, names in the same order, `.DS_Store` left out), as a Files panel lists a folder. */
+ * (`files`, names in the same order, `.DS_Store` left out), as a Files panel lists a folder, and
+ * without version control's own folders (`.git`, `.hg`, `.svn`). */
 export function listFolders(requestPath: string): JSONAnswer<FolderList | FolderRefused | { message: string }> {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
@@ -146,12 +150,15 @@ export function listFolders(requestPath: string): JSONAnswer<FolderList | Folder
   // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them.
   const asks = at === home ? promptedFolders() : new Set<string>();
   const isFolder = (entry: fs.Dirent) => entry.isDirectory() || (entry.isSymbolicLink() && (() => { try { return fs.statSync(path.join(at, entry.name)).isDirectory(); } catch { return false; } })());
+  const panel = query.get("files") === "1";
   const folders = entries
-    .filter(entry => (hidden || !entry.name.startsWith(".")) && isFolder(entry))
+    // A Files panel's: without version control's own folders, which nobody works in by hand.
+    .filter(entry => (hidden || !entry.name.startsWith(".")) && !(panel && VERSION_CONTROL.has(entry.name)) && isFolder(entry))
     .map(entry => (!asks.has(entry.name) && fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }))
     .sort((a, b) => byName(a.name, b.name));
-  const files = query.get("files") === "1"
-    ? entries.filter(entry => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map(entry => entry.name).sort(byName)
+  const files = panel
+    // (A linked worktree's `.git` is a file naming its repository: left out too.)
+    ? entries.filter(entry => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !VERSION_CONTROL.has(entry.name) && !isFolder(entry)).map(entry => entry.name).sort(byName)
     : undefined;
   return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders, ...(files ? { files } : {}) } };
 }
