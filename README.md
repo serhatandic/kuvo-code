@@ -86,7 +86,7 @@ side panel and the usage menu.
   `~/Library/Application Support/run.kuvo.code/engine`.
 - **A private server runs in the background**, `opencode serve --stdio --port 0`
   with a random password. Kuvo Code's own executable, started by launchd with
-  `--box` (`KuvoCode/Keeper`), keeps it, the coding agents' bridge and this
+  `--box` (`swift/KuvoCode/Keeper`), keeps it, the coding agents' bridge and this
   Mac's box running when you quit the app, as a machine's keeper does there,
   and records where each answers in the box's `run` folder. The app follows
   those records, talks to the engine's HTTP API and follows its event stream to
@@ -99,7 +99,7 @@ side panel and the usage menu.
   `gh` find their sign-ins.
 - **The coding agents you already have** (Claude Code, Codex, Cursor, Grok,
   Antigravity) run beside the engine, each as its maker built it and signed in
-  as you: a small bridge of Kuvo Code's own (`Packages/Box/src/agents`, run by the engine's
+  as you: a small bridge of Kuvo Code's own (`box/src/agents`, run by the engine's
   Bun) drives them through the Claude Agent SDK and your `claude`, Codex's
   app-server, Cursor's SDK, and the Agent Client Protocol for Grok and
   Antigravity, and answers the app in the engine's own API. A session there can
@@ -152,7 +152,7 @@ You need Xcode 27 or later.
 ```sh
 git clone https://github.com/serhatandic/kuvo-code.git
 cd kuvo-code
-open KuvoCode.xcodeproj
+open swift/KuvoCode.xcodeproj
 ```
 
 Run the **KuvoCode** scheme. See [CONTRIBUTING.md](CONTRIBUTING.md) for

@@ -123,13 +123,13 @@ the text field (`kuvo_ui/tests/text_field.rs`), the chat list (`tests/chat_list.
 contrast.
 
 `kuvo_box`'s tests (`cargo test -p kuvo_box`) hold it to the shared vectors in
-`Packages/KuvoLink/Vectors` (`tests/vectors.rs`), and run its scenarios against a stand-in box on
+`protocol/vectors` (`tests/vectors.rs`), and run its scenarios against a stand-in box on
 127.0.0.1 (`tests/stand_in.rs`) and a stand-in `ssh` with a machine's home in a test folder
 (`tests/ssh.rs`). None reaches a real box, and none reads a `KUVO_*` variable.
 
 ## Talking to a box
 
-`kuvo_box` is how a Rust client reaches a Kuvo box (`Packages/KuvoLink/PROTOCOL.md`): it finds
+`kuvo_box` is how a Rust client reaches a Kuvo box (`protocol/PROTOCOL.md`): it finds
 the box, holds one that's older than it needs, and reads and changes the box's state through its
 routes. It decides nothing the box decides: it orders the sidebar as every client does, from the
 box's facts.
@@ -175,7 +175,7 @@ What it uses of the box: `kuvo/info`; `kuvo/sessions/list` and `…/events` (wit
 `kuvo/work-queue?owner=all&glance=1` and `kuvo/asks` for the counts; for the rail's areas
 (`kuvo_box::areas`), `kuvo/bots`, `kuvo/groups`, `kuvo/work-queue/categories`, `kuvo/machines` and `kuvo/agents/api/kuvo/limits`' rows, and `kuvo/waiting` once a box
 has it (#711; a box without it is asked once). A message's parts and fields
-are held to `Packages/KuvoLink/Vectors/message-parts.json`.
+are held to `protocol/vectors/message-parts.json`.
 
 Over a box's own server, what's followed streams. Its record is read again for each request, so
 a server that started again (a new port and password each time) is found, its `kuvo/info` read

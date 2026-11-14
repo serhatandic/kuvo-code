@@ -28,7 +28,7 @@ Read: `crates/sidebar/src/sidebar.rs`, `crates/ui/src/components/ai/thread_item.
 ## What Kuvo takes
 
 - The box decides what shows where: `kuvo_box`'s `Listing::sidebar()` (pinned, projects by their
-  newest session, chats; subagents nowhere), held to `Vectors/session-lists.json`. The sidebar
+  newest session, chats; subagents nowhere), held to `protocol/vectors/session-lists.json`. The sidebar
   draws it as it is.
 - Projects with their sessions nested under a thin line (Capy's nested threads), newest first; a
   project with none says "No sessions yet". Six show, then "Show N more".

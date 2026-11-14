@@ -6,7 +6,7 @@ models; then a debug build plays it back into a new session (`KUVO_DEMO_REPLAY`)
 came, while the app measures itself. Compare two builds on the same recording.
 
 ```sh
-cd Tests/Perf
+cd swift/Tests/Perf
 python3 kuvo_perf.py build                                   # the perf copy, from this checkout
 python3 kuvo_perf.py record draw "draw the coolest thing you can in this chat"
 python3 kuvo_perf.py bench "$TMPDIR/kuvo-perf/DerivedData/Build/Products/Debug/Kuvo Code.app" draw thinking-scrolling

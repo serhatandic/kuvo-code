@@ -6,14 +6,14 @@
   the landing view, against this Mac's box or (`--stand-in`) a made-up one. Notes per screen in
   `notes/screens-*.md`; shots in `shots/screens-*.png`; scenarios in `kuvo/tests/screens.rs`.
 - `kuvo_box`: a plain message is checked in the box's order (a model that can't run before the side
-  thread's tag), held to every plain case in `Vectors/typed.json`; `models` (a conversation's
+  thread's tag), held to every plain case in `protocol/vectors/typed.json`; `models` (a conversation's
   model, the models offered, efforts, picking one, starting and stopping a session).
 - `kuvo_ui`: the text field says its error (`error()`) and names its key context (`CONTEXT`).
 
 ## Open
 
 - **Commands shown as typed** need the box: its `send` gives a command's message no parts
-  (`metadata: {}` in `Packages/Box/src/link/areas/messages.ts`), so no client can tell which
+  (`metadata: {}` in `box/src/link/areas/messages.ts`), so no client can tell which
   message ran one without guessing by time, as the Mac's `CommandMessages` does. The box should keep
   `{words, keyword: "/<name>"}` on it. Until then the app shows the engine's words.
 - **Machines**: the app shows this Mac's box only; following a machine live is
@@ -32,7 +32,7 @@
   second review, with each model's `efforts`) and says the rest aren't here yet.
 - **Moved to the box (#668):** whether a message may go on a session's model, and the words
   saying why not, come from the box (`refusal`, `choose`, `action` on `kuvo/sessions/models`, held
-  to `Vectors/model-readiness.json`); the composer draws them. And `kuvo/models/offered` takes the
+  to `protocol/vectors/model-readiness.json`); the composer draws them. And `kuvo/models/offered` takes the
   folder (`models.offered.folder`): the composer asks in its conversation's folder, or the project a
   new one starts in, so a model only a project's own settings add is offered there with its efforts.
 - Left from the second review: the earlier page is asked for from the list's render (pages shorter

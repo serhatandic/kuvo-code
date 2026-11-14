@@ -17,7 +17,7 @@ the app, with where each stands.
 ## Running
 
 ```sh
-cd Tests/E2E
+cd swift/Tests/E2E
 python3 kuvo_e2e.py build                 # the copy (run.kuvo.code.e2e) and the driver
 python3 kuvo_e2e.py new slugify-review    # a run: a folder for its projects and captures
 python3 kuvo_e2e.py project slugify https://github.com/sindresorhus/slugify.git

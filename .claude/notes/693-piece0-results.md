@@ -13,7 +13,7 @@ left for when the user is at the Mac is at the end (§7). Nothing here is produc
   - A box runs on whatever engine it has, so 1.4.4 is the right one to test.
 - Chrome for Testing 155.0.8059.79, mac-arm64, from `mac.json`, set up by the box's own
   `installBrowser()` (§1).
-- The keeper: this worktree's `KuvoCode/Resources/kuvo-browser.js` (`KEEPER = 50`, at `04cd65e35`),
+- The keeper: this worktree's `swift/KuvoCode/Resources/kuvo-browser.js` (`KEEPER = 50`, at `04cd65e35`),
   with its `CONFIG` line (the tools, scripts and instructions) taken from the installed copy, since
   the app fills that line in. 46 tools.
 - Every command ran under `env -i` (no `KUVO_*`), with `HOME` set to a scratch folder,
@@ -108,7 +108,7 @@ The box's own `installBrowser({ now: true })` ran in a test folder (Appendix A, 
     `timingSafeEqual`, and `canonicalPath` on the URL. Otherwise the socket is open to anything on
     127.0.0.1.
   - A test should say that an upgrade without the password is refused.
-- **Design change, new:** the box has no `ws` package (`Packages/Box/package.json`), and the box
+- **Design change, new:** the box has no `ws` package (`box/package.json`), and the box
   bundles with no dependencies. So piece 3 writes a small RFC 6455 server of its own, with tests:
   - masked client frames;
   - continuation frames (the spike handled none);
@@ -518,8 +518,8 @@ console.log(server.port);
 
 ```ts
 // The box's own install code, into the scratch HOME's .kuvo-code.
-import { installBrowser, browserStatus } from "<worktree>/Packages/Box/src/link/browser/install.ts";
-import { K, REAL_BOX, IS_MAC } from "<worktree>/Packages/Box/src/link/home.ts";
+import { installBrowser, browserStatus } from "<worktree>/box/src/link/browser/install.ts";
+import { K, REAL_BOX, IS_MAC } from "<worktree>/box/src/link/home.ts";
 console.log(JSON.stringify({ K, REAL_BOX, IS_MAC }));
 const t = Date.now();
 const outcome = await installBrowser({ now: true });
@@ -824,7 +824,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import type { Duplex } from "node:stream";
 const W = process.argv[2];
-const { serveBox } = await import(`${W}/Packages/Box/src/link/server/serve.ts`);
+const { serveBox } = await import(`${W}/box/src/link/server/serve.ts`);
 const password = crypto.randomBytes(16).toString("hex");
 const auth = "Basic " + Buffer.from(`opencode:${password}`).toString("base64");
 const FRAME = Buffer.alloc(150_000, "A").toString(); // about one Mac frame as a text line

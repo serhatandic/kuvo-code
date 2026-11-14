@@ -38,7 +38,7 @@ keys against the stand-in, whose repositories are fixtures: no git runs). Shots 
 ## Box changes
 
 All additive, each with its route shape, PROTOCOL.md ("Changes"), feature name and tests
-(`Packages/Box/test/git-files.test.ts`, 6, real repositories in a folder of their own):
+(`box/test/git-files.test.ts`, 6, real repositories in a folder of their own):
 
 - `git.files`: `GET kuvo/git/files?directory=` → the folder's changed files as a Changes panel
   groups them, from `git status --porcelain=v2`: group, status, the scope each one's actions and
@@ -179,7 +179,7 @@ Fixed, each with a test that fails on the code before (box tests now 20):
   time. A folder with thousands of new files git doesn't ignore lists the first 1,000 and counts the
   rest.
 - **Left in a client, to move:** the Mac's Files panel leaves out `.git`, `.hg` and `.svn` itself
-  (`KuvoCode/Views/Utilities/FilesView.swift`, `unlisted`); the box does now for `files=1`.
+  (`swift/KuvoCode/Views/Utilities/FilesView.swift`, `unlisted`); the box does now for `files=1`.
 
 ## To move to the box later
 
@@ -210,7 +210,7 @@ request can be made are the box's), but it still works these out from the box's 
    only to be refused (today it shows on any branch, and the box's draft says why it can't). View:
    Branches' card (`current`).
 7. **The Mac's own `.git` filter.** The Mac's Files panel leaves out `.git`, `.hg` and `.svn` itself
-   (`KuvoCode/Views/Utilities/FilesView.swift`, `unlisted`); the box does it for `files=1`, so the
+   (`swift/KuvoCode/Views/Utilities/FilesView.swift`, `unlisted`); the box does it for `files=1`, so the
    Mac could list folders through it.
 8. **"Undo Move" for a staged move.** `GET kuvo/git/files`, each file's `discard`: a value for a
    staged move (its old path comes back, the new one goes to the Trash), in place of the client

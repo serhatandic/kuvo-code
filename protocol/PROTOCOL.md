@@ -10,10 +10,10 @@ through a relay that can't read what passes through it.
 - **The relay** matches connections by address and passes bytes along. It keeps no
   content. It also sends Apple push notifications, whose content it can't read either.
 
-Everything below is implemented twice, in Swift (`Sources/KuvoLink`, for the Mac app and
-the phone) and in the box's TypeScript (`Packages/Box/src`, built to
-`Sources/KuvoLink/Resources/kuvo-link.js`, which every box runs). `Vectors/` holds the test vectors
-both run against.
+Everything below is implemented twice, in Swift (kuvo-ai's `swift/KuvoLink`, for the Mac app and
+the phone) and in the box's TypeScript (`box/src`, built to
+`swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js`, which every box runs). `vectors/`, beside
+this file, holds the test vectors both run against.
 
 ## Keys and addresses
 
@@ -185,7 +185,7 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   `"kuvo-link doc v1\0"` and the bytes. A box checks the signature before it reads them, and keeps
   and passes on the bytes as they are, so no one needs a canonical JSON. `n` is the version, a
   whole number from 1 to 2^53−1, one more with each change. A document is at most 512 KB of
-  bytes. Held to `Vectors/docs.json` (KuvoLink's `Documents`, the bridge's `readDoc`).
+  bytes. Held to `vectors/docs.json` (KuvoLink's `Documents`, the bridge's `readDoc`).
 - **Taken**: a box takes a document that verifies, from an origin it takes that kind from, newer
   than the one it has; at the same version, the one whose bytes' hash sorts first, so every box
   keeps the same one. One of its own further on than it knew (it lost count), by a document or a
@@ -726,7 +726,7 @@ connection.
   document's parts, but `d` is the base64url of the mail's JSON in UTF-8, so each part fits whatever
   the words are; `s` the `seatID`, or empty). One that would take more parts than a document may
   isn't sent at all, and the link's log says so. The coding agents' bridge on each box writes and
-  reads the mail (`Packages/Box/src/agents/groups/peer.ts`), and the box's link carries it. The bridge sends no
+  reads the mail (`box/src/agents/groups/peer.ts`), and the box's link carries it. The bridge sends no
   mail over 512 KB (its JSON in UTF-8): a turn that big goes without `fresh`, then with what the bot
   hasn't heard cut to its latest messages within 160 KB (the last always), and only one that still
   doesn't fit fails, the chat saying the chat is too big to send to that computer; a part that big
@@ -1308,7 +1308,7 @@ What a step of the agent's shows when it's opened, which every client draws from
 message alone (a step is `{type: "tool", id, name, state}`; `state` has `status`, `input`, and once
 it's done `content` and `metadata`). The engine's own tools, and the coding agents' as their bridge
 names them, by the same names (`bash`, in a conversation from before the engine named it, is
-`shell`). Sample steps: `Packages/KuvoLink/Vectors/tool-steps.json`, which only the desktop
+`shell`). Sample steps: `protocol/vectors/tool-steps.json`, which only the desktop
 client (gpui) tests against for now; the phone is to hold itself to it too.
 
 | Tool | Its target (on its row) | Opened, it shows |
@@ -1452,8 +1452,8 @@ sessions").
   (or lets it go, or a whole line comes), and dropped if the engine refuses the change; one made
   while another of the client's is still on its way is kept even where the list already agrees.
   A move between computers (`away`) is the client's to place, as it sees every computer's list.
-- `Packages/KuvoLink/Vectors/session-lists.json` holds engine sessions and what the box knows
-  beside them, the facts the box answers (`Packages/Box/test/session-lists.test.ts`), and the
+- `protocol/vectors/session-lists.json` holds engine sessions and what the box knows
+  beside them, the facts the box answers (`box/test/session-lists.test.ts`), and the
   sidebar a client draws from them (KuvoClient's `SessionListsTests`): a client in another language
   checks itself against it.
 
@@ -1486,7 +1486,7 @@ box decides it from what its engine and coding agents list, so every client show
     choose another. Also a coding agent's account you removed, and a Custom Auto list emptied (one
     deleted runs on your first list, as the bridge runs it).
 - What that means for a composer, decided and worded by the box (`models.readiness`), so no
-  client decides or words it (held to `Vectors/model-readiness.json`, which KuvoClient and gpui are
+  client decides or words it (held to `vectors/model-readiness.json`, which KuvoClient and gpui are
   held to too):
   - `refusal`: why a message on it can't go and what to do, a sentence to show as it is ("GPT-5.5
     needs a sign-in to GitHub Copilot: sign in, or choose another model."); left out where one can
@@ -1549,7 +1549,7 @@ box decides it from what its engine and coding agents list, so every client show
   conversation is on, names its button by `action.label` (or Sign In Again for a sign-in that
   ended). A client sends a plain message without asking the box, so it refuses one with `refusal`
   itself; the typed send decides it on the box ("What a typed message means"). How a signed-out engine
-  provider is signed in to is held to `Vectors/plan-sign-ins.json` in the box and KuvoClient's
+  provider is signed in to is held to `vectors/plan-sign-ins.json` in the box and KuvoClient's
   `PlanSignIns` and `Integration.offeredSignInMethods`, which both apps' Accounts offer from. A
   box without `sessions.models` leaves the Mac deciding from its accounts and models as it did
   before ("For released Macs"); no phone meets one.
@@ -2543,7 +2543,7 @@ without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's ow
   waits for the setup, then `Kuvo.hello`; a setup that failed is `Kuvo.error` with `kind: "missing"`
   and why (an older Mac then puts the browser there itself, as it did). A tool that waited says
   why, or to try again in a minute.
-- **The keeper's version**: `kuvo-browser.js` is built from `Packages/Box/src/browser`
+- **The keeper's version**: `kuvo-browser.js` is built from `box/src/browser`
   (`scripts/build-browser.sh`), which writes its keeper's version in: a hash of its source, so any
   change to the file's source (its tools' code too) restarts the keeper once a new process starts,
   closing its pages (sign-ins stay). Its `Kuvo.hello` says it as `build`, and its `version` is the
@@ -2833,7 +2833,7 @@ since it may be in the conversation already: it goes again and is taken once, an
 on its way it can arrive after Stop. A Stop pressed on another computer can't take back the
 phone's: one waiting may still arrive after it, at most two minutes after it first failed.
 
-A box takes a message sent again under the same id once (`Packages/Box/src/link/server/sent-once.ts`,
+A box takes a message sent again under the same id once (`box/src/link/server/sent-once.ts`,
 by where it goes, its conversation and its id): one still on its way to the conversation waits for
 it and answers as it did; one that went answers as it did then, for an hour, without the
 conversation (or the files it brought) asked again; one the engine refused, or that didn't reach
@@ -2848,9 +2848,9 @@ header is never passed to the engine.
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
-and a method is read in any case. Both are held to the same route scenarios (`Vectors/routes`), and
-every answer of a box's own routes to its route's shape (`Vectors/routes/shapes`, from
-`Packages/Box/src/shared/routes`): an object has only the fields its shape names; a field that can
+and a method is read in any case. Both are held to the same route scenarios (`vectors/routes`), and
+every answer of a box's own routes to its route's shape (`vectors/routes/shapes`, from
+`box/src/shared/routes`): an object has only the fields its shape names; a field that can
 be null is sent as `null`, never left out; and a refusal says why as JSON (`{"message"}`, or `{}`
 when there's nothing to say), never with an empty body. A `kuvo/…` route a box doesn't have
 answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
@@ -2975,7 +2975,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   answer 503. All of its API, but for the routes only the box and the app wire things with:
   `api/kuvo/engine` (where the engine is), `api/kuvo/groups` (group chats' own steps, which a
   phone takes through `kuvo/groups`) and `api/kuvo/artifacts` (what its browser downloaded; the
-  record is read through `kuvo/artifacts`). The same on both (`Vectors/link.json`, `agentRoutes`).
+  record is read through `kuvo/artifacts`). The same on both (`vectors/link.json`, `agentRoutes`).
   - A permission it lists (`…/session/<id>/permission`) has `sandboxed: true` when the agent asking
     runs in the box's sandbox now (its whole program started in it), which a bot answering it reads
     ("Work"); the engine's never have it.
@@ -3060,7 +3060,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `compaction` message with `reason: "manual"` and `session.compaction.started`, `.ended` or
     `.failed`, then `idle`. It adds no reply, and what's there stays. Its `status` says how it went:
     the engine's `idle` and run end say `succeeded` even for one that failed.
-    Only one that ran at rest is a turn of its own (an `idle` before it, `Packages/Box/src/shared/summaries.ts`):
+    Only one that ran at rest is a turn of its own (an `idle` before it, `box/src/shared/summaries.ts`):
     taken at a step of a run on the engine, the `idle` after it ends that run, told as any run's.
     A turn of its own that went through is no news: it stays read if it was, with no notification and
     no `[Session finished]` to a lead, who still reads how the work before it went. One that failed
@@ -3149,7 +3149,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     kuvo/accounts/found/use {id}` copies an opencode key in as the plan's sign-in in use (`200 {}`;
     `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it
     refused; each with `message`). Every box from bridge 0.9.79 (`accounts.found`).
-  What a phone may ask an engine for is the same on both (`Vectors/link.json`, `routes`).
+  What a phone may ask an engine for is the same on both (`vectors/link.json`, `routes`).
 - On a Mac (and on a member of a setup, from its document: "Your setup"), `kuvo/hosts`: the machines this phone may reach directly, with their addresses
   and static keys, so pairing once with the Mac reaches them all; each with `machine`, its id
   (as a bot's `machine`), and `anotherMac`: its engine is another Mac's, which gives it its
@@ -3226,7 +3226,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     started over: a client counts it as not heard, and gives up after a while); `503` while the
     engine or the bridge isn't running; `504` when it didn't answer in time; the engine's own
     status and words for another refusal, `502` for an answer that isn't one.
-  - Held to `Vectors/sign-in.json` in the box and KuvoClient (`SignInMethods`, `SignInAccounts`,
+  - Held to `vectors/sign-in.json` in the box and KuvoClient (`SignInMethods`, `SignInAccounts`,
     `SignInStatus`); the phone's sample Mac and tests' computers serve its recorded answers as they
     are. Every box the update gate lets through has `sign-in.methods`; a client offers no ways of
     its own.
@@ -3239,7 +3239,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   for an address that isn't one; `502 {"message"}` when nothing there answered (start the
   sign-in again). Send it to the computer the sign-in is on: a Mac for its own, a machine's
   bridge for the machine's, the engine's and the coding agents'. The same check on
-  both (`Vectors/link.json`, `signInReturns`).
+  both (`vectors/link.json`, `signInReturns`).
 - `kuvo/config`: the computer's own engine settings as Settings has them, the whole document
   (the same that its `opencode.json` holds). Each computer keeps its own ("Settings per box"),
   and its box answers for them, a Mac's as a machine's: change a machine's on the machine's box,
@@ -3934,7 +3934,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   and carries its conversation over, under the same id) is made this box's: what its folder says
   of where it works, the time zone its wake-ups go by and its rules (yours, from the machine's kit;
   this Mac's own clock on a Mac), its rules here (its approval with this box's Settings ›
-  Permissions, as the Mac makes them, held to `Vectors/routes/box/approval.json`; a machine whose
+  Permissions, as the Mac makes them, held to `vectors/routes/box/approval.json`; a machine whose
   settings aren't its own yet keeps the rules it runs with; and its folder here), and what it's told here, one at a time with its other
   tellings. `200 {"bot"}`; 404 for no such bot here; 409 without the box's words, and 503 when its
   conversation here didn't take it, both of which the box puts right as the bot's next run starts
@@ -4026,7 +4026,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   on the way before, `api/…` and `kuvo/agents/api/…`), from everyone it lists then (its `run/agents.json`; worked out again meanwhile, and waited for a moment only when
   a name after `&` isn't there yet), which the agent reads
   (bridge 0.9.64; before, only the Mac did, and a machine sent it without). The Mac and the boxes
-  read the same cases (`Vectors/routes/names/agent-naming.json`). A message to a group
+  read the same cases (`vectors/routes/names/agent-naming.json`). A message to a group
   chat (`POST kuvo/groups/<id>`) gets its block on the computer the chat lives on, from the agents
   there are to name there (not the chat's own bots), for every client alike: send only the words,
   and a block sent is not taken. Show a message from its parts (`agents`), each `&<name>` they
@@ -5695,7 +5695,7 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   it, or in a bot's chat asks the bot to plan it.
 - How the words read ("every 30 min", "weekdays at 8:30", "since abc1234", "with GPT-5 Mini"), so a
   client draws a keyword as it's typed the way the box reads it once sent, and what the box decides
-  for each kind of text: `Vectors/typed.json`, which the box (`test/typed.test.ts`) and KuvoClient
+  for each kind of text: `vectors/typed.json`, which the box (`test/typed.test.ts`) and KuvoClient
   (`TypedVectorsTests`) are held to.
 - Kept in clients, as drawing: which keyword or command a text starts with as it's typed (to draw
   it), the side thread's tag following what runs as typed, and whether Send needs a model.
@@ -5749,7 +5749,7 @@ the box sends keeps its parts, which clients draw it by. No client writes or rea
   heading). A client asks once for each message (KuvoClient's `MessageParts.read`), before it shows
   the page, and shows one its box couldn't read as written. A command shows as typed: a client
   keeps which messages ran one (`CommandMessages`).
-- Both directions: `Vectors/message-parts.json` (written from the apps' Swift before this), which
+- Both directions: `vectors/message-parts.json` (written from the apps' Swift before this), which
   the box (`test/message-parts.test.ts`) and KuvoClient (`MessagePartsTests`) are held to.
 - One waiting on the box (`waiting` in a queue) says the keyword it was sent with (`keyword`), for
   its row to show in front of its words.
@@ -5764,8 +5764,8 @@ Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
-the route scenario `Vectors/routes/features.json`, which `scripts/route-shapes.sh` writes from the
-box's lists (`FEATURES` in `Packages/Box/src/shared/features.ts`, `MAC_FEATURES` and
+the route scenario `vectors/routes/features.json`, which `scripts/route-shapes.sh` writes from the
+box's lists (`FEATURES` in `box/src/shared/features.ts`, `MAC_FEATURES` and
 `MACHINE_FEATURES` in `shared/routes/mac.ts`). A Mac's list is its box's (`macFeatures`, from #191
 step 2; the app gave it before): every box's but a machine's own, and the Mac's own, the same
 with its app closed, when what needs the app answers `503 {"message"}`.
@@ -6925,7 +6925,7 @@ lost). A client keeps the mark as it keeps the rest of
 the metadata when it writes it back. A session without the mark (a chat from before, or on a box
 from before `sessions.chat`, which marks nothing) goes by its folder, as before (the folder its
 box's `kuvo/info` names, kept for when that isn't answered). What both apps read is `SessionChat`
-(`Packages/KuvoClient`, ClientSessions).
+(`swift/KuvoClient`, ClientSessions).
 
 #### Session notes
 
@@ -7157,7 +7157,7 @@ over any change, and stays noted (`removed`, counted past its last change, or th
 removed if that's later; the 500 highest kept), so no copy brings it back; otherwise
 the change counted highest: `updated` is when one was made (milliseconds since 1970), and each
 change counts on from the one before it, whatever any clock says; at the same count, the words
-that sort last. A count past 2^52 isn't taken. Held to `Vectors/personalities.json` (KuvoLink's
+that sort last. A count past 2^52 isn't taken. Held to `vectors/personalities.json` (KuvoLink's
 `PersonalityLibraries`, the bridge's `mergePersonalities`). Kuvo Code's own presets (`preset.…`)
 aren't in it. A change that would take the library past what a document holds is refused, `400
 {"message"}`, on a Mac as on a machine.
@@ -8406,7 +8406,7 @@ repository written by anything.
 
 Each computer keeps the phones paired with it, and the ones removed, by the pairing they came in
 with (`pairing`, made where the phone paired, new each time). The same rules on a Mac and a
-machine's bridge, held to `Vectors/link.json` (`phoneBooks`):
+machine's bridge, held to `vectors/link.json` (`phoneBooks`):
 
 - A pairing adds a phone, with a pairing nothing removed (what removed its others still keeps
   them out).

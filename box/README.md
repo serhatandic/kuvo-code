@@ -3,12 +3,12 @@
 What runs on each of your computers beside the engine, the same on this Mac and on a Linux machine.
 It's programs of ours, built from this one package:
 
-- **the link** (`src/link`), built to `Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js`,
+- **the link** (`src/link`), built to `swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js`,
   which the Mac app puts on each machine and runs as this Mac's own box (`kuvo-link.js serve`): the
   relay, phones and peers, signed documents, mail, notices, updates, and the box's own routes;
-- **the agents bridge** (`src/agents`), built to `KuvoCode/Resources/kuvo-agents.js`, which the
+- **the agents bridge** (`src/agents`), built to `swift/KuvoCode/Resources/kuvo-agents.js`, which the
   app ships and each box runs with the engine's Bun: the coding agents, group chats and goals;
-- **the browser's keeper and tools** (`src/browser`), built to `KuvoCode/Resources/kuvo-browser.js`,
+- **the browser's keeper and tools** (`src/browser`), built to `swift/KuvoCode/Resources/kuvo-browser.js`,
   which each box runs with the engine's Bun: the browser agents use there, its live view, and the
   agents' browser tools.
 
@@ -16,7 +16,7 @@ The link and the agents bridge stay two processes. The link has to stay up while
 runs the box's self-update, which replaces the agents bridge's files. And an older Mac starts the
 agents bridge itself. What they say to each other is to be defined once, in `src/shared`.
 
-The protocol is `Packages/KuvoLink/PROTOCOL.md`. Code that's there only for released Macs is marked
+The protocol is `protocol/PROTOCOL.md`. Code that's there only for released Macs is marked
 `COMPAT(<version> <item>)`: `scripts/compat.sh` lists it.
 
 ## Building
@@ -30,7 +30,7 @@ what it built in its place. After changing `src/agents` (or `src/shared`), run `
 `package.json` and lockfile, so a change to either needs it rebuilt too), which CI checks
 (`build-agents.sh --check`). `bun run build` runs both. After changing `src/browser` (the
 browser's keeper and the agents' browser tools), run `scripts/build-browser.sh` and commit
-`KuvoCode/Resources/kuvo-browser.js`; CI and the box's suite fail when it isn't what the sources
+`swift/KuvoCode/Resources/kuvo-browser.js`; CI and the box's suite fail when it isn't what the sources
 build, byte for byte (`build-browser.sh --check`). Never bump its keeper's version (`KEEPER`): the
 script writes a hash of the source in its place.
 
@@ -44,7 +44,7 @@ perf or e2e copy, which is that Bun (`BUN_BE_BUN=1 <the copy's engine/<version>/
 In a debug build of the app, `KUVO_BOX_SCRIPT` can name `src/link/main.ts` itself, and
 `KUVO_AGENTS_SCRIPT` `src/agents/main.ts`, which the engine's Bun runs as they are.
 
-The bundle targets Node as well as Bun: the bridge's tests (`Packages/KuvoLink/Tests/Bridge`, `node
+The bundle targets Node as well as Bun: the bridge's tests (`box/bridge-tests`, `node
 --test`) import it, and machines run it with the engine's Bun. So it uses Node's modules, never
 Bun's own.
 

@@ -84,13 +84,13 @@ threads at all.
 
 **Decided (point 4):** which tool steps open is drawing, and stays in the client (`details()`).
 PROTOCOL.md has a "Tool steps" table (names and aliases, the target, what opens), and every
-client's samples are `Packages/KuvoLink/Vectors/tool-steps.json`, which gpui's tests read. **The
+client's samples are `protocol/vectors/tool-steps.json`, which gpui's tests read. **The
 phone should test its step rows against the same file** when it next touches them.
 
 ## Box changes
 
 All additive, each with its route shape, PROTOCOL.md section, feature name and tests
-(`Packages/Box/test/session-asks.test.ts`, `queue-items.test.ts`, `mentions.test.ts`):
+(`box/test/session-asks.test.ts`, `queue-items.test.ts`, `mentions.test.ts`):
 
 - `sessions.asks` ("A conversation's asks"): `GET kuvo/sessions/<id>/asks` (and `…/events`), every
   permission and question waiting in a conversation and its subagents, worded as the Mac's cards

@@ -44,11 +44,11 @@ can't run it: a ChatGPT or SuperGrok plan signs in through Codex or Grok, so it 
 model under that agent. Only for a box without `sessions.models` (the old-box path): a box that has
 it says so itself (`SessionModelState`). `Integration.offeredSignInMethods` is the ways in a box from before `sessions.models` is judged
 by (the old-box path): not a ChatGPT or SuperGrok plan's own (they go through Codex and Grok),
-unless one was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sign-ins.json`).
+unless one was made before; held, with `PlanSignIns`, to the box's cases (`protocol/vectors/plan-sign-ins.json`).
 `SignInMethods`, `SignInAccounts` and `SignInStatus` are the box's answers for signing in
 (`kuvo/sign-in/methods`, `kuvo/sign-in/accounts`, `kuvo/sign-in/status`): the ways in, in its order
 and words, legacy ones apart, the way in an account's card names (`hint`), whether Accounts offers
-Sign In (`offersSignIn`), and what to say when one didn't work; held to `Vectors/sign-in.json`.
+Sign In (`offersSignIn`), and what to say when one didn't work; held to `protocol/vectors/sign-in.json`.
 Both apps' sign-in sheets and Accounts draw them.
 `ProgramUpdate` is how a coding agent's program's update stands as its box keeps it
 (`Integration.programUpdate`: under way, updated, already the newest, or why it failed, by an id
