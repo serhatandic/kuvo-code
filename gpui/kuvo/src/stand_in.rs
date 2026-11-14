@@ -73,8 +73,6 @@ struct State {
     agents_unknown: bool,
     /// Its sessions' models can't be read now (`503`).
     models_fail: bool,
-    /// A box from before `kuvo/models/offered` said each model's side, efforts and aliases.
-    no_sides: bool,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -135,7 +133,7 @@ impl StandIn {
         self.state().nothing_runs = true;
     }
 
-    /// From now on, it says this of `session`'s model (`kuvo/sessions/models`).
+    /// From now on, it says this of `session`'s model (`kuvo/sessions/models`); null leaves it out.
     pub fn set_model_state(&self, session: &str, state: Value) {
         self.state().model_states.insert(session.to_owned(), state);
     }
@@ -143,11 +141,6 @@ impl StandIn {
     /// Whether its sessions' models can be read (`kuvo/sessions/models` answers `503` while not).
     pub fn models_readable(&self, readable: bool) {
         self.state().models_fail = !readable;
-    }
-
-    /// From now on, it answers as a box from before it said each offered model's side.
-    pub fn without_sides(&self) {
-        self.state().no_sides = true;
     }
 
     /// Whether the coding agents' bridge can say its models (`known.agents`).
@@ -450,7 +443,10 @@ impl StandIn {
                 let mut told = serde_json::Map::new();
                 for session in asked.split(',') {
                     if let Some(said) = state.model_states.get(session) {
-                        told.insert(session.into(), said.clone());
+                        // (Null: left out, as the box leaves out one it can't say about yet.)
+                        if !said.is_null() {
+                            told.insert(session.into(), said.clone());
+                        }
                     } else if let Some(model) = state.models.get(session) {
                         told.insert(session.into(), json!({ "model": model, "name": model_name(model), "runs": true }));
                     }
@@ -462,16 +458,11 @@ impl StandIn {
                     return answer(200, json!({ "models": [], "known": { "engine": true, "agents": true }, "starting": null }));
                 }
                 // Each with its side and its efforts, as the box says them.
-                let old = state.no_sides;
                 let with = |side: &'static str, (mut model, efforts): (Value, Vec<&str>)| -> Value {
-                    if !old {
-                        model["side"] = json!(side);
-                        model["efforts"] = json!(efforts);
-                        if model.get("aliases").is_none() {
-                            model["aliases"] = json!([]);
-                        }
-                    } else if let Some(model) = model.as_object_mut() {
-                        model.remove("aliases");
+                    model["side"] = json!(side);
+                    model["efforts"] = json!(efforts);
+                    if model.get("aliases").is_none() {
+                        model["aliases"] = json!([]);
                     }
                     model
                 };

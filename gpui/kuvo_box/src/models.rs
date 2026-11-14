@@ -140,14 +140,11 @@ pub struct OfferedModel {
     pub id: String,
     pub name: String,
     /// Where a conversation on it runs: a conversation is put on one of its own side's in place,
-    /// and goes to another side's as a new session. None from a box before it said.
-    #[serde(default)]
-    pub side: Option<Side>,
+    /// and goes to another side's as a new session (`models.offered.sides`, which the gate needs).
+    pub side: Side,
     /// Its efforts (variants), as its side lists them.
-    #[serde(default)]
     pub efforts: Vec<String>,
     /// Other ids a conversation may name it by (Claude Code's `default`).
-    #[serde(default)]
     pub aliases: Vec<String>,
     /// Its provider is retiring it: a picker leaves it out.
     #[serde(default)]
@@ -199,11 +196,6 @@ pub struct Offered {
 }
 
 impl Offered {
-    /// Whether it says which side each model is on: a box from before `side` doesn't.
-    pub fn says_sides(&self) -> bool {
-        self.models.is_empty() || self.models.iter().any(|model| model.side.is_some())
-    }
-
     /// Whether both sides could say their models.
     pub fn is_whole(&self) -> bool {
         self.known.engine && self.known.agents
@@ -215,7 +207,7 @@ impl Offered {
     /// `listing`) after.
     pub fn keeping(mut self, before: Option<&Offered>) -> Offered {
         let Some(before) = before else { return self };
-        let on = |side: Side| move |model: &&OfferedModel| model.side == Some(side);
+        let on = |side: Side| move |model: &&OfferedModel| model.side == side;
         if !self.known.engine && before.known.engine {
             let kept: Vec<OfferedModel> = before.models.iter().filter(on(Side::Engine)).cloned().collect();
             self.models.splice(0..0, kept);
@@ -364,8 +356,8 @@ mod tests {
 
     #[test]
     fn a_side_that_cant_say_keeps_what_it_said_before() {
-        let engine = json!({ "providerID": "anthropic", "id": "opus", "name": "Opus", "side": "engine", "efforts": ["low", "high"] });
-        let agents = json!({ "providerID": "claude-code", "id": "opus", "name": "Claude Code · Opus", "side": "agents", "efforts": [] });
+        let engine = json!({ "providerID": "anthropic", "id": "opus", "name": "Opus", "side": "engine", "efforts": ["low", "high"], "aliases": [] });
+        let agents = json!({ "providerID": "claude-code", "id": "opus", "name": "Claude Code · Opus", "side": "agents", "efforts": [], "aliases": ["default"] });
         let before = offered(json!({ "models": [engine, agents], "known": { "engine": true, "agents": true }, "listing": ["codex"] }));
         // The bridge started again: its side isn't said now; what it said before stays.
         let now = offered(json!({ "models": [engine], "known": { "engine": true, "agents": false } })).keeping(Some(&before));
@@ -375,7 +367,7 @@ mod tests {
         assert_eq!(now.models[0].efforts, ["low", "high"]);
         // The engine's, the same, ahead.
         let now = offered(json!({ "models": [agents], "known": { "engine": false, "agents": true } })).keeping(Some(&before));
-        assert_eq!(now.models.iter().map(|model| model.side).collect::<Vec<_>>(), [Some(Side::Engine), Some(Side::Agents)]);
+        assert_eq!(now.models.iter().map(|model| model.side).collect::<Vec<_>>(), [Side::Engine, Side::Agents]);
         // Nothing before: as said, not whole.
         assert!(!offered(json!({ "models": [], "known": { "engine": false, "agents": true } })).keeping(None).is_whole());
     }

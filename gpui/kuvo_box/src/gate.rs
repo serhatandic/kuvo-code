@@ -15,6 +15,7 @@ pub const REQUIRED: &[&str] = &[
     "git.status",
     "messages.send",
     "models.offered",
+    "models.offered.sides",
     "sessions.list",
     "sessions.models",
     "sessions.start.empty",

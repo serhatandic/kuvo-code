@@ -625,6 +625,10 @@ impl Conversation {
         }
         for event in during {
             let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+            // Counted as they came: not again.
+            if MODELS_CHANGED.contains(&kind) || kind == "session.model.selected" {
+                continue;
+            }
             let text = match kind {
                 "session.text.delta" => true,
                 "session.reasoning.delta" => false,
@@ -745,5 +749,10 @@ mod tests {
         assert_eq!(conversation.apply(&serde_json::json!({ "type": "session.model.selected", "data": { "sessionID": "ses_1" } })), Applied::ReadAgain);
         assert_eq!(conversation.apply(&serde_json::json!({ "type": "session.model.selected", "data": { "sessionID": "ses_2" } })), Applied::Nothing);
         assert_eq!(conversation.models_changed, 2);
+        // One heard while a read was on its way isn't counted again as the read takes it up.
+        let heard = serde_json::json!({ "type": "model.updated", "data": {} });
+        conversation.apply(&heard);
+        conversation.catch_up(page("Hello"), None, &[heard], Some(true));
+        assert_eq!(conversation.models_changed, 3);
     }
 }

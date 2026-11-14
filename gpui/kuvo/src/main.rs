@@ -12,6 +12,11 @@ use kuvo_box::BoxClient;
 use kuvo_ui::{ActiveTheme, Appearance, Assets, StyledType, Theme, TypeSize};
 
 fn main() {
+    // Asked for the made-up box in a build without it: said plainly, never this Mac's real box instead.
+    if std::env::args().any(|argument| argument == "--stand-in") && !cfg!(feature = "stand-in") {
+        eprintln!("This build has no stand-in box. Run it with: cargo run -p kuvo --features stand-in -- --stand-in");
+        std::process::exit(2);
+    }
     let client = if stand_in() {
         Ok(stand_in_box())
     } else {

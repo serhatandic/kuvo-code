@@ -152,7 +152,11 @@ fn session_row(workspace: &Workspace, id: &str, section: &str, cx: &mut Context<
     let running = facts.as_ref().is_some_and(Facts::is_running);
     let asked = facts.as_ref().is_some_and(|facts| facts.asked.is_some());
     // What it's doing, before its title: at work, or waiting on you.
-    let leading: AnyElement = if running {
+    // Started here, and what was written didn't go: waiting in it, with why.
+    let unsent = workspace.is_unsent(id);
+    let leading: AnyElement = if unsent {
+        status_dot(c.danger).into_any_element()
+    } else if running {
         spinner(SharedString::from(format!("spin-{section}-{id}")), IconSize::Nav, c.text_muted).into_any_element()
     } else if asked {
         status_dot(c.accent).into_any_element()

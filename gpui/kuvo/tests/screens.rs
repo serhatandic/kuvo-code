@@ -541,12 +541,49 @@ fn a_model_named_by_another_id_is_the_one_offered(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_box_from_before_sides_says_to_update_it_rather_than_offer_nothing(cx: &mut TestAppContext) {
+fn a_session_its_box_leaves_out_is_refused_nothing(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
-    stand_in.without_sides();
-    let (workspace, cx) = open(cx, stand_in);
+    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "claude-code", "id": "opus" }, "name": "Opus", "runs": false, "missing": "signIn", "account": { "id": "claude-code", "name": "Claude Code" } }));
+    let (workspace, cx) = open(cx, stand_in.clone());
     let composer = open_session(&workspace, "ses_limits", cx);
-    assert!(composer.read_with(cx, |composer, _| composer.box_too_old_to_pick() && !composer.left_out()));
-    // The chip still names its model.
-    assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Claude Opus 5.5".to_owned()));
+    // Signed in elsewhere; its list still being read, so the box leaves the session out for now.
+    stand_in.set_model_state("ses_limits", serde_json::Value::Null);
+    composer.update(cx, |composer, cx| composer.read_models(cx));
+    cx.run_until_parked();
+    // Its model is still named, and nothing's refused on what was said before.
+    assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Opus".to_owned()));
+    cx.simulate_input("Go on");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/send").len(), 1);
+}
+
+#[gpui::test]
+fn the_landing_view_reads_whats_offered_each_time_it_opens(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.agents_known(false);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let landing = workspace.read_with(cx, |workspace, _| workspace.landing().clone());
+    let offers_agents = |cx: &mut VisualTestContext| landing.read_with(cx, |composer, _| composer.menu_models().iter().any(|model| model.provider_id == "claude-code"));
+    assert!(!offers_agents(cx));
+    // The coding agents' bridge is back; New Session again: they're offered.
+    stand_in.agents_known(true);
+    open_session(&workspace, "ses_recipes", cx);
+    workspace.update_in(cx, |workspace, window, cx| workspace.new_session(None, window, cx));
+    cx.run_until_parked();
+    assert!(offers_agents(cx));
+}
+
+#[gpui::test]
+fn a_conversations_model_waits_to_be_changed_until_its_known_where_it_runs(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    workspace.update_in(cx, |workspace, window, cx| workspace.open_session("ses_limits", window, cx));
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let composer = view.read_with(cx, |view, _| view.composer().clone());
+    assert!(!composer.read_with(cx, |composer, _| composer.can_pick()));
+    // Its follow finds it on the engine.
+    let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
+    let conversation = read_now(&client, "ses_limits").unwrap();
+    view.update(cx, |view, cx| view.take(ConversationUpdate::Conversation(conversation), cx));
+    assert!(composer.read_with(cx, |composer, _| composer.can_pick()));
 }

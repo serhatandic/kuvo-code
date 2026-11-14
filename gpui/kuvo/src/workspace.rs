@@ -63,6 +63,9 @@ pub struct Workspace {
     landing_picked: bool,
     /// What the box said of sessions started here, until its list has them: their projects.
     started: HashMap<String, Option<String>>,
+    /// Sessions started here whose first message didn't go (or came back with why), while you were
+    /// elsewhere: marked in the sidebar until opened.
+    unsent: HashSet<String>,
     collapsed: HashSet<String>,
     showing_all: HashSet<String>,
     /// Now, as the sidebar's times count from it (fixed for shots).
@@ -90,6 +93,7 @@ impl Workspace {
             landing_place: None,
             landing_picked: false,
             started: HashMap::new(),
+            unsent: HashSet::new(),
             collapsed: HashSet::new(),
             showing_all: HashSet::new(),
             now: None,
@@ -285,11 +289,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Whether `session` was started here and what was written didn't go while you were elsewhere.
+    pub fn is_unsent(&self, session: &str) -> bool {
+        self.unsent.contains(session)
+    }
+
     /// Opens a session's conversation.
     pub fn open_session(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.opened() == Some(session) {
             return;
         }
+        self.unsent.remove(session);
         let (client, live) = (self.client.clone(), self.live);
         let composer = self.composer_for(session, window, cx);
         // Only the composer on screen asks again for what the box couldn't say.
@@ -334,6 +344,8 @@ impl Workspace {
         self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
         let landing = self.landing.clone();
         self.show_composer(Some(&landing), cx);
+        // What's offered may have changed since it was last open (an account signed in elsewhere).
+        landing.update(cx, |composer, cx| composer.read_models(cx));
         self.open = Open::Landing;
         window.focus(&self.landing.focus_handle(cx), cx);
         cx.notify();
@@ -382,6 +394,9 @@ impl Workspace {
                 let writing_next = !self.landing.read(cx).field().read(cx).text().trim().is_empty();
                 if self.is_landing() && !writing_next {
                     self.open_session(session, window, cx);
+                } else if composer.read(cx).field().read(cx).error().is_some() || !composer.read(cx).field().read(cx).text().is_empty() {
+                    // You're elsewhere: what didn't go waits there, marked in the sidebar.
+                    self.unsent.insert(session.clone());
                 }
             }
         }
