@@ -104,4 +104,29 @@ import Testing
         #expect(count == 0)
     }
 
+    @Test func shownUsageIsAcknowledgedByIdWhileSilentDeliveryStaysUnacknowledged() async throws {
+        let name = "BoxNoticesTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        func answer(_ id: String) throws -> BoxNotices.Told {
+            let json = #"{"notices":[{"id":"entry","notice":{"category":"usage","thread":"usage:one-row","data":{"notice":"ID"}}}]}"#.replacingOccurrences(of: "ID", with: id)
+            return try JSONDecoder().decode(BoxNotices.Told.self, from: Data(json.utf8))
+        }
+        let notices = BoxNotices()
+        notices.usageDelivery = .init(defaults: defaults)
+        var posts = 0, acknowledgements: [String] = []
+        notices.showUsage = { _, _ in posts += 1; return true }
+        notices.usageShown = { acknowledgements.append($0) }
+        await notices.take(try answer("usage_shown"), from: "one").value
+        await notices.take(try answer("usage_shown"), from: "two").value
+        #expect(posts == 1)
+        #expect(acknowledgements == ["usage_shown", "usage_shown"])
+        notices.usageVisible = { false }
+        await notices.take(try answer("usage_silent"), from: "one").value
+        notices.usageVisible = { true }
+        await notices.take(try answer("usage_silent"), from: "two").value
+        #expect(posts == 2)
+        #expect(acknowledgements == ["usage_shown", "usage_shown"])
+    }
+
 }
