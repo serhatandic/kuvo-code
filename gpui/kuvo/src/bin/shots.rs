@@ -28,18 +28,21 @@ struct Screen {
     /// What's typed in the sidebar's search, and how many rows the keyboard walks down.
     search: Option<&'static str>,
     walks: usize,
+    /// Files attached in the composer (from `gpui/`).
+    attach: &'static [&'static str],
 }
 
 const SCREENS: &[Screen] = &[
-    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0 },
-    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0 },
-    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false, opens: &[], search: None, walks: 0 },
-    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[], search: None, walks: 0 },
-    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0 },
-    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)], search: None, walks: 0 },
-    Screen { slug: "search", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: Some("redis"), walks: 1 },
-    Screen { slug: "walking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 3 },
-    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[], search: None, walks: 0 },
+    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)], search: None, walks: 0, attach: &[] },
+    Screen { slug: "search", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: Some("redis"), walks: 1, attach: &[] },
+    Screen { slug: "walking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 3, attach: &[] },
+    Screen { slug: "attached", width: 1280., height: 820., session: Some("ses_dark"), typed: Some("This is how the settings look in dark mode now: the cards blend into the page."), empty: false, opens: &[], search: None, walks: 0, attach: &["shots/theme-dark.png", "kuvo_ui/src/theme.rs"] },
+    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[], search: None, walks: 0, attach: &[] },
 ];
 
 fn main() -> anyhow::Result<()> {
@@ -80,6 +83,8 @@ fn main() -> anyhow::Result<()> {
                         None => workspace.landing().clone(),
                     };
                     let field = composer.read(cx).field().clone();
+                    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+                    composer.update(cx, |composer, cx| composer.attach(screen.attach.iter().map(|path| root.join(path)), cx));
                     if let Some(typed) = screen.typed {
                         field.update(cx, |field, cx| field.set_text(typed, cx));
                     }

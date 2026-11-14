@@ -568,7 +568,13 @@ impl StandIn {
                     Some(command) => json!({ "type": "user", "id": id, "time": { "created": now }, "text": format!("Run the project's {command} command. {words}").trim().to_owned() }),
                     None => {
                         let keyword = body["keyword"].as_str();
-                        user(&id, now, &words, keyword)
+                        let mut message = user(&id, now, &words, keyword);
+                        // The files it brought, as the box keeps them with its parts.
+                        let paths: Vec<String> = body["files"].as_array().into_iter().flatten().filter_map(|file| file["uri"].as_str()).map(|uri| decoded(uri.trim_start_matches("file://"))).collect();
+                        if !paths.is_empty() {
+                            message["metadata"]["kuvo"]["parts"]["paths"] = json!(paths);
+                        }
+                        message
                     }
                 };
                 state.messages.entry(session.clone()).or_default().push(message);

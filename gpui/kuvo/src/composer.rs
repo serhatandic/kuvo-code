@@ -7,17 +7,19 @@
 //! sends the same way.
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyBinding, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, actions,
-    div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, ObjectFit, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    StyledImage as _, Subscription, Task, Window, actions, div, img, prelude::FluentBuilder as _, px,
 };
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kuvo_box::models::{ModelState, Offered, OfferedModel, Side, StartIn, effort_title};
 use kuvo_box::typed::{self, Answer, ModelRef, Offers};
+use kuvo_box::parts::File;
 use kuvo_box::{BoxClient, Draft, Sent, Where};
 use kuvo_ui::{
-    ActiveTheme, Button, ButtonSize, IconName, StyledType, TextField, TextFieldEvent, TypeSize,
+    ActiveTheme, Button, ButtonSize, Icon, IconName, IconSize, StyledType, TextField, TextFieldEvent, TypeSize,
     menu::{Menu, MenuEntry, PopoverMenu},
     small::{Chip, ChipTone},
     theme::{radius, space},
@@ -125,6 +127,8 @@ pub struct Composer {
     note: Option<Note>,
     /// What the field held as the note was shown: the note goes once that changes.
     noted: String,
+    /// Files and pictures that go with what's written, in the order they were added.
+    attached: Vec<PathBuf>,
     tasks: Vec<Task<()>>,
     _field: Subscription,
 }
@@ -183,6 +187,7 @@ impl Composer {
             slash_dismissed: None,
             note: None,
             noted: String::new(),
+            attached: Vec::new(),
             tasks: Vec::new(),
             _field: subscription,
         };
@@ -487,12 +492,15 @@ impl Composer {
     /// Sends what's written (or, in a new conversation, starts it on the box and sends it there).
     pub fn send(&mut self, cx: &mut Context<Self>) {
         let text = self.text(cx);
-        if text.trim().is_empty() || self.sending {
+        if (text.trim().is_empty() && self.attached.is_empty()) || self.sending {
             return;
         }
         let mut draft = Draft::new(BoxClient::new_id(), text.clone());
+        let files = std::mem::take(&mut self.attached);
+        draft.files = files.iter().map(|path| File::at(path)).collect();
         draft.refusal = self.models.state.as_ref().and_then(|state| state.refusal(ACCOUNTS));
         if self.needs_model() {
+            self.attached = files;
             self.set_note(Note { text: "Choose a model to send it.".into(), warning: true }, cx);
             cx.notify();
             return;
@@ -512,7 +520,10 @@ impl Composer {
                     this.sending = false;
                     match result {
                         Ok(sent) => this.sent(sent, &text, cx),
-                        Err(error) => this.put_back(&text, Some(error.to_string()), cx),
+                        Err(error) => {
+                            this.attach(files, cx);
+                            this.put_back(&text, Some(error.to_string()), cx)
+                        }
                     }
                     cx.notify();
                 });
@@ -538,7 +549,10 @@ impl Composer {
                                 written: text.clone(),
                                 sent,
                             }),
-                            Err(error) => this.put_back(&text, Some(error.to_string()), cx),
+                            Err(error) => {
+                                this.attach(files, cx);
+                                this.put_back(&text, Some(error.to_string()), cx)
+                            }
                         }
                         cx.notify();
                     },
@@ -592,6 +606,82 @@ impl Composer {
                 cx.notify();
             }
         });
+    }
+
+    /// What goes with what's written: files and pictures, in order.
+    pub fn attached(&self) -> &[PathBuf] {
+        &self.attached
+    }
+
+    /// Files and pictures to go with what's written (picked, or dropped on it). Folders aren't
+    /// files to send; one already here isn't added twice.
+    pub fn attach(&mut self, paths: impl IntoIterator<Item = PathBuf>, cx: &mut Context<Self>) {
+        for path in paths {
+            if !path.is_dir() && !self.attached.contains(&path) {
+                self.attached.push(path);
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn detach(&mut self, at: usize, cx: &mut Context<Self>) {
+        if at < self.attached.len() {
+            self.attached.remove(at);
+            cx.notify();
+        }
+    }
+
+    /// The system's file picker, for files and pictures to attach.
+    fn pick_files(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picked.await {
+                this.update(cx, |this, cx| this.attach(paths, cx)).ok();
+            }
+        }));
+    }
+
+    /// What's attached, above the field: pictures as thumbnails, other files as chips, each with ×.
+    fn attachments(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.attached.is_empty() {
+            return None;
+        }
+        let c = cx.theme().colors.clone();
+        let items = self.attached.iter().enumerate().map(|(at, path)| {
+            let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            let remove = cx.listener(move |this, _, _, cx| this.detach(at, cx));
+            if is_picture(path) {
+                div()
+                    .id(("attached", at))
+                    .relative()
+                    .size(px(52.))
+                    .flex_none()
+                    .rounded(radius::NAV)
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(c.border)
+                    .bg(c.sunken)
+                    .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover).with_fallback(|| Icon::new(IconName::Image).size(IconSize::Card).into_any_element()))
+                    .child(
+                        div()
+                            .id(("detach", at))
+                            .absolute()
+                            .top(px(3.))
+                            .right(px(3.))
+                            .rounded(radius::PILL)
+                            .bg(c.elevated)
+                            .border_1()
+                            .border_color(c.border)
+                            .cursor_pointer()
+                            .on_click(remove)
+                            .child(Icon::new(IconName::Close).size(IconSize::Nav).color(c.text_muted)),
+                    )
+                    .into_any_element()
+            } else {
+                Chip::new(("attached", at), name).icon(IconName::File).on_remove(move |window, cx| remove(&gpui::ClickEvent::default(), window, cx)).into_any_element()
+            }
+        });
+        Some(div().debug_selector(|| "attachments".into()).flex().flex_wrap().items_center().gap(space::S1_5).children(items).into_any_element())
     }
 
     /// "/"'s offers for what's written: shown while it's "/" and a name being typed.
@@ -770,6 +860,12 @@ fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, bef
     (offered, said_all, state)
 }
 
+/// Whether a file is a picture, shown as one while it waits to go.
+fn is_picture(path: &Path) -> bool {
+    let extension = path.extension().map(|extension| extension.to_string_lossy().to_lowercase()).unwrap_or_default();
+    matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "bmp" | "tiff")
+}
+
 /// `front` put back ahead of what's written since, as one text.
 fn ahead_of(front: &str, now: &str) -> String {
     if now.is_empty() {
@@ -846,7 +942,7 @@ impl Render for Composer {
         let theme = cx.theme().clone();
         let c = &theme.colors;
         let text = self.text(cx);
-        let empty = text.trim().is_empty();
+        let empty = text.trim().is_empty() && self.attached.is_empty();
         let offers = self.slash_offers(cx);
         self.slash_at = self.slash_at.min(offers.len().saturating_sub(1));
         // The keyword it starts with, as the box will read it (and as the sent message shows it).
@@ -884,6 +980,7 @@ impl Render for Composer {
             .border_color(c.border_strong)
             .shadow(theme.card_shadow())
             .when(!offers.is_empty(), |d| d.child(self.slash_list(&offers, cx)))
+            .children(self.attachments(cx))
             .children(keyword.map(|chip| div().flex().child(chip)))
             .child(div().pt(space::S1).pr(space::S1).child(self.field.clone()))
             .child(
@@ -892,6 +989,7 @@ impl Render for Composer {
                     .items_center()
                     .gap(space::S1)
                     .ml(-space::S2)
+                    .child(Button::icon_only("attach", IconName::Paperclip, "Attach Files").ghost().size(ButtonSize::Small).on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))))
                     .children(self.model_chip(cx))
                     .children(self.effort_chip(cx))
                     .child(div().flex_1())
@@ -907,6 +1005,7 @@ impl Render for Composer {
                 this.slash_dismissed = Some(this.text(cx));
                 cx.notify();
             }))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach(paths.paths().to_vec(), cx)))
             .w_full()
             .flex()
             .flex_col()

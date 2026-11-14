@@ -728,3 +728,40 @@ fn the_keyboard_walks_the_sidebar_and_opens_what_its_on(cx: &mut TestAppContext)
     cx.simulate_keystrokes("enter");
     assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_lifetimes".into()));
 }
+
+#[gpui::test]
+fn files_attached_go_with_the_message_and_show_on_it(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_recipes", cx);
+    let folder = std::env::temp_dir().join(format!("kuvo-attach-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let (note, picture) = (folder.join("shopping list.txt"), folder.join("fridge.png"));
+    std::fs::write(&note, "rice").unwrap();
+    std::fs::write(&picture, b"not really a png").unwrap();
+
+    // Attached (as the picker or a drop hands them), each shows; a folder isn't a file to send.
+    composer.update(cx, |composer, cx| composer.attach([note.clone(), picture.clone(), folder.clone(), note.clone()], cx));
+    cx.run_until_parked();
+    assert_eq!(composer.read_with(cx, |composer, _| composer.attached().to_vec()), [note.clone(), picture.clone()]);
+    assert!(bounds(cx, "attachments").is_some());
+
+    // × takes one away; Send takes them with what's written, as files on this Mac's box.
+    composer.update(cx, |composer, cx| composer.detach(1, cx));
+    cx.simulate_input("What can I make with these?");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let sent = stand_in.seen_at("POST", "kuvo/sessions/ses_recipes/send");
+    let body = sent.last().and_then(|seen| seen.body.clone()).expect("sent");
+    let uri = format!("file://{}", note.to_string_lossy().replace(' ', "%20"));
+    assert_eq!(body["files"], json!([{ "uri": uri, "name": "shopping list.txt" }]));
+    assert!(composer.read_with(cx, |composer, _| composer.attached().is_empty()));
+
+    // Files alone can be sent.
+    composer.update(cx, |composer, cx| composer.attach([picture.clone()], cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_recipes/send").len(), 2);
+    std::fs::remove_dir_all(&folder).ok();
+}
