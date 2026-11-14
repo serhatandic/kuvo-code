@@ -403,9 +403,8 @@ private struct SubagentConversation: View {
         guard !isOffline else { return }
         Analytics.shared.track("subagent_messaged", ["working": isWorking])
         // A model that can't run: why, said instead of sending, as for any conversation (SessionView's `send`).
-        let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
         // (One with no model of its own runs on the one its box names.)
-        let unavailable = isAgentsOwn ? nil : (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
+        let unavailable = isAgentsOwn ? nil : (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, said: model.modelState) }
         model.submitDraft(for: catalog.model(model.session.model), queue: false, unavailable: unavailable)
     }
 }
