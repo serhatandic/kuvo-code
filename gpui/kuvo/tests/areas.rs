@@ -78,10 +78,10 @@ fn only_the_area_on_screen_asks_the_box(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
     let (_workspace, cx) = open(cx, stand_in.clone());
     assert!(stand_in.seen_at("GET", "kuvo/bots").is_empty());
-    assert!(stand_in.seen_at("GET", "kuvo/work-queue").is_empty());
+    assert!(stand_in.seen_at("GET", "kuvo/work-queue/categories").is_empty());
     assert!(stand_in.seen_at("GET", "kuvo/machines").is_empty());
     click(cx, "rail-queue");
-    assert_eq!(stand_in.seen_at("GET", "kuvo/work-queue").len(), 1);
+    assert_eq!(stand_in.seen_at("GET", "kuvo/work-queue/categories").len(), 1);
     assert!(stand_in.seen_at("GET", "kuvo/bots").is_empty());
 }
 
@@ -154,6 +154,32 @@ fn a_narrow_window_folds_the_areas_sidebar_away_and_the_rail_brings_it_out(cx: &
 }
 
 #[gpui::test]
+fn switching_areas_in_a_wide_window_still_folds_the_sidebar_when_it_narrows(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    click(cx, "session-project-ses_signup");
+    cx.simulate_keystrokes("ctrl-2");
+    assert_eq!(area(&workspace, cx), Area::Bots);
+    cx.simulate_keystrokes("ctrl-1 cmd-shift-f");
+    cx.run_until_parked();
+    assert_eq!(area(&workspace, cx), Area::Sessions);
+    cx.simulate_resize(size(px(760.), px(800.)));
+    cx.run_until_parked();
+    assert!(bounds(cx, "area-sidebar").is_none());
+}
+
+#[gpui::test]
+fn a_short_window_keeps_help_and_settings_in_reach(cx: &mut TestAppContext) {
+    let (_workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    cx.simulate_resize(size(px(1000.), px(480.)));
+    cx.run_until_parked();
+    let settings = bounds(cx, "rail-settings").expect("Settings");
+    assert!(settings.bottom() <= px(480.), "Settings at {:?}", settings);
+    let more = bounds(cx, "more-rings").expect("the rest behind +N");
+    assert!(more.bottom() <= bounds(cx, "rail-help").unwrap().top());
+    assert!(bounds(cx, "ring-3").is_none(), "fewer rings where there's less room");
+}
+
+#[gpui::test]
 fn needs_you_lists_whats_waiting_on_you_across_projects_with_what_each_asks(cx: &mut TestAppContext) {
     let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
     // On top, in the box's order (the newest ask first), each with its project and what it asks.
@@ -195,8 +221,11 @@ fn a_box_from_before_711_shows_no_needs_you_and_draws_no_counts(cx: &mut TestApp
     let (workspace, cx) = open(cx, stand_in.clone());
     assert!(bounds(cx, "header-Needs you").is_none());
     assert!(workspace.read_with(cx, |workspace, _| workspace.waiting().is_none()));
-    // It isn't asked again with each list.
-    workspace.update_in(cx, |workspace, _, cx| workspace.read_at_once(cx));
+    // It isn't asked again with each list (only once the box is reached again).
+    let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
+    let mut listing = kuvo_box::Listing::new();
+    listing.take(client.session_list(None).unwrap());
+    workspace.update(cx, |workspace, cx| workspace.take_list(kuvo_box::ListUpdate::Listing(listing), cx));
     assert_eq!(stand_in.seen_at("GET", "kuvo/waiting").len(), 1);
     // The project's own count, as before, still shows who waits.
     assert!(bounds(cx, "session-project-ses_limits").is_some());
@@ -223,6 +252,10 @@ fn back_and_forward_go_where_the_window_has_been(cx: &mut TestAppContext) {
     assert_eq!((area(&workspace, cx), title(&workspace, cx).as_deref()), (Area::Queue, Some("Work Queue")));
     click(cx, "back");
     assert_eq!((area(&workspace, cx), opened(&workspace, cx).as_deref()), (Area::Sessions, Some("ses_dark")));
+    // Back in the conversation still open, the keyboard is in it.
+    cx.simulate_input("ok");
+    let composer = workspace.read_with(cx, |workspace, cx| workspace.conversation().unwrap().read(cx).composer().clone());
+    assert_eq!(composer.read_with(cx, |composer, cx| composer.field().read(cx).text().to_owned()), "ok");
     click(cx, "back");
     assert_eq!(opened(&workspace, cx).as_deref(), Some("ses_signup"));
     cx.simulate_keystrokes("cmd-] cmd-] cmd-]");
@@ -254,4 +287,20 @@ fn with_no_account_an_empty_ring_goes_to_sign_in(cx: &mut TestAppContext) {
     assert!(bounds(cx, "ring-0").is_none());
     click(cx, "no-accounts");
     assert_eq!(title(&workspace, cx).as_deref(), Some("Accounts"));
+}
+
+#[gpui::test]
+fn back_passes_over_a_session_gone_since(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    click(cx, "session-project-ses_signup");
+    click(cx, "session-project-ses_webhook");
+    click(cx, "rail-bots");
+    // The webhook session is archived elsewhere, and the list says so.
+    stand_in.set_facts("ses_webhook", |facts| facts["archived"] = serde_json::json!(true));
+    workspace.update_in(cx, |workspace, _, cx| workspace.read_at_once(cx));
+    cx.run_until_parked();
+    click(cx, "back");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_signup".into()));
+    assert_eq!(area(&workspace, cx), Area::Sessions);
 }

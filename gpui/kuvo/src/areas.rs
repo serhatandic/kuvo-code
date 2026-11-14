@@ -234,11 +234,9 @@ impl AreaView {
         for bot in &bots.bots {
             let key = format!("bot:{}", bot.id);
             let selected = self.is_selected(&key);
-            // BOX-NEEDED: what a bot is doing now, `now: {working, asking, words}` on each bot in `GET kuvo/bots` (#711): until the box says it, its row shows its job.
-            let (working, asking, words) = match &bot.now {
-                Some(now) => (now.working, now.asking, now.words.clone().unwrap_or_else(|| bot.job.clone())),
-                None => (0, 0, bot.job.clone()),
-            };
+            // BOX-NEEDED: what a bot is doing now, `now: {working, asking}` on each bot in `GET kuvo/bots` (#711): until the box says it, its row shows its job.
+            let (working, asking) = bot.now.as_ref().map_or((0, 0), |now| (now.working, now.asking));
+            let words = doing(working, asking).unwrap_or_else(|| bot.job.clone());
             let trailing: Option<AnyElement> = if asking > 0 {
                 Some(count_badge(asking, cx).into_any_element())
             } else if working > 0 {
@@ -426,6 +424,17 @@ fn computer_row(
         .into_any_element()
 }
 
+/// What a bot is doing, in words, from the box's counts: "1 at work, 1 waiting on you"; none when
+/// it's doing nothing (its row shows its job).
+fn doing(working: usize, asking: usize) -> Option<String> {
+    let at_work = (working > 0).then(|| format!("{working} at work"));
+    let waiting = (asking > 0).then(|| if working > 0 { format!("{asking} waiting on you") } else { "Waiting on you".to_owned() });
+    match (at_work, waiting) {
+        (Some(at_work), Some(waiting)) => Some(format!("{at_work}, {waiting}")),
+        (at_work, waiting) => at_work.or(waiting),
+    }
+}
+
 /// A category's dot, by KuvoClient's rule (`WorkItemChip.color(of:)`: Next teal, Later purple,
 /// Parked grey, Done green, a custom one's by its id), in the theme's nearest colours.
 fn category_color(id: &str, cx: &App) -> Hsla {
@@ -534,4 +543,17 @@ pub fn placeholder(area: Area, title: SharedString, cx: &App) -> AnyElement {
 /// A new view for each area past Sessions.
 pub fn views(client: &BoxClient, live: bool, cx: &mut App) -> Vec<(Area, gpui::Entity<AreaView>)> {
     [Area::Bots, Area::Queue, Area::Computers, Area::Settings].into_iter().map(|area| (area, cx.new(|_| AreaView::new(area, client.clone(), live)))).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::doing;
+
+    #[test]
+    fn a_bot_says_what_its_doing_from_the_boxs_counts() {
+        assert_eq!(doing(1, 1).as_deref(), Some("1 at work, 1 waiting on you"));
+        assert_eq!(doing(0, 1).as_deref(), Some("Waiting on you"));
+        assert_eq!(doing(2, 0).as_deref(), Some("2 at work"));
+        assert_eq!(doing(0, 0), None);
+    }
 }

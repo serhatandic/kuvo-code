@@ -120,7 +120,9 @@ fn computer_switcher(workspace: &Workspace, cx: &App) -> AnyElement {
         BoxState::Updating => (Some(c.warning), Some(kuvo_box::gate::UPDATING.to_owned())),
         BoxState::Unreachable(why) => (Some(c.danger), Some(why.clone())),
     };
-    let trigger = Button::new("computer-switcher", name.clone()).ghost().size(ButtonSize::Small).icon(IconName::Computer).icon_after(IconName::ChevronDown);
+    // A long name is cut, so back, forward and + stay at the sidebar's edge.
+    let shown: gpui::SharedString = if name.chars().count() > 18 { format!("{}…", name.chars().take(17).collect::<String>()).into() } else { name.clone() };
+    let trigger = Button::new("computer-switcher", shown).ghost().size(ButtonSize::Small).icon(IconName::Computer).icon_after(IconName::ChevronDown);
     let menu_name = name.clone();
     div()
         .flex()

@@ -128,6 +128,8 @@ pub struct Workspace {
     waiting: Option<Waiting>,
     waiting_said: bool,
     waiting_task: Option<Task<()>>,
+    /// The list changed while a read of what waits was on its way: read once more after it.
+    waiting_again: bool,
     /// The area's sidebar folded away by its button (a wide window), or brought out (a narrow
     /// one, where it starts folded); and whether the window was narrow when last drawn.
     folded: bool,
@@ -193,6 +195,7 @@ impl Workspace {
             waiting: None,
             waiting_said: true,
             waiting_task: None,
+            waiting_again: false,
             folded: false,
             shown_narrow: false,
             narrow: false,
@@ -275,6 +278,11 @@ impl Workspace {
                 let name = self.box_name();
                 for (_, view) in self.areas.clone() {
                     view.update(cx, |view, cx| view.set_this_box(name.clone(), cx));
+                }
+                // Reached (perhaps updated since): what it says of waits and accounts is asked again.
+                self.waiting_said = true;
+                if self.live {
+                    self.rings.update(cx, |rings, cx| rings.read_again(cx));
                 }
             }
             Err(kuvo_box::Error::NeedsUpdating { .. }) => self.box_state = BoxState::Updating,
@@ -414,6 +422,10 @@ impl Workspace {
         self.area = Area::Sessions;
         self.record(Nav::Session(session.to_owned()));
         if self.opened() == Some(session) {
+            // Already open (back to it from another area): the keyboard goes back to it.
+            if let Some(view) = self.conversation() {
+                window.focus(&view.focus_handle(cx), cx);
+            }
             cx.notify();
             return;
         }
@@ -737,8 +749,7 @@ impl Workspace {
         if self.area != Area::Sessions {
             self.show_area(Area::Sessions, window, cx);
         }
-        self.folded = false;
-        self.shown_narrow = true;
+        self.bring_out_sidebar(window);
         self.walked = None;
         window.focus(&self.search.focus_handle(cx), cx);
         cx.notify();
@@ -854,8 +865,7 @@ impl Workspace {
     /// it showed.
     pub fn show_area(&mut self, area: Area, window: &mut Window, cx: &mut Context<Self>) {
         self.area = area;
-        self.folded = false;
-        self.shown_narrow = true;
+        self.bring_out_sidebar(window);
         match area {
             Area::Sessions => {
                 let nav = self.opened().map_or(Nav::Landing, |session| Nav::Session(session.to_owned()));
@@ -878,6 +888,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the area's sidebar: unfolded in a wide window, brought out in a narrow one (where it
+    /// folds again once the window changes width class).
+    fn bring_out_sidebar(&mut self, window: &Window) {
+        self.narrow = window.viewport_size().width < NARROW;
+        if self.narrow {
+            self.shown_narrow = true;
+        } else {
+            self.folded = false;
+        }
+    }
+
     /// A press on an area's rail button: the area open folds its sidebar away (or brings it back);
     /// another opens.
     pub fn rail_pressed(&mut self, area: Area, window: &mut Window, cx: &mut Context<Self>) {
@@ -891,6 +912,15 @@ impl Workspace {
             self.shown_narrow = !self.shown_narrow;
         } else {
             self.folded = !self.folded;
+        }
+        // Folded with the keyboard in it (its search, its list): the keyboard goes to the main view.
+        if !self.sidebar_shown() && (self.search.focus_handle(cx).is_focused(window) || self.list_focus.is_focused(window)) {
+            self.walked = None;
+            match self.conversation() {
+                Some(view) if self.area == Area::Sessions => window.focus(&view.focus_handle(cx), cx),
+                None if self.area == Area::Sessions => window.focus(&self.landing.focus_handle(cx), cx),
+                _ => window.focus(&self.focus, cx),
+            }
         }
         cx.notify();
     }
@@ -920,9 +950,21 @@ impl Workspace {
             self.take_waiting(read, cx);
             return;
         }
+        // One read at a time: changes meanwhile make one more once it's back.
+        if self.waiting_task.is_some() {
+            self.waiting_again = true;
+            return;
+        }
         self.waiting_task = Some(cx.spawn(async move |this, cx| {
             let read = cx.background_executor().spawn(async move { client.waiting() }).await;
-            this.update(cx, |this, cx| this.take_waiting(read, cx)).ok();
+            this.update(cx, |this, cx| {
+                this.waiting_task = None;
+                this.take_waiting(read, cx);
+                if std::mem::take(&mut this.waiting_again) {
+                    this.read_waiting(cx);
+                }
+            })
+            .ok();
         }));
     }
 
@@ -977,20 +1019,47 @@ impl Workspace {
     /// Goes to the place noted at `at` without noting it again. A session gone from the list
     /// since is passed over, as a way back to nothing.
     fn go(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let nav = self.history[at].clone();
-        if let Nav::Session(session) = &nav
-            && self.listing.is_read()
-            && self.listing.facts(session).is_none()
-            && !self.started.contains_key(session)
-        {
-            self.history.remove(at);
-            if self.at > at {
-                self.at -= 1;
+        // Sessions gone from the list since are dropped from the history (and the places that
+        // then repeat), so the press goes on to the next place there still is.
+        let forward = at > self.at;
+        let here = self.history[self.at].clone();
+        // (Gone: deleted, or no longer shown, as an archived one.)
+        let gone = |nav: &Nav, this: &Self| matches!(nav, Nav::Session(session) if this.listing.is_read() && kuvo_box::sessions::place(this.listing.facts(session)).is_none() && !this.started.contains_key(session));
+        let mut kept: Vec<Nav> = Vec::with_capacity(self.history.len());
+        let mut target = None;
+        let mut current = 0;
+        for (ix, nav) in self.history.iter().enumerate() {
+            if ix != self.at && gone(nav, self) {
+                continue;
             }
-            self.at = self.at.min(self.history.len() - 1);
-            cx.notify();
-            return;
+            if kept.last() == Some(nav) {
+                if ix == self.at {
+                    current = kept.len() - 1;
+                }
+                continue;
+            }
+            if ix == self.at {
+                current = kept.len();
+            }
+            if ix == at {
+                target = Some(kept.len());
+            }
+            kept.push(nav.clone());
         }
+        self.history = kept;
+        self.at = current;
+        let at = match target {
+            Some(at) if at != current => at,
+            // The place asked for went: the next one on that side, if any.
+            _ if forward && current + 1 < self.history.len() => current + 1,
+            _ if !forward && current > 0 => current - 1,
+            _ => {
+                cx.notify();
+                return;
+            }
+        };
+        debug_assert!(self.history[current] == here);
+        let nav = self.history[at].clone();
         let history = std::mem::take(&mut self.history);
         match &nav {
             Nav::Landing => self.new_session(None, window, cx),
@@ -1053,9 +1122,9 @@ impl Render for Workspace {
         let theme = cx.theme().clone();
         let c = &theme.colors;
         // A narrow window folds the area's sidebar away; brought out there, it folds again once
-        // the window has been wide.
+        // the window has been wide and narrows again.
         let narrow = window.viewport_size().width < NARROW;
-        if self.narrow && !narrow {
+        if self.narrow != narrow {
             self.shown_narrow = false;
         }
         self.narrow = narrow;

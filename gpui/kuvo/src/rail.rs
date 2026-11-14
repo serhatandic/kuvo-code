@@ -12,7 +12,7 @@ use gpui::{
     StatefulInteractiveElement, StrokeOptions, Styled, Task, Window, canvas, div, point, prelude::FluentBuilder as _, px, svg,
 };
 use kuvo_box::BoxClient;
-use kuvo_box::areas::{Account, Level, LimitWindow};
+use kuvo_box::areas::{Account, Level};
 use kuvo_ui::{
     ActiveTheme, Icon, IconName, IconSize, StyledType, TypeSize,
     menu::{HoverCard, Tooltip},
@@ -31,11 +31,16 @@ const BUTTON: Pixels = px(40.);
 /// A ring's size and stroke.
 const RING: Pixels = px(34.);
 const STROKE: Pixels = px(3.);
-/// How many rings show before "+N".
+/// How many rings show before "+N", where the window is tall enough.
 const MOST_RINGS: usize = 4;
+/// The room a ring takes in the rail, its gap included.
+const RING_ROOM: f32 = 48.;
+/// The rail's height besides its rings: the title bar, the four areas, Help and Settings, gaps.
+const RAIL_REST: f32 = 44. + 4. * 46. + 2. * 46. + 40.;
 /// How often the accounts are read again while the app runs (the box reads them on its own clock;
-/// this only picks up what it read).
+/// this only picks up what it read), and sooner after a read that failed (a box still starting).
 const REREAD: Duration = Duration::from_secs(120);
+const RETRY: Duration = Duration::from_secs(10);
 
 pub fn render(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
     let open = workspace.area();
@@ -113,24 +118,35 @@ pub struct Rings {
     /// Now, as a window's "starts over in" counts from it (fixed for shots).
     now: Option<f64>,
     _reading: Option<Task<()>>,
+    again: Option<Task<()>>,
 }
 
 impl Rings {
     pub fn new(client: BoxClient, live: bool, cx: &mut Context<Self>) -> Rings {
-        let mut rings = Rings { client, accounts: None, now: None, _reading: None };
+        let mut rings = Rings { client, accounts: None, now: None, _reading: None, again: None };
         if live {
             rings._reading = Some(cx.spawn(async move |this, cx| {
                 loop {
                     let Ok(client) = this.read_with(cx, |this, _| this.client.clone()) else { break };
                     let accounts = cx.background_executor().spawn(async move { client.accounts() }).await;
+                    let read = accounts.is_ok();
                     if this.update(cx, |this, cx| this.take(accounts, cx)).is_err() {
                         break;
                     }
-                    cx.background_executor().timer(REREAD).await;
+                    cx.background_executor().timer(if read { REREAD } else { RETRY }).await;
                 }
             }));
         }
         rings
+    }
+
+    /// Reads the accounts again now, off this thread (the box has just been reached).
+    pub fn read_again(&mut self, cx: &mut Context<Self>) {
+        let client = self.client.clone();
+        self.again = Some(cx.spawn(async move |this, cx| {
+            let accounts = cx.background_executor().spawn(async move { client.accounts() }).await;
+            this.update(cx, |this, cx| this.take(accounts, cx)).ok();
+        }));
     }
 
     /// Reads the accounts at once, on this thread (shots and tests, against a stand-in).
@@ -162,14 +178,18 @@ impl Rings {
 }
 
 impl Render for Rings {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.theme().colors.clone();
         let Some(accounts) = self.accounts.as_ref() else { return div().into_any_element() };
         let now = self.now();
-        let mut rings: Vec<AnyElement> = accounts.iter().take(MOST_RINGS).enumerate().map(|(ix, account)| ring_button(ix, account, now, cx)).collect();
+        // As many as the rail has room for (four at most), the rest behind "+N" (which takes a
+        // ring's room itself), so Help and Settings stay in reach in a short window.
+        let room = ((f32::from(window.viewport_size().height) - RAIL_REST) / RING_ROOM).floor().max(0.) as usize;
+        let most = if accounts.len() <= room.min(MOST_RINGS) { accounts.len() } else { room.saturating_sub(1).min(MOST_RINGS) };
+        let mut rings: Vec<AnyElement> = accounts.iter().take(most).enumerate().map(|(ix, account)| ring_button(ix, account, now, cx)).collect();
         // Past the rail's room: "+N", opening Settings › Usage.
-        if accounts.len() > MOST_RINGS {
-            let more = accounts.len() - MOST_RINGS;
+        if accounts.len() > most {
+            let more = accounts.len() - most;
             let hover = c.hover;
             rings.push(
                 div()
@@ -228,16 +248,18 @@ fn level_color(level: Option<Level>, cx: &App) -> Hsla {
         Some(Level::Over) => c.danger,
         Some(Level::Near) => c.warning,
         Some(Level::Calm) => c.success,
-        None => c.text_faint,
+        None => c.text_muted,
     }
 }
 
 fn ring_button(ix: usize, account: &Account, now: f64, cx: &mut Context<Rings>) -> AnyElement {
     let c = cx.theme().colors.clone();
     let hover = c.hover;
-    // BOX-NEEDED: the ring's share and level, `rows[].ring: {used, level}` in `GET kuvo/agents/api/kuvo/limits` (#711): until the box says it, the ring is its track alone, with the account's mark.
-    let (used, level) = account.ring.map_or((0., None), |ring| (ring.used, Some(ring.level)));
-    let color = level_color(level, cx);
+    // The share of its fullest window still current (KuvoClient's `tightest(at:)`, a view).
+    let tightest = account.tightest(now);
+    let used = tightest.map_or(0., |window| window.used);
+    // BOX-NEEDED: how close to its limit, `windows[].level: calm|near|over` in `GET kuvo/agents/api/kuvo/limits`' rows (#711): until the box says it, the arc is drawn quiet, never coloured by a threshold here.
+    let color = level_color(tightest.and_then(|window| window.level), cx);
     let card = account.clone();
     let mark: AnyElement = match kuvo_ui::icon::mark_path(&account.service) {
         Some(path) => svg().path(path).size(px(15.)).flex_none().text_color(c.text_muted).into_any_element(),
@@ -318,33 +340,10 @@ fn arcs(size: Pixels, stroke: Pixels, used: f32, color: Hsla, track: Hsla) -> im
     .size(size)
 }
 
-/// A window's name: its maker's where it has one, else the model's, else how long it is.
-fn window_name(window: &LimitWindow) -> String {
-    if let Some(name) = &window.name {
-        return name.clone();
-    }
-    let span = match window.minutes {
-        Some(300) => "5-hour".to_owned(),
-        Some(10080) => "Week".to_owned(),
-        Some(minutes) if minutes % 1440 == 0 => format!("{}-day", minutes / 1440),
-        Some(minutes) if minutes % 60 == 0 => format!("{}-hour", minutes / 60),
-        Some(minutes) => format!("{minutes}-minute"),
-        None => window.id.replace('_', " "),
-    };
-    match &window.model {
-        Some(model) => format!("{model} {}", span.to_lowercase()),
-        None => span,
-    }
-}
-
 /// What resting on a ring shows: the account, its plan, and each window with when it starts over.
 fn account_card(account: &Account, now: f64, cx: &App) -> AnyElement {
     let c = cx.theme().colors.clone();
-    let service = account.service.clone();
-    let title = match &account.label {
-        Some(label) => format!("{} · {label}", capitalized(&service)),
-        None => capitalized(&service),
-    };
+    let title = account.title();
     let windows = account.windows.iter().map(|window| {
         // A window whose time has passed has started over: not read since, not used (PROTOCOL.md).
         let over = window.resets_at.is_some_and(|at| at <= now);
@@ -363,7 +362,7 @@ fn account_card(account: &Account, now: f64, cx: &App) -> AnyElement {
                     .justify_between()
                     .gap(space::S2)
                     .text_ui(TypeSize::Small)
-                    .child(div().min_w_0().truncate().text_color(c.text).child(window_name(window)))
+                    .child(div().min_w_0().truncate().text_color(c.text).child(window.title()))
                     .child(div().flex_none().text_color(if calm { c.text_muted } else { color }).when(!calm, |d| d.medium()).child(said)),
             )
             .child(
@@ -385,38 +384,4 @@ fn account_card(account: &Account, now: f64, cx: &App) -> AnyElement {
         )
         .children(windows)
         .into_any_element()
-}
-
-/// A service's name as the card says it ("claude" → "Claude"; "zai" → "Z.ai").
-fn capitalized(service: &str) -> String {
-    match service {
-        "zai" => "Z.ai".into(),
-        "openrouter" => "OpenRouter".into(),
-        "opencode" => "OpenCode".into(),
-        other => {
-            let mut chars = other.chars();
-            chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn windows_are_named_as_their_maker_or_their_length_says() {
-        let window = |minutes: Option<u32>, model: Option<&str>, name: Option<&str>| LimitWindow {
-            id: "five_hour".into(),
-            used: 0.,
-            resets_at: None,
-            minutes,
-            model: model.map(str::to_owned),
-            name: name.map(str::to_owned),
-            level: None,
-        };
-        assert_eq!(window_name(&window(Some(300), None, None)), "5-hour");
-        assert_eq!(window_name(&window(Some(10080), Some("Sonnet"), None)), "Sonnet week");
-        assert_eq!(window_name(&window(None, None, Some("Premium requests"))), "Premium requests");
-    }
 }

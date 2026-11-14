@@ -2,7 +2,7 @@
 //! categories, the machines it runs sessions on, the accounts' limits, and what waits on you.
 //!
 //! It also says what #711 is to add to the box (each marked `BOX-NEEDED` where the app reads it):
-//! what a bot is doing now, the queue's counts, a ring's share and level, and `kuvo/waiting`. With
+//! what a bot is doing now, the queue's counts, each limit's level, and `kuvo/waiting`. With
 //! [`Areas::before_711`] it answers as a box does today, without them.
 
 use serde_json::{Value, json};
@@ -28,8 +28,8 @@ pub fn answer(areas: Areas, method: &str, route: &str, now: f64, asked: &[(Strin
     let answer = match route {
         "kuvo/bots" => json!({ "bots": if areas.empty { Vec::new() } else { bots(full) } }),
         "kuvo/groups" => json!({ "groups": if areas.empty { Vec::new() } else { groups(now) } }),
-        "kuvo/work-queue" => {
-            let mut queue = json!({ "owner": "all", "categories": categories(), "items": [], "owners": [], "removed": [], "computers": [] });
+        "kuvo/work-queue/categories" => {
+            let mut queue = json!({ "categories": categories() });
             if full {
                 queue["counts"] = if areas.empty {
                     json!({ "inProgress": 0, "categories": {} })
@@ -75,10 +75,10 @@ fn bots(full: bool) -> Vec<Value> {
         bot
     };
     vec![
-        bot("bot_mira", "Mira", "sky", "round", "Looks after the website", json!({ "working": 1, "asking": 1, "words": "1 at work, 1 waiting on you" })),
-        bot("bot_inbox", "Inbox Helper", "coral", "squircle", "Drafts replies to support mail", json!({ "working": 0, "asking": 1, "words": "Waiting on you" })),
-        bot("bot_release", "Release Captain", "lime", "pebble", "Ships a beta every Friday", json!({ "working": 0, "asking": 0, "words": "Wakes up Fri 09:00" })),
-        bot("bot_docs", "Docs Keeper", "violet", "gem", "Keeps the docs matching the code", json!({ "working": 0, "asking": 0, "words": "Finished 3h ago" })),
+        bot("bot_mira", "Mira", "sky", "round", "Looks after the website", json!({ "working": 1, "asking": 1 })),
+        bot("bot_inbox", "Inbox Helper", "coral", "squircle", "Drafts replies to support mail", json!({ "working": 0, "asking": 1 })),
+        bot("bot_release", "Release Captain", "lime", "pebble", "Ships a beta every Friday", json!({ "working": 0, "asking": 0 })),
+        bot("bot_docs", "Docs Keeper", "violet", "gem", "Keeps the docs matching the code", json!({ "working": 0, "asking": 0 })),
     ]
 }
 
@@ -123,22 +123,20 @@ fn accounts(now: f64, full: bool) -> Vec<Value> {
         }
         window
     };
-    let row = |service: &str, label: &str, plan: &str, windows: Vec<Value>| {
-        let mut row = json!({ "service": service, "label": label, "plan": plan, "windows": windows.clone(), "checked": now - MINUTE });
-        if full {
-            // The fullest window that hasn't started over, as the box will say it.
-            let used = windows.iter().filter_map(|window| window["used"].as_f64()).fold(0.0, f64::max);
-            row["ring"] = json!({ "used": used, "level": level(used) });
+    let row = |service: &str, agent: Option<&str>, label: &str, plan: &str, windows: Vec<Value>| {
+        let mut row = json!({ "service": service, "label": label, "plan": plan, "windows": windows, "checked": now - MINUTE });
+        if let Some(agent) = agent {
+            row["agent"] = json!(agent);
         }
         row
     };
     vec![
-        row("claude", "Work", "Max 20x", vec![window("five_hour", 0.46, 3.7 * HOUR, Some(300), None, None), window("seven_day", 0.38, 4.0 * DAY, Some(10080), None, None), window("seven_day_sonnet", 0.12, 4.0 * DAY, Some(10080), Some("Sonnet"), None)]),
-        row("claude", "Personal", "Pro", vec![window("five_hour", 0.18, 4.1 * HOUR, Some(300), None, None), window("seven_day", 0.22, 2.0 * DAY, Some(10080), None, None)]),
-        row("codex", "ChatGPT", "Pro", vec![window("primary", 0.74, 52.0 * MINUTE, Some(300), None, None), window("secondary", 0.41, 5.0 * DAY, Some(10080), None, None)]),
-        row("copilot", "GitHub", "Pro+", vec![window("premium", 0.35, 17.0 * DAY, None, None, Some("Premium requests"))]),
-        row("grok", "xAI", "SuperGrok", vec![window("week", 0.12, 3.0 * DAY, Some(10080), None, None)]),
-        row("openrouter", "Team key", "Credits", vec![window("credits", 0.58, 20.0 * DAY, None, None, Some("Credits"))]),
+        row("claude", Some("claude"), "Work", "Max 20x", vec![window("five_hour", 0.46, 3.7 * HOUR, Some(300), None, None), window("seven_day", 0.38, 4.0 * DAY, Some(10080), None, None), window("seven_day_sonnet", 0.12, 4.0 * DAY, Some(10080), Some("Sonnet"), None)]),
+        row("claude", Some("claude"), "Personal", "Pro", vec![window("five_hour", 0.18, 4.1 * HOUR, Some(300), None, None), window("seven_day", 0.22, 2.0 * DAY, Some(10080), None, None)]),
+        row("codex", Some("codex"), "", "Pro", vec![window("primary", 0.74, 52.0 * MINUTE, Some(300), None, None), window("secondary", 0.41, 5.0 * DAY, Some(10080), None, None)]),
+        row("copilot", None, "", "Pro+", vec![window("premium", 0.35, 17.0 * DAY, None, None, Some("Premium requests"))]),
+        row("grok", Some("grok"), "", "SuperGrok", vec![window("week", 0.12, 3.0 * DAY, Some(10080), None, None)]),
+        row("openrouter", None, "Team key", "Credits", vec![window("credits", 0.58, 20.0 * DAY, None, None, Some("Credits"))]),
     ]
 }
 
