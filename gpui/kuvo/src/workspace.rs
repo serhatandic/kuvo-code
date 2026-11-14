@@ -190,8 +190,10 @@ impl Workspace {
                 Err(kuvo_box::Error::Refused(refusal)) if refusal.status == 404 => kuvo_box::ConversationUpdate::Gone(refusal),
                 Err(error) => kuvo_box::ConversationUpdate::Failed(error),
             };
+            let asks = client.asks(session).unwrap_or_default();
             view.update(cx, |view, cx| {
                 view.take(update, cx);
+                view.take_asks(asks, cx);
                 view.composer().clone().update(cx, |composer, cx| composer.read_at_once(cx));
             });
         }
@@ -228,11 +230,6 @@ impl Workspace {
                 // Sessions started here are in the list now: what their box said of them goes.
                 let listing = &self.listing;
                 self.started.retain(|session, _| listing.facts(session).is_none());
-                // Whether the conversation open waits on you.
-                if let Open::Conversation { view, session } = &self.open {
-                    let asking = self.listing.facts(session).is_some_and(|facts| facts.asked.is_some());
-                    view.update(cx, |view, cx| view.set_asking(asking, cx));
-                }
             }
             ListUpdate::Waiting(why) => self.lists = Lists::Waiting(why),
             ListUpdate::Held { .. } => {
@@ -343,8 +340,6 @@ impl Workspace {
         // Only the composer on screen asks again for what the box couldn't say.
         self.show_composer(Some(&composer), cx);
         let view = cx.new(|cx| ConversationView::new(client, session.to_owned(), composer, live, cx));
-        let asking = self.listing.facts(session).is_some_and(|facts| facts.asked.is_some());
-        view.update(cx, |view, cx| view.set_asking(asking, cx));
         window.focus(&view.focus_handle(cx), cx);
         self.open = Open::Conversation { view, session: session.to_owned() };
         cx.notify();

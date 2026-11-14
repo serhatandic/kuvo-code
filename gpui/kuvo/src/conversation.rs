@@ -6,18 +6,20 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     SharedString, Styled, Task, Window, div, prelude::FluentBuilder as _, px,
 };
-use kuvo_box::follow::{ConversationUpdate, Follow, Timing};
+use kuvo_box::asks::Asks;
+use kuvo_box::follow::{ConversationUpdate, Follow, Followed, Timing};
 use kuvo_box::BoxClient;
 use kuvo_ui::{
     ActiveTheme, Button, ButtonSize, IconSize, StyledType, TypeSize,
     chat_list::{ChatListState, chat_list},
-    small::{spinner, status_dot},
+    small::spinner,
     theme::space,
 };
 
+use crate::ask_card::AskCard;
 use crate::composer::Composer;
 use crate::entries::{self, COLUMN, Entry, Fold};
 
@@ -39,8 +41,6 @@ pub struct ConversationView {
     /// How often its box's models were heard to change, as last seen: the composer reads the
     /// conversation's model again as it goes up.
     models_changed: Option<u64>,
-    /// Whether it waits on you (its box's list says so).
-    asking: bool,
     entries: Vec<Entry>,
     /// Each row's revision: a row is drawn again only once it's changed.
     revisions: Vec<u64>,
@@ -53,13 +53,18 @@ pub struct ConversationView {
     open: HashSet<Fold>,
     /// Its composer, which the workspace keeps (with its draft) while you're elsewhere.
     composer: Entity<Composer>,
+    /// What it waits on you for, in the composer's place while anything does.
+    asks: Entity<AskCard>,
     follow: Option<Rc<Follow<ConversationUpdate>>>,
     _follow_task: Option<Task<()>>,
+    _asks_follow: Option<Follow<Followed<Asks>>>,
+    _asks_task: Option<Task<()>>,
 }
 
 impl Focusable for ConversationView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.composer.focus_handle(cx)
+        let asks = self.asks.read(cx);
+        if asks.is_asking() { asks.focus_handle(cx) } else { self.composer.focus_handle(cx) }
     }
 }
 
@@ -73,7 +78,6 @@ impl ConversationView {
             earlier: None,
             // (From the box's first word: a change heard before the first update counts too.)
             models_changed: Some(0),
-            asking: false,
             entries: Vec::new(),
             revisions: Vec::new(),
             list: ChatListState::new(0, cx),
@@ -81,9 +85,12 @@ impl ConversationView {
             earlier_failed: None,
             asked_earlier: Rc::default(),
             open: HashSet::new(),
+            asks: cx.new(|cx| AskCard::new(client.clone(), session.clone(), cx)),
             composer,
             follow: None,
             _follow_task: None,
+            _asks_follow: None,
+            _asks_task: None,
         };
         if live {
             let follow = Rc::new(client.follow_conversation(&session, Timing::default()));
@@ -92,6 +99,18 @@ impl ConversationView {
             view._follow_task = Some(cx.spawn(async move |this, cx| {
                 while let Ok(update) = updates.recv().await {
                     if this.update(cx, |this, cx| this.take(update, cx)).is_err() {
+                        break;
+                    }
+                }
+            }));
+            // What it asks, as the box words it, now and as it changes.
+            let asks = client.follow_asks(&session, Timing::default());
+            let updates = asks.updates().clone();
+            view._asks_follow = Some(asks);
+            view._asks_task = Some(cx.spawn(async move |this, cx| {
+                while let Ok(update) = updates.recv().await {
+                    let Followed::Now(asks) = update else { continue };
+                    if this.update(cx, |this, cx| this.take_asks(asks, cx)).is_err() {
                         break;
                     }
                 }
@@ -125,16 +144,15 @@ impl ConversationView {
         self.problem.as_ref()
     }
 
-    /// Whether it waits on you, as its box's list says: this app can't answer yet, and says so.
-    pub fn set_asking(&mut self, asking: bool, cx: &mut Context<Self>) {
-        if self.asking != asking {
-            self.asking = asking;
-            cx.notify();
-        }
+    pub fn asks(&self) -> &Entity<AskCard> {
+        &self.asks
     }
 
-    pub fn is_asking(&self) -> bool {
-        self.asking
+    /// What the box says it waits on you for: a card in the composer's place while anything does,
+    /// with the keyboard on it as it comes.
+    pub fn take_asks(&mut self, asks: Asks, cx: &mut Context<Self>) {
+        self.asks.update(cx, |card, cx| card.take(asks, cx));
+        cx.notify();
     }
 
     /// What the box's follow says, shown.
@@ -360,21 +378,6 @@ impl Render for ConversationView {
             (Some(Problem::Gone(why)), true) => Some((why.clone(), c.danger)),
             _ => None,
         };
-        // Waiting on you for something this app can't answer yet: said plainly, above the composer.
-        let asking = (self.asking && !matches!(self.problem, Some(Problem::Gone(_)))).then(|| {
-            div()
-                .debug_selector(|| "asking".into())
-                .w_full()
-                .max_w(px(COLUMN))
-                .pb(space::S2)
-                .flex()
-                .items_center()
-                .gap(space::S2)
-                .text_ui(TypeSize::Caption)
-                .text_color(c.text_muted)
-                .child(status_dot(c.accent))
-                .child("It’s waiting on you for an answer this app can’t give yet: answer it in Kuvo Code on your Mac or iPhone.")
-        });
         let gone = matches!(self.problem, Some(Problem::Gone(_)));
         div()
             .size_full()
@@ -388,11 +391,14 @@ impl Render for ConversationView {
                     .items_center()
                     .px(space::S6)
                     .pb(space::S5)
-                    .children(asking)
                     .children(banner.map(|(why, color)| {
                         div().w_full().max_w(px(COLUMN)).pb(space::S2).text_ui(TypeSize::Caption).text_color(color).child(why)
                     }))
-                    .when(!gone, |d| d.child(div().w_full().max_w(px(COLUMN)).child(self.composer.clone()))),
+                    // What it waits on you for takes the composer's place, as on the Mac and the phone.
+                    .when(!gone, |d| {
+                        let asking = self.asks.read(cx).is_asking();
+                        d.child(div().w_full().max_w(px(COLUMN)).child(if asking { self.asks.clone().into_any_element() } else { self.composer.clone().into_any_element() }))
+                    }),
             )
     }
 }

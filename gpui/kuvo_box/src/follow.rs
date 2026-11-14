@@ -638,3 +638,71 @@ fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Late
     }
     false
 }
+
+/// What a follow of one of the box's own lists says (a conversation's asks, its queue).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Followed<T> {
+    /// As it is now.
+    Now(T),
+    /// Reading it failed (or it's not there): it's tried again.
+    Failed(Error),
+}
+
+/// Follows `route`'s `…/events` (ndjson: the state now, then a line as it changes); over SSH,
+/// `route` itself is read again every few seconds.
+pub(crate) fn follow_lines<T: serde::de::DeserializeOwned + Send + 'static>(client: &BoxClient, name: &str, route: String, timing: Timing) -> Follow<Followed<T>> {
+    let client = client.clone();
+    spawn(name, move |latest, stop| {
+        let mut backoff = Backoff::new(timing);
+        while !stop.is_stopped() {
+            let streams = client.streams();
+            let path = if streams { format!("{route}/events") } else { route.clone() };
+            let mut stream = match client.open(&Request::get(path), &|closer| stop.hold(closer)) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    stop.release();
+                    if stop.is_stopped() {
+                        return;
+                    }
+                    latest.put(Followed::Failed(error));
+                    if backoff.wait(&stop) {
+                        return;
+                    }
+                    continue;
+                }
+            };
+            if !(200..300).contains(&stream.status) {
+                let refusal = refusal(&mut stream);
+                stop.release();
+                latest.put(Followed::Failed(Error::Refused(refusal)));
+                if backoff.wait(&stop) {
+                    return;
+                }
+                continue;
+            }
+            loop {
+                match lines::next_line(&mut *stream.reader) {
+                    Ok(Some(text)) => match serde_json::from_str::<T>(&text) {
+                        Ok(now) => {
+                            backoff.reset();
+                            latest.put(Followed::Now(now));
+                        }
+                        Err(error) => latest.put(Followed::Failed(Error::BadAnswer(format!("What the box said couldn't be read: {error}")))),
+                    },
+                    Ok(None) => break,
+                    Err(error) => {
+                        if !stop.is_stopped() {
+                            latest.put(Followed::Failed(Error::Unreachable(format!("It stopped coming ({}).", error.kind()))));
+                        }
+                        break;
+                    }
+                }
+            }
+            stop.release();
+            let stopped = if streams { backoff.wait(&stop) } else { stop.wait(timing.conversation_again) };
+            if stopped {
+                return;
+            }
+        }
+    })
+}

@@ -232,6 +232,11 @@ impl TextField {
         }
     }
 
+    /// Changes what it says while it's empty.
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>) {
+        self.placeholder = text.into();
+    }
+
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = text.into();
         self

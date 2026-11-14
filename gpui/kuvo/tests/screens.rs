@@ -471,12 +471,73 @@ fn the_landing_project_doesnt_move_while_you_write(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_session_waiting_on_you_says_so_above_the_composer(cx: &mut TestAppContext) {
-    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+fn a_permission_shows_in_the_composers_place_and_is_answered_through_the_box(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission()]);
+    let (workspace, cx) = open(cx, stand_in.clone());
     open_session(&workspace, "ses_limits", cx);
-    assert!(bounds(cx, "asking").is_some());
-    open_session(&workspace, "ses_recipes", cx);
-    assert!(bounds(cx, "asking").is_none());
+
+    // The card, as the box words it, in the composer's place; the keyboard's on it.
+    assert!(bounds(cx, "ask-card").is_some());
+    assert!(bounds(cx, "composer-card").is_none());
+    assert!(bounds(cx, "ask-choice-always").is_some());
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let card = view.read_with(cx, |view, _| view.asks().clone());
+    let card_focus = card.read_with(cx, |card, cx| card.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&card_focus, cx));
+
+    // Escape opens the line for your words; what's written goes as Don't Allow, with them.
+    cx.simulate_keystrokes("escape");
+    assert!(bounds(cx, "ask-instead").is_some());
+    cx.simulate_input("Use the redis package we already have");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "instead", "message": "Use the redis package we already have" })));
+
+    // Answered: the composer is back.
+    assert!(bounds(cx, "ask-card").is_none());
+    assert!(bounds(cx, "composer-card").is_some());
+}
+
+#[gpui::test]
+fn a_number_key_picks_a_permissions_answer_and_more_than_one_ask_pages(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    second["command"] = json!("git push origin rate-limits");
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    open_session(&workspace, "ses_limits", cx);
+    let card = workspace.read_with(cx, |workspace, cx| workspace.conversation().unwrap().read(cx).asks().clone());
+    assert_eq!(card.read_with(cx, |card, _| card.place().words()), Some("1 of 2".into()));
+    let card_focus = card.read_with(cx, |card, cx| card.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&card_focus, cx));
+
+    // 2: Always Allow, for the first; the second shows next.
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "always" })));
+    assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
+    assert_eq!(card.read_with(cx, |card, _| card.place().words()), None);
+}
+
+#[gpui::test]
+fn the_agents_question_takes_a_choice_or_your_own_words(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    open_session(&workspace, "ses_cms", cx);
+    assert!(bounds(cx, "ask-option-0").is_some());
+    assert!(bounds(cx, "ask-words").is_some(), "it takes words of your own too");
+
+    // A click on a choice answers a question that takes one.
+    let redirect = bounds(cx, "ask-option-0").unwrap();
+    cx.simulate_click(redirect.center(), Modifiers::default());
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answers": { "q0": "redirect" } })));
+    assert!(bounds(cx, "ask-card").is_none());
 }
 
 #[gpui::test]

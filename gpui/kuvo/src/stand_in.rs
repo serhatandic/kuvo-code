@@ -73,6 +73,8 @@ struct State {
     agents_unknown: bool,
     /// Its sessions' models can't be read now (`503`).
     models_fail: bool,
+    /// What each conversation waits on you for, as the box words it (`kuvo/sessions/<id>/asks`).
+    asks: HashMap<String, Vec<Value>>,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -148,6 +150,11 @@ impl StandIn {
         self.state().agents_unknown = !known;
     }
 
+    /// What `session` waits on you for, from now on (as the box words each ask).
+    pub fn set_asks(&self, session: &str, asks: Vec<Value>) {
+        self.state().asks.insert(session.to_owned(), asks);
+    }
+
     /// An engine event, to those following the engine's events.
     pub fn emit(&self, kind: &str, data: Value) {
         self.state().emit(kind, data);
@@ -195,7 +202,38 @@ impl StandIn {
         state.messages.insert("ses_limits".into(), limits(now));
         state.messages.insert("ses_lighthouse".into(), long_history(now));
         state.messages.insert("ses_recipes".into(), recipes(now));
+        state.asks.insert("ses_cms".into(), vec![cms_question()]);
     }
+}
+
+/// A permission waiting in the rate limits' conversation: to install Redis's client.
+pub fn redis_permission() -> Value {
+    json!({
+        "id": "per_redis", "kind": "permission", "session": "ses_limits", "title": "Allow running this command?",
+        "message": null, "command": "npm install ioredis@5 --save", "files": [], "resources": ["npm install ioredis@5 --save"],
+        "choices": [
+            { "answer": "once", "title": "Allow Once", "named": null, "placeholder": null },
+            { "answer": "always", "title": "Always Allow", "named": "npm install", "placeholder": null },
+            { "answer": "reject", "title": "Don’t Allow", "named": null, "placeholder": null },
+            { "answer": "instead", "title": "Tell It What to Do Instead…", "named": null, "placeholder": "Tell it what to do instead…" }
+        ]
+    })
+}
+
+/// The agent's question in the CMS move.
+pub fn cms_question() -> Value {
+    json!({
+        "id": "frm_cms", "kind": "question", "session": "ses_cms", "title": "Question",
+        "questions": [{
+            "key": "q0", "title": "Old posts", "question": "The blog has 214 posts. Should the old URLs keep working once they move?",
+            "options": [
+                { "value": "redirect", "label": "Redirect them", "description": "301s from each old URL to its new one" },
+                { "value": "keep", "label": "Keep the old URLs", "description": "the CMS serves them as they are" },
+                { "value": "drop", "label": "Let them go", "description": null }
+            ],
+            "multiple": false, "custom": true, "required": true
+        }]
+    })
 }
 
 /// The messages of the session at work: a finished turn, then one under way.
@@ -547,6 +585,19 @@ impl StandIn {
                 answer(200, json!({}))
             }
             ("GET", ["kuvo", "sessions", session, "typed"]) if state.sessions.contains_key(*session) => answer(200, offers()),
+            ("GET", ["kuvo", "sessions", session, "asks"]) if state.sessions.contains_key(*session) => answer(200, json!({ "asks": state.asks.get(*session).cloned().unwrap_or_default() })),
+            ("POST", ["kuvo", "sessions", session, "asks", ask]) => {
+                let Some(asks) = state.asks.get_mut(*session) else { return answer(404, json!({})) };
+                let Some(at) = asks.iter().position(|each| each["id"] == json!(ask)) else { return answer(404, json!({})) };
+                asks.remove(at);
+                if asks.is_empty()
+                    && let Some(facts) = state.sessions.get_mut(*session)
+                {
+                    facts.as_object_mut().map(|facts| facts.remove("asked"));
+                }
+                state.list_changed();
+                answer(200, json!({}))
+            }
             ("POST", ["kuvo", "sessions", session, "typed"]) if state.sessions.contains_key(*session) => {
                 let text = request.body.as_ref().and_then(|body| body["text"].as_str()).unwrap_or("");
                 answer(200, decide(text))
