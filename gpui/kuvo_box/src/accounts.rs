@@ -475,7 +475,7 @@ mod tests {
     /// form, the legacy ones apart, and an account with none.
     #[test]
     fn ways_in_read_as_the_shared_vectors_say_them() {
-        let vectors: Value = serde_json::from_str(include_str!("../../../Packages/KuvoLink/Vectors/sign-in.json")).unwrap();
+        let vectors: Value = serde_json::from_str(include_str!("../../../protocol/vectors/sign-in.json")).unwrap();
         for case in vectors["methods"].as_array().unwrap() {
             let offered = &case["offered"];
             let ways: Ways = serde_json::from_value(offered.clone()).unwrap();
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn a_failure_is_shown_in_the_boxs_words() {
-        let vectors: Value = serde_json::from_str(include_str!("../../../Packages/KuvoLink/Vectors/sign-in.json")).unwrap();
+        let vectors: Value = serde_json::from_str(include_str!("../../../protocol/vectors/sign-in.json")).unwrap();
         for case in vectors["failures"].as_array().unwrap() {
             let status: Status = serde_json::from_value(json!({ "status": case["status"], "message": case["message"], "failure": case["failure"] })).unwrap();
             assert_eq!(status.failure_words().as_deref(), case["failure"].as_str());
