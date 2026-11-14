@@ -113,6 +113,8 @@ const bridgeSessions = {
   ses_codexHidden: session("ses_codexHidden", { providerID: "codex-cli@work", id: "gpt-5.1-codex-mini" }),
   ses_codexAbsent: session("ses_codexAbsent", { providerID: "codex-cli@work", id: "gpt-4.1" }),
   ses_codexOld: session("ses_codexOld", { providerID: "codex-cli@old", id: "gpt-5.1-codex-mini" }),
+  // A coding agent's own subagent, on its signed-out account's model.
+  ses_agentSub: { ...session("ses_agentSub", { providerID: "claude-code@work", id: "claude-opus-5-5" }), parentID: "ses_agentOut" },
 };
 // (`complete`: its list is every model it runs, as a bridge from #572 on says; an older one doesn't.)
 const agent = (id, name, { installed = true, signedIn = true, label, complete = true } = {}) => ({
@@ -348,6 +350,11 @@ test("none to run on: choose one", async () => {
   });
 });
 
+test("a coding agent's own subagent runs on what its agent gives it: nothing is said of its model", async () => {
+  const shown = await states("ses_agentSub", "ses_agentOut");
+  assert.deepEqual(Object.keys(shown), ["ses_agentOut"], "its parent, on the same signed-out account, is said");
+});
+
 test("none named is refused, and it's only read", async () => {
   assert.equal((await answer("GET", "kuvo/sessions/models")).status, 400);
   assert.equal((await answer("POST", "kuvo/sessions/models?sessions=ses_fine")).status, 405);
@@ -464,6 +471,19 @@ test("the models offered in a project's folder: the engine's lists there, where 
   const local = there.models.find(each => each.providerID === "my-own");
   assert.deepEqual(local, { providerID: "my-own", id: "local-7b", name: "Local 7B", side: "engine", efforts: ["high"], aliases: [] });
   assert.deepEqual(there.starting, { providerID: "my-own", id: "local-7b" });
+  // A session's folder (as the box's list has it) and a worktree's are read there too.
+  const worktree = fs.mkdtempSync(path.join(home, "worktree-")), sessionFolder = fs.mkdtempSync(path.join(home, "chat-"));
+  fs.writeFileSync(path.join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [{ project, root: worktree, folder: worktree, branch: "kuvo/x" }] }));
+  fs.mkdirSync(path.join(home, "run", "lists"), { recursive: true });
+  const facts = { kind: "chat", directory: sessionFolder, created: 1, updated: 1 };
+  fs.writeFileSync(path.join(home, "run", "lists", "sessions.json"), JSON.stringify({ epoch: "e", seq: 1, floor: 0, sessions: { ses_chat: { seq: 1, facts } }, gone: {}, projects: {} }));
+  for (const folder of [worktree, sessionFolder]) {
+    folders.length = 0;
+    await offeredOn(on, `?folder=${encodeURIComponent(folder)}`);
+    assert.ok(folders.includes(folder), `${folder}: asked of the engine there (${folders})`);
+  }
+  fs.rmSync(path.join(home, "run", "lists", "sessions.json"));
+  fs.rmSync(path.join(home, "box", "worktrees.json"));
   // Not in the box's own lists, nor another folder's.
   const plain = await offeredOn(on);
   assert.equal(plain.models.some(each => each.providerID === "my-own"), false);

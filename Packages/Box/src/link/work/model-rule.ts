@@ -156,12 +156,23 @@ export function rememberName(ref: { providerID: string; id: string }, name: stri
   names.delete(key);
   names.set(key, name);
   while (names.size > SAVED_MOST) names.delete(names.keys().next().value!);
-  saving ??= setTimeout(saveNames, 1_000);
-  saving.unref?.();
+  if (!saving) {
+    saving = setTimeout(saveNames, 1_000);
+    saving.unref?.();
+    // (One noted just before the box stops, an update's restart, is saved as it goes.)
+    process.once("exit", saveIfWaiting);
+  }
+}
+
+function saveIfWaiting(): void {
+  if (!saving) return;
+  clearTimeout(saving);
+  saveNames();
 }
 
 function saveNames(): void {
   saving = undefined;
+  process.removeListener("exit", saveIfWaiting);
   const names = [...saved()].map(([key, name]) => [...key.split("\u0000"), name]);
   try {
     fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });

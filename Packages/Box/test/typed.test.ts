@@ -71,6 +71,8 @@ let bridge: ReturnType<typeof Bun.serve>
 let engineAsked: Asked[] = []
 let bridgeAsked: Asked[] = []
 let conversations: Record<string, Conversation> = {}
+/** The coding agents' conversations, the bridge's. */
+let bridgeConversations: Record<string, Conversation> = {}
 let bridgeRuns = true
 const COMMANDS = { status: 200, body: { data: [{ name: "init", description: "Set it up" }, { name: "review", description: "Review" }, { name: "goal", description: "Goal" }] } as unknown }
 let commandsAnswer = COMMANDS
@@ -103,7 +105,9 @@ function startBridge() {
         held.reached()
         await held.release
       }
-      // (It has none of the engine's conversations.)
+      // (It has none of the engine's conversations: its own only.)
+      const own = /^\/api\/session\/([^/]+)$/.exec(each.path)?.[1]
+      if (own && bridgeConversations[decodeURIComponent(own)]) return Response.json({ data: bridgeConversations[decodeURIComponent(own)] })
       if (/^\/api\/session\//.test(each.path)) return Response.json({ message: "Not here." }, { status: 404 })
       const said = bridgeSays(each)
       return Response.json(said.body, { status: said.status })
@@ -158,6 +162,7 @@ beforeEach(() => {
   rmSync(TYPED_SENT, { force: true })
   held = null
   bridgeSays = () => ({ status: 200, body: {} })
+  bridgeConversations = {}
   conversations = {
     ses_main: { id: "ses_main", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 }, metadata: {} },
     ses_sub: { id: "ses_sub", parentID: "ses_main", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 } },
@@ -368,6 +373,20 @@ describe("kuvo/sessions/<id>/typed", () => {
     // On a model that runs, it goes, whatever a client says.
     conversations.ses_main.model = { providerID: "deepseek", id: "v4" }
     expect((await ask("POST", "ses_main", { text: "fix it", refusal: "Sign in to Anthropic again." })).json).toEqual({ send: { text: "fix it", quoted: true } })
+  })
+
+  test("a coding agent's own subagent isn't refused for its model: its agent runs it on what it gives it", async () => {
+    // Claude Code signed out on the bridge: its conversation is refused, its subagent isn't.
+    bridgeSays = each => {
+      if (each.path === "/api/integration") return { status: 200, body: { data: [{ id: "claude-code", name: "Claude Code", metadata: { source: "agent", installed: true, modelsComplete: true }, methods: [{ type: "oauth", id: "browser" }], connections: [] }] } }
+      if (each.path === "/api/model") return { status: 200, body: { data: [] } }
+      if (each.path === "/api/kuvo/auto") return { status: 200, body: { data: { lists: [] } } }
+      return { status: 200, body: {} }
+    }
+    const on = { location: { directory: "/srv/app" }, time: { created: 1, updated: 1 }, model: { providerID: "claude-code", id: "opus" } }
+    bridgeConversations = { ses_agent: { id: "ses_agent", ...on }, ses_agentSub: { id: "ses_agentSub", parentID: "ses_agent", ...on } }
+    expect((await ask("POST", "ses_agent", { text: "fix it" })).json.error).toBe("opus needs a sign-in to Claude Code: sign in, or choose another model.")
+    expect((await ask("POST", "ses_agentSub", { text: "fix it" })).json).toEqual({ send: { text: "fix it", quoted: true } })
   })
 
   test("none to run on: choose one; the engine not saying its lists lets it go, as a client does", async () => {

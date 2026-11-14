@@ -1249,3 +1249,20 @@ fn with_a_model_to_choose_a_command_still_goes_to_the_box(cx: &mut TestAppContex
     cx.run_until_parked();
     assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/typed").len(), 1, "asked of the box");
 }
+
+/// A conversation's composer follows its folder as the box's list has it: what's offered is read
+/// there (a conversation moved, or one opened before the list knew it).
+#[gpui::test]
+fn a_composer_follows_its_conversations_folder_from_the_list(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let folder = || composer.read_with(cx, |composer, _| composer.folder().map(str::to_owned));
+    let was = folder();
+    assert!(was.is_some(), "its folder, as the list had it when it opened");
+    // Moved to another folder: the list says so, and the composer reads there.
+    stand_in.set_facts("ses_limits", |facts| facts["directory"] = json!("/Users/sam/Projects/api-moved"));
+    workspace.update(cx, |workspace, cx| workspace.read_at_once(cx));
+    cx.run_until_parked();
+    assert_eq!(composer.read_with(cx, |composer, _| composer.folder().map(str::to_owned)), Some("/Users/sam/Projects/api-moved".to_owned()));
+}

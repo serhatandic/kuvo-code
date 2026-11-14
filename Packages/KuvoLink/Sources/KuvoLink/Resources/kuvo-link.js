@@ -17351,11 +17351,21 @@ function rememberName(ref, name) {
   names.set(key, name);
   while (names.size > SAVED_MOST)
     names.delete(names.keys().next().value);
-  saving ??= setTimeout(saveNames, 1000);
-  saving.unref?.();
+  if (!saving) {
+    saving = setTimeout(saveNames, 1000);
+    saving.unref?.();
+    process.once("exit", saveIfWaiting);
+  }
+}
+function saveIfWaiting() {
+  if (!saving)
+    return;
+  clearTimeout(saving);
+  saveNames();
 }
 function saveNames() {
   saving = undefined;
+  process.removeListener("exit", saveIfWaiting);
   const names = [...saved()].map(([key, name]) => [...key.split("\x00"), name]);
   try {
     fs66.mkdirSync(BOX, { recursive: true, mode: 448 });
@@ -40540,7 +40550,7 @@ import fs131 from "node:fs";
 import path136 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "25b490a77c71";
+var BRIDGE_VERSION = "60a4e7f34bc2";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

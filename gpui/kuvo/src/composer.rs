@@ -258,14 +258,14 @@ impl Composer {
         }
     }
 
-    /// The conversation's folder, as its box lists it: what's offered is read there, its project's
-    /// own models too (`models.offered.folder`).
     /// The conversation's folder, where what's offered is read (none known yet).
     pub fn folder(&self) -> Option<&str> {
         self.folder.as_deref()
     }
 
-    /// Whether it was read again for it (a folder it didn't have, in the app).
+    /// The conversation's folder, as its box lists it: what's offered is read there, its project's
+    /// own models too (`models.offered.folder`). Whether it was read again for it (a folder it
+    /// didn't have, in the app).
     pub fn set_folder(&mut self, folder: Option<String>, cx: &mut Context<Self>) -> bool {
         if self.folder == folder {
             return false;
