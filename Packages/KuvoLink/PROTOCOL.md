@@ -428,7 +428,10 @@ connection.
   `kuvo/info` names them (the box that takes them keeps the first 300 names), and `boxes`
   (`[{key, address, kind, name}]`, 64 at most), the sender's other peers, which the receiver takes
   plan limits from and tells its own to where they aren't its peers too ("Plan limits", "Across your
-  computers"; nothing else). A box sends its bots and its 40 latest
+  computers"; nothing else), and `setup` (the id of the setup it follows, where it follows one) and
+  `shared: true` (it's a machine two people's Macs set up), by which the receiver counts it as one of
+  your own computers, for resets, Always Allow and usage totals, only within one setup (#701; "Plan
+  limits", "Across your computers", Whose). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -4105,7 +4108,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
       with this sign-in; `agents: true`, agents may use them without asking (Always Allow, below).
       In a row, `usable` and `on` `{key, name, here?}` say which of your computers would use one:
       the first of its `boxes` (this box first, one heard from before one that's away, never one a
-      peer only vouches for) whose own
+      peer only vouches for, nor one that isn't yours, Whose) whose own
       `resets` say `usable`; none can, `usable: false` and no `on`. `agents` is that computer's.
     - `unreadable` `{message}`: what this sign-in can't read: a Mac's Claude token can only run
       Claude, so its extra usage and resets show only from a computer of yours signed in to Claude
@@ -4143,6 +4146,17 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     one. It takes only `limits`
     from those (any other mail from them is dropped, as from anyone else), and they go when no peer
     names them any more. A box two hops away (known only to a box only a peer knows) isn't one.
+  - **Whose** (#701): what's yours alone (spending a reset, Always Allow, what an account spends or
+    has left to spend, `agents`/`agentsReset`, and usage `totals`) stays between your own
+    computers: a peer, unless this box or it is a machine two people's Macs set up, or it follows
+    another setup than this box's. The link works that out from its own setup and what each peer's
+    agents' mail says (`setup`, `shared`), and tells the bridge each peer that isn't (`apart: true`
+    in `PUT /api/kuvo/peers`' `boxes`; on a machine two Macs set up, every peer). A peer that says
+    nothing of a setup (one not in one yet, a box from before this) counts as yours, as before. So
+    on a machine two people's Macs share, no one's resets are used, no Always Allow is taken or
+    passed on, and no one's spend is added up but its own; and each Mac treats that machine as it
+    treats the other Mac (a box a peer vouches for), which is told, and keeps of what's told it, only
+    what such a box is.
   - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
     `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them, but its own
     numbers only (each account's hashed `identity`, its windows with when each was read, `checked`,
@@ -4304,7 +4318,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
     longer knows it) asks anew.
   - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
-    `on`, a peer of yours (never a box a peer vouches for), as `{"seat": {"kind": "reset", at, ask:
+    `on`, one of your own computers (never a box a peer vouches for, nor one that isn't yours, Whose), as `{"seat": {"kind": "reset", at, ask:
     {id, row, by?}}}`, and answers when that one does (`{"seat": {"kind": "reset", at, answer: {id,
     outcome, until?, already?, open?, message?}}}`: `already`, its maker said this request was done
     before; `open`, the spend stays open there, so it stays open here too), or `unknown` after 45
@@ -4312,7 +4326,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     under the same id, which that box's journal answers once). An open one that can't be passed
     there now stays open (`not-now`, saying an earlier try may have gone); a new one that can't is
     never kept. A box takes a
-    reset's mail only from your own computers; its link drops it from a box a peer vouches for.
+    reset's mail only from your own computers (Whose); its link drops it from a box a peer vouches for.
   - **Always Allow**: `PUT kuvo/agents/api/kuvo/limits/reset/always {provider | row, always}`:
     agents may (or may not) use an account's resets without asking. It's the account's, by who it
     is (its row `<service>#<identity>`; 409 for one that doesn't say who it is yet): each decision
@@ -4397,7 +4411,7 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
     account (Cursor's): its days are its newest box's (`scanned`; of your own computers', for
     `totals`), never a sum; `boxes` as limits' rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
     vouched?, same?}`): `vouched`, a box a peer vouches for (another Mac beside a machine you
-    share), not one of your computers, and the row `vouched` when all of them are; `same`, a box
+    share) or one that isn't yours (Whose, above), not one of your computers, and the row `vouched` when all of them are; `same`, a box
     that reads a folder another of them already does (two boxes on one computer), not added again.
     Its `days` are the **sum** of every box's own (each box reads only its own logs), each folder
     once; an `accountWide` row's, its newest box's alone. OpenCode's: a row for Go (the same row as its plan limits') and one for Zen, each only
@@ -4405,8 +4419,9 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
     computer (`kuvo/moves`) is copied there, and the one it left keeps its copy for a while: its
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
-    peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
-    in no total), each folder once (an `accountWide` row's newest box of yours): what the Mac's Claude, Codex, Grok, OpenCode and Cursor cards show. `partial`: a service whose
+    peers, not a box a peer vouches for, nor one that isn't yours ("Plan limits", "Across your
+    computers", Whose: a machine two people's Macs share, and on it every peer), whose accounts may
+    be another person's: their rows show, `vouched`, in no total), each folder once (an `accountWide` row's newest box of yours): what the Mac's Claude, Codex, Grok, OpenCode and Cursor cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).
   - A `day`: `{date, tokens, cost, models: [{model, tokens, cost, family?}], unknown?, fallback?}`, newest first, for
