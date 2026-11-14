@@ -64,7 +64,7 @@ pub fn fold(count: usize, whole: bool) -> (usize, Option<String>) {
     if whole {
         (count.min(MOST), Some("Show less".to_owned()))
     } else {
-        (FOLDED, Some(format!("Show all {count} lines")))
+        (FOLDED, Some(if count > MOST { format!("Show the first {MOST} of {count} lines") } else { format!("Show all {count} lines") }))
     }
 }
 
@@ -325,5 +325,6 @@ mod tests {
         assert_eq!(fold(240, false), (FOLDED, Some("Show all 240 lines".into())));
         assert_eq!(fold(240, true), (240, Some("Show less".into())));
         assert_eq!(fold(5000, true), (MOST, Some("Show less".into())));
+        assert_eq!(fold(5000, false).1.as_deref(), Some("Show the first 400 of 5000 lines"));
     }
 }

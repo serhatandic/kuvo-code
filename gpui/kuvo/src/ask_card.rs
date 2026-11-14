@@ -100,6 +100,9 @@ pub struct AskCard {
     answering: Option<String>,
     /// Why the last answer didn't go.
     failed: Option<String>,
+    /// The ask shown just took another's place (that one was answered elsewhere): the first key
+    /// that would answer it only says so, so a key meant for the one before doesn't answer this.
+    fresh: bool,
     focus: FocusHandle,
     tasks: Vec<Task<()>>,
     _words: Subscription,
@@ -139,6 +142,7 @@ impl AskCard {
             instead: false,
             answering: None,
             failed: None,
+            fresh: false,
             focus: cx.focus_handle(),
             tasks: Vec::new(),
             _words: subscription,
@@ -148,12 +152,19 @@ impl AskCard {
     /// What the box says waits now.
     pub fn take(&mut self, asks: Asks, cx: &mut Context<Self>) {
         let before = self.place.shown().map(str::to_owned);
-        self.asks = asks.asks;
+        self.asks = asks.asks.into_iter().filter(|ask| *ask != Ask::Unknown).collect();
         self.place.update(self.asks.iter().map(|ask| ask.id().to_owned()).collect());
         if self.place.shown() != before.as_deref() {
             self.reset(cx);
+            // (Another took the place of one you may have been about to answer.)
+            self.fresh = before.is_some() && self.place.shown().is_some();
         }
         cx.notify();
+    }
+
+    /// Whether the ask shown just took another's place, and its keys wait for one more press.
+    pub fn is_fresh(&self) -> bool {
+        self.fresh
     }
 
     /// Whether anything waits (the card shows in the composer's place).
@@ -183,6 +194,7 @@ impl AskCard {
 
     /// A new ask shows: nothing picked, nothing written.
     fn reset(&mut self, cx: &mut Context<Self>) {
+        self.fresh = false;
         self.question = 0;
         self.picked.clear();
         self.instead = false;
@@ -339,7 +351,15 @@ impl AskCard {
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let modified = event.keystroke.modifiers.modified();
-        if modified {
+        // What's typed in the card's line is words, never an answer.
+        if modified || self.words.focus_handle(cx).is_focused(window) {
+            return;
+        }
+        let answers = key == "enter" || key == "escape" || (key.len() == 1 && key.as_bytes()[0].is_ascii_digit());
+        if answers && self.fresh {
+            self.fresh = false;
+            cx.notify();
+            cx.stop_propagation();
             return;
         }
         match (self.shown().cloned(), key) {
@@ -524,13 +544,14 @@ impl Render for AskCard {
         let parts: Vec<AnyElement> = match self.shown().cloned() {
             Some(Ask::Permission(permission)) => self.permission(&permission, cx),
             Some(Ask::Question(question)) => self.question(&question, cx),
-            Some(Ask::Other { title, message, .. }) => vec![
-                self.header(IconName::Question, title.into(), false, cx),
+            Some(Ask::Other { title, message, dismiss, .. }) => vec![
+                self.header(IconName::Question, title.into(), dismiss, cx),
                 div().text_ui(TypeSize::Small).text_color(c.text_muted).child(message).into_any_element(),
                 div().text_ui(TypeSize::Caption).text_color(c.text_faint).child("This app can’t answer this kind yet: answer it in Kuvo Code on your Mac or iPhone.").into_any_element(),
             ],
-            None => Vec::new(),
+            Some(Ask::Unknown) | None => Vec::new(),
         };
+        let fresh = self.fresh.then(|| div().text_ui(TypeSize::Caption).text_color(c.text_muted).child("The one before was answered elsewhere: this one took its place. Press again to answer it."));
         let failed = self.failed.clone().map(|why| div().text_ui(TypeSize::Caption).text_color(c.warning).child(why));
         div()
             .id("ask-card")
@@ -547,6 +568,7 @@ impl Render for AskCard {
             .border_1()
             .border_color(c.border_strong)
             .shadow(theme.card_shadow())
+            .children(fresh)
             .children(parts)
             .children(failed)
     }

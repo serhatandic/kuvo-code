@@ -63,6 +63,8 @@ pub struct ConversationView {
     /// What waits its turn, as the box orders it, over the composer.
     queue: Queue,
     queue_failed: Option<String>,
+    /// Why what it asks couldn't be read (what was shown stays meanwhile).
+    asks_failed: Option<String>,
     client: BoxClient,
     live: bool,
     _queue_follow: Option<Follow<Followed<Queue>>>,
@@ -101,6 +103,7 @@ impl ConversationView {
             _asks_task: None,
             queue: Queue::default(),
             queue_failed: None,
+            asks_failed: None,
             client: client.clone(),
             live,
             _queue_follow: None,
@@ -127,16 +130,29 @@ impl ConversationView {
             view._queue_follow = Some(queue);
             view.tasks.push(cx.spawn(async move |this, cx| {
                 while let Ok(update) = queued.recv().await {
-                    let Followed::Now(queue) = update else { continue };
-                    if this.update(cx, |this, cx| this.take_queue(queue, cx)).is_err() {
+                    let taken = match update {
+                        Followed::Now(queue) => this.update(cx, |this, cx| this.take_queue(queue, cx)),
+                        // What it said last stays, saying it couldn't be read now.
+                        Followed::Failed(error) => this.update(cx, |this, cx| {
+                            this.queue_failed = Some(format!("The queue couldn’t be read: {error}"));
+                            cx.notify();
+                        }),
+                    };
+                    if taken.is_err() {
                         break;
                     }
                 }
             }));
             view._asks_task = Some(cx.spawn(async move |this, cx| {
                 while let Ok(update) = updates.recv().await {
-                    let Followed::Now(asks) = update else { continue };
-                    if this.update(cx, |this, cx| this.take_asks(asks, cx)).is_err() {
+                    let taken = match update {
+                        Followed::Now(asks) => this.update(cx, |this, cx| this.take_asks(asks, cx)),
+                        Followed::Failed(error) => this.update(cx, |this, cx| {
+                            this.asks_failed = Some(format!("What it asks you couldn’t be read: {error}"));
+                            cx.notify();
+                        }),
+                    };
+                    if taken.is_err() {
                         break;
                     }
                 }
@@ -173,6 +189,7 @@ impl ConversationView {
     /// What waits its turn, as the box says it.
     pub fn take_queue(&mut self, queue: Queue, cx: &mut Context<Self>) {
         self.queue = queue;
+        self.queue_failed = None;
         cx.notify();
     }
 
@@ -220,6 +237,7 @@ impl ConversationView {
     /// What the box says it waits on you for: a card in the composer's place while anything does,
     /// with the keyboard on it as it comes.
     pub fn take_asks(&mut self, asks: Asks, cx: &mut Context<Self>) {
+        self.asks_failed = None;
         self.asks.update(cx, |card, cx| card.take(asks, cx));
         cx.notify();
     }
@@ -503,7 +521,8 @@ impl Render for ConversationView {
                 None => centred("Loading the conversation…".into(), true, cx),
             }
         } else if self.entries.is_empty() {
-            centred("Nothing here yet. Write below to start.".into(), false, cx)
+            let asking = self.asks.read(cx).is_asking();
+            centred(if asking { "Nothing here yet.".into() } else { "Nothing here yet. Write below to start.".into() }, false, cx)
         } else {
             chat_list(&self.list, move |ix, _window, cx| {
                 let cx: &App = cx;
@@ -537,6 +556,9 @@ impl Render for ConversationView {
                     .pb(space::S5)
                     .children(banner.map(|(why, color)| {
                         div().w_full().max_w(px(COLUMN)).pb(space::S2).text_ui(TypeSize::Caption).text_color(color).child(why)
+                    }))
+                    .children(self.asks_failed.clone().filter(|_| !gone).map(|why| {
+                        div().w_full().max_w(px(COLUMN)).pb(space::S2).text_ui(TypeSize::Caption).text_color(c.warning).child(why)
                     }))
                     .when(!gone, |d| d.children(self.queue_view(cx)))
                     // What it waits on you for takes the composer's place, as on the Mac and the phone.

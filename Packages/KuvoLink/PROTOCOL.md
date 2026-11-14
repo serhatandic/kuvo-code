@@ -1276,17 +1276,22 @@ Auto's reviewer took up.
     only after another answer), `questions: [{key, title, question, options: [{value, label,
     description}], multiple, custom, required}]`, asked one at a time: `multiple` takes several,
     `custom` takes words of your own (one with no choices does), `required` needs an answer.
-  - `other`: any other form (an MCP server's, fields a card can't take): `message` says what it
-    asks, and a client says to answer it where it was asked (it can dismiss it).
+  - `other`: anything else it waits on you for: a form a card can't take (an MCP server's, fields
+    a card can't take), or what the box asks you for it or its subagents (a command outside the
+    sandbox, something from the vault, as `kuvo/sandbox/asks` and `kuvo/vault/asks` list them;
+    only the box's long-running process has them). `message` says what it asks, and a client says
+    to answer it in Kuvo Code on a Mac or a phone; `dismiss` says whether it can be put away
+    unanswered from here (a form can, the box's own asks can't).
   `404 {"message"}` for no such session here, `503 {"message"}` while its place isn't answering.
 - `GET kuvo/sessions/<id>/asks/events` (ndjson): the same now, and again as an ask comes, is
-  answered, or its run ends (every 15 s at least); nothing while its place isn't answering, so
+  answered, or its run ends (as the long-running process notes them, looked at each second, and
+  every 15 s at least); nothing while its place isn't answering, so
   what it said last stands. Through `box route` it answers its first line.
 - `POST kuvo/sessions/<id>/asks/<ask>` answers one, to the place and session that asked: a
   permission with `{"answer": "once"|"always"|"reject"}`, or `{"answer": "instead", "message"}`
   (Don't Allow with your words, which the agent reads); a question with `{"answers": {<key>:
   "words" | ["choice"…]}}`, only what was answered (the box adds the form's defaults for the rest),
-  or `{"dismiss": true}` for any form. `200 {}`; `404 {"message"}` when it isn't waiting any more;
+  or `{"dismiss": true}` for any form (not the box's own asks). `200 {}`; `404 {"message"}` when it isn't waiting any more;
   `400 {"message"}` for an answer that doesn't fit (a choice it doesn't offer, a required one
   missing, words for `other`); `503` while its place isn't answering, `502` when it refused.
 

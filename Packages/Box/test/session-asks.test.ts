@@ -118,7 +118,7 @@ test("a conversation's asks, its subagents' too, come worded as the cards show t
     { key: "color", title: "Color", question: "Which color?", options: [{ value: "blue", label: "Blue", description: "Calm" }, { value: "red", label: "Red", description: null }], multiple: false, custom: false, required: true },
     { key: "extras", title: "Extras", question: "Extras", options: [{ value: "docs", label: "Docs", description: null }], multiple: true, custom: true, required: false },
   ] })
-  expect(other).toEqual({ id: "frm_mcp", kind: "other", session: "ses_root", title: "GitHub", message: "Pick a repository." })
+  expect(other).toEqual({ id: "frm_mcp", kind: "other", session: "ses_root", title: "GitHub", message: "Pick a repository.", dismiss: true })
 })
 
 test("an answer goes to the session that asked, as the engine takes it", async () => {
@@ -152,6 +152,25 @@ test("a form a client can't answer is dismissed from it, never answered", async 
   expect((await ask(handler, "POST", "kuvo/sessions/ses_root/asks/frm_mcp", { answers: { repo: 1 } })).status).toBe(400)
   expect((await ask(handler, "POST", "kuvo/sessions/ses_root/asks/frm_mcp", { dismiss: true })).status).toBe(200)
   expect(asked("/api/session/ses_root/form/frm_mcp")).toEqual([{ method: "DELETE", path: "/api/session/ses_root/form/frm_mcp", body: undefined }])
+})
+
+test("what the box asks you for a subagent shows with its asks, answered on the Mac or a phone", async () => {
+  const { ask: askVault } = await import("../src/link/vault/asks")
+  const stop = new AbortController()
+  const answered = askVault({ kind: "use", session: "ses_child", itemName: "GitHub token", why: "To open the pull request." }, stop.signal)
+  try {
+    const { status, json } = await ask(handler, "GET", "kuvo/sessions/ses_root/asks")
+    expect(status).toBe(200)
+    const vault = json.asks.find((each: any) => each.session === "ses_child" && each.kind === "other")
+    expect(vault).toMatchObject({ kind: "other", title: "Allow it to use the vault?", message: "GitHub token\nTo open the pull request.", dismiss: false })
+    // Neither answered nor put away from here.
+    const refused = await ask(handler, "POST", `kuvo/sessions/ses_root/asks/${vault.id}`, { dismiss: true })
+    expect(refused.status).toBe(400)
+    expect(refused.json.message).toContain("Mac or a phone")
+  } finally {
+    stop.abort()
+    await answered
+  }
 })
 
 test("one the engine refuses says why; no such conversation, or one whose place doesn't answer, says so", async () => {

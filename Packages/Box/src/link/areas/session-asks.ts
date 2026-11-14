@@ -5,7 +5,10 @@
 import { isObject, parsed } from "../../shared/json";
 import { outsideShown } from "../../shared/text";
 import { call } from "../engine/client";
-import { askFollowers, askTimes } from "../glance/asked";
+import fs from "node:fs";
+import { ASKS_FILE, askFollowers, askTimes } from "../glance/asked";
+import { listSandboxAsks } from "../fence/outside";
+import { listAsks as listVaultAsks } from "../vault/asks";
 import { homeFolder } from "../home";
 import { targetsOf } from "../letters/tools";
 import { alwaysWords, describeForm, type EngineForm } from "../notices/news";
@@ -154,7 +157,8 @@ async function asksOf(target: Target, session: string, folder: string, signal?: 
   const home = homeFolder();
   const found: { at: number; ask: Found }[] = [];
   const timeOf = (id: string, given: unknown) => noted.get(id) ?? (typeof given === "number" ? given : 0);
-  for (const asker of await askersOf(target, session, wait())) {
+  const askers = await askersOf(target, session, wait());
+  for (const asker of askers) {
     const at = `/api/session/${encodeURIComponent(asker)}`;
     let permissions: unknown, forms: unknown;
     try {
@@ -181,9 +185,24 @@ async function asksOf(target: Target, session: string, folder: string, signal?: 
       const title = text(form.title) || "Question";
       const shown: SessionAsk = questions
         ? { id: form.id, kind: "question", session: asker, title, questions }
-        : { id: form.id, kind: "other", session: asker, title, message: describeForm(form as EngineForm) };
+        : { id: form.id, kind: "other", session: asker, title, message: describeForm(form as EngineForm), dismiss: true };
       found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker, form: { fields } } });
     }
+  }
+  // What the box itself asks you for it: answered where its own cards are (the Mac, a phone).
+  const asking = new Set(askers);
+  for (const asked of listSandboxAsks()) {
+    if (!asked.session || !asking.has(asked.session)) continue;
+    const why = asked.why.trim();
+    const shown: SessionAsk = { id: asked.id, kind: "other", session: asked.session, title: "Allow running this outside the sandbox?", message: why ? `${asked.command}\n${why}` : asked.command, dismiss: false };
+    found.push({ at: asked.at, ask: { shown, target, asker: asked.session } });
+  }
+  for (const asked of listVaultAsks()) {
+    if (!asked.session || !asking.has(asked.session)) continue;
+    const what = asked.itemName ?? asked.need ?? asked.site;
+    const title = asked.kind === "item" ? "Allow it something from the vault?" : "Allow it to use the vault?";
+    const message = [what, asked.why].filter((each): each is string => typeof each === "string" && each.trim() !== "").join("\n") || "It asks for something from the vault.";
+    found.push({ at: asked.at, ask: { shown: { id: asked.id, kind: "other", session: asked.session, title, message, dismiss: false }, target, asker: asked.session } });
   }
   // (Stable: what came at the same time, or unnoted, stays in the order it was listed.)
   return found.sort((a, b) => a.at - b.at).map(each => each.ask);
@@ -260,10 +279,13 @@ export async function* sessionAsksRoute(context: RouteContext, match: RegExpMatc
   if (events) {
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     // (A place not answering: what was said last stands.)
+    // Told as an ask comes or goes in this process, and a look each second at the asks another
+    // process noted (a machine's kept server isn't the one hearing its engine).
+    const look = () => { try { return String(fs.statSync(ASKS_FILE).mtimeMs); } catch { return ""; } };
     return yield* followedLive(() => readAgain().catch(error => { if (error instanceof Unreached) return undefined; throw error; }), told => {
       askFollowers.add(told);
       return () => { askFollowers.delete(told); };
-    }, signal ?? undefined);
+    }, signal ?? undefined, { look });
   }
   let found: Found | undefined;
   try {
@@ -284,14 +306,15 @@ export async function* sessionAsksRoute(context: RouteContext, match: RegExpMatc
       if (!words) return yield* json(400, { message: "Say what it should do instead." });
       sent = { method: "POST", route: `${at}/permission/${encodeURIComponent(found.shown.id)}/reply`, body: { decision: "reject", message: words } };
     } else return yield* json(400, { message: "Answer once, always, reject or instead." });
-  } else if (isObject(given) && given.dismiss === true) {
+  } else if (isObject(given) && given.dismiss === true && (found.shown.kind !== "other" || found.shown.dismiss)) {
     sent = { method: "DELETE", route: `${at}/form/${encodeURIComponent(found.shown.id)}` };
   } else if (found.shown.kind === "question") {
     const checked = questionAnswer(found.form?.fields ?? [], found.shown.questions as AskedQuestion[], isObject(given) ? given.answers : undefined);
     if ("refused" in checked) return yield* json(400, { message: checked.refused });
     sent = { method: "POST", route: `${at}/form/${encodeURIComponent(found.shown.id)}/reply`, body: { answer: checked.answer } };
   } else {
-    return yield* json(400, { message: "This one is answered where it was asked: only dismissing it goes from here." });
+    const elsewhere = found.shown.kind === "other" && !found.shown.dismiss;
+    return yield* json(400, { message: elsewhere ? "Answer this one in Kuvo Code on a Mac or a phone." : "This one is answered where it was asked: only dismissing it goes from here." });
   }
   try {
     await call(found.target, sent.method, sent.route, sent.body, AbortSignal.timeout(15_000));

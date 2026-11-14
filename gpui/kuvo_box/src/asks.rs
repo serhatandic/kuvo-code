@@ -23,8 +23,12 @@ pub struct Asks {
 pub enum Ask {
     Permission(Permission),
     Question(Question),
-    /// A form this client can't take (an MCP server's): answered elsewhere.
-    Other { id: String, session: String, title: String, message: String },
+    /// Anything else it waits on you for (an MCP server's form, the box's own asks), answered on a
+    /// Mac or a phone; `dismiss`: whether it can be put away unanswered from here.
+    Other { id: String, session: String, title: String, message: String, dismiss: bool },
+    /// A kind this client doesn't know yet (a newer box's): left out, the rest still read.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Ask {
@@ -33,6 +37,7 @@ impl Ask {
             Ask::Permission(permission) => &permission.id,
             Ask::Question(question) => &question.id,
             Ask::Other { id, .. } => id,
+            Ask::Unknown => "",
         }
     }
 }
@@ -171,8 +176,10 @@ mod tests {
             { "id": "frm_1", "kind": "question", "session": "ses_sub", "title": "Question", "questions": [
                 { "key": "q0", "title": "Database", "question": "Which one?", "options": [{ "value": "pg", "label": "Postgres", "description": null }], "multiple": false, "custom": true, "required": true }
             ] },
-            { "id": "frm_2", "kind": "other", "session": "ses_1", "title": "Linear", "message": "Needs your answer." }
+            { "id": "frm_2", "kind": "other", "session": "ses_1", "title": "Linear", "message": "Needs your answer.", "dismiss": true },
+            { "id": "zzz_1", "kind": "poll", "session": "ses_1", "anything": [1, 2] }
         ] })).unwrap();
+        assert_eq!(asks.asks[3], Ask::Unknown, "a newer kind doesn't spoil the rest");
         assert!(matches!(&asks.asks[0], Ask::Permission(permission) if permission.choices[1].named.as_deref() == Some("git push")));
         assert!(matches!(&asks.asks[1], Ask::Question(question) if question.questions[0].options[0].label == "Postgres"));
         assert_eq!(asks.asks[2].id(), "frm_2");

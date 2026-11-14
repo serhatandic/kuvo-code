@@ -27,6 +27,18 @@ Scenarios in `kuvo/tests/screens.rs`.
    a box's ndjson list (`Followed`), `Request::delete`.
 6. Clippy clean for kuvo, kuvo_box and kuvo_ui with all targets (phase 0's warnings fixed too).
 
+## Review
+
+One reviewer pass. Fixed: a digit typed in a card's own line answered the permission (now words,
+with a test that presses the keys and fails without the fix); the box's own asks showed nothing
+(now `other` cards, `dismiss: false`); a card that just replaced another took the key meant for it;
+an MCP form had no way out (× when the box says `dismiss`); a newer ask kind spoiled the whole list
+(now left out); asks reached a machine's kept server up to 15 s late (the events route looks at
+the asks file each second); failures of the asks and queue follows weren't drawn (a quiet line
+now); the empty conversation said "Write below" under a card; mentions asked the box on every key
+(a 150 ms pause now); "Show all" past 400 lines overpromised. Left for the user: which steps open
+(Decisions).
+
 ## Box changes
 
 All additive, each with its route shape, PROTOCOL.md section, feature name and tests
@@ -67,8 +79,13 @@ All additive, each with its route shape, PROTOCOL.md section, feature name and t
   do it; `kuvo/search` could match names too, so no client does. The mention being typed is read
   from the end of what's written (`mention_query`), as the Mac's `Mentions.query` and
   `AgentReferences.query` read it: it decides when to ask the box, nothing more.
-- An ask that isn't the engine's or the bridge's (the sandbox's, the vault's) counts in the list's
-  `asked` but isn't on the card: the conversation shows nothing for it.
+- The box's own asks (a command outside the sandbox, something from the vault) show as a card that
+  says to answer them on the Mac or iPhone: this app can't answer them yet. Through `box route` (a
+  machine over SSH) they aren't listed: only the long-running process has them.
+- Edit on a queued message brings back its words and files, not the keyword it went with (the
+  box's `removed` doesn't carry it).
+- `DELETE …/queue/<item>` now also takes back what the engine holds; the Mac and the phone take
+  those back through the engine directly, so nothing changes for them.
 - From phase 2, still open: commands shown as typed, machines, paging's jump, the follows' wiring
   untested at app level.
 
@@ -87,3 +104,13 @@ and every colour and size is in `kuvo_ui/src/theme.rs` or the block, easy to cha
   and add Steer and Send Now next.
 - **Five new icons** (image, paperclip, pencil, question, shield), drawn in the set's style.
 - The keyboard's cursor in the sidebar is the accent's ring: the accent is still the user's call.
+- **Which tool steps open, and to what** (`entries.rs`, `details()`): an edit to its diffs
+  (`metadata.files`), a command to its output, a search to its results; a read or a step still
+  running to nothing. The reviewer counts this as client logic the box should state; I read it as
+  drawing (it changes no behaviour or data, as the Mac's step rows decide what they show, and
+  phase 2's `tool_label` does the same). Recommended: keep it in the client for now and move it to
+  KuvoClient-level shared views with the Swift apps; the alternative is the box annotating each
+  step with what it shows, which needs the box to rewrite the engine's messages. Your call.
+- **A card that just took another's place** (the one before answered on another device) shows a
+  line and waits for a second press of Return or a number, so a key meant for the first can't
+  answer it. Recommended: keep (the Mac doesn't do this yet).

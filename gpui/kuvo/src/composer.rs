@@ -35,6 +35,8 @@ const ACCOUNTS: &str = "Kuvo Code on your Mac or iPhone";
 /// How long before what the box couldn't say of its models is asked again, at first and at most.
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MOST: Duration = Duration::from_secs(30);
+/// How long typing a mention pauses before the box is asked what it suggests.
+const MENTION_PAUSE: Duration = Duration::from_millis(150);
 /// How many of "/"'s offers show at once (the rest scroll).
 const SLASH_MOST: usize = 8;
 
@@ -753,12 +755,22 @@ impl Composer {
         };
         let (client, id) = (self.client.clone(), id.clone());
         if self.live {
-            self.spawn(cx, move || client.mentions(&id, wanted, &query), move |this, found, cx| {
-                if this.mention_reads == read {
-                    this.mentions = found.unwrap_or_default();
-                    cx.notify();
+            // Asked once typing pauses a moment, not on every key.
+            self.tasks.retain(|task| !task.is_ready());
+            self.tasks.push(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(MENTION_PAUSE).await;
+                if this.read_with(cx, |this, _| this.mention_reads != read).unwrap_or(true) {
+                    return;
                 }
-            });
+                let found = cx.background_executor().spawn(async move { client.mentions(&id, wanted, &query) }).await;
+                this.update(cx, |this, cx| {
+                    if this.mention_reads == read {
+                        this.mentions = found.unwrap_or_default();
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }));
         } else {
             // (Tests and shots: at once, as the box would answer.)
             self.mentions = client.mentions(&id, wanted, &query).unwrap_or_default();

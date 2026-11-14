@@ -87,9 +87,11 @@ export const ASKED_QUESTION = object({
 /** The agent's questions, answered with choices or in words. */
 export const QUESTION_ASK = object({ id: string, kind: literal("question"), session: string, title: string, questions: list(ASKED_QUESTION) });
 
-/** Any other form (an MCP server's, or fields a client can't take): what it asks, answered
- * elsewhere. */
-export const OTHER_ASK = object({ id: string, kind: literal("other"), session: string, title: string, message: string });
+/** Anything else it waits on you for: a form a card can't take (an MCP server's, fields a client
+ * can't take), or what the box asks you for it (a command outside the sandbox, something from the
+ * vault). What it asks, answered on the Mac or a phone; `dismiss`: whether it can be put away
+ * unanswered from here (a form can; the box's own asks can't). */
+export const OTHER_ASK = object({ id: string, kind: literal("other"), session: string, title: string, message: string, dismiss: bool });
 
 export const SESSION_ASK = oneOf(PERMISSION_ASK, QUESTION_ASK, OTHER_ASK);
 /** What a conversation waits on you for, oldest first. */

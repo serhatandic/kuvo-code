@@ -9621,7 +9621,8 @@
            },
            "session": "string",
            "title": "string",
-           "message": "string"
+           "message": "string",
+           "dismiss": "bool"
           }
          }
         ]
@@ -9786,7 +9787,8 @@
            },
            "session": "string",
            "title": "string",
-           "message": "string"
+           "message": "string",
+           "dismiss": "bool"
           }
          }
         ]
