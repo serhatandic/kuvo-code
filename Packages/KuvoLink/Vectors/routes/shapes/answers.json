@@ -3221,6 +3221,9 @@
             "literal": "models.offered"
            },
            {
+            "literal": "models.offered.sides"
+           },
+           {
             "literal": "moves"
            },
            {
@@ -3708,6 +3711,9 @@
            },
            {
             "literal": "models.offered"
+           },
+           {
+            "literal": "models.offered.sides"
            },
            {
             "literal": "moves"

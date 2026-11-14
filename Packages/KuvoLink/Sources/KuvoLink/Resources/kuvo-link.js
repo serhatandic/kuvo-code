@@ -3961,6 +3961,7 @@ var FEATURES = [
   "mcp.catalog",
   "messages.send",
   "models.offered",
+  "models.offered.sides",
   "moves",
   "moves.agents",
   "moves.check",
@@ -40276,7 +40277,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "7a96f06e7381";
+var BRIDGE_VERSION = "1855e0574e9c";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
