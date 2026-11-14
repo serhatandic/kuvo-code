@@ -2279,19 +2279,29 @@ A client never keeps an older box's way of doing something (#679): it brings a b
 before it uses it, and meanwhile says so. A box is older than a client needs when its `kuvo/info`
 `features` lack any name the client uses with no way around it (or it has no `kuvo/info`): today
 `agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
-`models.offered`, `sessions.list`, `sessions.models`, `sessions.start.empty` and `typed`
-(KuvoClient's `BoxGate.required`; a box with `sessions.list` and `typed` has what came before them
-too). A client adds a name there as it drops its fallback for a box without it, or its words that
-such a box needs a newer Kuvo Code.
+`messages.send`, `models.offered`, `sessions.list`, `sessions.models`, `sessions.start.empty` and
+`typed` (KuvoClient's `BoxGate.required`; a box with `messages.send` has what came before it too,
+`sessions.move`, `projects.folders` and `sign-in.methods` among them, and names its chats folder in
+`kuvo/info`). A client adds a name there as it drops its fallback for a box without it, or its words
+that such a box needs a newer Kuvo Code.
 
 - **Held**: a client sends a held box nothing but `kuvo/info`, `kuvo/update` and `kuvo/box/update`,
-  its Mac's app's own registration (`kuvo/box/app`, "This Mac's app"), and what keeps work already under way there going, so a session waiting on you can be answered:
+  its Mac's app's own registration (`kuvo/box/app`, "This Mac's app") and the keys it holds for
+  that app (`kuvo/box/proof` and `kuvo/box/kept-keys`, "This Mac's box: its keys, for its app"),
+  and what keeps work already under way there going, so a session waiting on you can be answered:
   its engine (`api/…`) and coding agents' bridge (`kuvo/agents/…`), the tool calls of the agents at
   work there (`kuvo/agent-tools`; a tool that box hasn't is said to the agent as waiting for the
   update), its asks (`kuvo/asks`, `kuvo/sandbox/asks`, `kuvo/vault/asks`, `kuvo/work/asks`) and
   Auto's decisions (`kuvo/sessions/<id>/decisions`). Every other request is refused in the client,
   in the gate's words (`503`, `reason: "updating"`), without reaching the box. Its sessions wait where they'd show, beside what it waits for or why it couldn't be updated.
+  A new chat there says the same, though its `kuvo/info` (which names its chats folder) answers.
   A held box whose `kuvo/info` says it has everything is let go, and read again at once.
+- Plan limits, usage history and usage settings are the coding agents' bridge's
+  (`kuvo/agents/api/kuvo/limits…`, `kuvo/agents/api/kuvo/usage…`; the Mac app asks the bridge
+  itself, at `api/kuvo/…`), so they're asked of a held box too, as all of its bridge is: what
+  they read, and what they change (a reset used, the usage panel's settings), is the bridge's own,
+  and none of it waits on the link's update. A bridge without one answers 404, and the client
+  shows nothing from it ("Plan limits", "Usage history").
 - **A Mac, its machines** (always over SSH): connecting puts this app's files on an older box
   ("Updates"), so its link answers as this version at once. The connection's last step reads
   `kuvo/info`; a machine still older isn't used, and its connection fails, saying why ("Kuvo Code
