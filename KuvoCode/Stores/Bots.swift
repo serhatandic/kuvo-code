@@ -393,7 +393,8 @@ final class Bots {
                     for try await data in client.follow("kuvo/bots/events") {
                         guard let line = try? JSONDecoder().decode(Line.self, from: data) else { continue }
                         take(line.bots, from: box)
-                        take(held: line.held, from: box)
+                        // (What this Mac's box holds: the only box this Mac gives edits to hold.)
+                        if onThisMac { take(held: line.held, from: box) }
                     }
                 } catch let refusal as BoxRefusal {
                     older = !onThisMac && (refusal.status == 404 || refusal.status == 403)
@@ -421,7 +422,7 @@ final class Bots {
         // One changed here meanwhile as it is here (made, as made; deleted, gone).
         let touched = touchedWhileListing[box] ?? []
         take(listed.bots.filter { !touched.contains($0.id) } + known.filter { $0.box == box && touched.contains($0.id) }.map(Self.listed), from: box)
-        take(held: listed.held, from: box)
+        if BoxClient.isThisMac(box) { take(held: listed.held, from: box) }
     }
 
     /// A bot's run ended: on a machine, its box may have changed it meanwhile (its job, kept with
@@ -517,9 +518,8 @@ final class Bots {
 
     /// What Edit Bot changes (its name, look, model and personality, and its job with `job`), sent to
     /// its box, which tells its conversation and its group chats. One for a machine that's away goes
-    /// to this Mac's box, which holds it for that machine and hands it on once it's back (and one for
-    /// a bot with an edit held already goes there too, on top of it, never before it); it shows as
-    /// made meanwhile. Throws what a box said no to.
+    /// to this Mac's box, which holds it for that machine and hands it on once it's back (its box
+    /// keeps whichever of a field is newer); it shows as made meanwhile. Throws what a box said no to.
     func update(_ edited: Bot, job: Bool = false) async throws {
         guard let current = known.first(where: { $0.id == edited.id }) else { return }
         // As you see it, with what's held for it.
@@ -534,7 +534,6 @@ final class Bots {
         }
         guard !fields.isEmpty else { return }
         if Moves.isFrozen(edited.id) { throw Moves.Failure.moving }
-        if let holder = heldEdit(for: edited.id)?.box { return try await hold(fields, for: current, on: holder) }
         if let machine = current.machine, !canReach(machine) { return try await hold(fields, for: current) }
         do {
             try await send(fields, to: current)
@@ -640,13 +639,13 @@ final class Bots {
     /// in it. A project it worked in stays. A machine's bot goes only once it's gone there, so while
     /// that machine can't be reached it stays, and this says so. One whose machine you removed from
     /// Kuvo Code leaves the list, and goes there the next time that machine answers (this Mac's box
-    /// holds it); so does one with an edit held already, after it.
+    /// holds it).
     func delete(_ bot: Bot) async throws {
         if Moves.isFrozen(bot.id) { throw Moves.Failure.moving }
         if let machine = bot.machine {
             let removed = isRemoved(machine)
-            if removed || heldEdit(for: bot.id) != nil {
-                try await hold(nil, for: bot, on: heldEdit(for: bot.id)?.box ?? BoxClient.thisMac)
+            if removed {
+                try await hold(nil, for: bot)
                 // A machine you removed: it goes there if you add it again.
                 if removed {
                     known.removeAll { $0.id == bot.id }

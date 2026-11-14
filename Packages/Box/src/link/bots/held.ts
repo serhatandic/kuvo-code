@@ -24,7 +24,8 @@ import { IS_MAC, RUN } from "../home";
 import { readPeerAgents } from "../peers/directory";
 import { computerName } from "../peers/computer-name";
 import { mailFor, peersOf } from "../peers/known";
-import { readTold } from "../work-queue/told";
+import { isApart } from "../peers/apart";
+import { sharedMachine } from "../setup/settle";
 import { ownName } from "../letters/start";
 import { macLink, readLink } from "../state";
 import { botHere, isModel, noteBotsChanged } from "./here";
@@ -61,6 +62,11 @@ const MOST_REFUSALS = 50;
  * minutes; a few days covers a holder that was itself off meanwhile), and how many at most. */
 const TAKEN_MEMORY = 7 * 86_400_000;
 const MOST_TAKEN = 1_000;
+/** The most a held change may be, as JSON (what's held goes in one mail). */
+const MOST_CHANGE = 32_000;
+/** How many times a computer may say a bot isn't there before a change held for it is refused,
+ * while none lists it yet (one moving there). */
+const NOT_THERE_TRIES = 3;
 
 /** An edit held here: the bot's computer by its key (empty while this box doesn't know it: one you
  * removed, named by the client in `on`), the change (`PATCH kuvo/bots/<id>`'s fields) and when each
@@ -130,10 +136,12 @@ function allHeld(link: LinkState | null = readLink()): Held[] {
 
 /** The computer that keeps `bot`, as its box last told this one (its agents), or else as the client
  * named it (`on`: its key, or its id on its Mac): one of this box's peers, never this box. */
-export function keeperOf(bot: string, on: string | null | undefined, link: LinkState | null = readLink()): Peer | null {
-  const peers = peersOf(link);
+export function keeperOf(bot: string, on: string | null | undefined, link: LinkState | null = readLink(), except?: string): Peer | null {
+  const peers = peersOf(link).filter(peer => peer.key !== except);
   const told = readPeerAgents();
-  const listing = peers.find(peer => told[peer.key]?.list?.some(agent => agent.kind === "bot" && agent.id === bot));
+  // (Two that list it, one moving it to the other: the one that told this box last.)
+  const listing = peers.filter(peer => told[peer.key]?.list?.some(agent => agent.kind === "bot" && agent.id === bot))
+    .sort((a, b) => (told[b.key]?.heard ?? told[b.key]?.at ?? 0) - (told[a.key]?.heard ?? told[a.key]?.at ?? 0))[0];
   if (listing) return listing;
   if (!on) return null;
   return peers.find(peer => peer.key === on || (peer.kind === "machine" && peer.id === on)) ?? null;
@@ -199,6 +207,9 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
   const named = removed && on ? plainName(on).slice(0, 200) : "";
   if (!keeper && !named) return no(404, "That bot isn’t there any more.");
   const computer = keeper ? shownName(keeper) : named;
+  // (Only for one of your own computers: not on a machine two people's Macs share, nor for one
+  // that is, or that follows another setup.)
+  if (keeper ? isApart(keeper.key, link) : sharedMachine(link)) return no(409, `${ownName()} doesn’t keep changes for ${computer}, which isn’t only yours: change it from ${computer}.`);
   if ("change" in given && isObject(given.change) && "work" in given.change) return no(409, `${computer} isn’t connected: change its work settings once it’s back.`);
   const checked = "change" in given ? checkedChange(given.change) : null;
   if (checked && "error" in checked) return no(400, checked.error);
@@ -212,6 +223,11 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
         return;
       }
       const given = checked ? Object.fromEntries(Object.keys(checked.change).map(field => [field, now])) : {};
+      // (What's held goes in one mail: one too big for it never would.)
+      if (checked && JSON.stringify({ ...(before?.change ?? {}), ...checked.change }).length > MOST_CHANGE) {
+        answer = no(400, "That’s too much to change at once.");
+        return;
+      }
       const held: Held = {
         id: `bte_${crypto.randomBytes(16).toString("base64url")}`,
         bot,
@@ -242,6 +258,8 @@ export const livesHere = (bot: string): boolean => Boolean(botHere(bot));
 
 // When each held edit last went, in this process, by bot.
 const sent = new Map<string, { id: string; at: number }>();
+// How many times each held change's computer said its bot isn't there, by the held edit's id.
+const notThere = new Map<string, number>();
 
 /** `key` answers again: what's held for it goes now, not at its next minute. */
 export function heldBack(key: string): void {
@@ -262,7 +280,10 @@ export function sendHeld(host: Pick<LinkHost, "send" | "welcomed"> | null | unde
   if (!host?.welcomed || !link) return;
   const told = readPeerAgents();
   for (let held of allHeld(link)) {
-    const keeper = keeperOf(held.bot, held.on, link);
+    // (Another computer only once the one it's held for doesn't list it: one that said it isn't there
+    // is left for its answer, `takeBotEdited`.)
+    const stillThere = Boolean(held.to) && told[held.to]?.list?.some(agent => agent.kind === "bot" && agent.id === held.bot);
+    const keeper = stillThere ? null : keeperOf(held.bot, held.on, link);
     if (keeper && keeper.key !== held.to) {
       const moved = locked(LOCK, () => {
         const now = readHeld(held.bot, link);
@@ -280,7 +301,9 @@ export function sendHeld(host: Pick<LinkHost, "send" | "welcomed"> | null | unde
     if (last?.id === held.id && now - last.at < AGAIN_AFTER) continue;
     const peer = peersOf(link).find(each => each.key === held.to);
     if (!peer || !(told[peer.key]?.features ?? []).includes(HELD_FEATURE)) continue;
-    const bytes = mailFor(peer, { botEdit: { id: held.id, bot: held.bot, ...(held.delete ? { delete: true } : { change: held.change, times: held.times ?? {} }), at: held.at }, at: now }, link);
+    // (How long ago each field was given, not when: the computers' clocks may not agree.)
+    const ages = Object.fromEntries(Object.entries(held.times ?? {}).map(([field, at]) => [field, Math.max(0, now - at)]));
+    const bytes = mailFor(peer, { botEdit: { id: held.id, bot: held.bot, ...(held.delete ? { delete: true } : { change: held.change, ages }), at: held.at }, at: now }, link);
     if (!bytes) continue;
     try {
       host.send(bytes);
@@ -334,23 +357,35 @@ export function takeBotEdited(sender: MailSender, given: unknown, now = Date.now
         return;
       }
       if (status === 404 && !held.delete) {
-        const keeper = keeperOf(bot, null, link);
-        if (keeper && keeper.key !== held.to) {
+        const keeper = keeperOf(bot, null, link, sender.key);
+        if (keeper) {
           // (Moved meanwhile: it goes where the bot is now.)
           changed = writeHeld({ ...held, to: keeper.key }, link);
           sent.delete(bot);
+          notThere.delete(held.id);
+          return;
+        }
+        // (No other lists it yet: it may be on its way to one. Asked again a few times first.)
+        const tries = (notThere.get(held.id) ?? 0) + 1;
+        if (tries < NOT_THERE_TRIES) {
+          notThere.set(held.id, tries);
+          sent.set(bot, { id: held.id, at: now });
           return;
         }
       }
+      notThere.delete(held.id);
       fs.rmSync(fileOf(bot), { force: true });
       sent.delete(bot);
       changed = true;
-      if (status < 300 || (status === 404 && held.delete)) return;
-      const computer = nameOf(held, link);
       const why = isObject(given) && typeof given.message === "string" ? plainName(given.message).slice(0, 500) : "";
+      // (Done: but for some of it, said.)
+      if ((status < 300 && !why) || (status === 404 && held.delete)) return;
+      const computer = nameOf(held, link);
       const message = held.delete
         ? `${computer} didn’t delete the bot as you asked while it was away.${why ? ` ${why}` : ""}`
-        : `${computer} didn’t take the changes you made while it was away.${why ? ` ${why}` : ""}`;
+        : status < 300
+          ? `${computer} didn’t take all the changes you made while it was away.${why ? ` ${why}` : ""}`
+          : `${computer} didn’t take the changes you made while it was away.${why ? ` ${why}` : ""}`;
       writeRefused([{ bot, box: held.to, computer, message, at: now }, ...readRefused(now, link).filter(each => each.bot !== bot)], link);
     });
   } catch {}
@@ -389,7 +424,7 @@ const taking = new Set<string>();
 /** What this box does with a held edit: as Edit Bot changes a bot (as of `at`, when you made it),
  * or Delete Bot… deletes it. */
 export interface EditSteps {
-  change: (bot: string, change: BotChange, at: number) => Promise<{ status: number; value: unknown }>;
+  change: (bot: string, change: BotChange, at: Record<string, number>) => Promise<{ status: number; value: unknown }>;
   delete: (bot: string) => Promise<{ status: number; value: unknown }>;
 }
 
@@ -409,8 +444,9 @@ export async function takeBotEdit(sender: MailSender, given: unknown, reply: (pa
   if (taking.has(key)) return;
   const kept = readTaken(now)[key];
   if (kept) return answer(kept.status, kept.message);
-  // (From a machine Macs share outside one setup: another person may use it.)
-  if (readTold(sender.key)?.shared) return answer(403, `${ownName()} doesn’t take changes to its bots from ${computerName(peer)}, a machine shared with other Macs.`);
+  // (Only from one of your own computers: not on a machine two people's Macs share, nor from one
+  // that is, or that follows another setup.)
+  if (isApart(sender.key, link)) return answer(403, `${ownName()} doesn’t take changes to its bots from ${computerName(peer)}, which isn’t only yours: change them from ${ownName()}.`);
   taking.add(key);
   try {
     let done: { status: number; value: unknown };
@@ -418,14 +454,16 @@ export async function takeBotEdit(sender: MailSender, given: unknown, reply: (pa
       if (given.delete === true) done = await steps.delete(bot);
       else {
         // Only what was given after it last changed here (a change made here meanwhile stays), and
-        // never its work settings, which change only where it lives.
-        const times = isObject(given.times) ? given.times : {};
+        // never its work settings, which change only where it lives. When each was given is worked
+        // out here from how long ago the holder said it was (its clock may not agree with this one's).
+        const ages = isObject(given.ages) ? given.ages : {};
+        const clock = Date.now();
+        const times: Record<string, number> = {};
+        for (const [field, age] of Object.entries(ages)) if (typeof age === "number" && Number.isFinite(age)) times[field] = clock - Math.max(0, age);
         const edited = editedTimes(bot);
         const fresh = Object.entries(given.change as Record<string, unknown>).filter(([field]) => (FIELDS as readonly string[]).includes(field)
-          && !(typeof times[field] === "number" && typeof edited[field] === "number" && (times[field] as number) <= edited[field]));
-        // (Each field as of when it was given; the newest for what's noted.)
-        const at = Math.max(0, ...fresh.map(([field]) => (typeof times[field] === "number" ? times[field] as number : 0))) || (typeof given.at === "number" ? given.at : Date.now());
-        done = fresh.length ? await steps.change(bot, Object.fromEntries(fresh) as BotChange, at) : { status: 200, value: {} };
+          && !(times[field] !== undefined && edited[field] !== undefined && times[field] <= edited[field]));
+        done = fresh.length ? await changeWhatItCan(bot, fresh, times, steps) : { status: 200, value: {} };
       }
     } catch {
       done = { status: 503, value: { message: `Something went wrong on ${ownName()}.` } };
@@ -438,9 +476,25 @@ export async function takeBotEdit(sender: MailSender, given: unknown, reply: (pa
   }
 }
 
+// A held change done as far as it can be: whole, or, where that's refused for what's in it (a
+// personality there isn't, a model it can't use), each field on its own, what's refused said.
+async function changeWhatItCan(bot: string, fields: [string, unknown][], times: Record<string, number>, steps: EditSteps): Promise<{ status: number; value: unknown }> {
+  const whole = await steps.change(bot, Object.fromEntries(fields) as BotChange, times);
+  if (fields.length < 2 || (whole.status !== 400 && whole.status !== 422)) return whole;
+  const refused: string[] = [];
+  let took = false;
+  for (const field of fields) {
+    const one = await steps.change(bot, Object.fromEntries([field]) as BotChange, times);
+    if (one.status < 300) took = true;
+    else if (isObject(one.value) && typeof one.value.message === "string") refused.push(one.value.message);
+  }
+  return took ? { status: 200, value: refused.length ? { message: refused.join(" ") } : {} } : whole;
+}
+
 /** All this process remembers forgotten (a test's: what's on disk stays, as for a box that started
  * again). */
 export function forgetHeldSends(): void {
   sent.clear();
+  notThere.clear();
   taking.clear();
 }

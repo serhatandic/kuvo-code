@@ -85,8 +85,8 @@ interface BridgeGroups {
 // name, look, personality or model), in its description and in its conversation, which is told as
 // the Mac tells it: the kit's words, with its job as its memory has it now. The Mac takes the
 // change in as it next connects (Bots.takeIn). `at`: when it was made (an edit another computer held,
-// as of when you made it), noted for each field it names (`noteEdited`).
-export async function changeBot(id: string, given: BotChange | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal, at = Date.now()): Promise<ChangedAnswer> {
+// as of when you made each field), noted for each field it names (`noteEdited`).
+export async function changeBot(id: string, given: BotChange | null | undefined, readEngine: () => Target, readBridge: () => Target | null, machine?: string, signal?: AbortSignal, at: number | Record<string, number> = Date.now()): Promise<ChangedAnswer> {
   const no = (status: OtherStatus, message: string): ChangedAnswer => ({ status, value: { message } });
   const here = botHere(id);
   if (!here) return no(404, "That bot isn’t there any more.");

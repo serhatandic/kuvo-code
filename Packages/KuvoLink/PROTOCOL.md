@@ -3946,9 +3946,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   {"message"}`. Only Edit Bot's fields are held (`name`, `look`, `personality`, `job`, `model`): a
   change naming `work` is `409 {"message"}`, as a bot's work settings change only where it lives,
   while that computer answers. The box checks what it can without the bot (`400 {"message"}` for an
-  empty name, a look there isn't, a model or job that isn't one, or no field a change has) and
-  leaves the rest to that computer; `404` for a bot no computer lists (or a computer it doesn't
-  know, without `removed`), `503` when it can't keep it now. It holds each sealed with its own
+  empty name, a look there isn't, a model or job that isn't one, no field a change has, or one too
+  big for a mail, over 32,000 characters as JSON) and leaves the rest to that computer; `404` for a
+  bot no computer lists (or a computer it doesn't know, without `removed`), `409` for a computer
+  that isn't only yours (a machine two people's Macs share, this box or that one, or one that
+  follows another setup: as plan limits go, "Across your computers", Whose), `503` when it can't
+  keep it now. It holds each sealed with its own
   secret (this Mac's box, only as its app gives it, in memory) in `run/bots-held/<id>.json`, and
   its refusals the same way, so what anything else there leaves isn't sent or shown.
   - `kuvo/bots` and its events add `held` (each as above, the first held first) and `refused`
@@ -3957,20 +3960,25 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     you left it, "waiting for <computer>"; why it wasn't taken). Neither is there while the box
     can't check its seals (this Mac's box before its app gives it its keys): a client keeps what it
     last heard. A bot moving to another computer meanwhile: what's held goes where it lists now.
-  - It goes as `{"botEdit": {id, bot, change?, times?, delete?: true, at}}` (`id` `bte_…`, one for
-    each version of what's held; `times`, when each field was given, ms, by the holder's clock) to
-    that computer, if its `features` say `bots.held` (one that doesn't yet waits until it's
+  - It goes as `{"botEdit": {id, bot, change?, ages?, delete?: true, at}}` (`id` `bte_…`, one for
+    each version of what's held; `ages`, how long ago each field was given, ms, so no computer's
+    clock is read by another's) to that computer (once it no longer lists the bot, to the one
+    that does: it moved), if its `features` say `bots.held` (one that doesn't yet waits until it's
     updated), again each minute while it isn't answered and at once when it's back ("Peers",
-    `run/peer-reach.json`). That computer takes it only from one of its peers, not from a machine
-    that told it's shared (`403`), and does it as `PATCH` or `DELETE` there would, once for each `id`
+    `run/peer-reach.json`). That computer takes it only from one of its peers that's one of your own
+    computers to it (`403` otherwise, as above), and does it as `PATCH` or `DELETE` there would, once for each `id`
     (remembered seven days; one it couldn't do now, `409` or `5xx`, is done when it comes again).
-    Of a change, it takes only the fields given after that field last changed there (by a client,
-    the bot's set_job, or another held edit: `run/bots-edited.json`, a month), so an edit made
-    there meanwhile is never undone by an older one, and never `work`. It answers `{"botEdited":
-    {id, bot, status, message?}}`, which the holder takes only from it: done (`2xx`, or `404` for a
-    delete), it's let go; `409` or `5xx`, it goes again later; `404` for a change, it goes where the
-    bot lists now, or is refused; any other, it's let go and refused, in words naming that
-    computer.
+    Of a change, it takes only the fields given after that field last changed (by a client, the
+    bot's set_job, or another held edit), each given at its own clock's now less its age: the bot's
+    folder keeps when (`edited.json`, by its computer's clock, a month, never ahead of it), so it
+    goes with the bot when it moves, and an edit made meanwhile is never undone by an older one;
+    and never `work`. What it can't take of a change (a personality there isn't) doesn't hold up
+    the rest: each field is then done on its own, and the answer says what wasn't. It answers
+    `{"botEdited": {id, bot, status, message?}}`, which the holder takes only from it: done (`2xx`,
+    or `404` for a delete), it's let go, and a `message` with a `2xx` is refused as what wasn't
+    taken; `409` or `5xx`, it goes again later; `404` for a change, it goes to another computer that
+    lists the bot now, or, with none, is asked again twice more, a minute apart, then refused; any
+    other, it's let go and refused, in words naming that computer.
 - `POST kuvo/bots/<id>/arrived`: a bot whose folder and conversation a client just brought to this
   box from another computer (Move to Computer: the client holds it where it was, copies its folder
   and carries its conversation over, under the same id) is made this box's: what its folder says

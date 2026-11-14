@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- Changes you make to a bot while its machine is away are kept by your Mac's background service rather than the app, so they reach the machine once it's back even with Kuvo Code closed.
+- Changes you make to a bot while its machine is away are kept by your Mac's background service rather than the app, so they reach the machine once it's back, also while Kuvo Code's window is closed; a change made on the machine meanwhile isn't undone by an older one that waited.
 - When a conversation's model can't run (its account needs a sign-in or a key, its coding agent isn't installed, or the model is gone), what Send says comes from the computer the conversation is on, in the same words on your Mac and your iPhone. It names the account and the model, but no longer the computer or a Settings page.
 - Discard Changes in the Changes tab leaves a new file alone if it was committed in the meantime, and says so; discarding a deletion you staged while keeping the file, or a move whose old name has a new file since, now puts what's there in the Trash before the committed file comes back.
 - What goes with your message for the agent (your comments on the changes, where your files are, who the agents you name with & are) is written by the computer the conversation is on, the same way from your Mac and your iPhone; conversations from before show as they did.

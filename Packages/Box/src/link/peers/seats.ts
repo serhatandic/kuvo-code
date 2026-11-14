@@ -27,7 +27,7 @@ import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shar
 import type { DocPart, PendingParts } from "../documents/parts";
 import { followedSetup } from "../setup/record";
 import { sharedMachine } from "../setup/settle";
-import { toldShared } from "../work-queue/told";
+import { isApart, saysShared as saysSharedHere } from "./apart";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { MailSender, Peer } from "./known";
@@ -209,8 +209,8 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   // `toldShared`), and one that says it follows another setup than this box's (PROTOCOL.md, "Plan
   // limits", "Across your computers", Whose).
   const shared = sharedMachine(link);
-  const saysShared = (key: string) => told[key]?.shared === true || toldShared(key) === true;
-  const apart = (key: string) => shared || saysShared(key) || (!!setup && !!told[key]?.setup && told[key]!.setup !== setup.id);
+  const saysShared = (key: string) => saysSharedHere(key, told);
+  const apart = (key: string) => isApart(key, link, told);
   return {
     ...(key ? { self: { key, name } } : {}),
     // Boxes only a peer knows, for plan limits alone.

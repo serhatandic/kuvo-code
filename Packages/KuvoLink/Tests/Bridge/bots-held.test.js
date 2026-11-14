@@ -144,7 +144,8 @@ test("an edit to a bot whose computer is away is held by the box asked, merged a
   assert.ok(tries.length >= 1);
   const edit = tries.at(-1).botEdit;
   assert.deepEqual({ bot: edit.bot, change: edit.change }, { bot: wren, change: second.body.held.change });
-  assert.deepEqual(Object.keys(edit.times).sort(), ["look", "name", "personality"], "when each field was given");
+  assert.deepEqual(Object.keys(edit.ages).sort(), ["look", "name", "personality"], "how long ago each field was given");
+  assert.ok(Object.values(edit.ages).every(age => age >= 0));
   link.sendHeld(host);
   assert.deepEqual(mailTo(lab), [], "not again at once");
   // Lab is back (any mail from it): it goes now, not at its next minute.
@@ -202,6 +203,8 @@ test("what can't be held: a bot no computer lists (unless the client names its c
     assert.equal(refused.status, 400, JSON.stringify(body));
     assert.equal(typeof refused.body.message, "string");
   }
+  // Too much for one mail: never held, rather than waiting for ever.
+  assert.equal((await route("PATCH", `kuvo/bots/${wren}`, { name: "x".repeat(40_000) })).status, 400);
   // A computer this box doesn't know now (a machine you removed), named by the client: held, and it
   // goes there once it's one of this box's computers again.
   assert.equal((await route("DELETE", "kuvo/bots/bot_gone00000001?on=attic")).status, 404, "one it doesn't know, unless the client says it's one you removed");
@@ -234,12 +237,16 @@ test("what can't be held: a bot no computer lists (unless the client names its c
 test("a bot that moved meanwhile: what's held for it goes to the computer it's on now", async () => {
   await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren II" });
   const [toLab] = mailTo(lab);
-  // Now the Mac lists it, and lab doesn't.
-  agentsTold({ labBots: [], macBots: [{ session: "ses_wren", name: "Wren", kind: "bot", id: wren }] });
+  // Now the Mac lists it, and lab, whose word is older, still does.
+  agentsTold({ macBots: [{ session: "ses_wren", name: "Wren", kind: "bot", id: wren }] });
   receive(lab, { botEdited: { id: toLab.botEdit.id, bot: wren, status: 404, message: "That bot isn’t there any more." } });
   assert.equal((await listed()).held[0].computer, "Studio");
   const [toMac] = mailTo(mac);
   assert.deepEqual(toMac.botEdit.change, { name: "Wren II" });
+  // And back to lab: the Mac, which says it isn't there, still lists it from before; it goes to lab.
+  agentsTold({ macBots: [{ session: "ses_wren", name: "Wren", kind: "bot", id: wren }] });
+  receive(mac, { botEdited: { id: toMac.botEdit.id, bot: wren, status: 404, message: "That bot isn’t there any more." } });
+  assert.equal((await listed()).held[0].computer, "lab");
 });
 
 test("the computer that keeps the bot does a held edit once, as Edit Bot would, and answers; a delete too", async () => {
@@ -266,16 +273,26 @@ test("the computer that keeps the bot does a held edit once, as Edit Bot would, 
   assert.deepEqual(await answer(), { id, bot: "bot_scout00001", status: 200 });
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout III");
   // One held elsewhere that you made before the change here (its Mac was offline): it doesn't undo
-  // it, though its look, given later, lands; one you made after it does.
+  // it, though its look, given later, lands; one you made after it does. (The change here, a moment
+  // ago, as its folder notes it.)
+  const edited = path.join(folder, "edited.json");
+  write(edited, { ...JSON.parse(fs.readFileSync(edited, "utf8")), name: Date.now() - 30_000 });
   const older = `bte_${crypto.randomBytes(16).toString("base64url")}`;
-  receive(lab, { botEdit: { id: older, bot: "bot_scout00001", change: { name: "Scout Old", look: { color: "mint", shape: "round", face: "happy" } }, times: { name: Date.now() - 60_000, look: Date.now() + 1_000 }, at: Date.now() } });
+  receive(lab, { botEdit: { id: older, bot: "bot_scout00001", change: { name: "Scout Old", look: { color: "mint", shape: "round", face: "happy" } }, ages: { name: 60_000, look: 1_000 }, at: Date.now() } });
   assert.equal((await answer()).status, 200);
   const now = JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8"));
   assert.deepEqual([now.name, now.look.face], ["Scout III", "happy"]);
   const newer = `bte_${crypto.randomBytes(16).toString("base64url")}`;
-  receive(lab, { botEdit: { id: newer, bot: "bot_scout00001", change: { name: "Scout IV" }, times: { name: Date.now() + 2_000 }, at: Date.now() } });
+  receive(lab, { botEdit: { id: newer, bot: "bot_scout00001", change: { name: "Scout IV" }, ages: { name: 1_000 }, at: Date.now() } });
   assert.equal((await answer()).status, 200);
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout IV");
+  // One with a bad field: the rest lands, and what didn't is said.
+  const mixed = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  receive(lab, { botEdit: { id: mixed, bot: "bot_scout00001", change: { name: "Scout V", personality: "preset.gone" }, ages: { name: 0, personality: 0 }, at: Date.now() } });
+  const partly = await answer();
+  assert.equal(partly.status, 200);
+  assert.match(partly.message, /preset\.gone/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout V");
   // Its work settings never come this way.
   const work = `bte_${crypto.randomBytes(16).toString("base64url")}`;
   receive(lab, { botEdit: { id: work, bot: "bot_scout00001", change: { work: { limits: null, allowed: ["makeProject"] } }, at: Date.now() } });
@@ -292,4 +309,78 @@ test("the computer that keeps the bot does a held edit once, as Edit Bot would, 
   receive(lab, { botEdit: { id: gone, bot: "bot_scout00001", delete: true, at: Date.now() } });
   assert.equal((await answer()).status, 200);
   assert.equal(fs.existsSync(folder), false);
+});
+
+test("a computer that says the bot isn't there, with none listing it yet (it's on its way): asked again a few times before it's refused", async () => {
+  await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren II" });
+  agentsTold({ labBots: [] });
+  for (let round = 0; round < 2; round++) {
+    const [toLab] = mailTo(lab);
+    receive(lab, { botEdited: { id: toLab.botEdit.id, bot: wren, status: 404, message: "That bot isn’t there any more." } });
+    assert.equal((await listed()).held.length, 1, `still held after ${round + 1}`);
+    assert.deepEqual((await listed()).refused, []);
+    link.sendHeld(host, undefined, Date.now() + 61_000);
+  }
+  const [last] = mailTo(lab);
+  receive(lab, { botEdited: { id: last.botEdit.id, bot: wren, status: 404, message: "That bot isn’t there any more." } });
+  assert.deepEqual((await listed()).held, []);
+  assert.match((await listed()).refused[0].message, /lab didn’t take the changes/);
+});
+
+test("some of a held change taken, some not: let go, and what wasn't is said", async () => {
+  await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren II", personality: "preset.gone" });
+  const [toLab] = mailTo(lab);
+  receive(lab, { botEdited: { id: toLab.botEdit.id, bot: wren, status: 200, message: "There’s no personality “preset.gone”." } });
+  const list = await listed();
+  assert.deepEqual(list.held, []);
+  assert.equal(list.refused[0].message, "lab didn’t take all the changes you made while it was away. There’s no personality “preset.gone”.");
+});
+
+test("only between your own computers: a machine that isn't only yours neither holds edits for one nor has them done here", async () => {
+  // Lab says it's a machine two people's Macs share.
+  agentsTold({ labFeatures: ["bots.held"] });
+  const told = JSON.parse(fs.readFileSync(path.join(run, "peer-agents.json"), "utf8"));
+  told[lab.pub].shared = true;
+  write(path.join(run, "peer-agents.json"), told);
+  const held = await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren II" });
+  assert.equal(held.status, 409);
+  assert.match(held.body.message, /change it from lab/);
+  // Nor does this box take one from it.
+  write(path.join(bots, "kit.json"), kit);
+  const folder = path.join(bots, "bot_scout00001");
+  write(path.join(folder, "session"), "ses_scout");
+  write(path.join(folder, "bot.json"), { kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: { color: "sky", shape: "round", face: "calm" }, created: "2026-10-01T09:00:00Z" });
+  const id = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  receive(lab, { botEdit: { id, bot: "bot_scout00001", change: { name: "Taken" }, ages: { name: 0 }, at: Date.now() } });
+  for (;;) {
+    const [mail] = mailTo(lab);
+    if (mail) {
+      assert.equal(mail.botEdited.status, 403);
+      break;
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout");
+});
+
+test("when a bot's fields last changed goes with it to another computer, and the clock of the computer that held an edit doesn't count", async () => {
+  write(path.join(bots, "kit.json"), kit);
+  // Scout, just moved here: its folder says its name changed ten seconds ago where it was.
+  const folder = path.join(bots, "bot_scout00001");
+  write(path.join(folder, "session"), "ses_scout");
+  write(path.join(folder, "bot.json"), { kuvo: 1, id: "bot_scout00001", name: "Scout Moved", job: "", look: { color: "sky", shape: "round", face: "calm" }, created: "2026-10-01T09:00:00Z" });
+  write(path.join(folder, "edited.json"), { name: Date.now() - 10_000 });
+  // An edit held for a minute by a computer whose clock is an hour ahead (as it says the time).
+  const id = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  receive(lab, { botEdit: { id, bot: "bot_scout00001", change: { name: "Scout Old" }, ages: { name: 60_000 }, times: { name: Date.now() + 3_600_000 }, at: Date.now() + 3_600_000 } });
+  for (;;) {
+    const [mail] = mailTo(lab);
+    if (mail) {
+      assert.equal(mail.botEdited.status, 200);
+      break;
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout Moved", "the newer name stays");
+  assert.ok(JSON.parse(fs.readFileSync(path.join(folder, "edited.json"), "utf8")).name <= Date.now(), "never a time ahead of this clock");
 });

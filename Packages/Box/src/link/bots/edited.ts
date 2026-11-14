@@ -1,51 +1,44 @@
-// When each field of a bot here was last changed (`run/bots-edited.json`, `{<bot>: {<field>: ms}}`):
-// by a client, the bot itself (set_job), or an edit another computer held for this one. An edit held
-// elsewhere that comes later changes only the fields it changed after that (PROTOCOL.md, `kuvo/bots`,
-// "Held for another computer"), so one you made here meanwhile is never undone by an older one.
+// When each field of a bot was last changed (`edited.json` in its folder, `{<field>: ms}`, by the
+// clock of the box it lives on): by a client, the bot itself (set_job), or an edit another computer
+// held for it. An edit held elsewhere that comes later changes only the fields it changed after
+// that (PROTOCOL.md, `kuvo/bots`, "Held for another computer"), so one you made meanwhile is never
+// undone by an older one. In its folder, so it goes with the bot when it moves.
 
-import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { locked, textOf, writePrivate } from "../files";
-import { RUN } from "../home";
+import { botHere } from "./here";
 
-const FILE = path.join(RUN, "bots-edited.json");
-const LOCK = path.join(RUN, ".bots-edited.lock");
 /** How long a field's time is kept: past it, a held edit always lands (one held that long is rare). */
 const KEPT = 30 * 86_400_000;
+export const EDITED_FILE = "edited.json";
 
-type Times = Record<string, Record<string, number>>;
-
-function readTimes(now: number): Times {
+function readTimes(folder: string, now: number): Record<string, number> {
   try {
-    const kept: unknown = JSON.parse(textOf(FILE) ?? "");
+    const kept: unknown = JSON.parse(textOf(path.join(folder, EDITED_FILE)) ?? "");
     if (!isObject(kept)) return {};
-    const times: Times = {};
-    for (const [bot, fields] of Object.entries(kept)) {
-      if (!isObject(fields)) continue;
-      const fresh = Object.entries(fields).filter(([, at]) => typeof at === "number" && now - at < KEPT);
-      if (fresh.length) times[bot] = Object.fromEntries(fresh) as Record<string, number>;
-    }
-    return times;
+    return Object.fromEntries(Object.entries(kept).filter(([, at]) => typeof at === "number" && now - at < KEPT)) as Record<string, number>;
   } catch {
     return {};
   }
 }
 
-/** When each field of `bot` was last changed here, by field. */
-export const editedTimes = (bot: string, now = Date.now()): Record<string, number> => readTimes(now)[bot] ?? {};
+/** When each field of `bot`, a bot here, was last changed, by field. */
+export function editedTimes(bot: string, now = Date.now()): Record<string, number> {
+  const here = botHere(bot);
+  return here ? readTimes(here.folder, now) : {};
+}
 
-/** `fields` of `bot` changed here as of `at` (each, unless it was changed later already). */
-export function noteEdited(bot: string, fields: string[], at = Date.now(), now = Date.now()): void {
-  if (!fields.length) return;
+/** `fields` of `bot` changed as of `at` (one time for all, or each its own), each unless it was
+ * changed later already. */
+export function noteEdited(bot: string, fields: string[], at: number | Record<string, number> = Date.now(), now = Date.now()): void {
+  const here = botHere(bot);
+  if (!fields.length || !here) return;
   try {
-    fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
-    locked(LOCK, () => {
-      const times = readTimes(now);
-      const mine = { ...(times[bot] ?? {}) };
-      for (const field of fields) mine[field] = Math.max(mine[field] ?? 0, at);
-      times[bot] = mine;
-      writePrivate(FILE, JSON.stringify(times));
+    locked(path.join(here.folder, ".edited.lock"), () => {
+      const times = readTimes(here.folder, now);
+      for (const field of fields) times[field] = Math.max(times[field] ?? 0, Math.min(now, typeof at === "number" ? at : at[field] ?? now));
+      writePrivate(path.join(here.folder, EDITED_FILE), JSON.stringify(times));
     });
   } catch {}
 }

@@ -114,23 +114,23 @@ import Testing
         #expect(kept.change?.keys.sorted() == ["job", "look", "name"], "one edit, each field the last given")
         #expect(UserDefaults.standard.data(forKey: Bots.oldOutboxKey) == nil, "nothing kept in the app")
 
-        // Back, and still held (the box hands it on): a change now goes on top of it there, not
-        // straight to the machine before it.
-        connected = true
-        var again = try #require(app.bots.bot(ada.id))
-        again.name = "Ada L."
-        try await app.bots.update(again)
-        #expect(try await held(box).first?.change?["name"]?.string == "Ada L.")
-        #expect(try await there(machine)?.name == "Ada")
-
         // A new launch: what it shows comes from this Mac's box.
         let later = AppModel()
         later.bots.app = later
         later.bots.boxes = app.bots.boxes
         later.bots.reachable = { _ in false }
         await later.bots.refresh(BoxClient.mac)
-        #expect(later.bots.bot(ada.id)?.name == "Ada L.")
+        #expect(later.bots.bot(ada.id)?.name == "Ada Lovelace")
         #expect(later.bots.waitingFor(try #require(later.bots.bot(ada.id))) == "lab")
+
+        // Back, with what's held still on its way: a change now goes straight to the machine, whose
+        // box keeps it over the older one held (it takes only what was given after).
+        connected = true
+        var again = try #require(app.bots.bot(ada.id))
+        again.name = "Ada L."
+        try await app.bots.update(again)
+        #expect(try await there(machine)?.name == "Ada L.")
+        #expect(try await held(box).first?.change?["name"]?.string == "Ada Lovelace", "nothing more held")
     }
 
     /// What an earlier version kept here for machines that were away (with a delete for a bot whose
