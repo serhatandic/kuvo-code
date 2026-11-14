@@ -14,10 +14,10 @@ done until the phone has it.
 When you add or change something people use:
 
 - **The box's side**: what a client reads or does is a route. It goes in
-  the box's link, `Packages/Box/src/link` (routes in `server/router.ts`, their answers' shapes in
+  the box's link, `box/src/link` (routes in `server/router.ts`, their answers' shapes in
   `src/shared/routes`), so it works on every box, and where this Mac's box answers it differently,
-  in `KuvoCode/Stores/PhoneLink.swift`. Write it up in
-  `Packages/KuvoLink/PROTOCOL.md`. Never build a feature that only the Mac app's own code path
+  in `swift/KuvoCode/Stores/PhoneLink.swift`. Write it up in
+  `protocol/PROTOCOL.md`. Never build a feature that only the Mac app's own code path
   can reach.
 - **Tell the phone session, in the same task.** Usually a session is working on the phone app
   ("Mobile App Development"; find it with list_agents or the session list). Send it:
@@ -34,13 +34,13 @@ When you add or change something people use:
 ## It shares the Mac's look
 
 Kuvo Code for iPhone (`../kuvo-code-ios`, closed source) draws its code blocks as the Mac does
-(`KuvoCode/Design/CodeBlockStyle.swift`; the phone's `CodeStyle.swift` is its own version, for
+(`swift/KuvoCode/Design/CodeBlockStyle.swift`; the phone's `CodeStyle.swift` is its own version, for
 touch and the phone's text size) and its quote cards in its own way. When you change those here,
 or how the conversation, cards, composer or sidebar look, change the phone's too (or tell the
 session working on the phone), so the two stay one app. The same goes for the app icon: the phone's
-`KuvoCodeMobile/AppIcon.icon` is a copy of `KuvoCode/AppIcon.icon`.
+`KuvoCodeMobile/AppIcon.icon` is a copy of `swift/KuvoCode/AppIcon.icon`.
 
-What both apps share as code, not copies, is in `Packages/KuvoClient`, which the phone builds
+What both apps share as code, not copies, is in `swift/KuvoClient`, which the phone builds
 against from this checkout as it does OpenCodeKit: `ClientText`, the rules for what a message says
 (picture names, web links, the site a link is on, a field's own typing), `ClientAccounts`, and
 `ClientDesign`, the look both draw with (surfaces, sizes, the loader, the bots, code colors, math

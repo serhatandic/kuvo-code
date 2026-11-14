@@ -35,8 +35,8 @@ GPUI also brings in other crates from Zed's repository, all Apache-2.0: `gpui_ap
 
 **Services' marks** (`assets/marks/<service>.svg`, the usage rings' marks): OpenUsage's provider
 icons (MIT, Copyright 2026 Robin Ebers), unchanged, as Kuvo Code already ships them in
-`Packages/UsageKit/Sources/UsageKit/Resources/ProviderIcons` (its licence:
-`Packages/UsageKit/LICENSE`, and its entry in `THIRD_PARTY_LICENSES.txt`). They're named by the
+`swift/UsageKit/Sources/UsageKit/Resources/ProviderIcons` (its licence:
+`swift/UsageKit/LICENSE`, and its entry in `THIRD_PARTY_LICENSES.txt`). They're named by the
 box's `service` ids (`claude`, `codex`, `copilot`, `cursor`, `grok`, `antigravity`, `openrouter`,
 `zai`, `ollama`, `opencode`), which models.dev's logos (MIT, by provider: `anthropic`, `openai`…)
 aren't, and models.dev has none for Cursor or Antigravity. The engine (opencode) is installed as a

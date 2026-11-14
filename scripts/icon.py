@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generates KuvoCode/AppIcon.icon, the app icon in Icon Composer's format, from its artwork.
+"""Generates swift/KuvoCode/AppIcon.icon, the app icon in Icon Composer's format, from its artwork.
 
-The icon is two pictures, KuvoCode/AppIcon.icon/Assets/artwork-light.png and artwork-dark.png at
+The icon is two pictures, swift/KuvoCode/AppIcon.icon/Assets/artwork-light.png and artwork-dark.png at
 1024 x 1024: Kuvo Code's bots peeking out from behind a big coral one, on a light tile and on a
 dark one. The Mac shows the one that matches its appearance. Xcode compiles the file with the app.
 
@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-OUT = os.path.join(ROOT, "KuvoCode", "AppIcon.icon")
+OUT = os.path.join(ROOT, "swift", "KuvoCode", "AppIcon.icon")
 ARTWORK = {look: os.path.join(OUT, "Assets", f"artwork-{look}.png") for look in ("light", "dark")}
 README_ICON = os.path.join(ROOT, "docs", "images", "icon.png")
 ICTOOL = "/Applications/Xcode.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool"

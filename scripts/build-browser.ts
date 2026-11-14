@@ -1,5 +1,5 @@
-// What scripts/build-browser.sh writes: KuvoCode/Resources/kuvo-browser.js, the browser's keeper and
-// the agents' browser tools every box runs, from Packages/Box/src/browser. Its source with the
+// What scripts/build-browser.sh writes: swift/KuvoCode/Resources/kuvo-browser.js, the browser's keeper and
+// the agents' browser tools every box runs, from box/src/browser. Its source with the
 // scripts it runs in pages (page.ts), the tools (tools.ts) and what agents are told of them
 // (instructions.ts) filled in, with the search engines a box offers (shared/routes/browser.ts), as JSON with its keys in order, and its keeper's version (KEEPER):
 // the first 12 hex digits of the SHA-256 of that source as it is. Its first line names the rest
@@ -12,16 +12,16 @@ import path from "node:path";
 
 const root = process.argv[2];
 const check = process.argv[3] === "--check";
-const folder = path.join(root, "Packages/Box/src/browser");
+const folder = path.join(root, "box/src/browser");
 const { pageScripts } = await import(path.join(folder, "page.ts"));
 const { TOOLS } = await import(path.join(folder, "tools.ts"));
 const { INSTRUCTIONS, VAULT_INSTRUCTIONS } = await import(path.join(folder, "instructions.ts"));
-const { SEARCH_ENGINES } = await import(path.join(root, "Packages/Box/src/shared/routes/browser.ts"));
+const { SEARCH_ENGINES } = await import(path.join(root, "box/src/shared/routes/browser.ts"));
 
-const OUT = "KuvoCode/Resources/kuvo-browser.js";
+const OUT = "swift/KuvoCode/Resources/kuvo-browser.js";
 const CONFIG = `/*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", vaultInstructions: "", searchEngines: [] }`;
 const KEEPER = `const KEEPER = "0.0.0-keeper-from-its-sources";`;
-const BANNER = "// Built from Packages/Box/src/browser by scripts/build-browser.sh: change those, then run it. Never edit this file.\n";
+const BANNER = "// Built from box/src/browser by scripts/build-browser.sh: change those, then run it. Never edit this file.\n";
 
 const sha256 = (text: string): string => crypto.createHash("sha256").update(text).digest("hex");
 
@@ -38,7 +38,7 @@ function inOrder(value: unknown): unknown {
 function fill(text: string, part: string, by: string): string {
   const pieces = text.split(part);
   if (pieces.length !== 2) {
-    console.error(`scripts/build-browser.sh: Packages/Box/src/browser/kuvo-browser.js should have \`${part}\` once, to fill in.`);
+    console.error(`scripts/build-browser.sh: box/src/browser/kuvo-browser.js should have \`${part}\` once, to fill in.`);
     process.exit(1);
   }
   return pieces.join(by);
@@ -54,7 +54,7 @@ if (check) {
   let kept: string | null = null;
   try { kept = fs.readFileSync(where, "utf8"); } catch {}
   if (kept === built) process.exit(0);
-  console.error(`${OUT} isn't what Packages/Box/src/browser builds: change the sources, not it, then run ./scripts/build-browser.sh and commit it.`);
+  console.error(`${OUT} isn't what box/src/browser builds: change the sources, not it, then run ./scripts/build-browser.sh and commit it.`);
   process.exit(1);
 }
 fs.writeFileSync(where, built);

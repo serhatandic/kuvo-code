@@ -9,21 +9,21 @@ Strict rules are marked (strict): never bend them. Contributor docs are in `CONT
 Kuvo Code is a small distributed system. Build every feature for that system, never for the Mac alone.
 
 - **Every computer is an equal box, the Mac included**: the engine with its sessions, bots, coding agents, group chats, wake-ups and the agent's browser. Each box keeps its own settings and keys, and works with no client connected.
-- **Boxes talk peer to peer**, end to end encrypted through the relay (`Packages/KuvoLink/PROTOCOL.md`, "Peers"). No box needs another to do its own work.
+- **Boxes talk peer to peer**, end to end encrypted through the relay (`protocol/PROTOCOL.md`, "Peers"). No box needs another to do its own work.
 - **Clients connect to boxes.** The Mac app and the iPhone app are clients of every box, the Mac's own included, and hold none of its state.
-- **So every feature lives on the box**: `Packages/Box` (the link in `src/link`, the coding agents' bridge in `src/agents`, shared code in `src/shared`). `scripts/build-box.sh` builds the link into `kuvo-link.js`; never edit that built file. Never build a feature only into the Mac app, only for this Mac's box, or only through the Mac's SSH connection. Where a box can't do something yet, say so plainly in the UI and your report; never quietly make the Mac a hub.
+- **So every feature lives on the box**: `box/` (the link in `src/link`, the coding agents' bridge in `src/agents`, shared code in `src/shared`). `scripts/build-box.sh` builds the link into `kuvo-link.js`; never edit that built file. Never build a feature only into the Mac app, only for this Mac's box, or only through the Mac's SSH connection. Where a box can't do something yet, say so plainly in the UI and your report; never quietly make the Mac a hub.
 - **Box code runs on macOS and Linux** (`IS_MAC` means the box beside the app, not the system). Prefer code that's the same on both; where they differ (file watching, processes, paths, the keeper, the shell, Keychain versus files), handle both in one place and test each. Check a box change on a Linux machine (a test folder of your own on devbox) before calling it done.
 - **Never bump or hand-edit what's worked out, so parallel branches merge cleanly** (CONTRIBUTING.md, "What branches don't edit by hand"): `BRIDGE_VERSION` is a hash `build-box.sh` writes; a new feature name is one line, in order, in `FEATURES` (`src/shared/features.ts`); `answers.json`, `routes/features.json`, `kuvo-link.js`, `kuvo-agents.js` and `kuvo-browser.js` (with its `KEEPER` hash) are written by `route-shapes.sh`, `build-box.sh`, `build-agents.sh` and `build-browser.sh`.
 
 ### Logic goes in the box, never in a client (strict)
 
-All new code that isn't drawing goes in `Packages/Box`, with no exceptions unless the user agrees. (In November 2026 a review found 32 to 45 hours of logic to move out of the Mac app, and features that failed whenever the app was closed.) Keep clients thin enough that adding a machine, or a Windows or Linux client, is almost trivial; between two working designs, pick the one a new client would rewrite less of.
+All new code that isn't drawing goes in `box/`, with no exceptions unless the user agrees. (In November 2026 a review found 32 to 45 hours of logic to move out of the Mac app, and features that failed whenever the app was closed.) Keep clients thin enough that adding a machine, or a Windows or Linux client, is almost trivial; between two working designs, pick the one a new client would rewrite less of.
 
 - **A box decides, a client draws**: a client reads the box's state, changes it through a route, and draws the result. Sessions, agents, accounts, models, settings, files, git, processes, the network and what's allowed belong in the box, on Macs and Linux alike (say plainly, with the reason, what can't apply on Linux).
-- **The box states facts, not finished views** ("this session runs, this bot oversees it", not "6 sessions at work"). What Mac and phone both work out from them goes in `Packages/KuvoClient`: views only (a rule that changes behavior or data is still the box's), kept small, and described in `PROTOCOL.md` so another client can do the same.
+- **The box states facts, not finished views** ("this session runs, this bot oversees it", not "6 sessions at work"). What Mac and phone both work out from them goes in `swift/KuvoClient`: views only (a rule that changes behavior or data is still the box's), kept small, and described in `PROTOCOL.md` so another client can do the same.
 - **Only this stays in a client:** drawing and layout, animation, window and selection state, the side panel's browser, and what only an installed app can do (updating itself, login items, Mac notifications). The keeper starts and watches the box, and takes on no features.
 - **Before writing logic in Swift, ask:** does it work with this client closed, on a Linux machine, and for the phone without a second copy? Any "no" puts it in the box.
-- **Never add** a route only the app answers (`toApp` in `Packages/Box/src/link/mac/relay.ts`, `PhoneLink.swift`), a copy of box logic in a client (or in `kuvo-browser.js` and the keeper side by side), or client logic "for now", "until the box can", or because the app is quicker to change.
+- **Never add** a route only the app answers (`toApp` in `box/src/link/mac/relay.ts`, `PhoneLink.swift`), a copy of box logic in a client (or in `kuvo-browser.js` and the keeper side by side), or client logic "for now", "until the box can", or because the app is quicker to change.
 - **Logic already in a client:** don't extend it. Move it to the box if that's small; otherwise make the smallest fix and list it in your report as left to move.
 - **If something truly can't be on the box,** say why before building it, and the user decides. Plans and briefs name where each new piece of logic lives.
 
@@ -38,7 +38,7 @@ What people see and touch matters most. Never trade its quality away or let the 
 - Design the UI with as much care as the internals, in the same task; no sketch to polish later.
 - **Drafts first, always:** before building any new screen, control or visible change, draft two or three options (light and dark) with your recommendation, and let the user pick, even when one seems obvious. Meanwhile build only what doesn't depend on the choice. A bug fix that restores an existing design needs none.
 - **Look at how the best do it** (Codex, Claude Code, Cursor, GitHub, Linear, Apple's apps) and bring what you borrow and where we differ, and why. Where they've settled a behavior (what a mode does, what asks and what's refused, how a common control works), match it, showing ours, theirs and what we'll do side by side; doing it differently is the user's call, never a default.
-- Match how the app already draws the same kind of thing (`KuvoCode/Design`, the views beside it, the website's screenshots): materials, spacing, wording, states, motion.
+- Match how the app already draws the same kind of thing (`swift/KuvoCode/Design`, the views beside it, the website's screenshots): materials, spacing, wording, states, motion.
 - Work through every state: empty, loading, failed, long text, many items, a narrow window, light and dark, larger text, VoiceOver. See it yourself in a demo copy where you can; if you couldn't, say so (it doesn't hold up a merge).
 - When the machinery makes the right UI hard, change the machinery.
 - **The right panel is only for common tools** (browser, terminals, files, Changes). A feature's own view goes in a popover or sheet on the conversation, or a page in Settings.
@@ -114,6 +114,6 @@ On 2026-10-28 GitHub's abuse checks hid the user's account, likely from many ses
 ## Commits
 
 - Small, logical commits with plain messages. Never `Co-Authored-By` or any AI attribution.
-- This repo will be open source: check for personal paths, secrets and machine data before committing. The signing team stays in the git-ignored `Config/Signing.local.xcconfig`.
+- This repo will be open source: check for personal paths, secrets and machine data before committing. The signing team stays in the git-ignored `swift/Config/Signing.local.xcconfig`.
 - **Carry work to main in checkpoints:** a finished piece that passes its area's tests (what uses it included) on its final tip and its review is merged into local main, not left on a branch; the user takes merged work in batches with `scripts/try-update.sh`. Main needn't be release ready.
 - **Delete a branch once it's merged**, and its worktree (`git branch -d`); on origin only with a push the user asked for. Never delete an unmerged branch or one someone is still on.

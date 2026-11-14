@@ -1,4 +1,4 @@
-//! The shared cases every client is held to (Packages/KuvoLink/Vectors), as KuvoClient's tests
+//! The shared cases every client is held to (protocol/vectors), as KuvoClient's tests
 //! hold the Swift apps: what a sidebar shows from a box's session facts, which keyword a typed text
 //! starts with, which texts go to the box at all, and that a box of this version passes the gate.
 
@@ -11,7 +11,7 @@ use kuvo_box::typed;
 use serde_json::Value;
 
 fn vectors(name: &str) -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/Vectors").join(name);
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../protocol/vectors").join(name);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     serde_json::from_str(&text).expect("the vectors are JSON")
 }
@@ -200,7 +200,7 @@ fn a_held_box_is_asked_only_what_keeps_work_going() {
 /// The gate holds the same boxes as the Swift apps': the names in KuvoClient's `BoxGate.required`.
 #[test]
 fn the_gate_needs_what_the_swift_clients_need() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoClient/Sources/ClientSessions/BoxGate.swift");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../swift/KuvoClient/Sources/ClientSessions/BoxGate.swift");
     let swift = std::fs::read_to_string(path).unwrap();
     let list = swift.split("public static let required: [String] = [").nth(1).and_then(|rest| rest.split(']').next()).expect("BoxGate.required");
     let names: Vec<&str> = list.split(',').map(|name| name.trim().trim_matches('"')).filter(|name| !name.is_empty()).collect();
@@ -210,7 +210,7 @@ fn the_gate_needs_what_the_swift_clients_need() {
 /// The protocol names exactly the same required features as both native clients.
 #[test]
 fn the_gate_matches_the_protocols_update_gate_list() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/PROTOCOL.md");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../protocol/PROTOCOL.md");
     let protocol = std::fs::read_to_string(path).unwrap();
     let list = protocol.split("### The update gate").nth(1)
         .and_then(|rest| rest.split("today\n").nth(1))
@@ -220,7 +220,7 @@ fn the_gate_matches_the_protocols_update_gate_list() {
 }
 
 /// A message's parts as every client reads them, kept with a message or read by its box from one
-/// from before; and the fields a client sends, as the box takes them (Vectors/message-parts.json).
+/// from before; and the fields a client sends, as the box takes them (protocol/vectors/message-parts.json).
 #[test]
 fn a_messages_parts_are_read_as_the_box_wrote_them() {
     let vectors = vectors("message-parts.json");
@@ -271,7 +271,7 @@ fn a_client_sends_the_fields_the_box_takes() {
 }
 
 /// What a session's model being ready means for a composer, as its box words it
-/// (`Vectors/model-readiness.json`, which the box's words and KuvoClient's `SessionModelState` are
+/// (`protocol/vectors/model-readiness.json`, which the box's words and KuvoClient's `SessionModelState` are
 /// held to too): read as `kuvo/sessions/models` answers it, and drawn as it says, nothing worded here.
 #[test]
 fn a_models_readiness_is_drawn_as_its_box_words_it() {
@@ -298,7 +298,7 @@ fn a_models_readiness_is_drawn_as_its_box_words_it() {
     }
 }
 
-/// A value of `shape` as the box's route shapes write them (`Vectors/routes/shapes/answers.json`):
+/// A value of `shape` as the box's route shapes write them (`protocol/vectors/routes/shapes/answers.json`):
 /// every field there, optional ones too, and the first of what may be one of several.
 fn sample(shape: &Value) -> Value {
     use serde_json::json;

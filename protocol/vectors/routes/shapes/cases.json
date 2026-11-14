@@ -1,0 +1,615 @@
+{
+ "about": "How both runners hold an answer to its shape (protocol/vectors/routes/shapes/answers.json says what a shape is), so the two never drift apart: each case is a shape, a value (left out: nothing there) and whether it fits. An object's fields are all it may have; a name ending in ? may be left out, but isn't null unless its shape says so; one whose shape takes null is sent as null, never left out.",
+ "cases": [
+  {
+   "shape": "string",
+   "value": "x",
+   "matches": true
+  },
+  {
+   "shape": "string",
+   "value": 1,
+   "matches": false
+  },
+  {
+   "shape": "string",
+   "value": null,
+   "matches": false
+  },
+  {
+   "shape": "string",
+   "matches": false
+  },
+  {
+   "shape": "number",
+   "value": 1.5,
+   "matches": true
+  },
+  {
+   "shape": "number",
+   "value": "1",
+   "matches": false
+  },
+  {
+   "shape": "number",
+   "value": true,
+   "matches": false
+  },
+  {
+   "shape": "bool",
+   "value": false,
+   "matches": true
+  },
+  {
+   "shape": "bool",
+   "value": 0,
+   "matches": false
+  },
+  {
+   "shape": "null",
+   "value": null,
+   "matches": true
+  },
+  {
+   "shape": "null",
+   "value": 0,
+   "matches": false
+  },
+  {
+   "shape": "null",
+   "matches": false
+  },
+  {
+   "shape": "any",
+   "value": {
+    "a": [
+     1
+    ]
+   },
+   "matches": true
+  },
+  {
+   "shape": "any",
+   "value": null,
+   "matches": true
+  },
+  {
+   "shape": "any",
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": "wake"
+   },
+   "value": "wake",
+   "matches": true
+  },
+  {
+   "shape": {
+    "literal": "wake"
+   },
+   "value": "watch",
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": 1
+   },
+   "value": 1.0,
+   "matches": true
+  },
+  {
+   "shape": {
+    "literal": true
+   },
+   "value": 1,
+   "matches": false
+  },
+  {
+   "shape": {
+    "list": "number"
+   },
+   "value": [],
+   "matches": true
+  },
+  {
+   "shape": {
+    "list": "number"
+   },
+   "value": [
+    1,
+    2
+   ],
+   "matches": true
+  },
+  {
+   "shape": {
+    "list": "number"
+   },
+   "value": [
+    1,
+    "2"
+   ],
+   "matches": false
+  },
+  {
+   "shape": {
+    "list": "number"
+   },
+   "value": {},
+   "matches": false
+  },
+  {
+   "shape": {
+    "map": "bool"
+   },
+   "value": {},
+   "matches": true
+  },
+  {
+   "shape": {
+    "map": "bool"
+   },
+   "value": {
+    "a": true,
+    "b": false
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "map": "bool"
+   },
+   "value": {
+    "a": 1
+   },
+   "matches": false
+  },
+  {
+   "shape": {
+    "map": "bool"
+   },
+   "value": [],
+   "matches": false
+  },
+  {
+   "shape": {
+    "map": "bool"
+   },
+   "value": null,
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {}
+   },
+   "value": {},
+   "matches": true
+  },
+  {
+   "shape": {
+    "object": {}
+   },
+   "value": {
+    "a": 1
+   },
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {}
+   },
+   "value": [],
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": "string"
+    }
+   },
+   "value": {
+    "a": "x"
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "object": {
+     "a": "string"
+    }
+   },
+   "value": {},
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": "string"
+    }
+   },
+   "value": {
+    "a": null
+   },
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": "string"
+    }
+   },
+   "value": {
+    "a": "x",
+    "b": 1
+   },
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a?": "string"
+    }
+   },
+   "value": {},
+   "matches": true
+  },
+  {
+   "shape": {
+    "object": {
+     "a?": "string"
+    }
+   },
+   "value": {
+    "a": "x"
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "object": {
+     "a?": "string"
+    }
+   },
+   "value": {
+    "a": null
+   },
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a?": "string"
+    }
+   },
+   "value": {
+    "a?": "x"
+   },
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a?": {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "value": {
+    "a": null
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     "string",
+     "null"
+    ]
+   },
+   "value": null,
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     "string",
+     "null"
+    ]
+   },
+   "value": "x",
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     "string",
+     "null"
+    ]
+   },
+   "value": 1,
+   "matches": false
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "literal": "a"
+     },
+     {
+      "literal": "b"
+     }
+    ]
+   },
+   "value": "b",
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "literal": "a"
+     },
+     {
+      "literal": "b"
+     }
+    ]
+   },
+   "value": "c",
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "wakes": {
+      "list": {
+       "object": {
+        "id": "string",
+        "every?": "string"
+       }
+      }
+     }
+    }
+   },
+   "value": {
+    "wakes": [
+     {
+      "id": "w"
+     },
+     {
+      "id": "v",
+      "every": "1d"
+     }
+    ]
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "object": {
+     "wakes": {
+      "list": {
+       "object": {
+        "id": "string",
+        "every?": "string"
+       }
+      }
+     }
+    }
+   },
+   "value": {
+    "wakes": [
+     {
+      "id": "w",
+      "every": null
+     }
+    ]
+   },
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "value": {},
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "value": {
+    "a": null
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "object": {
+     "a": "null"
+    }
+   },
+   "value": {},
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": "any"
+    }
+   },
+   "value": {},
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": "string"
+    }
+   },
+   "value": {},
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {
+     "a": {
+      "oneOf": [
+       "string",
+       "number"
+      ]
+     }
+    }
+   },
+   "value": {},
+   "matches": false
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     },
+     "number"
+    ]
+   },
+   "value": null,
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     },
+     "number"
+    ]
+   },
+   "value": 2,
+   "matches": true
+  },
+  {
+   "shape": {
+    "oneOf": [
+     {
+      "oneOf": [
+       "string",
+       "null"
+      ]
+     },
+     "number"
+    ]
+   },
+   "value": true,
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": false
+   },
+   "value": 0,
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": false
+   },
+   "value": false,
+   "matches": true
+  },
+  {
+   "shape": {
+    "literal": 1
+   },
+   "value": true,
+   "matches": false
+  },
+  {
+   "shape": {
+    "literal": "1"
+   },
+   "value": 1,
+   "matches": false
+  },
+  {
+   "shape": {
+    "list": "string"
+   },
+   "value": null,
+   "matches": false
+  },
+  {
+   "shape": {
+    "object": {}
+   },
+   "value": null,
+   "matches": false
+  },
+  {
+   "shape": {
+    "map": {
+     "object": {
+      "a": "number"
+     }
+    }
+   },
+   "value": {
+    "x": {
+     "a": 1
+    }
+   },
+   "matches": true
+  },
+  {
+   "shape": {
+    "map": {
+     "object": {
+      "a": "number"
+     }
+    }
+   },
+   "value": {
+    "x": {
+     "a": 1,
+     "b": 2
+    }
+   },
+   "matches": false
+  },
+  {
+   "shape": "bytes",
+   "value": "x",
+   "matches": false
+  },
+  {
+   "shape": {
+    "nothing": 1
+   },
+   "value": 1,
+   "matches": false
+  }
+ ]
+}

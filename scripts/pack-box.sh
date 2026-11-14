@@ -1,5 +1,5 @@
 #!/bin/sh
-# Packs the box's release from a built "Kuvo Code.app" (Packages/KuvoLink/PROTOCOL.md, "Updates"):
+# Packs the box's release from a built "Kuvo Code.app" (protocol/PROTOCOL.md, "Updates"):
 # what every box runs (the app's `--write-box-files`), with each helper bundle the app carries
 # (`Contents/Helpers/<name>.app`, signed already) as `bin/<name>.app`, packed as
 # `box-<version>.tar.gz`, and `boxes.json`, its manifest, signed (scripts/sign-box.mjs). The release
@@ -46,7 +46,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 const box = process.argv[2];
-// As a box takes them (Packages/Box/src/link/updates/update.ts, BUNDLE and BUNDLE_PART): no part
+// As a box takes them (box/src/link/updates/update.ts, BUNDLE and BUNDLE_PART): no part
 // starting with a dot, no links, nothing but folders and files.
 const bundleName = /^bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app$/;
 const part = /^(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;

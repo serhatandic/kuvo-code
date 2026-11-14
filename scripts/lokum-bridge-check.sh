@@ -11,10 +11,10 @@ case "$NAME" in ''|*[!a-zA-Z0-9_-]*) echo 'name must contain only letters, digit
 cd "$REPO"
 files=()
 for file in "$@"; do
-    file=${file#Packages/KuvoLink/}; file=${file#Tests/Bridge/}
+    file=${file#box/}; file=${file#bridge-tests/}
     case "$file" in */*|.*|*[!a-zA-Z0-9_.-]*|-* ) echo "Invalid test file: $file" >&2; exit 64;; esac
-    [[ "$file" == *.test.js && -f "Packages/KuvoLink/Tests/Bridge/$file" ]] || { echo "No bridge test: $file" >&2; exit 64; }
-    files+=("Tests/Bridge/$file")
+    [[ "$file" == *.test.js && -f "box/bridge-tests/$file" ]] || { echo "No bridge test: $file" >&2; exit 64; }
+    files+=("bridge-tests/$file")
 done
 IFS= read -r -d '' remote <<'REMOTE' || true
 set -eo pipefail
@@ -73,9 +73,9 @@ mkdir "$T/bin"
 printf '#!/bin/bash\nBUN_BE_BUN=1 exec %q "$@"\n' "$engine" > "$T/bin/bun"
 chmod +x "$T/bin/bun"
 export PATH=$T/bin:/usr/local/bin:/usr/bin:/bin
-(cd "$T/repo/Packages/Box" && BUN_BE_BUN=1 "$engine" install --frozen-lockfile)
-cd "$T/repo/Packages/KuvoLink"
-[ $# -gt 0 ] || set -- Tests/Bridge/*.test.js
+(cd "$T/repo/box" && BUN_BE_BUN=1 "$engine" install --frozen-lockfile)
+cd "$T/repo/box"
+[ $# -gt 0 ] || set -- bridge-tests/*.test.js
 # Node 24, as CI (.github/workflows/ci.yml) and the Mac run the bridge tests (the box's server takes
 # options Node 22 ignores), checked against nodejs.org's published checksums; never installed system-wide.
 node=v24.22.2
@@ -111,12 +111,12 @@ for file in "${files[@]}"; do printf -v quoted ' %q' "$file"; command+=$quoted; 
 sources=()
 while IFS= read -r -d '' source; do
     case "$source" in
-        Packages/KuvoLink/Sources/KuvoLink/Resources/*) ;;
+        swift/KuvoLink/Sources/KuvoLink/Resources/*) ;;
         *.swift|*.ts|*.js|*.mjs|*.sh|*.py) sources+=("$source");;
     esac
-done < <(git --no-optional-locks ls-files -z KuvoCode Packages/OpenCodeKit/Sources Packages/KuvoLink/Sources scripts)
+done < <(git --no-optional-locks ls-files -z swift/KuvoCode swift/OpenCodeKit/Sources swift/KuvoLink/Sources scripts)
 COPYFILE_DISABLE=1 tar --no-xattrs --exclude node_modules --exclude .build -czf - \
-    Packages/KuvoLink/Tests/Bridge Packages/KuvoLink/Vectors Packages/KuvoLink/Sources/KuvoLink/Resources \
-    Packages/KuvoLink/PROTOCOL.md Packages/Box/src Packages/Box/package.json Packages/Box/bun.lock \
+    box/bridge-tests protocol/vectors swift/KuvoLink/Sources/KuvoLink/Resources \
+    protocol/PROTOCOL.md box/src box/package.json box/bun.lock \
     "${sources[@]}" |
     ssh -o BatchMode=yes "$HOST" "$command"

@@ -5,12 +5,12 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-resolved=KuvoCode.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+resolved=swift/KuvoCode.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 checkouts=build/SourcePackages/checkouts
 # Pinned only because a dependency's own tools need it; nothing from it is in the app.
 build_only="swift-argument-parser"
 
-xcodebuild -resolvePackageDependencies -project KuvoCode.xcodeproj -scheme KuvoCode \
+xcodebuild -resolvePackageDependencies -project swift/KuvoCode.xcodeproj -scheme KuvoCode \
     -clonedSourcePackagesDirPath build/SourcePackages >/dev/null
 
 section() { # name, version, location, note, license file
@@ -36,25 +36,25 @@ time it's used; its license is the last one below.
 HEADER
 
     section OpenUsage fork https://github.com/robinebers/openusage \
-        "Packages/UsageKit is a fork of OpenUsage, not the official OpenUsage. The OpenUsage name and logo are trademarks of Robin Ebers and aren't used. Its provider icons are also among ClientDesign's marks (Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets)." \
-        Packages/UsageKit/LICENSE
+        "swift/UsageKit is a fork of OpenUsage, not the official OpenUsage. The OpenUsage name and logo are trademarks of Robin Ebers and aren't used. Its provider icons are also among ClientDesign's marks (swift/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets)." \
+        swift/UsageKit/LICENSE
     section Textual 0.5.0 https://github.com/gonzalezreal/textual \
-        "Packages/Textual is a copy of Textual with Kuvo Code's changes (see its README)." \
-        Packages/Textual/LICENSE
+        "swift/Textual is a copy of Textual with Kuvo Code's changes (see its README)." \
+        swift/Textual/LICENSE
     section Prism 1.29.0 https://prismjs.com \
-        "KuvoCode/Resources/prism-bundle.js, with its language definitions, as bundled by Textual's Scripts/bundle-prism.sh." \
+        "swift/KuvoCode/Resources/prism-bundle.js, with its language definitions, as bundled by Textual's Scripts/bundle-prism.sh." \
         Licenses/Prism.txt
     section Mermaid 12.3.0 https://github.com/mermaid-js/mermaid \
-        "KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar." \
+        "swift/KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar." \
         Licenses/mermaid.txt
     section browser-use 0.4.2 https://github.com/browser-use/browser-use \
-        "Packages/Box/src/browser/buildDomTree.js, unchanged." \
+        "box/src/browser/buildDomTree.js, unchanged." \
         Licenses/browser-use.txt
     section models.dev "(logos, 2026-11-01)" https://models.dev \
-        "Providers' logos in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each logo is its owner's trademark, shown only to name its provider." \
+        "Providers' logos in swift/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each logo is its owner's trademark, shown only to name its provider." \
         Licenses/models.dev.txt
     section "Simple Icons" 16.35.0 https://simpleicons.org \
-        "Services' marks in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each mark is its owner's trademark, shown only to name its service." \
+        "Services' marks in swift/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each mark is its owner's trademark, shown only to name its service." \
         Licenses/simple-icons.txt
     section GPUI "(Zed, rev dc93abce)" https://github.com/zed-industries/zed/tree/main/crates/gpui \
         "The UI framework of the GPUI client in gpui/. Parts of gpui/kuvo_ui/src/text_field are adapted from its examples/input.rs. Every Rust crate the client builds on, and its license, is listed in gpui/LICENSES-DEPS.md." \
@@ -82,7 +82,7 @@ PY
         section "$name" "$version" "$location" "$note" "$license"
     done
 
-    section opencode "$(sed -n 's/.*cli-darwin-arm64-\([0-9.]*\)\.tgz.*/\1/p' Packages/OpenCodeKit/Sources/OpenCodeKit/Engine/EngineInstaller.swift)" \
+    section opencode "$(sed -n 's/.*cli-darwin-arm64-\([0-9.]*\)\.tgz.*/\1/p' swift/OpenCodeKit/Sources/OpenCodeKit/Engine/EngineInstaller.swift)" \
         https://github.com/anomalyco/opencode \
         "Downloaded on first launch, not included in the app." \
         Licenses/opencode.txt

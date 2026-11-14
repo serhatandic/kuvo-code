@@ -26,13 +26,13 @@ You need a Mac with Apple silicon, macOS 26 or later, and Xcode 27 or later.
 ```sh
 git clone https://github.com/serhatandic/kuvo-code.git
 cd kuvo-code
-open KuvoCode.xcodeproj
+open swift/KuvoCode.xcodeproj
 ```
 
 Run the **KuvoCode** scheme. To build from Terminal instead:
 
 ```sh
-xcodebuild -project KuvoCode.xcodeproj -scheme KuvoCode -configuration Debug -derivedDataPath build/DerivedData build
+xcodebuild -project swift/KuvoCode.xcodeproj -scheme KuvoCode -configuration Debug -derivedDataPath build/DerivedData build
 open "build/DerivedData/Build/Products/Debug/Kuvo Code.app"
 ```
 
@@ -67,7 +67,7 @@ your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applicat
 What's New. Ctrl-C stops the server and puts the real feed back, and so does any other way it ends,
 even killed outright: `scripts/feed-guard.py` watches it from outside its process group and tree,
 and each run first clears a `127.0.0.1` feed an earlier one left
-(`python3 -m unittest discover -s Tests/Guard -p test_try_update.py` checks each way).
+(`python3 -m unittest discover -s swift/Tests/Guard -p test_try_update.py` checks each way).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
 generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
@@ -89,13 +89,13 @@ before it's notarized, for the app to offer this Mac's box as it updates
 (`kuvo/box/update`; it doesn't yet), and the release publishes the same files. A local
 `scripts/build-app.sh` does it only with `KUVO_BOX_SIGNING_KEY` set, so a local
 build carries none. Machines take only
-what a key pinned in the box's link (`UPDATE_KEYS`, in `Packages/Box/src`) signed; see
-`Packages/KuvoLink/PROTOCOL.md`, "Updates".
+what a key pinned in the box's link (`UPDATE_KEYS`, in `box/src`) signed; see
+`protocol/PROTOCOL.md`, "Updates".
 
 Builds are signed ad hoc, so macOS treats every build as a new app and asks for
 privacy permissions (like access to Desktop) again. To keep one identity
-between builds, copy `Config/Signing.local.xcconfig.example` to
-`Config/Signing.local.xcconfig` and set your team. That file is git-ignored.
+between builds, copy `swift/Config/Signing.local.xcconfig.example` to
+`swift/Config/Signing.local.xcconfig` and set your team. That file is git-ignored.
 
 The first launch downloads the pinned opencode engine. To use another build of
 it, set `KUVO_OPENCODE_BINARY` to its path in the scheme's environment.
@@ -132,7 +132,7 @@ A home folder of a test's own doesn't keep a script from `crontab` or `launchctl
 account's. A test that runs a machine's scripts puts stand-ins for them first on its PATH, and its
 suite takes the `AccountUntouched` trait; `scripts/test-app.sh` makes the same check around its run.
 
-A bridge test file cleans up with `atEnd` and `removeAtEnd` from `Tests/Bridge/at-end.js`, never
+A bridge test file cleans up with `atEnd` and `removeAtEnd` from `box/bridge-tests/at-end.js`, never
 node:test's `after` (a test's own `t.after` is fine). They stop what the file started, latest
 first, and remove its folders last, even when a step fails. Then anything still open fails the
 file, named, rather than keeping its process and the whole run going.
@@ -216,7 +216,7 @@ kinds alongside:
 ```sh
 scripts/heavy.sh mac scripts/test-app.sh
 scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
-scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
+scripts/heavy.sh mac-build sh -c 'cd swift/KuvoClient && swift test'
 scripts/heavy.sh phone-build <phone-build-command>   # the phone's `scripts/build-app.sh` does this
 scripts/heavy.sh phone <phone-test-command>          # only a run that boots a simulator
 scripts/test-box.sh box <test-filter>
@@ -280,7 +280,7 @@ system has crashed", #562).
 The compiler sees the sources as `/^src/…` (the project's folder), so `#filePath` is that too, and so
 are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
 `#filePath` (the app's `scripts/test-app.sh` checks). An app test that reads the sources themselves finds
-them with `SourceRoot.url()` (`KuvoCodeTests/Support/SourceRoot.swift`): `scripts/test-app.sh` gives it
+them with `SourceRoot.url()` (`swift/KuvoCodeTests/Support/SourceRoot.swift`): `scripts/test-app.sh` gives it
 the checkout, or the batch's exported sources, as `KUVO_SOURCE_ROOT`.
 
 Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
@@ -334,7 +334,7 @@ Run them with the script: it builds a copy of the app of their own
 (its settings, caches and website data) before and after each run. The app itself refuses to host them,
 as they'd use your settings, and a copy built under Desktop or Documents waits on a
 privacy prompt while tests run. For the same reason the test copy keeps its Keychain
-in memory (`KuvoCode/Stores/Keychain.swift`) and never asks to show notifications:
+in memory (`swift/KuvoCode/Stores/Keychain.swift`) and never asks to show notifications:
 macOS would ask whether each new build may use what the last one kept, and the
 tests would wait for your answer. Reach the Keychain only through `Keychain`; the
 script won't run the tests otherwise.
@@ -352,7 +352,7 @@ folder in Application Support (its engine, sessions and sign-ins) or the app in
 Applications. The scripts check with `scripts/real-app-guard.sh` and stop, naming
 themselves, and a debug build launched with any `KUVO_DEMO_*`, `KUVO_PERF_*` or
 `KUVO_E2E` variable won't start under the real bundle ID or with the real
-engine. `python3 -m unittest discover -s Tests/Guard` checks each of them.
+engine. `python3 -m unittest discover -s swift/Tests/Guard` checks each of them.
 
 Recorded engine responses in `Tests/OpenCodeKitTests/Fixtures` drive most of
 OpenCodeKit's tests. `LiveServerTests` run against a real binary when
@@ -366,10 +366,10 @@ own, without SSH.
 #### Route scenarios
 
 Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a machine's bridge
-(`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
+(`kuvo-link.js`). The scenarios in `protocol/vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
 `PhoneLink` and stores, and `scripts/test-box.sh bridge contract.test.js` the
-bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs scenarios this Mac's box answers
+bridge's real handler. `box/bridge-tests/contract-mac.test.js` runs scenarios this Mac's box answers
 (all but the app's own routes, `PhoneLink.appRoutes`) against the bridge's handler as this Mac's
 box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
 stand-in, the same small one on each. To add one:
@@ -393,7 +393,7 @@ stand-in, the same small one on each. To add one:
   `routes/match/cases.json`, and the bridge's checks each scenario's shape.
 - Where the boxes differ on purpose, say so: `"only": "mac"` (or `"machine"`) on a scenario or a
   step, or `"expect": {"mac": {…}, "machine": {…}}`, each with a `"why"`.
-- Every answer, whole, is also held to its route's shape: `Packages/Box/src/shared/routes`, one
+- Every answer, whole, is also held to its route's shape: `box/src/shared/routes`, one
   file an area, with each field an answer can have (one ending in `?` may be left out) and its
   type, which the box's code takes its types from too. A new route, or a new field in an answer,
   goes there first; `./scripts/route-shapes.sh` writes `routes/shapes/answers.json` for both
@@ -408,15 +408,15 @@ stand-in, the same small one on each. To add one:
   from its approval and Settings › Permissions (`approval.json`, which the bridge's bots tests
   hold `refreshedRules` to). Bot templates, Kuvo Code's own
   personalities and what a bot is told are written once, in
-  `Packages/KuvoLink/Sources/KuvoLink/Resources/bot-words.json`, which every box reads and the
+  `swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json`, which every box reads and the
   runners use as it is; kuvo-web's `src/lib/bots.ts` copies its templates.
 
-`Tests/E2E` tries the whole app the way people use it: a separate copy
+`swift/Tests/E2E` tries the whole app the way people use it: a separate copy
 (`run.kuvo.code.e2e`) driven in the background through Accessibility, with
 OpenCode's free models, on real projects. Its README says how to run it, and
 `SCENARIOS.md` lists the cases and where each stands.
 
-`Tests/Perf` measures how smoothly a conversation streams and scrolls: a real run recorded once
+`swift/Tests/Perf` measures how smoothly a conversation streams and scrolls: a real run recorded once
 from a separate copy (`run.kuvo.code.perf`), played back into debug builds to compare them. Its
 README says how.
 
@@ -424,13 +424,17 @@ README says how.
 
 | Path | What's there |
 | --- | --- |
-| `KuvoCode/` | The app: views, stores and the design system |
-| `Packages/OpenCodeKit/` | The engine client: API, models, event stream, transcript reducer, engine installer |
-| `Packages/UsageKit/` | The usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage) |
-| `Packages/KuvoClient/` | What the Mac app and the iPhone app share as code: `ClientText`, the rules for what a message says (its `README.md`) |
-| `Packages/KuvoLink/` | The phone link: its protocol (`PROTOCOL.md`), the Swift side, and the box's link as built (`kuvo-link.js`) |
-| `Packages/Box/` | The box (TypeScript): its link, built to `kuvo-link.js`, and the agents bridge (Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API), built to `kuvo-agents.js` (its `README.md`) |
-| `Config/App.xcconfig` | The app's name and bundle ID, and signing defaults |
+| `box/` | The box (TypeScript): its link, built to `kuvo-link.js`, and the agents bridge (Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API), built to `kuvo-agents.js` (its `README.md`); its tests in `test/`, and the bridge's, on Node, in `bridge-tests/` |
+| `protocol/` | How boxes and clients talk (`PROTOCOL.md`), and the vectors every side is held to (`vectors/`) |
+| `swift/KuvoCode/` | The Mac app: views, stores and the design system; its project is `swift/KuvoCode.xcodeproj`, its tests `swift/KuvoCodeTests/` |
+| `swift/OpenCodeKit/` | The engine client: API, models, event stream, transcript reducer, engine installer |
+| `swift/UsageKit/` | The usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage) |
+| `swift/KuvoClient/` | What the Mac app and the iPhone app share as code: `ClientText`, the rules for what a message says (its `README.md`) |
+| `swift/KuvoLink/` | The phone link's Swift side, and the box's link as built (`kuvo-link.js`) |
+| `swift/Config/App.xcconfig` | The app's name and bundle ID, and signing defaults |
+| `swift/Tests/` | The app tried whole (`E2E`), measured (`Perf`), and the scripts' guards against the real app (`Guard`) |
+| `gpui/` | The GPUI app, in Rust (its `README.md`) |
+| `scripts/` | Builds, checks and the test runners |
 | `Licenses/` | License texts for code copied into this repository |
 
 ### The browser on a machine
@@ -438,15 +442,15 @@ README says how.
 A machine's browser is Chrome for Testing, the full browser run in Chrome's own headless mode
 (the separate headless shell is one sites take for a bot), with its libraries and fonts, in
 `~/.kuvo-code/browser` there. The machine's box sets it up itself, with or without a Mac
-(`Packages/Box/src/link/browser`, PROTOCOL.md's "The browser on a machine"): the build pinned in
+(`box/src/link/browser`, PROTOCOL.md's "The browser on a machine"): the build pinned in
 `linux.json` and `mac.json` there (`scripts/browser-runtime.py` writes them; on a Mac machine,
 Chrome for Testing as it comes, with a `chrome` launcher, as it won't run through a link),
 downloaded only from Google's Chrome for Testing and Rocky Linux over HTTPS, each file checked
 against its size and SHA-256 before it's unpacked (by the box itself: no `unzip`, `xz` or `rpm`
 on the machine). The Mac only shows how it goes (`kuvo/browser`). Its tests serve stand-ins
-(`Tests/Bridge/browser-source-stand-in.js`): never the real sources, never a real `~/.kuvo-code`.
+(`box/bridge-tests/browser-source-stand-in.js`): never the real sources, never a real `~/.kuvo-code`.
 One script,
-`KuvoCode/Resources/kuvo-browser.js`, built from `Packages/Box/src/browser`, runs with the
+`swift/KuvoCode/Resources/kuvo-browser.js`, built from `box/src/browser`, runs with the
 engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
@@ -469,7 +473,7 @@ On a Mac, Chrome's editing keys come from its window's key bindings, which a key
 never reaches: the keeper names what each does (`keyForHere`), so clients send the same keys to
 every machine.
 
-Its source is `Packages/Box/src/browser/kuvo-browser.js`; the scripts it runs in pages
+Its source is `box/src/browser/kuvo-browser.js`; the scripts it runs in pages
 (`page.ts`, with `page/` and browser-use's `buildDomTree.js`), the agents' tools (`tools.ts`) and
 what they're told (`instructions.ts`) are filled in by `./scripts/build-browser.sh`, which you run
 and commit after changing them (CI checks it with `--check`, and so does the box's suite). It
@@ -477,23 +481,23 @@ writes `KEEPER` too, a hash of the source, so a copy built from changed sources 
 that's running; never edit it or the built file. This Mac's panel still has its own copies of the
 page scripts, tools and words (`BrowserAgent`, `BrowserTools`) until its agents use its box's
 browser (#693): change both (`BrowserToolsOnBoxTests` holds them together), and when you change
-what agents are given on purpose, write `Tests/Bridge/browser-tools-before.json` again
+what agents are given on purpose, write `box/bridge-tests/browser-tools-before.json` again
 (`browser-tools-built.test.js` says how).
 
 ### The phone link
 
 Kuvo Code for iPhone reaches this Mac's engine, and your machines', through a relay, encrypted
-end to end ([Noise](https://noiseprotocol.org), `Packages/KuvoLink/PROTOCOL.md`). The Mac side
-is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource, built from `Packages/Box/src`
+end to end ([Noise](https://noiseprotocol.org), `protocol/PROTOCOL.md`). The Mac side
+is `PhoneLink`; on a machine, `kuvo-link.js` (KuvoLink's resource, built from `box/src`
 with `./scripts/build-box.sh`, which you run and commit after changing them) runs with the engine's
 runtime in `~/.kuvo-code/bin`, set up by the Mac with the phones you've paired. The Swift and
-JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
+JavaScript sides check against the same vectors in `protocol/vectors`.
 
-Group chats run in each computer's agents bridge (`Packages/Box/src/agents/groups`), this Mac's as a
+Group chats run in each computer's agents bridge (`box/src/agents/groups`), this Mac's as a
 machine's: the app shows them and sends what you do in them (`BoxGroups`), and holds none of
 their rules. Their own tests are the bridge's (`scripts/test-box.sh box`). What the app still reads
 the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
-quotes) is held to `Packages/Box/test/agents/box-vectors.json`: after changing one on either side, run
+quotes) is held to `box/test/agents/box-vectors.json`: after changing one on either side, run
 `./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.
 This Mac's box carries its group chats' mail to your machines on its own relay connection, as a
 machine's bridge does (`kuvo-link.js`: `watchSeats`, `carrySeat`).
@@ -501,7 +505,7 @@ machine's bridge does (`kuvo-link.js`: `watchSeats`, `carrySeat`).
 Code that's there only for released Macs (PROTOCOL.md's "For released Macs": Kuvo Code 0.5 to
 0.7.2, and 0.8.0-beta.1) carries a marker where it is, on every side, `COMPAT(<version> <item>):
 what it does. Goes …` (`#` in a shell script), whose item that section names. `scripts/compat.sh
-[0.7 | beta.1]` lists them, so a version's paths go together, and `Tests/Bridge/compat.test.js`
+[0.7 | beta.1]` lists them, so a version's paths go together, and `box/bridge-tests/compat.test.js`
 fails on an item without a marker or a marker without an item. Mark what you add for them the same
 way.
 
@@ -513,7 +517,7 @@ relay other than one on this Mac (`ws://127.0.0.1:8790`).
 
 Debug builds read these environment variables to open the app in a given state
 without clicking, for trying a change or taking screenshots. What the window does
-for them (tabs, the panel, prompts, bots, Settings) is in `KuvoCode/App/Demo`, and
+for them (tabs, the panel, prompts, bots, Settings) is in `swift/KuvoCode/App/Demo`, and
 the `KUVO_PERF_*` runs are in `DemoPerf` there.
 
 A demo copy left to run on its own must never show a macOS prompt, because nobody is
@@ -545,8 +549,8 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/s
 | Variable | Effect |
 | --- | --- |
 | `KUVO_OPENCODE_BINARY` | Use this opencode binary instead of the pinned download |
-| `KUVO_BOX_SCRIPT` | Run this Mac's box from this script (a checkout's `Packages/Box/src/link/main.ts`, or a built `kuvo-link.js`) instead of the app's |
-| `KUVO_AGENTS_SCRIPT` | Run the agents bridge from this script (a checkout's `Packages/Box/src/agents/main.ts`) instead of the app's bundle |
+| `KUVO_BOX_SCRIPT` | Run this Mac's box from this script (a checkout's `box/src/link/main.ts`, or a built `kuvo-link.js`) instead of the app's |
+| `KUVO_AGENTS_SCRIPT` | Run the agents bridge from this script (a checkout's `box/src/agents/main.ts`) instead of the app's bundle |
 | `KUVO_DEMO_FOLDER`, `KUVO_DEMO_PROMPT`, `KUVO_DEMO_MODEL` | Open a project and start a session with a prompt (`provider/model`) |
 | `KUVO_DEMO_WORKTREE` | Start that session in a worktree of its own |
 | `KUVO_DEMO_DRAFT` | With `KUVO_DEMO_FOLDER` and no prompt: a message typed, not sent, in the new session's composer; with `KUVO_DEMO_SESSION`, in that session's |
@@ -554,7 +558,7 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/s
 | `KUVO_DEMO_DRAFT_FILES` | With `KUVO_DEMO_FOLDER` and no prompt: comma-separated paths attached, not sent, in the new session's composer |
 | `KUVO_DEMO_SHOW_IN_PANEL` | `<full path>` (on the session's computer): as if the agent of the session in view showed that in the panel, in its box's words |
 | `KUVO_DEMO_SCROLL` | Seconds after the conversation in view opens: it scrolls up through it in steps and writes how long that took to `KUVO_PERF_LOG` (a file); `KUVO_PERF_NO_GLASS`, `KUVO_PERF_PLAIN`, `KUVO_PERF_NO_EDGE` and `KUVO_PERF_NO_ANIM` turn parts of the transcript off to compare. A window behind others draws less often, so compare runs alike. Debug builds also log real dropped frames as you scroll (`log show --predicate 'subsystem == "run.kuvo.code" AND category == "scroll"'`) |
-| `KUVO_DEMO_REPLAY` | With `KUVO_DEMO_FOLDER`: a run recorded from the engine (see `Tests/Perf`) played into a new session there at the pace it came, and how the app kept up written to `KUVO_PERF_LOG`; `KUVO_DEMO_REPLAY_SPEED` plays it that many times faster, `KUVO_DEMO_REPLAY_UNTIL` stops it that many milliseconds in, to look at it there, and `KUVO_DEMO_REPLAY_HOLD` measures that many seconds after it ends instead |
+| `KUVO_DEMO_REPLAY` | With `KUVO_DEMO_FOLDER`: a run recorded from the engine (see `swift/Tests/Perf`) played into a new session there at the pace it came, and how the app kept up written to `KUVO_PERF_LOG`; `KUVO_DEMO_REPLAY_SPEED` plays it that many times faster, `KUVO_DEMO_REPLAY_UNTIL` stops it that many milliseconds in, to look at it there, and `KUVO_DEMO_REPLAY_HOLD` measures that many seconds after it ends instead |
 | `KUVO_DEMO_WANDER` | Seconds after the conversation in view opens: it scrolls up and down a screen or two from the end, as a trackpad does, for `KUVO_DEMO_WANDER_FOR` seconds |
 | `KUVO_DEMO_TABS` | Open the project's sessions as tabs (`KUVO_DEMO_TAB_COUNT=<n>`: its latest n) |
 | `KUVO_DEMO_SESSION` | Open the session with this ID in a tab (one on a machine shows its conversation as last seen until the machine connects) |
@@ -720,7 +724,7 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/s
 | `KUVO_PERF_STILL_BOTS` | Every bot holds still, to compare what their motion costs |
 | `KUVO_ANALYTICS_URL` | Send anonymous usage to this collector, e.g. `http://127.0.0.1:8787/kuvo/code`; debug builds send none otherwise |
 | `KUVO_DEMO_AGENTS_FAILED` | This Mac's coding agents' bridge (and its group chats) as if it had stopped for good, with that reason |
-| `KUVO_DEMO_GROUP_REPLAY` | `setup`, then `run`: a three-bot group chat discussion measured (`Tests/Perf`, `groups`) |
+| `KUVO_DEMO_GROUP_REPLAY` | `setup`, then `run`: a three-bot group chat discussion measured (`swift/Tests/Perf`, `groups`) |
 | `KUVO_DEMO_BRANCH_BACKUPS` | `listed`, `gone`, `empty`, `none`, `failed`, `old`, `restored` or `gone-restored`: Branch Backups opens from the Changes panel with sample backups, the `restored` ones with the first taken back |
 | `KUVO_DEMO_AUTO` | With `KUVO_DEMO_SESSION`: it in Auto with sample decisions and no box behind it: `held` (one held back over the composer), `paused`, `decisions` (Auto's Decisions open), `fullAccess` (Full Access asked for) or `unread` (Decisions with its computer out of reach) |
 | `KUVO_PERF_PROVIDER` | The stand-in model that discussion talks on, an OpenAI-compatible URL (`kuvo_perf.py` serves it) |
@@ -746,9 +750,9 @@ each step but `check` asks you to type yes at the terminal first.
 
 ### The icon
 
-The icon is two pictures, `KuvoCode/AppIcon.icon/Assets/artwork-light.png` and
+The icon is two pictures, `swift/KuvoCode/AppIcon.icon/Assets/artwork-light.png` and
 `artwork-dark.png`, and the Mac shows the one that matches its appearance.
-`scripts/icon.py` makes the Icon Composer file in `KuvoCode/AppIcon.icon` from
+`scripts/icon.py` makes the Icon Composer file in `swift/KuvoCode/AppIcon.icon` from
 them, which Xcode compiles with the app, and the README's `docs/images/icon.png`.
 To change the icon, give it pictures of the new one with `--light` and `--dark`:
 it trims any background, lines the two up and makes them square. With `--phone`
@@ -759,7 +763,7 @@ and `--web` it also writes the iPhone app's copy and the website's `icon.png`,
 
 Claude Code, Codex, Cursor, Grok and Antigravity run beside the engine, the way
 [T3 Code](https://github.com/pingdotgg/t3code) runs them: each as its maker built it, signed in
-as you. `Packages/Box/src/agents` is a small server, the agents bridge, that `OutsideAgents` starts with the
+as you. `box/src/agents` is a small server, the agents bridge, that `OutsideAgents` starts with the
 engine's Bun as it starts the engine (it prints `{"url": …}`, takes the password in
 `OPENCODE_PASSWORD` and stops when its stdin closes). It answers the app in the engine's own API
 (sessions, messages, events, permissions, questions, models, sign-in), so their sessions use
@@ -773,10 +777,10 @@ the app's usual views; `Workspace` sends a session to it when its metadata names
   downloaded from Google, checked against its pinned SHA-256, into `agents/antigravity`.
 
 The SDKs are installed from npm the first time each is needed (`runtime/<agent>`), at the
-versions in the agents' files, and aren't part of the app. After changing `Packages/Box/src/agents`, run
-`./scripts/build-agents.sh` and commit `KuvoCode/Resources/kuvo-agents.js`, the bundle the app
+versions in the agents' files, and aren't part of the app. After changing `box/src/agents`, run
+`./scripts/build-agents.sh` and commit `swift/KuvoCode/Resources/kuvo-agents.js`, the bundle the app
 ships; CI fails when it isn't built from the sources as they are (`build-agents.sh --check`). In a
-debug build, `KUVO_AGENTS_SCRIPT=<checkout>/Packages/Box/src/agents/main.ts` runs the source
+debug build, `KUVO_AGENTS_SCRIPT=<checkout>/box/src/agents/main.ts` runs the source
 instead.
 
 ### Dependencies
@@ -784,7 +788,7 @@ instead.
 Kuvo Code depends on Textual, SwiftUIMath (which Textual uses too; replies'
 math is drawn with it directly), SwiftTerm, Sparkle and, through UsageKit,
 KeyboardShortcuts. SwiftTerm stays on 1.11, because 1.12 and later need the
-Metal toolchain to build. Textual is a copy in `Packages/Textual`, changed so
+Metal toolchain to build. Textual is a copy in `swift/Textual`, changed so
 replies are laid out in one pass (its README says what's different and how to
 bring in upstream's changes).
 
@@ -832,7 +836,7 @@ Every change starts from an issue and lands on `main` through a pull request.
      a few under `### Highlights` at the top of its section, each
      `- **Title**: one line. <!-- symbol: <SF Symbol>; open: settings/<page> -->`,
      which What's New shows once after an update; then run
-     `python3 scripts/whats-new.py` and commit `KuvoCode/Resources/whats-new.json`
+     `python3 scripts/whats-new.py` and commit `swift/KuvoCode/Resources/whats-new.json`
      (CI checks it, and the release workflow writes it again).
      (`.gitattributes` merges `CHANGELOG.md` line by line, so branches that
      each add a line there merge without a conflict; if two edit the same line,
@@ -847,12 +851,12 @@ Every change starts from an issue and lands on `main` through a pull request.
 Many branches change the box at once, so what each would bump or count is worked out instead,
 and the lists they add to merge line by line:
 
-- **The bridge's version** (`BRIDGE_VERSION`, `Packages/Box/src/link/version.ts`): never bump
+- **The bridge's version** (`BRIDGE_VERSION`, `box/src/link/version.ts`): never bump
   it. `scripts/build-box.sh` writes in a hash of the link as built, so it changes with every
   change (a machine's `setup` replaces a running bridge whose version isn't its own), and nothing
   compares it: clients check `features`. A note of when something came in (PROTOCOL.md) names its
   feature, not a bridge version.
-- **What a box answers** (`FEATURES` in `Packages/Box/src/shared/features.ts`; `MAC_FEATURES`
+- **What a box answers** (`FEATURES` in `box/src/shared/features.ts`; `MAC_FEATURES`
   and `MACHINE_FEATURES` in `shared/routes/mac.ts`): add a name on a line of its own, in order
   (`LC_ALL=C sort`). Names two branches add in different places merge cleanly; git merges
   `features.ts` by union (`.gitattributes`), so two names added side by side both stay too,
@@ -864,7 +868,7 @@ and the lists they add to merge line by line:
   instead: this Mac's box claims every other name (`macFeatures`).
 - **Other lists a feature adds to** are one entry a line, in order, so they merge the same way
   (without union): the bridge's test of each name's route (`routes` in
-  `Tests/Bridge/bridge.test.js`, whose order it checks), `MAC_FEATURES`, `MACHINE_FEATURES`, and
+  `box/bridge-tests/bridge.test.js`, whose order it checks), `MAC_FEATURES`, `MACHINE_FEATURES`, and
   PROTOCOL.md's table of names ("Features").
 - **A branch from before these were one a line** (#396) merges main into itself first, where the
   old lines conflict as they always did, and puts its names back one a line, in order. Merged the

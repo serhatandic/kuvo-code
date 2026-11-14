@@ -19,10 +19,10 @@ cd "$(dirname "$0")/.."
 REPO=${REPO:-serhatandic/kuvo-code}
 SERVICE="Kuvo Code box signing key"
 ACCOUNT=kuvo-box
-# Where the box's link pins it, in its sources (Packages/Box/src): change it there, then run
+# Where the box's link pins it, in its sources (box/src): change it there, then run
 # scripts/build-box.sh.
-PINS=$(grep -rl 'export const UPDATE_KEYS' Packages/Box/src | head -n 1)
-[ -n "$PINS" ] || { echo "No UPDATE_KEYS in Packages/Box/src: where the box's link pins its key has moved." >&2; exit 1; }
+PINS=$(grep -rl 'export const UPDATE_KEYS' box/src | head -n 1)
+[ -n "$PINS" ] || { echo "No UPDATE_KEYS in box/src: where the box's link pins its key has moved." >&2; exit 1; }
 
 if ! command -v gh >/dev/null 2>&1; then
     echo "GitHub's command line tool isn't installed: brew install gh, then gh auth login." >&2

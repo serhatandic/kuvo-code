@@ -1,0 +1,707 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		4B0A00000000000000000010 /* OpenCodeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000011 /* OpenCodeKit */; };
+		4B0A00000000000000000015 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000016 /* Textual */; };
+		4B0A000000000000000000A0 /* KuvoVoice in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000A1 /* KuvoVoice */; };
+		4B0A0000000000000000007E /* ClientText in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000007F /* ClientText */; };
+		4B0A0000000000000000008E /* ClientAccounts in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000008F /* ClientAccounts */; };
+		4B0A000000000000000000F0 /* ClientNews in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F1 /* ClientNews */; };
+		4B0A000000000000000000F2 /* ClientSessions in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F3 /* ClientSessions */; };
+		4B0A000000000000000000F4 /* ClientChanges in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F5 /* ClientChanges */; };
+		4B0A000000000000000000F7 /* ClientVault in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000F8 /* ClientVault */; };
+		4B0A000000000000000000F9 /* ClientSandbox in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A000000000000000000FA /* ClientSandbox */; };
+		4B0A0000000000000000009E /* ClientDesign in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000009F /* ClientDesign */; };
+		4B0A00000000000000000060 /* SwiftUIMath in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000061 /* SwiftUIMath */; };
+		4B0A00000000000000000018 /* UsageKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000019 /* UsageKit */; };
+		4B0A0000000000000000001B /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A0000000000000000001C /* SwiftTerm */; };
+		4B0A00000000000000000031 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 4B0A00000000000000000030 /* LICENSE */; };
+		4B0A00000000000000000033 /* NOTICE in Resources */ = {isa = PBXBuildFile; fileRef = 4B0A00000000000000000032 /* NOTICE */; };
+		4B0A00000000000000000035 /* THIRD_PARTY_LICENSES.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4B0A00000000000000000034 /* THIRD_PARTY_LICENSES.txt */; };
+		4B0A000000000000000000B1 /* buildDomTree.js in Resources */ = {isa = PBXBuildFile; fileRef = 4B0A000000000000000000B0 /* buildDomTree.js */; };
+		4B0A00000000000000000042 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000041 /* Sparkle */; };
+		4B0A00000000000000000050 /* KuvoLink in Frameworks */ = {isa = PBXBuildFile; productRef = 4B0A00000000000000000051 /* KuvoLink */; };
+		4B0A0000000000000000007D /* routes in Resources */ = {isa = PBXBuildFile; fileRef = 4B0A0000000000000000007C /* routes */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		4B0A00000000000000000013 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
+		4B0A00000000000000000001 /* $(APP_NAME).app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "$(APP_NAME).app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B0A00000000000000000030 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = LICENSE; path = ../LICENSE; sourceTree = "<group>"; };
+		4B0A00000000000000000032 /* NOTICE */ = {isa = PBXFileReference; lastKnownFileType = text; name = NOTICE; path = ../NOTICE; sourceTree = "<group>"; };
+		4B0A00000000000000000034 /* THIRD_PARTY_LICENSES.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = THIRD_PARTY_LICENSES.txt; path = ../THIRD_PARTY_LICENSES.txt; sourceTree = "<group>"; };
+		4B0A000000000000000000B0 /* buildDomTree.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = buildDomTree.js; path = ../box/src/browser/buildDomTree.js; sourceTree = "<group>"; };
+		4B0A00000000000000000071 /* KuvoCodeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KuvoCodeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B0A0000000000000000007C /* routes */ = {isa = PBXFileReference; lastKnownFileType = folder; name = routes; path = ../protocol/vectors/routes; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		4B0A00000000000000000002 /* KuvoCode */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = KuvoCode;
+			sourceTree = "<group>";
+		};
+		4B0A00000000000000000070 /* KuvoCodeTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = KuvoCodeTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4B0A00000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B0A00000000000000000010 /* OpenCodeKit in Frameworks */,
+				4B0A00000000000000000015 /* Textual in Frameworks */,
+				4B0A000000000000000000A0 /* KuvoVoice in Frameworks */,
+				4B0A00000000000000000060 /* SwiftUIMath in Frameworks */,
+				4B0A00000000000000000018 /* UsageKit in Frameworks */,
+				4B0A0000000000000000001B /* SwiftTerm in Frameworks */,
+				4B0A00000000000000000042 /* Sparkle in Frameworks */,
+				4B0A00000000000000000050 /* KuvoLink in Frameworks */,
+				4B0A0000000000000000007E /* ClientText in Frameworks */,
+				4B0A0000000000000000008E /* ClientAccounts in Frameworks */,
+				4B0A000000000000000000F0 /* ClientNews in Frameworks */,
+				4B0A000000000000000000F2 /* ClientSessions in Frameworks */,
+				4B0A000000000000000000F4 /* ClientChanges in Frameworks */,
+				4B0A000000000000000000F7 /* ClientVault in Frameworks */,
+				4B0A000000000000000000F9 /* ClientSandbox in Frameworks */,
+				4B0A0000000000000000009E /* ClientDesign in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B0A00000000000000000073 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4B0A00000000000000000004 = {
+			isa = PBXGroup;
+			children = (
+				4B0A00000000000000000002 /* KuvoCode */,
+				4B0A00000000000000000070 /* KuvoCodeTests */,
+				4B0A0000000000000000007C /* routes */,
+				4B0A000000000000000000B0 /* buildDomTree.js */,
+				4B0A00000000000000000014 /* Config */,
+				4B0A00000000000000000030 /* LICENSE */,
+				4B0A00000000000000000032 /* NOTICE */,
+				4B0A00000000000000000034 /* THIRD_PARTY_LICENSES.txt */,
+				4B0A00000000000000000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		4B0A00000000000000000014 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				4B0A00000000000000000013 /* App.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		4B0A00000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4B0A00000000000000000001 /* $(APP_NAME).app */,
+				4B0A00000000000000000071 /* KuvoCodeTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4B0A00000000000000000006 /* KuvoCode */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B0A00000000000000000020 /* Build configuration list for PBXNativeTarget "KuvoCode" */;
+			buildPhases = (
+				4B0A00000000000000000007 /* Sources */,
+				4B0A00000000000000000003 /* Frameworks */,
+				4B0A00000000000000000008 /* Resources */,
+				4B0A00000000000000000100 /* Background Work Launch Agent */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				4B0A00000000000000000002 /* KuvoCode */,
+			);
+			name = KuvoCode;
+			packageProductDependencies = (
+				4B0A00000000000000000011 /* OpenCodeKit */,
+				4B0A00000000000000000016 /* Textual */,
+				4B0A000000000000000000A1 /* KuvoVoice */,
+				4B0A00000000000000000061 /* SwiftUIMath */,
+				4B0A00000000000000000019 /* UsageKit */,
+				4B0A0000000000000000001C /* SwiftTerm */,
+				4B0A00000000000000000041 /* Sparkle */,
+				4B0A00000000000000000051 /* KuvoLink */,
+				4B0A0000000000000000007F /* ClientText */,
+				4B0A0000000000000000008F /* ClientAccounts */,
+				4B0A000000000000000000F1 /* ClientNews */,
+				4B0A000000000000000000F3 /* ClientSessions */,
+				4B0A000000000000000000F5 /* ClientChanges */,
+				4B0A000000000000000000F8 /* ClientVault */,
+				4B0A000000000000000000FA /* ClientSandbox */,
+				4B0A0000000000000000009F /* ClientDesign */,
+			);
+			productName = KuvoCode;
+			productReference = 4B0A00000000000000000001 /* $(APP_NAME).app */;
+			productType = "com.apple.product-type.application";
+		};
+		4B0A00000000000000000072 /* KuvoCodeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B0A00000000000000000077 /* Build configuration list for PBXNativeTarget "KuvoCodeTests" */;
+			buildPhases = (
+				4B0A00000000000000000074 /* Sources */,
+				4B0A00000000000000000073 /* Frameworks */,
+				4B0A00000000000000000075 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4B0A0000000000000000007B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				4B0A00000000000000000070 /* KuvoCodeTests */,
+			);
+			name = KuvoCodeTests;
+			packageProductDependencies = (
+			);
+			productName = KuvoCodeTests;
+			productReference = 4B0A00000000000000000071 /* KuvoCodeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4B0A00000000000000000009 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					4B0A00000000000000000006 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					4B0A00000000000000000072 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 4B0A00000000000000000006;
+					};
+				};
+			};
+			buildConfigurationList = 4B0A00000000000000000021 /* Build configuration list for PBXProject "KuvoCode" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4B0A00000000000000000004;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				4B0A00000000000000000012 /* XCLocalSwiftPackageReference "OpenCodeKit" */,
+				4B0A0000000000000000001A /* XCLocalSwiftPackageReference "UsageKit" */,
+				4B0A00000000000000000052 /* XCLocalSwiftPackageReference "KuvoLink" */,
+				4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Textual" */,
+				4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "KuvoVoice" */,
+				4B0A00000000000000000080 /* XCLocalSwiftPackageReference "KuvoClient" */,
+				4B0A00000000000000000062 /* XCRemoteSwiftPackageReference "swiftui-math" */,
+				4B0A0000000000000000001D /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				4B0A00000000000000000040 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 4B0A00000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4B0A00000000000000000006 /* KuvoCode */,
+				4B0A00000000000000000072 /* KuvoCodeTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4B0A00000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B0A00000000000000000031 /* LICENSE in Resources */,
+				4B0A00000000000000000033 /* NOTICE in Resources */,
+				4B0A00000000000000000035 /* THIRD_PARTY_LICENSES.txt in Resources */,
+				4B0A000000000000000000B1 /* buildDomTree.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B0A00000000000000000075 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B0A0000000000000000007D /* routes in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4B0A00000000000000000100 /* Background Work Launch Agent */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 0;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Background Work Launch Agent";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/$(PRODUCT_BUNDLE_IDENTIFIER).box.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# This Mac's keeper (`--box`), as launchd starts it: its launch agent, named by this copy's bundle ID\n# so a demo or test copy never shares one with the app (Keeper.swift, BackgroundWork.swift).\nplist=\"${SCRIPT_OUTPUT_FILE_0}\"\nmkdir -p \"$(dirname \"$plist\")\"\ncat > \"$plist\" <<PLIST\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>${PRODUCT_BUNDLE_IDENTIFIER}.box</string>\n\t<key>BundleProgram</key>\n\t<string>Contents/MacOS/${EXECUTABLE_NAME}</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>${EXECUTABLE_NAME}</string>\n\t\t<string>--box</string>\n\t</array>\n\t<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>${PRODUCT_BUNDLE_IDENTIFIER}</string>\n\t</array>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\t<key>ProcessType</key>\n\t<string>Standard</string>\n\t<key>LimitLoadToSessionType</key>\n\t<string>Aqua</string>\n</dict>\n</plist>\nPLIST\nplutil -lint \"$plist\" >/dev/null\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4B0A00000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4B0A00000000000000000074 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+		4B0A0000000000000000007A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4B0A00000000000000000009 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B0A00000000000000000006;
+			remoteInfo = KuvoCode;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		4B0A0000000000000000007B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B0A00000000000000000006 /* KuvoCode */;
+			targetProxy = 4B0A0000000000000000007A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4B0A00000000000000000022 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		4B0A00000000000000000023 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		4B0A00000000000000000024 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4B0A00000000000000000013 /* App.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = KuvoCode/KuvoCode.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.7.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
+				PRODUCT_MODULE_NAME = KuvoCode;
+				PRODUCT_NAME = "$(APP_NAME)";
+				REGISTER_APP_GROUPS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		4B0A00000000000000000025 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4B0A00000000000000000013 /* App.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = KuvoCode/KuvoCode.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.7.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
+				PRODUCT_MODULE_NAME = KuvoCode;
+				PRODUCT_NAME = "$(APP_NAME)";
+				REGISTER_APP_GROUPS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		4B0A00000000000000000078 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4B0A00000000000000000013 /* App.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_ENTITLEMENTS = "";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID).tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)";
+			};
+			name = Debug;
+		};
+		4B0A00000000000000000079 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4B0A00000000000000000013 /* App.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_ENTITLEMENTS = "";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID).tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/Contents/MacOS/$(APP_NAME)";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4B0A00000000000000000020 /* Build configuration list for PBXNativeTarget "KuvoCode" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B0A00000000000000000024 /* Debug */,
+				4B0A00000000000000000025 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4B0A00000000000000000021 /* Build configuration list for PBXProject "KuvoCode" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B0A00000000000000000022 /* Debug */,
+				4B0A00000000000000000023 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4B0A00000000000000000077 /* Build configuration list for PBXNativeTarget "KuvoCodeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B0A00000000000000000078 /* Debug */,
+				4B0A00000000000000000079 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		4B0A00000000000000000012 /* XCLocalSwiftPackageReference "OpenCodeKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = OpenCodeKit;
+		};
+		4B0A0000000000000000001A /* XCLocalSwiftPackageReference "UsageKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = UsageKit;
+		};
+		4B0A00000000000000000052 /* XCLocalSwiftPackageReference "KuvoLink" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = KuvoLink;
+		};
+		4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Textual" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Textual;
+		};
+		4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "KuvoVoice" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = KuvoVoice;
+		};
+		4B0A00000000000000000080 /* XCLocalSwiftPackageReference "KuvoClient" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = KuvoClient;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4B0A00000000000000000062 /* XCRemoteSwiftPackageReference "swiftui-math" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swiftui-math";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.1.0;
+			};
+		};
+		4B0A0000000000000000001D /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 1.11.2;
+			};
+		};
+		4B0A00000000000000000040 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4B0A00000000000000000011 /* OpenCodeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OpenCodeKit;
+		};
+		4B0A00000000000000000016 /* Textual */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Textual;
+		};
+		4B0A000000000000000000A1 /* KuvoVoice */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KuvoVoice;
+		};
+		4B0A0000000000000000007F /* ClientText */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientText;
+		};
+		4B0A0000000000000000008F /* ClientAccounts */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientAccounts;
+		};
+		4B0A000000000000000000F1 /* ClientNews */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientNews;
+		};
+		4B0A000000000000000000F3 /* ClientSessions */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientSessions;
+		};
+		4B0A000000000000000000F5 /* ClientChanges */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientChanges;
+		};
+		4B0A000000000000000000F8 /* ClientVault */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientVault;
+		};
+		4B0A000000000000000000FA /* ClientSandbox */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientSandbox;
+		};
+		4B0A0000000000000000009F /* ClientDesign */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClientDesign;
+		};
+		4B0A00000000000000000061 /* SwiftUIMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B0A00000000000000000062 /* XCRemoteSwiftPackageReference "swiftui-math" */;
+			productName = SwiftUIMath;
+		};
+		4B0A00000000000000000019 /* UsageKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UsageKit;
+		};
+		4B0A0000000000000000001C /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B0A0000000000000000001D /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		4B0A00000000000000000051 /* KuvoLink */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KuvoLink;
+		};
+		4B0A00000000000000000041 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B0A00000000000000000040 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 4B0A00000000000000000009 /* Project object */;
+}

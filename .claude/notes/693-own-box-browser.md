@@ -3,12 +3,12 @@
 Status: design only, written 2026-11-14 against main at `708019fcf`, revised after one reviewer pass
 (§9). Nothing here is built. Read with `333-own-box-independent.md` and `333-piece-0-results.md`
 (main checkout's `.claude/notes`, untracked) and PROTOCOL.md's "The browser on a machine"
-(`Packages/KuvoLink/PROTOCOL.md:2325`).
+(`protocol/PROTOCOL.md:2325`).
 
 ## 0. In short
 
 - **This Mac's box sets up and runs Chrome for Testing the way every machine's box already does**
-  (`Packages/Box/src/link/browser/install.ts`, pin `mac.json`), in the box's own `browser/` folder.
+  (`box/src/link/browser/install.ts`, pin `mac.json`), in the box's own `browser/` folder.
 - **The Mac's part comes after #333's move** to `~/.kuvo-code` (question 1).
   - The box's `kuvo-browser.js` reaches its box through `K/bin/kuvo-link.js` (`kuvo-browser.js:217`,
     `:2201`, `:2329`). A box still in the app's folder runs the app's own copy (`BoxProcess.swift:76-80`)
@@ -41,7 +41,7 @@ Status: design only, written 2026-11-14 against main at `708019fcf`, revised aft
 
 - **A machine's browser** (the Mini, Linux):
   - The box installs it (`install.ts`), and `kuvo-browser.js host` runs it headless
-    (`KuvoCode/Resources/kuvo-browser.js:637`), with clients joining through `run/browser.sock`
+    (`swift/KuvoCode/Resources/kuvo-browser.js:637`), with clients joining through `run/browser.sock`
     (`:28`).
   - On macOS it already has `--use-mock-keychain` (`:514`) and `CFFIXED_USER_HOME` (`:585`).
   - A Mac sees it through `kuvo-browser.js connect` over SSH (`:1252`).
@@ -298,7 +298,7 @@ add a **view vocabulary** of facts, so a client draws without CDP. Feature `brow
 
 - **`kuvo-browser.js`, built from the box:**
   - `BrowserAgent`'s scripts, `buildDomTree.js`, `BrowserTools`' definitions and instructions, and
-    `Passkeys`' script move into `Packages/Box/src/browser/`;
+    `Passkeys`' script move into `box/src/browser/`;
   - `scripts/build-box.sh` builds it, and `pack-box.sh` takes it from there;
   - `KEEPER` becomes a hash the build writes, so parallel keeper changes merge cleanly.
 - **The view logic `MachineBrowser` holds** (§3.1).

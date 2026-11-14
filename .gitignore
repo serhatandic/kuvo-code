@@ -5,6 +5,11 @@ build/
 .build/
 .swiftpm/
 *.xcuserstate
-Config/Signing.local.xcconfig
-Packages/Box/node_modules/
-Packages/Box/src/**/.unresolved-*.ts
+swift/Config/Signing.local.xcconfig
+box/node_modules/
+box/src/**/.unresolved-*.ts
+# What checkouts from before the layout move (#709) still keep in the old places, and git never
+# moves: the signing team and the box's installed packages, kept out of commits until they go.
+# Move Config/Signing.local.xcconfig to swift/Config/, and delete Packages/. Goes once no checkout has them.
+/Config/Signing.local.xcconfig
+/Packages/

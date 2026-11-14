@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reads what's new from CHANGELOG.md into the whats-new.json an app carries (ClientNews reads it).
 
-    scripts/whats-new.py            writes KuvoCode/Resources/whats-new.json
+    scripts/whats-new.py            writes swift/KuvoCode/Resources/whats-new.json
     scripts/whats-new.py --check    says whether it's what CHANGELOG.md gives, as CI checks
     scripts/whats-new.py --changelog ../kuvo-code-ios/CHANGELOG.md --out <file>   another app's
 
@@ -96,7 +96,7 @@ def releases(changelog):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--changelog", default=ROOT / "CHANGELOG.md", type=Path)
-    parser.add_argument("--out", default=ROOT / "KuvoCode/Resources/whats-new.json", type=Path)
+    parser.add_argument("--out", default=ROOT / "swift/KuvoCode/Resources/whats-new.json", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     text = json.dumps({"releases": releases(args.changelog.read_text())}, ensure_ascii=False, indent=2) + "\n"

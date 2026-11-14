@@ -12,7 +12,7 @@ Fixes #<!-- issue number -->
 ## Validation
 
 - [ ] The app builds without new warnings, and I tried the change in it
-- [ ] `swift test` passes in `Packages/OpenCodeKit` and `Packages/UsageKit`, if I changed them
+- [ ] `swift test` passes in `swift/OpenCodeKit` and `swift/UsageKit`, if I changed them
 - [ ] If dependencies or copied code changed, I ran `./scripts/third-party-licenses.sh`
 - [ ] If the change is user-facing, I noted what the docs at kuvo.run/code need
 - [ ] If the change is user-facing, I added it to `CHANGELOG.md` under Unreleased

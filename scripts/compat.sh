@@ -6,7 +6,7 @@
 #                               ships) or 0.7 (Kuvo Code 0.5 to 0.7.2, goes 3 months after 0.8.0)
 # A marker is a comment beside the code, `COMPAT(<version> <item>): what it does. Goes …`, whose
 # item PROTOCOL.md names in that section (`<!-- compat: <version> <item> -->`). Code needed by both
-# versions is marked for 0.7, which goes last. Packages/KuvoLink/Tests/Bridge/compat.test.js holds
+# versions is marked for 0.7, which goes last. box/bridge-tests/compat.test.js holds
 # the markers and the list to each other.
 set -eu
 cd "$(dirname "$0")/.."
@@ -19,8 +19,8 @@ esac
 
 # The same files the test reads: the code as written (a bundle leaves comments out), new files too.
 git grep --untracked -n -I -E 'COMPAT\((0\.7|beta\.1) [a-z0-9-]+\)' -- \
-  'KuvoCode' 'Packages/Box/src' 'Packages/OpenCodeKit/Sources' 'Packages/KuvoClient/Sources' 'Packages/KuvoLink/Sources' 'scripts' \
-  ':(exclude)KuvoCode/Resources/kuvo-agents.js' ':(exclude)KuvoCode/Resources/kuvo-browser.js' ':(exclude)scripts/compat.sh' |
+  'swift/KuvoCode' 'box/src' 'swift/OpenCodeKit/Sources' 'swift/KuvoClient/Sources' 'swift/KuvoLink/Sources' 'scripts' \
+  ':(exclude)swift/KuvoCode/Resources/kuvo-agents.js' ':(exclude)swift/KuvoCode/Resources/kuvo-browser.js' ':(exclude)scripts/compat.sh' |
   grep -E '^[^:]+\.(swift|ts|js|mjs|sh|py):' |
   awk -v want="$want" '
     {

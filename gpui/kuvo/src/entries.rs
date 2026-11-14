@@ -596,11 +596,11 @@ mod tests {
         assert_eq!((label.as_ref(), target.as_deref()), ("Running", Some("npm test …")));
     }
 
-    /// Every client's sample steps (`Packages/KuvoLink/Vectors/tool-steps.json`, PROTOCOL.md's "Tool
+    /// Every client's sample steps (`protocol/vectors/tool-steps.json`, PROTOCOL.md's "Tool
     /// steps"): each one's target, and what it opens to.
     #[test]
     fn every_sample_step_shows_its_target_and_opens_to_what_the_vectors_say() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/Vectors/tool-steps.json");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../protocol/vectors/tool-steps.json");
         let vectors: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         for case in vectors["cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();

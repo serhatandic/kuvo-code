@@ -1,7 +1,7 @@
 #!/bin/sh
-# Builds the box's link (Packages/Box/src/link) into Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js,
+# Builds the box's link (box/src/link) into swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js,
 # the one file the Mac app puts on each machine and runs as this Mac's own box (`kuvo-link.js serve`),
-# with the engine's Bun. Run it after changing anything in Packages/Box/src, and commit the result.
+# with the engine's Bun. Run it after changing anything in box/src, and commit the result.
 # `--check` builds it again and says whether that's what's here, byte for byte, as CI checks: so a
 # change made to kuvo-link.js itself, or merged into it, never passes for one made in its sources.
 # It builds with one Bun, the one CI has (BUN_VERSION), so every computer builds the same file.
@@ -11,7 +11,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-OUT=Packages/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js
+OUT=swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js
 # The same as CI's setup-bun (.github/workflows/ci.yml).
 BUN_VERSION=1.4.2
 
@@ -33,7 +33,7 @@ fi
 real_app_guard "scripts/build-box.sh" "$BUN"
 
 # For Node too, not only Bun: the bridge's tests import it with Node, and it uses Node's modules only.
-# Its version (BRIDGE_VERSION, Packages/Box/src/link/version.ts) is the first 12 hex digits of the
+# Its version (BRIDGE_VERSION, box/src/link/version.ts) is the first 12 hex digits of the
 # SHA-256 of what's built with the version as its source has it, written in its place: it changes
 # with every change to the link, the same on every computer, and no branch bumps it by hand.
 SOURCE_VERSION=0.0.0-from-its-sources
@@ -42,10 +42,10 @@ built=$(mktemp "${TMPDIR:-/tmp}/kuvo-link.XXXXXX")
 trap 'rm -f "$raw" "$built"' EXIT
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }
 build() {
-  BUN_BE_BUN=1 "$BUN" build Packages/Box/src/link/main.ts --target=node --format=esm --outfile "$raw" \
-    --banner "// Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file." >/dev/null
+  BUN_BE_BUN=1 "$BUN" build box/src/link/main.ts --target=node --format=esm --outfile "$raw" \
+    --banner "// Built from box/src by scripts/build-box.sh: change those, then run it. Never edit this file." >/dev/null
   if ! grep -q "\"$SOURCE_VERSION\"" "$raw"; then
-    echo "scripts/build-box.sh: the built link doesn't have \"$SOURCE_VERSION\" (Packages/Box/src/link/version.ts) to write its version in." >&2
+    echo "scripts/build-box.sh: the built link doesn't have \"$SOURCE_VERSION\" (box/src/link/version.ts) to write its version in." >&2
     exit 1
   fi
   hash=$(sha256 "$raw" | cut -c1-12)
@@ -59,7 +59,7 @@ build() {
 if [ "${1:-}" = "--check" ]; then
   build "$built"
   cmp -s "$built" "$OUT" && exit 0
-  echo "$OUT isn't what Packages/Box/src builds: change the sources, not it, then run ./scripts/build-box.sh and commit it." >&2
+  echo "$OUT isn't what box/src builds: change the sources, not it, then run ./scripts/build-box.sh and commit it." >&2
   exit 1
 fi
 

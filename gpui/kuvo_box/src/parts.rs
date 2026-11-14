@@ -4,7 +4,7 @@
 //! it). A client sends them as fields ([`Sending`], `kuvo/sessions/<id>/send`) and the box writes the
 //! text the agent reads; the box keeps them with the message (`metadata.kuvo.parts`), and reads them
 //! from the text of one from before (`kuvo/messages/parts`). A client draws from these, and parses
-//! no text. Held to `Packages/KuvoLink/Vectors/message-parts.json`, as KuvoClient's `MessageParts` is.
+//! no text. Held to `protocol/vectors/message-parts.json`, as KuvoClient's `MessageParts` is.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

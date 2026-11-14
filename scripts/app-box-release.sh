@@ -32,4 +32,4 @@ if [ "$SIGN_IDENTITY" = "-" ]; then
 else
     set -- --force --sign "$SIGN_IDENTITY" --options runtime --timestamp
 fi
-codesign "$@" --entitlements KuvoCode/KuvoCode.entitlements "$APP"
+codesign "$@" --entitlements swift/KuvoCode/KuvoCode.entitlements "$APP"

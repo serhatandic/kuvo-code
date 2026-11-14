@@ -1,4 +1,4 @@
-// Signs a box release, for machines to update themselves with (Packages/KuvoLink/PROTOCOL.md,
+// Signs a box release, for machines to update themselves with (protocol/PROTOCOL.md,
 // "Updates"), and prints boxes.json: the manifest and its signature, in one file, so the two
 // can't come from different releases.
 //   KUVO_BOX_SIGNING_KEY=<PEM> node scripts/sign-box.mjs <version> <pack> <pack's URL> <box.json>

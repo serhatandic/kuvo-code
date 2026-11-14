@@ -1,0 +1,5 @@
+[test]
+# Every test run has a home of its own (test/preload.ts), never this computer's ~/.kuvo-code.
+preload = ["./test/preload.ts"]
+# Only the box's own tests: the bridge's (bridge-tests) run on Node (scripts/test-box.sh).
+root = "test"
