@@ -3942,20 +3942,6 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   {"message"}` for one that isn't there or isn't a file, `403 {"message"}` for one it can't read,
   `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
-- On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
-  doesn't state yet (a plan's limits are every box's own, in "Plan limits"). A provider whose
-  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out,
-  and for Claude and Cursor, whose bars have no limits of their own, the lines the card has from
-  the rows too (Cursor's `Credits` and its `extras`, `On-demand`), which a client draws from each
-  row under its own account: one this Mac's box states rows for (`services`, with an account
-  listed), and Claude and Cursor wherever any of the Mac's computers states an account of them. Its
-  spend shows under the first of those rows. A client lists these in their order, the box's rows
-  in the place of each that `covers`: each provider's name, plan, brand color, mark as a PNG
-  to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
-  `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
-  While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200
-  with an empty line and stays open, saying nothing more until it's up. Lines that JSON can't carry are left out. Times are
-  seconds since 1970.
 
 ### Goals
 
@@ -4182,8 +4168,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     never merged by its numbers: two accounts can read alike (a personal plan and a team's, each
     at 12%).
 - Listing them (KuvoClient's `UsageListing.listing`, as the Mac and the phone do): one box's `rows`
-  as they are, merging nothing (the Mac: its own box's; the phone: the box of the first Mac whose
-  usage panel answers, else the first that answers, that panel placing the rows), refreshed
+  as they are, merging nothing (the Mac: its own box's; the phone: the first box in its list of
+  your computers that states accounts, a machine's on Linux too), refreshed
   through that box alone, while they have every row each other box the client reaches says is
   signed in there (`here`), with that box among the row's `boxes` and not `away`. A row whose computers are all away shows "As of" its reading's time.
   Naming, a view: a row's name is its account's ("Claude", "Codex", "ChatGPT", "Claude · Work");
@@ -4492,6 +4478,21 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   seconds, the rest coming as the event).
 - The bridge's events carry `kuvo.usage.updated` `{services}` when the rows change (a read here, a
   peer's word): ask again, in your zone.
+- Showing it (KuvoClient's `UsageSpend` and `UsageLayout`, views both apps draw by): a client takes
+  a service's `totals` from one box, the one whose plan limits `rows` it lists ("Listing them"),
+  else the first it reaches that states that service, and never adds two boxes' up (each counts
+  your other computers already). Under the service's first account it shows Today, Yesterday and
+  Last 30 Days, each in dollars (an estimate unless every row of that service says `estimated:
+  false`) and tokens, in the answer's `zone` as of now (a day more than 30 before today left out),
+  and Usage Trend, the tokens of each of those 31 days. A period with no use has no line, never
+  $0, and a box that couldn't be read gives none. A service with use and no plan limits row
+  (OpenCode's Zen alone) is a row of its own. The cards go in the order of the usage settings'
+  `layout.providerOrder` (a card `claude@…` is Claude's place), the rest in the panel's own
+  (Claude, Codex, Cursor, Antigravity, Copilot, Grok, OpenCode, OpenRouter, Z.ai); a line shows
+  where `layout.placed` holds its meter (`<service>.today`, `.yesterday`, `.last30`, `.trend`),
+  and all of them while `layout` was never set. The phone reads every box it reaches this way, a
+  machine's on Linux too, with no Mac app open; a box from before `usage.history` answers 404 and
+  shows no spend (the update gate brings it up to date).
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail
   below, only when what was used changed. A log is read on from where
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
@@ -5483,7 +5484,6 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
 | `typed` | `kuvo/sessions/<id>/typed`: what "/" offers, and what a typed text means ("What a typed message means") |
 | `update` | a machine only: `kuvo/update` |
-| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -6304,7 +6304,7 @@ from 0.9.201, while it waits for its next try, `run/engine.retry`, that it's try
 machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
 minutes." The Mac's own routes (`MAC_APP_ROUTES`, the one list of them: `kuvo/machines…`,
-`kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/engine/…`), it hands the app
+`kuvo/hosts…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/engine/…`), it hands the app
 (`link/route`), but `kuvo/engine/restart` while its keeper runs (`run/keeper.json`, its process
 alive), which it answers itself (from #341). (`kuvo/claude-code` was one of them before #341: every
 box answers it now.) Those it hands the app as it comes, whether its app or its keeper runs the box (the keeper's

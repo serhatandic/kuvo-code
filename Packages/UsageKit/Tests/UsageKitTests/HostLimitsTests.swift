@@ -54,8 +54,6 @@ final class HostLimitsTests: XCTestCase {
             HostLimitRow(id: "claude#b2", providerID: "claude", name: "Claude · Athas", meters: [], isLocal: false, place: "mini-local"),
         ], covered: ["claude"])
         XCTAssertEqual(names(limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }), ["Claude +spend", "Claude · Athas", "panel:cursor"])
-        // A phone gets Claude's place for them too.
-        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") }, ["claude>claude", "cursor"])
         // With no bar of that name, just its name.
         XCTAssertEqual(names(limits.entries(groups: [group("cursor")]) { _ in false }), ["panel:cursor", "Claude", "Claude · Athas"])
 
@@ -74,16 +72,6 @@ final class HostLimitsTests: XCTestCase {
         let limits = HostLimits()
         limits.update(rows: [HostLimitRow(id: "mini/codex-cli", providerID: "codex", name: "Codex", meters: [], isLocal: false, place: "mini-local")], covered: ["codex"])
         XCTAssertEqual(names(limits.entries(groups: [group("codex"), group("cursor")]) { _ in false }), ["panel:codex", "Codex · mini-local", "panel:cursor"])
-        XCTAssertEqual(limits.phoneGroups([group("codex")]).map { $0.covers }, [nil])
-    }
-
-    func testAPhoneGetsThePanelInOrderWithWhereThisMacsBoxRowsGo() {
-        let limits = HostLimits()
-        limits.update(rows: [row("this Mac/claude-code", "claude", "Claude"), row("this Mac/openrouter", "openrouter", "OpenRouter")], covered: ["claude", "openrouter", "copilot"])
-        // Claude's place (once for its account cards) and OpenRouter's, marked; Copilot, covered with
-        // no row here, as the panel's own.
-        XCTAssertEqual(limits.phoneGroups([group("cursor"), group("claude"), group("claude@ab12cd34"), group("copilot"), group("openrouter")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") },
-                       ["cursor", "claude>claude", "copilot", "openrouter>openrouter"])
     }
 
     func testACoveredProviderTheHostHasNoRowForYetKeepsItsOwnBar() {

@@ -33,12 +33,12 @@ import type { AnswerPiece, Asker, LinkHandler, LinkRequest } from "../server/con
 import type { LinkState } from "../state";
 
 // What only this Mac's app answers a phone, by area: its machines (which this box answers in part
-// with the app closed: machines.ts), the machines your phones reach directly, its usage panel's
-// numbers, what its panel's browser asks you, its macOS services (`kuvo/mac`), and its engine's
+// with the app closed: machines.ts), the machines your phones reach directly, what its panel's
+// browser asks you, its macOS services (`kuvo/mac`), and its engine's
 // restart while the app runs this box itself (`boxAnswers`). The one list of them: the app keeps
 // none, and hands its own requests for anything else to this box. Everything else a phone asks
 // this box answers itself, as a machine's does, with the app open or closed.
-export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
+export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
 export const macAppAnswers = (route: string): boolean => MAC_APP_ROUTES.some(area => route === area || route.startsWith(`${area}/`));
 
 /** Those of the app's areas this box answers itself now, with the app closed too: its engine's

@@ -70,7 +70,7 @@ import Testing
     /// With the keeper running this Mac's box, what a phone asks of the Mac's own routes goes to the
     /// keeper's host and on to the open app. The box takes an answer only when it says it's the
     /// app's (anything else is "the app isn't answering", a 503, and the phone waits for ever): it
-    /// has to say so through the keeper too, a real 404 and a followed route's lines with it.
+    /// has to say so through the keeper too, a real refusal and a followed route's lines with it.
     @Test func withTheKeeperRunningTheBoxTheAppsAnswersStillReachAPhone() async throws {
         let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
         defer { done(engine) }
@@ -89,59 +89,18 @@ import Testing
         }
         #expect(try JSONSerialization.jsonObject(with: Data(try #require(first).utf8)) is [String: Any])
 
-        // A real 404 is the app's too (no usage to read in this test copy).
-        let (_, read) = try await session.data(for: try asked("kuvo/usage", at: keeper.environment))
-        let missing = try #require(read as? HTTPURLResponse)
-        #expect(missing.statusCode == 404)
-        #expect(missing.value(forHTTPHeaderField: "X-Kuvo-Answer") == "1")
+        // A real refusal is the app's too (an ask is answered with POST).
+        let (_, read) = try await session.data(for: try asked("kuvo/asks/ask_1", at: keeper.environment))
+        let refused = try #require(read as? HTTPURLResponse)
+        #expect(refused.statusCode == 405)
+        #expect(refused.value(forHTTPHeaderField: "X-Kuvo-Answer") == "1")
 
         // The app quit: the keeper answers itself, and doesn't say it's the app's.
         keeper.host.useApp([:])
-        let (_, away) = try await session.data(for: try asked("kuvo/usage", at: keeper.environment))
+        let (_, away) = try await session.data(for: try asked("kuvo/asks", at: keeper.environment))
         let closed = try #require(away as? HTTPURLResponse)
         #expect(closed.statusCode == 503)
         #expect(closed.value(forHTTPHeaderField: "X-Kuvo-Answer") == nil)
-    }
-
-    /// The usage panel, as UsageKit's reads: nothing until it's up, and observed, as it is.
-    @Observable final class Panel {
-        var report: Data?
-    }
-
-    /// A phone that asks while the panel is still coming up (the app just started) isn't told
-    /// there's no usage, which it would believe until it next opened: its stream stays open, and
-    /// the report comes down it as soon as the panel is up, and again as it changes.
-    @Test func thePanelComingUpLateReachesAPhoneThatAskedBefore() async throws {
-        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
-        defer { done(engine) }
-        let panel = Panel()
-        link.usagePanel = { panel.report }
-        let keeper = try await keeper(of: host)
-        defer { keeper.host.stop() }
-
-        let request = try asked("kuvo/usage/events", at: keeper.environment)
-        let seen = OSAllocatedUnfairLock<(status: Int?, answer: String?, lines: [String])>(initialState: (nil, nil, []))
-        let reading = Task.detached {
-            let (bytes, response) = try await URLSession(configuration: .ephemeral).bytes(for: request)
-            let http = response as? HTTPURLResponse
-            seen.withLock { $0.status = http?.statusCode; $0.answer = http?.value(forHTTPHeaderField: "X-Kuvo-Answer") }
-            TestPulse.beat()
-            for try await line in bytes.lines where !line.isEmpty {
-                seen.withLock { $0.lines.append(line) }
-                TestPulse.beat()
-            }
-        }
-        defer { reading.cancel() }
-        try await until { seen.withLock { $0.status != nil } }
-        #expect(seen.withLock { $0.status } == 200)
-        #expect(seen.withLock { $0.answer } == "1")
-        #expect(seen.withLock { $0.lines }.isEmpty)
-
-        panel.report = Data(#"{"providers":[],"refreshing":false}"#.utf8)
-        try await until { seen.withLock { $0.lines.count == 1 } }
-        panel.report = Data(#"{"providers":[],"refreshing":true}"#.utf8)
-        try await until { seen.withLock { $0.lines.count == 2 } }
-        #expect(seen.withLock { $0.lines.last } == #"{"providers":[],"refreshing":true}"#)
     }
 
     /// What the real box's code (`macFront`, in `kuvo-link.js`, on Node) gives a phone asking
@@ -183,40 +142,6 @@ import Testing
         func stop() { process.terminate() }
     }
 
-    /// The whole way from the box to the usage panel, with the keeper running the box: Kuvo Code
-    /// closed, the box tells a phone it isn't answering (503, which a phone asks again after); open
-    /// with the panel still coming up, the stream is open and says nothing; and with the panel up,
-    /// the report comes down it, so the phone's gauge is back with nothing restarted.
-    @Test func theRealBoxGivesAPhoneTheUsageAsTheAppComesAndThePanelComesUp() async throws {
-        let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
-        defer { done(engine) }
-        let panel = Panel()
-        link.usagePanel = { panel.report }
-        let address = try #require(host.address)
-        let keeper = try await keeper(of: host)
-        defer { keeper.host.stop() }
-
-        keeper.host.useApp([:])
-        let closed = try AskedOfTheBox("kuvo/usage/events", keeper: keeper.environment)
-        defer { closed.stop() }
-        try await until { !closed.said.withLock { $0 }.isEmpty }
-        #expect(closed.said.withLock { $0.first } == "503")
-
-        keeper.host.useApp(address)
-        let opened = try AskedOfTheBox("kuvo/usage/events", keeper: keeper.environment)
-        defer { opened.stop() }
-        // At once, with the panel not up: an empty line, or what's on the way holds the head back.
-        try await until { opened.said.withLock { $0.count >= 2 } }
-        #expect(opened.said.withLock { $0 } == ["200", #""\n""#])
-
-        panel.report = Data(#"{"providers":[],"refreshing":false}"#.utf8)
-        try await until { opened.said.withLock { $0.count >= 3 } }
-        #expect(opened.said.withLock { $0.last } == #""{\"providers\":[],\"refreshing\":false}\n""#)
-    }
-
-    /// From what the app keeps to a phone, the real thing at both ends: machines only in the settings,
-    /// as an update first finds them, moved as the keeper moves them (`Keeper.start`, which no test
-    /// runs), and with the app closed the box reads them from where it runs, for a phone.
     @Test func machinesInTheSettingsReachAPhoneThroughTheRealBoxWithTheAppClosed() async throws {
         let (engine, _) = try await engine { _ in HTTPResponse(status: 200) }
         defer {
@@ -261,7 +186,7 @@ import Testing
         }
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
-        let (_, read) = try await session.data(for: try asked("kuvo/usage", at: keeper.environment))
+        let (_, read) = try await session.data(for: try asked("kuvo/asks", at: keeper.environment))
         #expect((read as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Kuvo-Answer") == "1")
     }
 
