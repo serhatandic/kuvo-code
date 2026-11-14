@@ -13,9 +13,14 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 export async function* namedRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, readEngine, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  return yield* json(200, { agents: await namedNow(readEngine) } satisfies Named);
+}
+
+/** Who `&` can name here, as `kuvo/named` lists them (and "&" suggests them). */
+export async function namedNow(readEngine: RouteContext["readEngine"]): Promise<Named["agents"]> {
   const link = readLink();
   // Its own as last worked out while its engine can't say (starting), rather than none.
   const fresh = await ownAgentsNow(readEngine, link?.id ?? null).catch(() => null);
   const own = fresh ?? ownAsLast(link?.id ?? null);
-  return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(), movedOf(link)) } satisfies Named);
+  return namedAgents(own, peersOf(link), readPeerAgents(), movedOf(link));
 }

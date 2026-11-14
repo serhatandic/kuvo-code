@@ -1,0 +1,74 @@
+{
+  "about": "What a step of the agent's shows (PROTOCOL.md, \"Tool steps\"): each case is a tool step as the engine keeps it in a message's content, its target as its row shows it (null for none), and what it opens to: \"nothing\", \"output\" (its command, null for none, and the text it printed) or \"changes\" (each file, with the lines added and removed). Every client holds itself to these: gpui's kuvo (entries.rs's tests), the phone later.",
+  "cases": [
+    {
+      "name": "a command that ran opens to its command and what it printed",
+      "step": { "type": "tool", "id": "call_1", "name": "shell", "state": { "status": "completed", "input": { "command": "npm test -- signup\nnpm run lint" }, "content": [{ "type": "text", "text": "10 passed" }, { "type": "text", "text": "0 problems" }], "metadata": { "exit": 0 } } },
+      "target": "npm test -- signup …",
+      "opens": { "output": { "command": "npm test -- signup\nnpm run lint", "text": "10 passed\n0 problems" } }
+    },
+    {
+      "name": "bash, as a conversation from before the engine named it shell",
+      "step": { "type": "tool", "id": "call_2", "name": "bash", "state": { "status": "completed", "input": { "command": "true" }, "content": [] } },
+      "target": "true",
+      "opens": { "output": { "command": "true", "text": "" } }
+    },
+    {
+      "name": "a command still running opens to nothing yet",
+      "step": { "type": "tool", "id": "call_3", "name": "shell", "state": { "status": "running", "input": { "command": "npm run build" } } },
+      "target": "npm run build",
+      "opens": "nothing"
+    },
+    {
+      "name": "an edit opens to its changes",
+      "step": { "type": "tool", "id": "call_4", "name": "edit", "state": { "status": "completed", "input": { "filePath": "/Users/sam/web/src/signup/Form.tsx" }, "content": [{ "type": "text", "text": "Edited." }], "metadata": { "files": [{ "file": "/Users/sam/web/src/signup/Form.tsx", "patch": "--- a\n+++ b\n@@ -1,2 +1,3 @@\n-reset();\n+await post();\n+reset();\n same\n", "additions": 2, "deletions": 1, "status": "modified" }] } } },
+      "target": "signup/Form.tsx",
+      "opens": { "changes": [{ "file": "/Users/sam/web/src/signup/Form.tsx", "added": 2, "removed": 1 }] }
+    },
+    {
+      "name": "a patch across files opens to each",
+      "step": { "type": "tool", "id": "call_5", "name": "apply_patch", "state": { "status": "completed", "input": {}, "metadata": { "files": [
+        { "file": "/p/a.ts", "patch": "@@ -1 +1 @@\n-a\n+b\n", "additions": 1, "deletions": 1, "status": "modified" },
+        { "file": "/p/new.ts", "patch": "@@ -0,0 +1 @@\n+hello\n", "additions": 1, "deletions": 0, "status": "added" }
+      ] } } },
+      "target": null,
+      "opens": { "changes": [{ "file": "/p/a.ts", "added": 1, "removed": 1 }, { "file": "/p/new.ts", "added": 1, "removed": 0 }] }
+    },
+    {
+      "name": "a file written opens to it as added",
+      "step": { "type": "tool", "id": "call_6", "name": "write", "state": { "status": "completed", "input": { "filePath": "/p/notes.md" }, "metadata": { "files": [{ "file": "/p/notes.md", "patch": "@@ -0,0 +1,2 @@\n+# Notes\n+Soon.\n", "additions": 2, "deletions": 0, "status": "added" }] } } },
+      "target": "p/notes.md",
+      "opens": { "changes": [{ "file": "/p/notes.md", "added": 2, "removed": 0 }] }
+    },
+    {
+      "name": "a search opens to what it found",
+      "step": { "type": "tool", "id": "call_7", "name": "grep", "state": { "status": "completed", "input": { "pattern": "reset\\(" }, "content": [{ "type": "text", "text": "Found 2 matches\nForm.tsx:\n  Line 48: reset();" }] } },
+      "target": "reset\\(",
+      "opens": { "output": { "command": null, "text": "Found 2 matches\nForm.tsx:\n  Line 48: reset();" } }
+    },
+    {
+      "name": "a search that found nothing opens to nothing",
+      "step": { "type": "tool", "id": "call_8", "name": "glob", "state": { "status": "completed", "input": { "pattern": "**/*.rb" }, "content": [] } },
+      "target": "**/*.rb",
+      "opens": "nothing"
+    },
+    {
+      "name": "a web search opens to its results",
+      "step": { "type": "tool", "id": "call_9", "name": "websearch", "state": { "status": "completed", "input": { "query": "ioredis sliding window" }, "content": [{ "type": "text", "text": "1. Rate limiting with Redis" }] } },
+      "target": "ioredis sliding window",
+      "opens": { "output": { "command": null, "text": "1. Rate limiting with Redis" } }
+    },
+    {
+      "name": "a file read opens to nothing more",
+      "step": { "type": "tool", "id": "call_10", "name": "read", "state": { "status": "completed", "input": { "filePath": "/Users/sam/api/src/middleware/auth.ts" }, "content": [{ "type": "text", "text": "export function auth() {}" }] } },
+      "target": "middleware/auth.ts",
+      "opens": "nothing"
+    },
+    {
+      "name": "another tool opens to nothing, named on its row",
+      "step": { "type": "tool", "id": "call_11", "name": "todowrite", "state": { "status": "completed", "input": {} } },
+      "target": null,
+      "opens": "nothing"
+    }
+  ]
+}

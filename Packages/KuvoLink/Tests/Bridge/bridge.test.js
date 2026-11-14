@@ -1629,6 +1629,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "projects.folders": ["POST", "kuvo/sessions/ses_none/folders"],
     "providers.models": ["GET", "kuvo/providers/models"],
     queue: ["GET", "kuvo/sessions/ses_none/queue"],
+    // (Every message waiting, as clients show it: the queue's `items`.)
+    "queue.items": ["GET", "kuvo/sessions/ses_none/queue"],
     // (queue/add taking a message once by its id, sent again.)
     "queue.once": ["POST", "kuvo/sessions/ses_none/queue/add"],
     "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"],
@@ -1645,10 +1647,12 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sandbox.reviews.whole": ["GET", "kuvo/sandbox/asks"],
     search: ["GET", "kuvo/search?q=none"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"],
+    "sessions.asks": ["GET", "kuvo/sessions/ses_none/asks"],
     // (Chats marked in their sessions' metadata: kuvo/info names the folder they're in.)
     "sessions.chat": ["GET", "kuvo/info"],
     "sessions.glance": ["POST", "kuvo/sessions/glance"],
     "sessions.list": ["POST", "kuvo/sessions/list"],
+    "sessions.mentions": ["GET", "kuvo/sessions/ses_none/mentions?for=files"],
     "sessions.models": ["POST", "kuvo/sessions/models"],
     "sessions.move": ["POST", "kuvo/sessions/ses_none/move"],
     "sessions.start": ["POST", "kuvo/sessions"],

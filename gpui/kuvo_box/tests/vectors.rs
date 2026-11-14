@@ -186,10 +186,13 @@ fn a_held_box_is_asked_only_what_keeps_work_going() {
         "kuvo/vault/asks",
         "kuvo/work/asks/w1",
         "kuvo/sessions/ses_1/decisions",
+        "kuvo/sessions/ses_1/asks",
+        "kuvo/sessions/ses_1/asks/events",
+        "kuvo/sessions/ses_1/asks/per_1",
     ] {
         assert!(gate::is_allowed(allowed), "{allowed}");
     }
-    for held in ["kuvo/sessions/list", "kuvo/sessions/ses_1/typed", "kuvo/asksx", "kuvo/work-queue", "kuvo/sessions/ses_1/decisions/x", "kuvo/box/proofs"] {
+    for held in ["kuvo/sessions/list", "kuvo/sessions/ses_1/typed", "kuvo/asksx", "kuvo/work-queue", "kuvo/sessions/ses_1/decisions/x", "kuvo/box/proofs", "kuvo/sessions/ses_1/asks/per_1/more", "kuvo/sessions/ses_1/queue"] {
         assert!(!gate::is_allowed(held), "{held}");
     }
 }
@@ -280,5 +283,57 @@ fn a_models_readiness_is_drawn_as_its_box_words_it() {
         // A plain message on it is kept, saying why in the box's words, as the box would (typed/decide.ts).
         let kept = kuvo_box::typed::plain_answer("fix it", false, state.refusal.as_deref());
         assert_eq!(kept.and_then(|answer| answer.error), state.refusal.clone(), "{about}");
+    }
+}
+
+/// A value of `shape` as the box's route shapes write them (`Vectors/routes/shapes/answers.json`):
+/// every field there, optional ones too, and the first of what may be one of several.
+fn sample(shape: &Value) -> Value {
+    use serde_json::json;
+    match shape {
+        Value::String(kind) => match kind.as_str() {
+            "string" => json!("words"),
+            "number" => json!(1),
+            "bool" => json!(true),
+            _ => Value::Null,
+        },
+        Value::Object(shape) => {
+            if let Some(literal) = shape.get("literal") {
+                literal.clone()
+            } else if let Some(list) = shape.get("list") {
+                json!([sample(list)])
+            } else if let Some(one_of) = shape.get("oneOf").and_then(Value::as_array) {
+                one_of.iter().find(|each| each.as_str() != Some("null")).map(sample).unwrap_or(Value::Null)
+            } else if let Some(fields) = shape.get("object").and_then(Value::as_object) {
+                Value::Object(fields.iter().map(|(name, field)| (name.trim_end_matches('?').to_owned(), sample(field))).collect())
+            } else {
+                Value::Null
+            }
+        }
+        _ => Value::Null,
+    }
+}
+
+/// Every kind of ask the box words reads as that kind; one missing any field doesn't keep the rest
+/// from showing.
+#[test]
+fn every_ask_the_box_words_is_read_and_one_amiss_spoils_none_of_the_rest() {
+    use kuvo_box::asks::{Ask, Asks};
+    let answers = vectors("routes/shapes/answers.json");
+    let route = answers["routes"].as_array().unwrap().iter().find(|route| route["route"] == "GET kuvo/sessions/:id/asks").expect("the asks route's shape");
+    let kinds = route["answers"]["200"]["object"]["asks"]["list"]["oneOf"].as_array().expect("each kind of ask");
+    let samples: Vec<Value> = kinds.iter().map(sample).collect();
+    assert_eq!(samples.len(), 3, "permission, question, other");
+    let asks: Asks = serde_json::from_value(serde_json::json!({ "asks": samples })).unwrap();
+    assert!(matches!(asks.asks.as_slice(), [Ask::Permission(_), Ask::Question(_), Ask::Other { .. }]), "{asks:?}");
+    for (n, kind) in samples.iter().enumerate() {
+        for field in kind.as_object().unwrap().keys().filter(|field| *field != "kind") {
+            let mut amiss = samples.clone();
+            amiss[n].as_object_mut().unwrap().remove(field);
+            let asks: Asks = serde_json::from_value(serde_json::json!({ "asks": amiss })).unwrap();
+            assert_eq!(asks.asks.len(), 3);
+            let read = asks.asks.iter().filter(|ask| **ask != Ask::Unknown).count();
+            assert!(read >= 2, "without {field}, one ask spoiled the others: {asks:?}");
+        }
     }
 }

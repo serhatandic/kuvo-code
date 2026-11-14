@@ -5,6 +5,7 @@
 //! nothing.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, div,
@@ -15,6 +16,7 @@ use kuvo_box::{Conversation, Parts};
 use kuvo_ui::{
     ActiveTheme, Icon, IconName, IconSize, StyledType, TypeSize,
     markdown::Markdown,
+    output::{DiffView, OutputWell, parse_patch},
     small::{Chip, ChipTone, spinner},
     theme::{radius, space},
 };
@@ -100,15 +102,31 @@ fn shows(step: &Step) -> bool {
 /// The widest a conversation's column gets: it stays readable in a wide window.
 pub const COLUMN: f32 = 720.;
 
-/// A thinking block: its step's id, and which of the step's blocks it is.
-pub type Block = (String, usize);
+/// What's opened in a conversation, each by its step's id and which of the step's blocks it is:
+/// a thinking block, a tool step showing what it printed or changed, or that output (or one of its
+/// files' changes) shown whole rather than folded.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Fold {
+    Thinking(String, usize),
+    Step(String, usize),
+    Whole(String, usize, usize),
+}
 
-/// Draws row `ix`. `expanded`: the thinking blocks opened; `toggle` opens or closes one.
+impl Fold {
+    /// The step it's in, whose row is drawn again as it changes.
+    pub fn step(&self) -> &str {
+        match self {
+            Fold::Thinking(step, _) | Fold::Step(step, _) | Fold::Whole(step, _, _) => step,
+        }
+    }
+}
+
+/// Draws row `ix`. `open`: what's opened; `toggle` opens or closes one.
 pub fn render(
     ix: usize,
     entry: &Entry,
-    expanded: &HashSet<Block>,
-    toggle: impl Fn(Block, &mut App) + Clone + 'static,
+    open: &HashSet<Fold>,
+    toggle: impl Fn(Fold, &mut App) + Clone + 'static,
     earlier: AnyElement,
     cx: &App,
 ) -> AnyElement {
@@ -116,7 +134,7 @@ pub fn render(
         Entry::Earlier => earlier,
         Entry::Message(message) => match message.as_ref() {
             Message::User(user) => user_message(ix, &user.parts(), cx),
-            Message::Assistant(step) => agent_step(step, expanded, toggle, cx),
+            Message::Assistant(step) => agent_step(step, open, toggle, cx),
             Message::System(note) => quiet_line(note.text.lines().next().unwrap_or("").to_owned(), cx),
             Message::Shell(run) => shell_run(run, cx),
             _ => div().into_any_element(),
@@ -197,8 +215,9 @@ fn user_message(ix: usize, parts: &Parts, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn agent_step(step: &Step, expanded: &HashSet<Block>, toggle: impl Fn(Block, &mut App) + Clone + 'static, cx: &App) -> AnyElement {
+fn agent_step(step: &Step, open: &HashSet<Fold>, toggle: impl Fn(Fold, &mut App) + Clone + 'static, cx: &App) -> AnyElement {
     let c = &cx.theme().colors;
+    let chevron = |opened: bool| Icon::new(if opened { IconName::ChevronDown } else { IconName::ChevronRight }).size(IconSize::Nav).color(c.text_faint);
     let mut blocks: Vec<AnyElement> = Vec::new();
     for (n, content) in step.content.iter().enumerate() {
         let key = format!("{}:{n}", step.id);
@@ -207,23 +226,22 @@ fn agent_step(step: &Step, expanded: &HashSet<Block>, toggle: impl Fn(Block, &mu
                 blocks.push(div().child(Markdown::new(SharedString::from(key), text)).into_any_element());
             }
             Content::Reasoning { text, done } => {
-                let block: Block = (step.id.clone(), n);
-                let open = expanded.contains(&block);
+                let fold = Fold::Thinking(step.id.clone(), n);
+                let opened = open.contains(&fold);
                 let toggle = toggle.clone();
-                let id = block.clone();
                 let label = if *done { "Thought" } else { "Thinking" };
                 let row = step_row(SharedString::from(format!("think-{key}")), IconName::Sparkle, label.into(), None, !*done, false, cx)
                     .cursor_pointer()
                     .hover(|s| s.opacity(0.8))
-                    .on_click(move |_, _, cx| toggle(id.clone(), cx))
-                    .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(IconSize::Nav).color(c.text_faint));
+                    .on_click(move |_, _, cx| toggle(fold.clone(), cx))
+                    .child(chevron(opened));
                 blocks.push(
                     div()
                         .flex()
                         .flex_col()
                         .gap(space::S1)
                         .child(row)
-                        .when(open && !text.trim().is_empty(), |d| {
+                        .when(opened && !text.trim().is_empty(), |d| {
                             d.child(
                                 div()
                                     .ml(px(7.))
@@ -243,9 +261,27 @@ fn agent_step(step: &Step, expanded: &HashSet<Block>, toggle: impl Fn(Block, &mu
                 let busy = matches!(status, "running" | "streaming" | "pending");
                 let failed = status == "failed" || status == "error";
                 let (icon, label, target) = tool_label(name, state, busy);
-                blocks.push(step_row(SharedString::from(format!("tool-{key}")), icon, label, target, busy, failed, cx).into_any_element());
-                if failed && let Some(error) = state.get("error").and_then(Value::as_str) {
-                    blocks.push(div().ml(px(22.)).text_ui(TypeSize::Caption).text_color(c.danger).child(first_line(error)).into_any_element());
+                let shown = details(name, state);
+                let fold = Fold::Step(step.id.clone(), n);
+                let opened = shown.is_some() && open.contains(&fold);
+                let mut row = step_row(SharedString::from(format!("tool-{key}")), icon, label, target, busy, failed, cx);
+                // One with something to show opens to it.
+                if let Some(shown) = &shown {
+                    let toggle = toggle.clone();
+                    let fold = fold.clone();
+                    row = row
+                        .cursor_pointer()
+                        .hover(|s| s.opacity(0.8))
+                        .on_click(move |_, _, cx| toggle(fold.clone(), cx))
+                        .children(shown.counts().map(|(added, removed)| counts(added, removed, cx)))
+                        .child(chevron(opened));
+                }
+                blocks.push(row.into_any_element());
+                if failed && let Some(error) = tool_error(state) {
+                    blocks.push(div().ml(px(22.)).text_ui(TypeSize::Caption).text_color(c.danger).child(first_line(&error)).into_any_element());
+                }
+                if let (true, Some(shown)) = (opened, shown) {
+                    blocks.push(div().ml(px(22.)).child(details_view(&key, step, n, shown, open, toggle.clone())).into_any_element());
                 }
             }
             _ => {}
@@ -255,6 +291,134 @@ fn agent_step(step: &Step, expanded: &HashSet<Block>, toggle: impl Fn(Block, &mu
         blocks.push(callout(error_words(error), cx));
     }
     div().flex().flex_col().gap(space::S2).children(blocks).into_any_element()
+}
+
+/// "+12 −3", beside a step that changed files.
+fn counts(added: usize, removed: usize, cx: &App) -> AnyElement {
+    let c = &cx.theme().colors;
+    div()
+        .flex()
+        .flex_none()
+        .gap(space::S1)
+        .text_ui(TypeSize::Caption)
+        .child(div().text_color(c.diff_added).child(format!("+{added}")))
+        .child(div().text_color(c.diff_removed).child(format!("−{removed}")))
+        .into_any_element()
+}
+
+/// What a tool step shows when it's opened.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Details {
+    /// What it printed or found: a command's output (with the command), a search's results.
+    Output { command: Option<String>, text: String },
+    /// The files it changed, each as a diff.
+    Changes(Vec<Changed>),
+}
+
+/// One file a step changed, as the engine says it (`metadata.files`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Changed {
+    pub file: String,
+    /// Added or deleted (a modified file says nothing).
+    pub status: Option<String>,
+    pub added: usize,
+    pub removed: usize,
+    /// Its unified patch, read into lines only once it's shown.
+    pub patch: Rc<str>,
+}
+
+impl Details {
+    /// Lines added and removed, for a step that changed files.
+    pub fn counts(&self) -> Option<(usize, usize)> {
+        match self {
+            Details::Changes(files) => Some(files.iter().fold((0, 0), |(a, r), file| (a + file.added, r + file.removed))),
+            Details::Output { .. } => None,
+        }
+    }
+}
+
+/// What a step printed, as the engine keeps it: its text blocks (`state.content`), one after another.
+fn printed(state: &Value) -> String {
+    let blocks = state.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
+    let texts: Vec<&str> = blocks.iter().filter(|block| block.get("type").and_then(Value::as_str) == Some("text")).filter_map(|block| block.get("text").and_then(Value::as_str)).collect();
+    texts.join("\n")
+}
+
+/// Why a step failed, as the engine says it.
+fn tool_error(state: &Value) -> Option<String> {
+    let error = state.get("error")?;
+    error.as_str().map(str::to_owned).or_else(|| error.get("message").and_then(Value::as_str).map(str::to_owned))
+}
+
+/// What a tool step shows when it's opened (none: it has nothing to show, and doesn't open): the
+/// files it changed, as diffs; a command's output; a search's results. As the Mac's step rows show
+/// them; a file read, or a step that's still running, shows nothing more.
+pub fn details(name: &str, state: &Value) -> Option<Details> {
+    let status = state.get("status").and_then(Value::as_str).unwrap_or("");
+    if matches!(status, "running" | "streaming" | "pending") {
+        return None;
+    }
+    let files = state.pointer("/metadata/files").and_then(Value::as_array).cloned().unwrap_or_default();
+    let changed: Vec<Changed> = files
+        .iter()
+        .filter_map(|file| {
+            let patch = file.get("patch").and_then(Value::as_str)?;
+            Some(Changed {
+                file: file.get("file").and_then(Value::as_str).unwrap_or("").to_owned(),
+                status: file.get("status").and_then(Value::as_str).filter(|status| *status != "modified").map(str::to_owned),
+                added: file.get("additions").and_then(Value::as_u64).unwrap_or(0) as usize,
+                removed: file.get("deletions").and_then(Value::as_u64).unwrap_or(0) as usize,
+                patch: patch.into(),
+            })
+        })
+        .filter(|file| file.patch.lines().any(|line| line.starts_with("@@")))
+        .collect();
+    if !changed.is_empty() {
+        return Some(Details::Changes(changed));
+    }
+    let text = printed(state);
+    let command = state.pointer("/input/command").and_then(Value::as_str).map(|command| command.trim().to_owned());
+    match name {
+        // A command shows what it printed, or that it printed nothing.
+        "shell" if status == "completed" || !text.trim().is_empty() => Some(Details::Output { command, text }),
+        "grep" | "glob" | "list" | "ls" | "websearch" if !text.trim().is_empty() => Some(Details::Output { command: None, text }),
+        _ => None,
+    }
+}
+
+/// An opened step's output or changes, each folded until it's shown whole.
+fn details_view(key: &str, step: &Step, n: usize, shown: Details, open: &HashSet<Fold>, toggle: impl Fn(Fold, &mut App) + Clone + 'static) -> AnyElement {
+    let whole = |part: usize| Fold::Whole(step.id.clone(), n, part);
+    match shown {
+        Details::Output { command, text } => {
+            let fold = whole(0);
+            let mut well = OutputWell::new(SharedString::from(format!("output-{key}")), text).whole(open.contains(&fold)).on_toggle(move |_, cx| toggle(fold.clone(), cx));
+            if let Some(command) = command {
+                well = well.command(command);
+            }
+            well.into_any_element()
+        }
+        Details::Changes(files) => {
+            // The step names one file already; several get a title each, and so does one that was
+            // added or deleted, which only its title says.
+            let titled = files.len() > 1 || files.iter().any(|file| file.status.is_some());
+            let views = files.into_iter().enumerate().map(|(part, file)| {
+                let fold = whole(part);
+                let toggle = toggle.clone();
+                let mut view = DiffView::new(SharedString::from(format!("diff-{key}-{part}")), Rc::new(parse_patch(&file.patch))).whole(open.contains(&fold)).on_toggle(move |_, cx| toggle(fold.clone(), cx));
+                if titled {
+                    let title = match file.status.as_deref() {
+                        Some("added") => format!("{} (new)", short_path(&file.file)),
+                        Some("deleted") => format!("{} (deleted)", short_path(&file.file)),
+                        _ => short_path(&file.file),
+                    };
+                    view = view.title(title).counts(file.added, file.removed);
+                }
+                view.into_any_element()
+            });
+            div().flex().flex_col().gap(space::S2).children(views).into_any_element()
+        }
+    }
 }
 
 /// A tool step or thinking, as one quiet line: its icon (or a spinner while it runs), what it did,
@@ -268,8 +432,10 @@ fn step_row(id: SharedString, icon: IconName, label: SharedString, target: Optio
     } else {
         Icon::new(icon).size(IconSize::Nav).color(c.text_faint).into_any_element()
     };
+    let selector = id.to_string();
     div()
         .id(id)
+        .debug_selector(move || selector)
         .flex()
         .items_center()
         .gap(space::S1_5)
@@ -428,5 +594,48 @@ mod tests {
         assert_eq!((label.as_ref(), target.as_deref()), ("Read", Some("signup/Form.tsx")));
         let (_, label, target) = tool_label("shell", &json!({ "status": "running", "input": { "command": "npm test\nnpm run lint" } }), true);
         assert_eq!((label.as_ref(), target.as_deref()), ("Running", Some("npm test …")));
+    }
+
+    /// Every client's sample steps (`Packages/KuvoLink/Vectors/tool-steps.json`, PROTOCOL.md's "Tool
+    /// steps"): each one's target, and what it opens to.
+    #[test]
+    fn every_sample_step_shows_its_target_and_opens_to_what_the_vectors_say() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/Vectors/tool-steps.json");
+        let vectors: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for case in vectors["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let Content::Tool { name: tool, state, .. } = serde_json::from_value(case["step"].clone()).unwrap() else { panic!("{name}: not a tool step") };
+            let busy = matches!(state["status"].as_str(), Some("running" | "streaming" | "pending"));
+            let (_, _, target) = tool_label(&tool, &state, busy);
+            assert_eq!(target.as_deref(), case["target"].as_str(), "{name}: its target");
+            let opened = details(&tool, &state);
+            match &case["opens"] {
+                Value::String(nothing) if nothing == "nothing" => assert_eq!(opened, None, "{name}"),
+                opens if opens.get("output").is_some() => {
+                    let output = &opens["output"];
+                    assert_eq!(opened, Some(Details::Output { command: output["command"].as_str().map(str::to_owned), text: output["text"].as_str().unwrap().to_owned() }), "{name}");
+                }
+                opens => {
+                    let Some(Details::Changes(files)) = opened else { panic!("{name}: no changes") };
+                    let shown: Vec<Value> = files.iter().map(|file| json!({ "file": file.file, "added": file.added, "removed": file.removed })).collect();
+                    assert_eq!(Value::Array(shown), opens["changes"], "{name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_step_opens_to_its_changes_its_output_or_its_results_and_a_read_to_nothing() {
+        let patch = "--- a\n+++ b\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n";
+        let edit = json!({ "status": "completed", "metadata": { "files": [{ "file": "/p/a.ts", "patch": patch, "additions": 1, "deletions": 1, "status": "modified" }] } });
+        let shown = details("edit", &edit).expect("its changes");
+        assert_eq!(shown.counts(), Some((1, 1)));
+        let shell = json!({ "status": "completed", "input": { "command": "npm test" }, "content": [{ "type": "text", "text": "ok" }, { "type": "text", "text": "done" }] });
+        assert_eq!(details("shell", &shell), Some(Details::Output { command: Some("npm test".into()), text: "ok\ndone".into() }));
+        // A command that printed nothing still says so; a search that found nothing doesn't open.
+        assert!(details("shell", &json!({ "status": "completed", "input": { "command": "true" } })).is_some());
+        assert!(details("grep", &json!({ "status": "completed", "content": [] })).is_none());
+        assert!(details("read", &json!({ "status": "completed", "content": [{ "type": "text", "text": "file" }] })).is_none());
+        assert!(details("shell", &json!({ "status": "running", "input": { "command": "npm test" } })).is_none());
     }
 }

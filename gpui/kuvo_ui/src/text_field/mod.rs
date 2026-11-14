@@ -232,6 +232,11 @@ impl TextField {
         }
     }
 
+    /// Changes what it says while it's empty.
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>) {
+        self.placeholder = text.into();
+    }
+
     pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
         self.placeholder = text.into();
         self
@@ -367,8 +372,7 @@ impl TextField {
     fn previous_word(&self, offset: usize) -> usize {
         self.content
             .split_word_bound_indices()
-            .filter(|(ix, word)| *ix < offset && word.chars().any(char::is_alphanumeric))
-            .last()
+            .rfind(|(ix, word)| *ix < offset && word.chars().any(char::is_alphanumeric))
             .map(|(ix, _)| ix)
             .unwrap_or(0)
     }

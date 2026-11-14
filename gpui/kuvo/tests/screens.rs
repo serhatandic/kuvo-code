@@ -297,7 +297,7 @@ fn a_run_streams_into_the_conversation_and_its_end_shows(cx: &mut TestAppContext
             _ => None,
         })
     });
-    assert!(streamed.unwrap().ends_with("Running the sign-up tests now. All 14 pass."));
+    assert!(streamed.unwrap().ends_with("checking the lint now. All 14 pass."));
     assert!(view.read_with(cx, |view, _| view.list().is_following()));
     let step = bounds(cx, "entry-msg_s5").unwrap();
     let working = bounds(cx, "entry-working").unwrap();
@@ -471,13 +471,304 @@ fn the_landing_project_doesnt_move_while_you_write(cx: &mut TestAppContext) {
     assert_eq!(workspace.read_with(cx, |workspace, _| workspace.landing_place()), StartIn::Project("/Users/sam/Projects/api".into()));
 }
 
+/// Opens `session`, which waits on you, as you'd come to it: the keyboard goes where it's drawn.
+fn open_asking(workspace: &Entity<Workspace>, session: &str, cx: &mut VisualTestContext) -> (Entity<kuvo::conversation::ConversationView>, Entity<kuvo::ask_card::AskCard>) {
+    workspace.update_in(cx, |workspace, window, cx| workspace.open_read_at_once(session, window, cx));
+    cx.run_until_parked();
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let card = view.read_with(cx, |view, _| view.asks().clone());
+    (view, card)
+}
+
+/// Whether the keyboard is on the card (or its line).
+fn card_has_keys(card: &Entity<kuvo::ask_card::AskCard>, cx: &mut VisualTestContext) -> bool {
+    let focus = card.read_with(cx, |card, cx| card.focus_handle_any(cx));
+    cx.update(|window, cx| focus.contains_focused(window, cx))
+}
+
+/// The moment a card waits, still, before its keys answer.
+fn quiet(cx: &mut VisualTestContext) {
+    cx.executor().advance_clock(kuvo::ask_card::QUIET);
+    cx.run_until_parked();
+}
+
 #[gpui::test]
-fn a_session_waiting_on_you_says_so_above_the_composer(cx: &mut TestAppContext) {
-    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
-    open_session(&workspace, "ses_limits", cx);
-    assert!(bounds(cx, "asking").is_some());
-    open_session(&workspace, "ses_recipes", cx);
-    assert!(bounds(cx, "asking").is_none());
+fn a_permission_shows_in_the_composers_place_and_is_answered_through_the_box(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission()]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
+
+    // The card, as the box words it, in the composer's place; the keyboard's on it.
+    assert!(bounds(cx, "ask-card").is_some());
+    assert!(bounds(cx, "composer-card").is_none());
+    assert!(bounds(cx, "ask-choice-always").is_some());
+    assert!(card_has_keys(&card, cx));
+
+    // Escape opens the line for your words; what's written goes as Don't Allow, with them.
+    quiet(cx);
+    cx.simulate_keystrokes("escape");
+    assert!(bounds(cx, "ask-instead").is_some());
+    // A number typed there is words, never an answer (pressed as keys, as the keyboard sends them).
+    cx.simulate_keystrokes("1 2 space");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").is_empty(), "nothing was answered");
+    cx.simulate_input("Use the redis package we already have");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "instead", "message": "12 Use the redis package we already have" })));
+
+    // Answered: the composer is back, with the keyboard.
+    assert!(bounds(cx, "ask-card").is_none());
+    assert!(bounds(cx, "composer-card").is_some());
+    let field = workspace.read_with(cx, |workspace, cx| workspace.conversation().unwrap().read(cx).composer().read(cx).field().clone());
+    assert!(cx.update(|window, cx| field.focus_handle(cx).is_focused(window)));
+}
+
+#[gpui::test]
+fn a_cards_keys_wait_until_its_been_still_a_moment_and_a_held_key_answers_nothing(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    second["command"] = json!("git push origin rate-limits");
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
+    assert_eq!(card.read_with(cx, |card, _| card.place().words()), Some("1 of 2".into()));
+
+    // As it comes, a key (a Return meant for the composer) answers nothing.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").is_empty());
+
+    // Typing (a "run step 2" meant for elsewhere) keeps it waiting: the 2 after "step" answers
+    // nothing, however long the card has been there.
+    quiet(cx);
+    cx.simulate_keystrokes("s t e p");
+    cx.executor().advance_clock(kuvo::ask_card::QUIET / 2);
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").is_empty());
+
+    // Still a moment: 2, Always Allow, for the first; the second shows next.
+    quiet(cx);
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "always" })));
+    assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
+
+    // The 2 held down, repeating, doesn't answer the one that took its place: neither at once, nor
+    // after a moment.
+    let held = gpui::KeyDownEvent { keystroke: gpui::Keystroke::parse("2").unwrap(), is_held: true, prefer_character_input: false };
+    cx.simulate_event(held.clone());
+    quiet(cx);
+    cx.simulate_event(held);
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "once" })));
+}
+
+#[gpui::test]
+fn a_key_meant_for_an_ask_answered_elsewhere_doesnt_answer_the_one_that_takes_its_place(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second.clone()]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (view, card) = open_asking(&workspace, "ses_limits", cx);
+    quiet(cx);
+
+    // The first is answered on the phone: the second takes its place, and a Return meant for the
+    // first, pressed as it does, answers nothing.
+    let asks: kuvo_box::asks::Asks = serde_json::from_value(json!({ "asks": [second] })).unwrap();
+    view.update(cx, |view, cx| view.take_asks(asks, cx));
+    assert!(!card.read_with(cx, |card, cx| card.takes_keys(cx)));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
+    // Once it's been there a moment, Return answers it.
+    quiet(cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "once" })));
+}
+
+/// Answers the first of two asks, the box's word that it's gone coming `before` its own reply or
+/// after it; either way the second shows, and takes no key until it's been there a moment.
+fn answer_racing_the_boxs_word(before: bool, cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second.clone()]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (view, card) = open_asking(&workspace, "ses_limits", cx);
+    quiet(cx);
+    let gone: kuvo_box::asks::Asks = serde_json::from_value(json!({ "asks": [second] })).unwrap();
+    // Allow Once, picked: its reply is on its way until the window runs on.
+    card.update_in(cx, |card, window, cx| card.choose(0, window, cx));
+    if before {
+        view.update(cx, |view, cx| view.take_asks(gone.clone(), cx));
+    }
+    cx.run_until_parked();
+    if !before {
+        view.update(cx, |view, cx| view.take_asks(gone, cx));
+        cx.run_until_parked();
+    }
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").len(), 1);
+    assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
+    assert!(card.read_with(cx, |card, _| card.failed().is_none()), "nothing said of the next one");
+    // Its keys wait (whichever came first), then the first key pressed answers it: none is
+    // swallowed by what became of the one before.
+    assert!(!card.read_with(cx, |card, cx| card.takes_keys(cx)));
+    quiet(cx);
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").len(), 1);
+}
+
+#[gpui::test]
+fn your_answer_whose_reply_comes_after_the_boxs_word_leaves_the_next_ask_as_it_should_be(cx: &mut TestAppContext) {
+    answer_racing_the_boxs_word(true, cx);
+}
+
+#[gpui::test]
+fn your_answer_whose_reply_comes_before_the_boxs_word_leaves_the_next_ask_as_it_should_be(cx: &mut TestAppContext) {
+    answer_racing_the_boxs_word(false, cx);
+}
+
+#[gpui::test]
+fn after_an_answer_in_your_own_words_the_next_card_has_the_keyboard(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
+    quiet(cx);
+    // Tell It What to Do Instead, in your words.
+    cx.simulate_keystrokes("escape");
+    cx.simulate_input("Not yet");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
+    // The next card has the keyboard: its 1, once it's been still, answers it.
+    assert!(card_has_keys(&card, cx));
+    quiet(cx);
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "once" })));
+}
+
+#[gpui::test]
+fn after_a_question_answered_in_your_own_words_the_next_one_takes_its_keys(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut two = kuvo::stand_in::cms_question();
+    let mut next = two["questions"][0].clone();
+    next["key"] = json!("q1");
+    next["question"] = json!("And the drafts?");
+    two["questions"].as_array_mut().unwrap().push(next);
+    stand_in.set_asks("ses_cms", vec![two]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_cms", cx);
+    quiet(cx);
+    // The first in your words, in its line.
+    let line = bounds(cx, "ask-words").unwrap();
+    cx.simulate_click(line.center(), Modifiers::default());
+    cx.simulate_keystrokes("k e e p enter");
+    cx.run_until_parked();
+    // The second: the card has the keyboard (not the line), so its 2 is a pick, once it's still.
+    assert!(card_has_keys(&card, cx));
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty(), "too soon: nothing, and nothing typed in its line");
+    quiet(cx);
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answers": { "q0": "keep", "q1": "keep" } })));
+}
+
+#[gpui::test]
+fn an_ask_takes_the_keyboard_from_wherever_it_was_in_the_conversation(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (view, card) = open_asking(&workspace, "ses_limits", cx);
+    // The keyboard nowhere (a click on the conversation itself), then an ask comes.
+    cx.update(|window, cx| window.blur(cx));
+    let asks: kuvo_box::asks::Asks = serde_json::from_value(json!({ "asks": [kuvo::stand_in::redis_permission()] })).unwrap();
+    view.update(cx, |view, cx| view.take_asks(asks, cx));
+    cx.run_until_parked();
+    assert!(card_has_keys(&card, cx));
+}
+
+#[gpui::test]
+fn the_agents_question_takes_a_choice_or_your_own_words(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_cms", cx);
+    assert!(bounds(cx, "ask-option-0").is_some());
+    assert!(bounds(cx, "ask-words").is_some(), "it takes words of your own too");
+    assert!(card_has_keys(&card, cx));
+
+    // A Return as it comes, meant for the composer, answers nothing; the keyboard is on the card,
+    // not its line, so what you were typing doesn't land there.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty());
+
+    // In its line: Return with nothing written sends nothing (nor puts it away); typing there makes
+    // Return wait a moment too, then it answers in your words.
+    let line = bounds(cx, "ask-words").unwrap();
+    cx.simulate_click(line.center(), Modifiers::default());
+    quiet(cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty());
+    // (It needs an answer: Skip is off.)
+    let skip = bounds(cx, "ask-skip").expect("Skip");
+    cx.simulate_click(skip.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty(), "Skip is off for one that needs an answer");
+    // Written in its line, Return answers in your words.
+    let words = bounds(cx, "ask-words").unwrap();
+    cx.simulate_click(words.center(), Modifiers::default());
+    cx.simulate_keystrokes("k e e p enter");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answers": { "q0": "keep" } })));
+    assert!(bounds(cx, "ask-card").is_none());
+}
+
+#[gpui::test]
+fn a_click_on_a_choice_answers_the_question(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    open_asking(&workspace, "ses_cms", cx);
+    let redirect = bounds(cx, "ask-option-0").unwrap();
+    cx.simulate_click(redirect.center(), Modifiers::default());
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answers": { "q0": "redirect" } })));
+    assert!(bounds(cx, "ask-card").is_none());
+}
+
+#[gpui::test]
+fn an_ask_this_app_cant_answer_leaves_the_composer_usable_under_it(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.set_asks("ses_limits", vec![json!({ "id": "sq_1", "kind": "other", "session": "ses_limits", "title": "Allow running this outside the sandbox?", "message": "brew install redis", "dismiss": false })]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
+    assert!(bounds(cx, "ask-card").is_some());
+    assert!(bounds(cx, "composer-card").is_some(), "the composer stays, under it");
+    assert!(bounds(cx, "ask-dismiss").is_none(), "the box's own ask isn't put away from here");
+    assert!(!card_has_keys(&card, cx));
 }
 
 #[gpui::test]
@@ -544,7 +835,7 @@ fn a_model_named_by_another_id_is_the_one_offered(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_session_its_box_leaves_out_is_refused_nothing(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
-    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "claude-code", "id": "opus" }, "name": "Opus", "runs": false, "missing": "signIn", "account": { "id": "claude-code", "name": "Claude Code" } }));
+    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "claude-code", "id": "opus" }, "name": "Opus", "runs": false, "missing": "signIn", "account": { "id": "claude-code", "name": "Claude Code" }, "refusal": "Opus needs a sign-in to Claude Code: sign in, or choose another model.", "action": { "do": "signIn", "label": "Sign In", "help": "Sign in to Claude Code" } }));
     let (workspace, cx) = open(cx, stand_in.clone());
     let composer = open_session(&workspace, "ses_limits", cx);
     // Signed in elsewhere; its list still being read, so the box leaves the session out for now.
@@ -627,6 +918,272 @@ fn what_is_said_of_the_model_before_a_pick_comes_back_is_left(cx: &mut TestAppCo
     cx.run_until_parked();
     composer.update(cx, |composer, cx| composer.take_state(opus, cx));
     assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Claude Opus 5.5".to_owned()));
+}
+
+#[gpui::test]
+fn a_tool_step_opens_to_what_it_printed_and_long_output_unfolds(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in);
+    open_session(&workspace, "ses_signup", cx);
+
+    // Closed, a step is one line; a click opens it to the command and what it printed, folded.
+    assert!(bounds(cx, "output-msg_s5:1").is_none());
+    let row = bounds(cx, "tool-msg_s5:1").expect("the test run's row");
+    cx.simulate_click(row.center(), Modifiers::default());
+    cx.run_until_parked();
+    let folded = bounds(cx, "output-msg_s5:1").expect("its output, under it");
+
+    // Show all: the rest of it, then folded again.
+    let fold = bounds(cx, "output-msg_s5:1-fold").expect("the fold's button");
+    cx.simulate_click(fold.center(), Modifiers::default());
+    cx.run_until_parked();
+    let whole = bounds(cx, "output-msg_s5:1").expect("its output, whole");
+    assert!(whole.size.height > folded.size.height + px(100.), "{whole:?} vs {folded:?}");
+    let fold = bounds(cx, "output-msg_s5:1-fold").expect("Show less");
+    cx.simulate_click(fold.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(bounds(cx, "output-msg_s5:1").map(|b| b.size.height), Some(folded.size.height));
+
+    // An edit opens to its changes; a step still running has nothing to open.
+    let edit = bounds(cx, "tool-msg_s5:0").expect("the edit's row");
+    cx.simulate_click(edit.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(bounds(cx, "diff-msg_s5:0-0").is_some());
+    let running = bounds(cx, "tool-msg_s5:3").expect("the lint running");
+    cx.simulate_click(running.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(bounds(cx, "output-msg_s5:3").is_none());
+}
+
+fn type_in(field: &Entity<kuvo_ui::TextField>, text: &str, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+    cx.simulate_input(text);
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn the_sidebar_search_finds_sessions_by_name_and_by_what_was_said(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    let search = workspace.read_with(cx, |workspace, _| workspace.search().clone());
+
+    // By name as you type: only the sessions whose titles have it.
+    type_in(&search, "fo", cx);
+    assert!(bounds(cx, "session-found-ses_signup").is_some(), "“Fix the sign-up form…”");
+    assert!(bounds(cx, "session-project-ses_dark").is_none(), "the rest of the list goes");
+    assert!(bounds(cx, "header-In Conversations").is_none(), "two characters: names only");
+
+    // From three, what was said too: the box searches conversations, less those found by name.
+    search.update(cx, |field, cx| field.set_text("", cx));
+    type_in(&search, "redis", cx);
+    assert!(bounds(cx, "found-ses_limits").is_some(), "the rate limits conversation mentions Redis");
+    assert!(bounds(cx, "session-found-ses_signup").is_none());
+    assert!(bounds(cx, "header-In Conversations").is_some());
+
+    // Nothing anywhere: said so.
+    search.update(cx, |field, cx| field.set_text("", cx));
+    type_in(&search, "zzzz", cx);
+    assert!(workspace.read_with(cx, |workspace, cx| kuvo::sidebar::lines(workspace, cx).contains(&kuvo::sidebar::Line::Quiet("Nothing matches.".into()))));
+
+    // Escape clears it, and the list is back.
+    cx.simulate_keystrokes("escape");
+    assert!(bounds(cx, "session-project-ses_dark").is_some());
+}
+
+#[gpui::test]
+fn the_keyboard_walks_the_sidebar_and_opens_what_its_on(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    workspace.update_in(cx, |workspace, window, cx| workspace.focus_search(window, cx));
+
+    // ↓ from the search steps into the list: the first project, then its first session.
+    cx.simulate_keystrokes("down");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), Some(format!("project:{}", "/Users/sam/Projects/website")));
+    cx.simulate_keystrokes("down down");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), Some("session-project:ses_dark".into()));
+
+    // Return opens it, and the keyboard goes to its composer.
+    cx.simulate_keystrokes("enter");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_dark".into()));
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), None);
+
+    // Return on a project folds it; ↑ from the first row goes back to the search.
+    workspace.update_in(cx, |workspace, window, cx| workspace.focus_search(window, cx));
+    cx.simulate_keystrokes("down enter");
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_collapsed("/Users/sam/Projects/website")));
+    assert!(bounds(cx, "session-project-ses_signup").is_none());
+    cx.simulate_keystrokes("up");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), None);
+    let search = workspace.read_with(cx, |workspace, _| workspace.search().clone());
+    assert!(cx.update(|window, cx| search.focus_handle(cx).is_focused(window)));
+
+    // Return in an empty search opens nothing (nor folds anything).
+    cx.simulate_keystrokes("enter");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_dark".into()));
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_collapsed("/Users/sam/Projects/website")));
+
+    // From the search, Return opens the first that's found.
+    cx.simulate_input("lifetimes");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_lifetimes".into()));
+}
+
+#[gpui::test]
+fn files_attached_go_with_the_message_and_show_on_it(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_recipes", cx);
+    let folder = std::env::temp_dir().join(format!("kuvo-attach-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let (note, picture) = (folder.join("shopping list.txt"), folder.join("fridge.png"));
+    std::fs::write(&note, "rice").unwrap();
+    std::fs::write(&picture, b"not really a png").unwrap();
+
+    // Attached (as the picker or a drop hands them), each shows; a folder isn't a file to send.
+    composer.update(cx, |composer, cx| composer.attach([note.clone(), picture.clone(), folder.clone(), note.clone()], cx));
+    cx.run_until_parked();
+    assert_eq!(composer.read_with(cx, |composer, _| composer.attached().to_vec()), [note.clone(), picture.clone()]);
+    assert!(bounds(cx, "attachments").is_some());
+
+    // × takes one away; Send takes them with what's written, as files on this Mac's box.
+    composer.update(cx, |composer, cx| composer.detach(1, cx));
+    cx.simulate_input("What can I make with these?");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let sent = stand_in.seen_at("POST", "kuvo/sessions/ses_recipes/send");
+    let body = sent.last().and_then(|seen| seen.body.clone()).expect("sent");
+    let uri = format!("file://{}", note.to_string_lossy().replace(' ', "%20"));
+    assert_eq!(body["files"], json!([{ "uri": uri, "name": "shopping list.txt" }]));
+    assert!(composer.read_with(cx, |composer, _| composer.attached().is_empty()));
+
+    // Files alone can be sent.
+    composer.update(cx, |composer, cx| composer.attach([picture.clone()], cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_recipes/send").len(), 2);
+    std::fs::remove_dir_all(&folder).ok();
+}
+
+#[gpui::test]
+fn at_and_ampersand_offer_what_the_box_suggests_and_an_agent_picked_is_named(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_recipes", cx);
+
+    // "@": the files the box finds for what's typed; Return puts the one picked in.
+    cx.simulate_input("Check @sche");
+    let offers = composer.read_with(cx, |composer, cx| composer.shown_offers(cx));
+    assert_eq!((offers.0.iter().map(|offer| offer.name.as_str()).collect::<Vec<_>>(), offers.1), (vec!["schema.ts"], true));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(typed(&composer, cx).0, "Check @web/src/signup/schema.ts ");
+
+    // "&": bots and sessions; the one picked is named when it's sent.
+    cx.simulate_input("with &mi");
+    assert_eq!(composer.read_with(cx, |composer, cx| composer.shown_offers(cx).0.first().map(|offer| offer.name.clone())), Some("Mira".into()));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(typed(&composer, cx).0, "Check @web/src/signup/schema.ts with &Mira ");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let sent = stand_in.seen_at("POST", "kuvo/sessions/ses_recipes/send").last().and_then(|seen| seen.body.clone()).expect("sent");
+    assert_eq!(sent["named"], json!(["ses_mira"]));
+    assert_eq!(sent["words"], json!("Check @web/src/signup/schema.ts with &Mira "));
+}
+
+#[gpui::test]
+fn the_queue_shows_what_waits_and_a_message_taken_back_comes_to_the_composer(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_signup", cx);
+    assert!(bounds(cx, "queue").is_some());
+    assert!(bounds(cx, "queued-msg_q1").is_some() && bounds(cx, "queued-msg_q2").is_some());
+
+    // Edit: taken out of the queue, its words back in the composer to change.
+    let edit = bounds(cx, "edit-msg_q1").expect("yours can be edited");
+    assert!(bounds(cx, "edit-msg_q2").is_none(), "another agent's letter can't");
+    cx.simulate_click(edit.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("DELETE", "kuvo/sessions/ses_signup/queue/msg_q1").len(), 1);
+    assert_eq!(typed(&composer, cx).0, "Then do the same for the password field: keep it, and say what's wrong with it");
+    assert!(bounds(cx, "queued-msg_q1").is_none());
+
+    // Remove: gone, and the queue with it once nothing waits.
+    let remove = bounds(cx, "remove-msg_q2").expect("Remove");
+    cx.simulate_click(remove.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("DELETE", "kuvo/sessions/ses_signup/queue/msg_q2").len(), 1);
+    assert!(bounds(cx, "queue").is_none());
+}
+
+/// Runs the window until `done`, waiting (on no clock) for what the follows' own threads hand on:
+/// each time it's still not done, until the conversation is told something again.
+fn until(cx: &mut VisualTestContext, view: &Entity<kuvo::conversation::ConversationView>, mut done: impl FnMut(&mut VisualTestContext) -> bool) {
+    use futures::StreamExt as _;
+    cx.executor().allow_parking();
+    let mut told = cx.notifications(view);
+    // A guard, not a clock the test leans on: a follow that never hands anything on would leave it
+    // waiting for good, so the run is ended, saying so, rather than hanging unseen.
+    let (finished, guard) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if guard.recv_timeout(std::time::Duration::from_secs(60)) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+            eprintln!("the live follow handed nothing on for a minute: the test stops here");
+            std::process::exit(101);
+        }
+    });
+    let _finished = finished;
+    loop {
+        cx.run_until_parked();
+        if done(cx) {
+            return;
+        }
+        cx.foreground_executor().block_test(told.next());
+    }
+}
+
+#[gpui::test]
+fn followed_live_an_ask_takes_the_keyboard_as_it_comes_and_the_queue_shows_as_it_changes(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        Theme::init(Appearance::Light, cx);
+        kuvo::bind_keys(cx);
+    });
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    let client = BoxClient::new(stand_in.clone());
+    // Live: the box is followed on threads of their own, as the app follows it.
+    let window = cx.add_window(move |window, cx| Workspace::new(client, true, window, cx));
+    let workspace = window.root(cx).unwrap();
+    let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
+    cx.simulate_resize(size(px(1200.), px(800.)));
+    workspace.update_in(cx, |workspace, window, cx| workspace.open_session("ses_limits", window, cx));
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let card = view.read_with(cx, |view, _| view.asks().clone());
+    let field = view.read_with(cx, |view, cx| view.composer().read(cx).field().clone());
+    until(cx, &view, |cx| view.read_with(cx, |view, _| !view.entries().is_empty()));
+    assert!(cx.update(|window, cx| field.focus_handle(cx).is_focused(window)), "nothing asked: the composer has the keyboard");
+
+    // Asks come while you're in the composer: the card takes its place, and the keyboard.
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
+    until(cx, &view, |cx| card.read_with(cx, |card, _| card.is_asking()));
+    assert!(card_has_keys(&card, cx));
+
+    // Answered: whether the box's word that it's gone comes before the answer's own reply or
+    // after it, the next one shows, and takes no key until it's been there a moment.
+    quiet(cx);
+    cx.simulate_keystrokes("1");
+    until(cx, &view, |cx| card.read_with(cx, |card, _| card.place().shown() == Some("per_push")) && stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").len() == 1);
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
+    quiet(cx);
+    cx.simulate_keystrokes("3");
+    until(cx, &view, |cx| !card.read_with(cx, |card, _| card.is_asking()));
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "reject" })));
+    assert!(cx.update(|window, cx| field.focus_handle(cx).is_focused(window)), "the keyboard is back in the composer");
+
+    // The queue, as the box changes it.
+    stand_in.set_queue("ses_limits", vec![json!({ "id": "msg_q9", "words": "Then add a test for the header", "files": [], "keyword": null, "from": null, "on": "engine", "delivery": "queue", "held": false })]);
+    until(cx, &view, |cx| view.read_with(cx, |view, _| view.queued().len() == 1));
+    assert!(bounds(cx, "queued-msg_q9").is_some());
 }
 
 /// What's offered is read in the conversation's folder, and in the project a new one starts in, so a

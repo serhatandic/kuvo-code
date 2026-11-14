@@ -2583,6 +2583,7 @@ name = "kuvo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "gpui",
  "gpui_platform",
  "kuvo",
