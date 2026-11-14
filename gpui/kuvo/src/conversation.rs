@@ -6,12 +6,12 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    SharedString, Styled, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use kuvo_box::follow::{ConversationUpdate, Follow, Timing};
 use kuvo_box::messages::{self, Page};
-use kuvo_box::{BoxClient, Conversation, Where};
+use kuvo_box::{BoxClient, Conversation};
 use kuvo_ui::{
     ActiveTheme, Button, ButtonSize, IconSize, StyledType, TypeSize,
     chat_list::{ChatListState, chat_list},
@@ -19,7 +19,7 @@ use kuvo_ui::{
     theme::space,
 };
 
-use crate::composer::{Composer, ComposerEvent, Target};
+use crate::composer::Composer;
 use crate::entries::{self, COLUMN, Entry};
 
 /// What's wrong, said over the conversation.
@@ -42,13 +42,11 @@ pub struct ConversationView {
     asked_earlier: Rc<RefCell<Option<String>>>,
     /// Thinking blocks opened.
     expanded: HashSet<String>,
+    /// Its composer, which the workspace keeps (with its draft) while you're elsewhere.
     composer: Entity<Composer>,
     follow: Option<Rc<Follow<ConversationUpdate>>>,
     _follow_task: Option<Task<()>>,
-    _composer: Subscription,
 }
-
-impl EventEmitter<ComposerEvent> for ConversationView {}
 
 impl Focusable for ConversationView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -59,9 +57,7 @@ impl Focusable for ConversationView {
 impl ConversationView {
     /// A conversation of `client`'s box. `live`: follow it there (the app); else it shows what
     /// it's handed ([`ConversationView::take`]), for tests and shots.
-    pub fn new(client: BoxClient, session: String, place: Where, live: bool, cx: &mut Context<Self>) -> ConversationView {
-        let composer = cx.new(|cx| Composer::new(client.clone(), Target::Session { id: session.clone(), place }, live, cx));
-        let subscription = cx.subscribe(&composer, |_, _, event: &ComposerEvent, cx| cx.emit(event.clone()));
+    pub fn new(client: BoxClient, session: String, composer: Entity<Composer>, live: bool, cx: &mut Context<Self>) -> ConversationView {
         let mut view = ConversationView {
             session: session.clone(),
             conversation: None,
@@ -74,7 +70,6 @@ impl ConversationView {
             composer,
             follow: None,
             _follow_task: None,
-            _composer: subscription,
         };
         if live {
             let follow = Rc::new(client.follow_conversation(&session, Timing::default()));
@@ -107,6 +102,11 @@ impl ConversationView {
         &self.list
     }
 
+    /// Why the page before couldn't be read, while that's said.
+    pub fn earlier_failed(&self) -> Option<&str> {
+        self.earlier_failed.as_deref()
+    }
+
     pub fn problem(&self) -> Option<&Problem> {
         self.problem.as_ref()
     }
@@ -116,7 +116,11 @@ impl ConversationView {
         match update {
             ConversationUpdate::Conversation(conversation) => {
                 self.problem = None;
-                self.earlier_failed = None;
+                // A page that couldn't be read is said until Try Again, or until there's another
+                // way back (another page came), so a run streaming meanwhile doesn't ask again.
+                if self.conversation.as_ref().map(|shown| &shown.earlier) != Some(&conversation.earlier) {
+                    self.earlier_failed = None;
+                }
                 let (running, place) = (conversation.running, conversation.place);
                 self.show(entries::entries(&conversation));
                 self.conversation = Some(conversation);
@@ -132,8 +136,6 @@ impl ConversationView {
             }
             ConversationUpdate::EarlierFailed(error) => {
                 self.earlier_failed = Some(error.to_string());
-                // Asked again when tried again.
-                self.asked_earlier.borrow_mut().take();
                 if let Some(ix) = self.entries.iter().position(|entry| matches!(entry, Entry::Earlier)) {
                     self.list.changed(ix);
                 }
@@ -155,7 +157,9 @@ impl ConversationView {
         let state = self.list.list_state().clone();
         let is_earlier = |entries: &[Entry]| matches!(entries.first(), Some(Entry::Earlier));
         let is_working = |entries: &[Entry]| matches!(entries.last(), Some(Entry::Working));
-        let messages = |entries: &[Entry]| -> Vec<Entry> { entries.iter().filter(|entry| !matches!(entry, Entry::Earlier | Entry::Working)).cloned().collect() };
+        fn messages(entries: &[Entry]) -> Vec<&Entry> {
+            entries.iter().filter(|entry| !matches!(entry, Entry::Earlier | Entry::Working)).collect()
+        }
         let (old_messages, new_messages) = (messages(&old), messages(new));
         // Where what was shown sits among what's shown now.
         let ahead = match old_messages.first() {
@@ -221,11 +225,23 @@ impl ConversationView {
         cx.notify();
     }
 
+    /// Asks for the page that couldn't be read, again.
+    fn try_earlier_again(&mut self, cx: &mut Context<Self>) {
+        self.earlier_failed = None;
+        if let Some(follow) = &self.follow {
+            follow.load_earlier();
+        }
+        if let Some(ix) = self.entries.iter().position(|entry| matches!(entry, Entry::Earlier)) {
+            self.list.changed(ix);
+        }
+        cx.notify();
+    }
+
     /// The top row, while there are earlier messages: they're read as it comes into view.
-    fn earlier_row(&self, cx: &App) -> AnyElement {
+    fn earlier_row(&self, cx_view: &Entity<ConversationView>, cx: &App) -> AnyElement {
         let c = &cx.theme().colors;
         if let Some(error) = &self.earlier_failed {
-            let follow = self.follow.clone();
+            let view = cx_view.clone();
             return div()
                 .flex()
                 .flex_col()
@@ -234,10 +250,8 @@ impl ConversationView {
                 .text_ui(TypeSize::Caption)
                 .text_color(c.text_muted)
                 .child(SharedString::from(format!("Earlier messages couldn’t be read. {error}")))
-                .child(Button::new("earlier-again", "Try Again").size(ButtonSize::Small).on_click(move |_, _, _| {
-                    if let Some(follow) = &follow {
-                        follow.load_earlier();
-                    }
+                .child(Button::new("earlier-again", "Try Again").size(ButtonSize::Small).on_click(move |_, _, cx| {
+                    view.update(cx, |this, cx| this.try_earlier_again(cx));
                 }))
                 .into_any_element();
         }
@@ -291,7 +305,7 @@ impl Render for ConversationView {
             chat_list(&self.list, move |ix, _window, cx| {
                 let this = view.read(cx);
                 let Some(entry) = this.entries.get(ix).cloned() else { return div().into_any_element() };
-                let earlier = if matches!(entry, Entry::Earlier) { this.earlier_row(cx) } else { div().into_any_element() };
+                let earlier = if matches!(entry, Entry::Earlier) { this.earlier_row(&view, cx) } else { div().into_any_element() };
                 let expanded = this.expanded.clone();
                 let toggle_view = view.clone();
                 let toggle = move |key: String, cx: &mut App| toggle_view.update(cx, |this, cx| this.toggle(key, cx));

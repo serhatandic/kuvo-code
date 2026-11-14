@@ -19,8 +19,10 @@ We follow Capy's landing (the user's reference), not Zed's:
   "No project", a chat) and the box it's on with its dot.
 - It starts in the newest project until another is picked; a project's "+" in the sidebar opens it
   in that project.
-- The model and effort chips offer what the box offers, starting on the model the box says new
-  ones start on (`kuvo/models/offered`'s `starting`).
+- The model and effort chips offer what the box offers (the coding agents' too), starting on the
+  model the box says new ones start on (`kuvo/models/offered`'s `starting`); where it says nothing
+  runs, the chip says "Choose a Model" and Send waits.
 - Send starts the session on the box (`POST kuvo/sessions`, `sessions.start.empty`, in the project
   or as a chat, on the model picked), then sends what was written to it through the typed send, so
-  "/" works from the first message as the box decides, and opens it.
+  "/" works from the first message as the box decides, and opens it. Where the message couldn't
+  go after the session was made, the session opens with it back in its composer, saying why.

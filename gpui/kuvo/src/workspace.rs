@@ -1,7 +1,7 @@
 //! The window: the sidebar on the window's background, and beside it a card holding either the
 //! conversation open or, for a new one, the landing view.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton,
@@ -40,7 +40,7 @@ pub enum BoxState {
 
 enum Open {
     Landing,
-    Conversation { view: Entity<ConversationView>, session: String, _subscription: Subscription },
+    Conversation { view: Entity<ConversationView>, session: String },
 }
 
 pub struct Workspace {
@@ -53,6 +53,9 @@ pub struct Workspace {
     lists: Lists,
     open: Open,
     landing: Entity<Composer>,
+    /// Each conversation's composer, kept with its draft (and any send on its way) while you're
+    /// in another.
+    composers: HashMap<String, (Entity<Composer>, Subscription)>,
     /// The project the landing view starts in, as picked (none: the newest project's).
     landing_place: Option<StartIn>,
     collapsed: HashSet<String>,
@@ -67,7 +70,7 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(client: BoxClient, live: bool, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
-        let landing = cx.new(|cx| Composer::new(client.clone(), Target::New(StartIn::Chat), live, cx));
+        let landing = cx.new(|cx| Composer::new(client.clone(), Target::New(StartIn::Chat), None, live, cx));
         let subscription = cx.subscribe_in(&landing, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
         let mut workspace = Workspace {
             client: client.clone(),
@@ -78,6 +81,7 @@ impl Workspace {
             lists: Lists::Loading,
             open: Open::Landing,
             landing,
+            composers: HashMap::new(),
             landing_place: None,
             collapsed: HashSet::new(),
             showing_all: HashSet::new(),
@@ -268,11 +272,24 @@ impl Workspace {
             return;
         }
         let (client, live) = (self.client.clone(), self.live);
-        let view = cx.new(|cx| ConversationView::new(client, session.to_owned(), Where::Engine, live, cx));
-        let subscription = cx.subscribe_in(&view, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
+        let composer = self.composer_for(session, window, cx);
+        let view = cx.new(|cx| ConversationView::new(client, session.to_owned(), composer, live, cx));
         window.focus(&view.focus_handle(cx), cx);
-        self.open = Open::Conversation { view, session: session.to_owned(), _subscription: subscription };
+        self.open = Open::Conversation { view, session: session.to_owned() };
         cx.notify();
+    }
+
+    /// `session`'s composer: the one it had, with its draft, or a new one.
+    fn composer_for(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
+        if let Some((composer, _)) = self.composers.get(session) {
+            return composer.clone();
+        }
+        let directory = self.listing.facts(session).map(|facts| facts.directory.clone());
+        let (client, live) = (self.client.clone(), self.live);
+        let composer = cx.new(|cx| Composer::new(client, Target::Session { id: session.to_owned(), place: Where::Engine }, directory, live, cx));
+        let subscription = cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
+        self.composers.insert(session.to_owned(), (composer.clone(), subscription));
+        composer
     }
 
     /// The landing view, for a new conversation in `project` (or the one picked last).
@@ -309,7 +326,14 @@ impl Workspace {
 
     fn composer_event(&mut self, event: &ComposerEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            ComposerEvent::Started { session } => self.open_session(session, window, cx),
+            ComposerEvent::Started { session, unsent } => {
+                // What couldn't be sent goes with the conversation, in its own composer, with why.
+                if let Some((text, error)) = unsent {
+                    let composer = self.composer_for(session, window, cx);
+                    composer.update(cx, |composer, cx| composer.restore(text, error, cx));
+                }
+                self.open_session(session, window, cx);
+            }
         }
     }
 

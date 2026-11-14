@@ -8,7 +8,7 @@
 //! a clock or another thread.
 
 use gpui::{Bounds, Entity, Focusable as _, Modifiers, Pixels, TestAppContext, VisualTestContext, px, size};
-use kuvo::composer::Composer;
+use kuvo::composer::{Composer, Models};
 use kuvo::conversation::read_now;
 use kuvo::entries::Entry;
 use kuvo::stand_in::{Replies, StandIn};
@@ -160,9 +160,16 @@ fn slash_offers_what_the_box_offers_as_its_typed(cx: &mut TestAppContext) {
 
     cx.simulate_input("/");
     let names = |composer: &Entity<Composer>, cx: &mut VisualTestContext| composer.read_with(cx, |composer, cx| composer.slash_offers(cx).into_iter().map(|offer| offer.name).collect::<Vec<_>>());
-    assert_eq!(names(&composer, cx).len(), 8, "as many as fit");
+    // Everything it offers (the list scrolls past eight), keywords first, as the box orders them.
+    assert_eq!(names(&composer, cx), ["plan", "goal", "loop", "review", "autopilot", "btw", "handoff", "compact", "init", "test"]);
     cx.simulate_input("t");
-    assert_eq!(names(&composer, cx), ["test"]);
+    // Names starting with it first, then those with it inside, as KuvoClient matches them.
+    assert_eq!(names(&composer, cx), ["test", "autopilot", "btw", "compact", "init"]);
+    cx.simulate_keystrokes("backspace v i e w");
+    assert_eq!(names(&composer, cx), ["review"]);
+    cx.simulate_keystrokes("backspace backspace backspace backspace");
+    cx.simulate_input("t");
+    assert_eq!(names(&composer, cx)[0], "test");
     cx.simulate_keystrokes("backspace r");
     assert_eq!(names(&composer, cx), ["review"]);
     // Tab (or Return) takes it, ready for what follows; the list goes.
@@ -187,7 +194,7 @@ fn a_model_that_cant_run_keeps_the_message_saying_why(cx: &mut TestAppContext) {
     let (workspace, cx) = open(cx, stand_in.clone());
     let composer = open_session(&workspace, "ses_limits", cx);
     let state: ModelState = serde_json::from_value(json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": false, "missing": "signIn", "account": { "id": "anthropic", "name": "Anthropic" } })).unwrap();
-    composer.update(cx, |composer, cx| composer.take_models(Some(state), Vec::new(), None, Vec::new(), cx));
+    composer.update(cx, |composer, cx| composer.take_models(Models { state: Some(state), ..Models::default() }, cx));
 
     cx.simulate_input("Use Redis");
     cx.simulate_keystrokes("enter");
@@ -309,3 +316,89 @@ fn a_conversation_that_isnt_there_says_so(cx: &mut TestAppContext) {
     assert_eq!(problem, Some(kuvo::conversation::Problem::Gone("This conversation isn’t on Stand-in Mac any more.".into())));
 }
 
+
+#[gpui::test]
+fn a_step_this_app_cant_take_yet_keeps_what_was_written(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    let composer = open_session(&workspace, "ses_limits", cx);
+    // The box says "!ls" is the client's to run: this one can't yet, so it stays, saying so.
+    cx.simulate_input("!ls -la");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(typed(&composer, cx).0, "!ls -la");
+    let note = composer.read_with(cx, |composer, _| composer.note().cloned()).expect("a note");
+    assert!(note.warning && note.text.contains("isn’t in this app yet"));
+}
+
+#[gpui::test]
+fn a_draft_stays_with_its_conversation(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    let limits = open_session(&workspace, "ses_limits", cx);
+    cx.simulate_input("Half a thought");
+    open_session(&workspace, "ses_recipes", cx);
+    let again = open_session(&workspace, "ses_limits", cx);
+    assert_eq!(again, limits);
+    assert_eq!(typed(&again, cx).0, "Half a thought");
+}
+
+#[gpui::test]
+fn a_new_session_whose_message_didnt_go_opens_with_it_and_why(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    stand_in.fail_sends();
+    let field = workspace.read_with(cx, |workspace, cx| workspace.landing().read(cx).field().clone());
+    cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+    cx.simulate_input("Add a health check route");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let opened = workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)).expect("the new session opens");
+    assert!(opened.starts_with("ses_new"));
+    let composer = workspace.read_with(cx, |workspace, cx| workspace.conversation().unwrap().read(cx).composer().clone());
+    assert_eq!(typed(&composer, cx), ("Add a health check route".to_owned(), Some("The engine isn't answering. Try again in a moment.".to_owned())));
+}
+
+#[gpui::test]
+fn with_no_model_to_run_a_new_session_waits_for_one(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.nothing_runs();
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let landing = workspace.read_with(cx, |workspace, _| workspace.landing().clone());
+    assert!(landing.read_with(cx, |composer, _| composer.needs_model()));
+    let field = landing.read_with(cx, |composer, _| composer.field().clone());
+    cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+    cx.simulate_input("Anything");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions").is_empty(), "nothing started");
+    assert_eq!(typed(&landing, cx).0, "Anything");
+}
+
+#[gpui::test]
+fn a_conversations_model_menu_offers_its_own_sides_models(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    // An engine conversation: the coding agents' models (another side) aren't offered in place.
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let (offered, left_out, efforts) = composer.read_with(cx, |composer, _| {
+        let models = composer.models();
+        (models.offered.iter().map(|model| model.id.clone()).collect::<Vec<_>>(), models.left_out, models.efforts.clone())
+    });
+    assert_eq!(offered, ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6", "gemini-3-pro"]);
+    assert!(left_out);
+    assert_eq!(efforts, ["low", "medium", "high", "max"]);
+    // A new one may start on any, the agents' too.
+    let landing = workspace.read_with(cx, |workspace, _| workspace.landing().clone());
+    assert!(landing.read_with(cx, |composer, _| composer.models().offered.iter().any(|model| model.provider_id == "claude-code")));
+}
+
+#[gpui::test]
+fn a_page_that_couldnt_be_read_isnt_asked_again_as_words_stream(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    open_session(&workspace, "ses_lighthouse", cx);
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
+    view.update(cx, |view, cx| view.take(ConversationUpdate::EarlierFailed(kuvo_box::Error::Unreachable("The box didn’t answer.".into())), cx));
+    // Another read of the newest (words streaming): still said, not asked again.
+    let conversation = read_now(&client, "ses_lighthouse").unwrap();
+    view.update(cx, |view, cx| view.take(ConversationUpdate::Conversation(conversation), cx));
+    assert_eq!(view.read_with(cx, |view, _| view.earlier_failed().map(str::to_owned)), Some("The box didn’t answer.".to_owned()));
+}

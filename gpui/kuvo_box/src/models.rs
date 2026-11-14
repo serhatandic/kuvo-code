@@ -60,7 +60,7 @@ pub struct ModelState {
 impl ModelState {
     /// Whether the chip says "Choose a Model" and Send waits for one: none to run on, or gone.
     pub fn needs_choosing(&self) -> bool {
-        self.runs == Some(false) && matches!(self.missing.as_deref(), Some("model" | "gone"))
+        self.runs == Some(false) && matches!(self.missing.as_deref(), None | Some("model" | "gone"))
     }
 
     /// Why a message can't go on this model, as KuvoClient's `SessionModelState.refusal` says it
@@ -73,7 +73,7 @@ impl ModelState {
         let name = self.name.clone().or_else(|| self.model.as_ref().map(|model| model.id.clone())).unwrap_or_else(|| "This model".into());
         let account = self.account.as_ref().map(|account| account.name.clone()).or_else(|| self.model.as_ref().map(|model| model.provider_id.clone())).unwrap_or_else(|| "its account".into());
         Some(match self.missing.as_deref() {
-            Some("model") => "Choose a model to send it.".into(),
+            None | Some("model") => "Choose a model to send it.".into(),
             Some("signIn") => format!("{name} needs a sign-in: sign in to {account} in {accounts}, or choose another model."),
             Some("key") => match &self.plan {
                 Some(plan) => format!(
@@ -154,6 +154,36 @@ fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Re
     Option::<ModelRef>::deserialize(deserializer).map(Some)
 }
 
+/// A model as the engine or the coding agents' bridge lists it (`api/model`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedModel {
+    pub provider_id: String,
+    pub id: String,
+    /// Other ids it's known by (Claude Code's `default`).
+    pub aliases: Vec<String>,
+    /// Its efforts (variants).
+    pub efforts: Vec<String>,
+}
+
+impl ListedModel {
+    fn read(value: &Value) -> Option<ListedModel> {
+        let strings = |name: &str| -> Vec<String> {
+            value.get(name).and_then(Value::as_array).map(|list| list.iter().filter_map(|each| each.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+        };
+        Some(ListedModel {
+            provider_id: value.get("providerID")?.as_str()?.to_owned(),
+            id: value.get("id")?.as_str()?.to_owned(),
+            aliases: strings("aliases"),
+            efforts: value.get("variants").and_then(Value::as_array).map(|list| list.iter().filter_map(|each| each.get("id")?.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
+        })
+    }
+
+    /// Whether it's `model` (by its id or one it's known by).
+    pub fn is(&self, model: &ModelRef) -> bool {
+        self.provider_id == model.provider_id && (self.id == model.id || self.aliases.iter().any(|alias| *alias == model.id))
+    }
+}
+
 /// Where a new conversation goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartIn {
@@ -206,25 +236,24 @@ impl BoxClient {
         self.get(&path)
     }
 
-    /// The efforts `model` offers (its variants, "low", "high"…), as the engine (or the coding
-    /// agents' bridge) lists it for `directory`; none for a model that has none or isn't listed.
-    pub fn efforts(&self, place: Where, directory: Option<&str>, model: &ModelRef) -> Result<Vec<String>> {
+    /// The models `place` (the engine, or the coding agents' bridge) lists for `directory`, as it
+    /// lists them (`api/model`): which models a conversation there can be put on in place, and
+    /// their efforts.
+    pub fn listed_models(&self, place: Where, directory: Option<&str>) -> Result<Vec<ListedModel>> {
         let mut request = Request::get(format!("{}api/model", place.prefix()));
         if let Some(directory) = directory {
             request = request.header("x-opencode-directory", directory);
         }
         let listed: Value = self.value(&request)?;
         let models = listed.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
-        let found = models.iter().find(|each| {
-            let same = |name: &str, wanted: &str| each.get(name).and_then(Value::as_str) == Some(wanted);
-            same("providerID", &model.provider_id) && (same("id", &model.id) || each.get("aliases").and_then(Value::as_array).is_some_and(|aliases| aliases.iter().any(|alias| alias.as_str() == Some(model.id.as_str()))))
-        });
-        Ok(found
-            .and_then(|found| found.get("variants")?.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|variant| variant.get("id").and_then(Value::as_str).map(str::to_owned))
-            .collect())
+        Ok(models.iter().filter_map(ListedModel::read).collect())
+    }
+
+    /// The efforts `model` offers (its variants, "low", "high"…), as the engine (or the coding
+    /// agents' bridge) lists it for `directory`; none for a model that has none or isn't listed.
+    pub fn efforts(&self, place: Where, directory: Option<&str>, model: &ModelRef) -> Result<Vec<String>> {
+        let listed = self.listed_models(place, directory)?;
+        Ok(listed.into_iter().find(|listed| listed.is(model)).map(|listed| listed.efforts).unwrap_or_default())
     }
 
     /// Puts `session` on `model` (with its effort as `variant`), from its next step.
@@ -288,6 +317,10 @@ mod tests {
         assert_eq!(sign_in.refusal("Settings › Accounts").as_deref(), Some("Claude Opus 5.5 needs a sign-in: sign in to Anthropic in Settings › Accounts, or choose another model."));
         let key = state(json!({ "model": { "providerID": "openai", "id": "gpt-6" }, "runs": false, "missing": "key", "account": { "id": "openai", "name": "OpenAI" } }));
         assert_eq!(key.refusal("Settings › Accounts").as_deref(), Some("gpt-6 needs an OpenAI key: add one in Settings › Accounts, or choose another model."));
+        // Can't run, with nothing said of why: one's to be chosen, as KuvoClient's `SessionModelState` says.
+        let unsaid = state(json!({ "model": null, "runs": false }));
+        assert!(unsaid.needs_choosing());
+        assert_eq!(unsaid.refusal("x").as_deref(), Some("Choose a model to send it."));
         // Not said yet: nothing refused.
         assert_eq!(state(json!({ "model": null })).refusal("x"), None);
     }

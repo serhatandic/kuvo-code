@@ -18,7 +18,7 @@ use gpui::{App, KeyBinding, actions};
 
 pub use workspace::Workspace;
 
-actions!(kuvo, [NewSession, ToggleAppearance]);
+actions!(kuvo, [NewSession, ToggleAppearance, Quit]);
 
 /// Binds the app's keys, after the blocks' (so "/"'s list takes its keys ahead of the field's).
 pub fn bind_keys(cx: &mut App) {
@@ -27,5 +27,6 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-n", NewSession, Some("Workspace")),
         KeyBinding::new("cmd-shift-l", ToggleAppearance, Some("Workspace")),
+        KeyBinding::new("cmd-q", Quit, None),
     ]);
 }

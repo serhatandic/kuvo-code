@@ -70,12 +70,12 @@ fn sessions(workspace: &Workspace, _window: &mut Window, cx: &mut Context<Worksp
     let sidebar = listing.sidebar();
     let mut column = div().flex().flex_col().gap(space::S0_5);
     if sidebar.pinned.is_empty() && sidebar.projects.is_empty() && sidebar.chats.is_empty() {
-        return quiet(Some("No sessions yet. Start one with New Session."), false, cx);
+        return quiet(Some("No sessions yet."), false, cx);
     }
     if !sidebar.pinned.is_empty() {
         column = column.child(SectionHeader::new("pinned-header", "Pinned"));
         for id in &sidebar.pinned {
-            column = column.child(session_row(workspace, id, "pinned", IconName::Pin, cx));
+            column = column.child(session_row(workspace, id, "pinned", cx));
         }
     }
     if !sidebar.projects.is_empty() {
@@ -121,7 +121,7 @@ fn sessions(workspace: &Workspace, _window: &mut Window, cx: &mut Context<Worksp
         }
         let all = workspace.shows_all(&directory);
         let shown = if all { group.sessions.len() } else { group.sessions.len().min(SHOWN) };
-        let mut rows: Vec<AnyElement> = group.sessions[..shown].iter().map(|id| session_row(workspace, id, "project", IconName::Message, cx)).collect();
+        let mut rows: Vec<AnyElement> = group.sessions[..shown].iter().map(|id| session_row(workspace, id, "project", cx)).collect();
         if group.sessions.len() > SHOWN {
             let more = group.sessions.len() - SHOWN;
             let label = if all { "Show fewer".to_owned() } else { format!("Show {more} more") };
@@ -133,7 +133,7 @@ fn sessions(workspace: &Workspace, _window: &mut Window, cx: &mut Context<Worksp
     if !sidebar.chats.is_empty() {
         column = column.child(SectionHeader::new("chats-header", "Chats"));
         for id in &sidebar.chats {
-            column = column.child(session_row(workspace, id, "chat", IconName::Message, cx));
+            column = column.child(session_row(workspace, id, "chat", cx));
         }
     }
     column.into_any_element()
@@ -145,7 +145,7 @@ fn nested(rows: Vec<AnyElement>, cx: &App) -> AnyElement {
     div().ml(px(15.)).pl(space::S1).border_l_1().border_color(c.border).flex().flex_col().gap(space::S0_5).children(rows).into_any_element()
 }
 
-fn session_row(workspace: &Workspace, id: &str, section: &str, _icon: IconName, cx: &mut Context<Workspace>) -> AnyElement {
+fn session_row(workspace: &Workspace, id: &str, section: &str, cx: &mut Context<Workspace>) -> AnyElement {
     let c = cx.theme().colors.clone();
     let facts = workspace.listing().facts(id).cloned();
     let title = facts.as_ref().and_then(|facts| facts.title.clone()).filter(|title| !title.trim().is_empty()).unwrap_or_else(|| "New Session".into());

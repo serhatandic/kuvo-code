@@ -137,7 +137,7 @@ fn user_message(ix: usize, parts: &Parts, cx: &App) -> AnyElement {
         let said = if widget.is_empty() { "Answers a widget".to_owned() } else { format!("Answers “{widget}”") };
         above.push(div().text_ui(TypeSize::Caption).text_color(c.text_faint).child(said).into_any_element());
     }
-    let keyword = parts.keyword.clone().map(|keyword| Chip::new(("keyword", ix), keyword).tone(ChipTone::Accent));
+    let keyword = parts.keyword.clone().map(|keyword| Chip::new(("keyword", ix), keyword).icon(IconName::Sparkle).tone(ChipTone::Accent));
     let mut below: Vec<AnyElement> = Vec::new();
     for (n, path) in parts.paths.iter().enumerate() {
         below.push(Chip::new(("path", ix * 1000 + n), short_path(path)).icon(IconName::File).into_any_element());

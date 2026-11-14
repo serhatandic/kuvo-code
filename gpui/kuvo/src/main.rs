@@ -4,11 +4,11 @@
 use std::path::PathBuf;
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Focusable, IntoElement, ParentElement, Render, Styled, TitlebarOptions, Window,
+    App, AppContext as _, Bounds, Context, Focusable, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, TitlebarOptions, Window,
     WindowBounds, WindowOptions, div, point, px, size,
 };
 use kuvo::stand_in::{Replies, StandIn};
-use kuvo::{Workspace, bind_keys};
+use kuvo::{Quit, Workspace, bind_keys};
 use kuvo_box::BoxClient;
 use kuvo_ui::{ActiveTheme, Appearance, Assets, StyledType, Theme, TypeSize};
 
@@ -22,6 +22,15 @@ fn main() {
     };
     gpui_platform::application().with_assets(Assets).run(move |cx: &mut App| {
         bind_keys(cx);
+        // Its menu, and quitting: with ⌘Q, or as its window closes (it has only the one).
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.set_menus([Menu { name: "Kuvo".into(), items: vec![MenuItem::action("Quit Kuvo", Quit)], disabled: false }]);
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         let bounds = Bounds::centered(None, size(px(1240.), px(820.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

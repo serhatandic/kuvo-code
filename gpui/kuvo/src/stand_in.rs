@@ -61,6 +61,10 @@ struct State {
     events: HashMap<u64, Sender<String>>,
     next: u64,
     seen: Vec<Seen>,
+    /// Sends answered as an engine that's gone away answers them (`503`).
+    sends_fail: bool,
+    /// No model runs here: a new session starts on none.
+    nothing_runs: bool,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -113,6 +117,16 @@ impl StandIn {
             change(facts);
         }
         state.list_changed();
+    }
+
+    /// From now on, a message sent is answered as by an engine that isn't answering.
+    pub fn fail_sends(&self) {
+        self.state().sends_fail = true;
+    }
+
+    /// From now on, no model runs here (`kuvo/models/offered` says `starting: null`).
+    pub fn nothing_runs(&self) {
+        self.state().nothing_runs = true;
     }
 
     /// An engine event, to those following the engine's events.
@@ -341,8 +355,13 @@ fn models() -> Vec<(Value, Vec<&'static str>)> {
     ]
 }
 
+/// The coding agents' models, as their bridge lists them.
+fn agents_models() -> Vec<(Value, Vec<&'static str>)> {
+    vec![(json!({ "providerID": "claude-code", "id": "opus", "name": "Claude Code · Opus" }), vec!["low", "medium", "high"])]
+}
+
 fn model_name(model: &Value) -> Option<String> {
-    models().into_iter().find(|(each, _)| each["providerID"] == model["providerID"] && each["id"] == model["id"]).and_then(|(each, _)| each["name"].as_str().map(str::to_owned))
+    models().into_iter().chain(agents_models()).find(|(each, _)| each["providerID"] == model["providerID"] && each["id"] == model["id"]).and_then(|(each, _)| each["name"].as_str().map(str::to_owned))
 }
 
 /// The keywords and commands "/" offers.
@@ -409,8 +428,21 @@ impl StandIn {
                 answer(200, json!({ "sessions": told }))
             }
             ("GET", ["kuvo", "models", "offered"]) => {
-                let listed: Vec<Value> = models().into_iter().map(|(model, _)| model).collect();
+                if state.nothing_runs {
+                    return answer(200, json!({ "models": [], "known": { "engine": true, "agents": true }, "starting": null }));
+                }
+                let listed: Vec<Value> = models().into_iter().chain(agents_models()).map(|(model, _)| model).collect();
                 answer(200, json!({ "models": listed, "known": { "engine": true, "agents": true }, "starting": { "providerID": "anthropic", "id": "claude-opus-5-5", "variant": "high" } }))
+            }
+            ("GET", ["kuvo", "agents", "api", "model"]) => {
+                let listed: Vec<Value> = agents_models()
+                    .into_iter()
+                    .map(|(mut model, efforts)| {
+                        model["variants"] = json!(efforts.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>());
+                        model
+                    })
+                    .collect();
+                answer(200, json!({ "data": listed }))
             }
             ("GET", ["api", "model"]) => {
                 let listed: Vec<Value> = models()
@@ -464,6 +496,9 @@ impl StandIn {
                 let session = (*session).to_owned();
                 if !state.sessions.contains_key(&session) {
                     return answer(404, json!({ "message": "There's no such session." }));
+                }
+                if state.sends_fail {
+                    return answer(503, json!({ "message": "The engine isn't answering. Try again in a moment." }));
                 }
                 let body = request.body.clone().unwrap_or(Value::Null);
                 let words = body["words"].as_str().unwrap_or("").to_owned();
