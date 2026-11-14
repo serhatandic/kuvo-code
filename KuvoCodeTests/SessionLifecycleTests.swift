@@ -152,10 +152,6 @@ import Testing
         engine.on("GET", "/api/session/ses_new", json: ["data": made])
         engine.conversation("ses_new", [])
         let session = try await workspace.createSession(in: project, model: nil, agent: "build")
-        // (Made by the engine here; its messages go through this Mac's box.)
-        let box = SessionsBox()
-        try await box.start(engine, for: workspace)
-        defer { box.stop() }
         let model = try #require(workspace.model(for: session.id))
         model.submit("Say hi in three words.", files: [], for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/ses_new/prompt").isEmpty }
