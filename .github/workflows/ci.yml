@@ -17,12 +17,12 @@ concurrency:
   cancel-in-progress: ${{ github.workflow == 'CI' }}
 
 # Every job runs on GitHub's hosted runners, side by side. Xcode's runner images are named for the
-# Xcode version they ship, which has the Swift toolchain and the macOS SDK Kuvo Code builds
-# against. The app itself, signed and in its disk image, is built only by release.yml (a tag, or a
-# dry run from Actions › Release › Run workflow), not on every push.
+# Xcode version they ship, which has the Swift toolchain the shared packages build with. The
+# retired Swift Mac app (swift/MAC-APP-REFERENCE.md) isn't built or tested here; release.yml still
+# builds it, only for the box release machines update from, until the box makes that itself.
 jobs:
   checks:
-    name: generated files and What's New
+    name: generated files
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -52,10 +52,10 @@ jobs:
           ../scripts/build-agents.sh --check
           ../scripts/build-browser.sh --check
 
-      - name: Check What's New is what CHANGELOG.md says
-        run: |
-          python3 scripts/whats-new.py --check
-          python3 -m unittest discover -s scripts -p test_whats_new.py
+      # (scripts/whats-new.py writes the phone's What's New; the Mac app's whats-new.json is the
+      # retired app's, written only as release.yml builds it.)
+      - name: Test scripts/whats-new.py
+        run: python3 -m unittest discover -s scripts -p test_whats_new.py
 
   box:
     name: box and bridge (${{ matrix.system }})
@@ -140,10 +140,6 @@ jobs:
         working-directory: swift/OpenCodeKit
         run: swift test
 
-      - name: Test UsageKit
-        working-directory: swift/UsageKit
-        run: swift test
-
       - name: Test KuvoClient
         working-directory: swift/KuvoClient
         run: swift test
@@ -154,59 +150,3 @@ jobs:
 
       - name: Test scripts/heavy.sh, which takes turns for heavy jobs
         run: python3 -m unittest discover -s scripts -p test_heavy.py
-
-  app:
-    name: app
-    runs-on: xcode-27
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Toolchain
-        run: |
-          xcodebuild -version
-          swift --version
-
-      # The Xcode project's packages, as cloned and downloaded. Resolving checks them against
-      # Package.resolved below either way.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: build/SourcePackages
-          key: source-packages-${{ runner.os }}-${{ hashFiles('swift/KuvoCode.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          restore-keys: source-packages-${{ runner.os }}-
-
-      # Package.resolved is part of the build input: fail if building would
-      # change it rather than testing a different dependency graph. Generating
-      # the license file resolves the packages too.
-      - name: Resolve dependencies and check THIRD_PARTY_LICENSES.txt
-        run: |
-          ./scripts/third-party-licenses.sh
-          git diff --exit-code swift/KuvoCode.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
-          git diff --exit-code THIRD_PARTY_LICENSES.txt \
-            || { echo "Run scripts/third-party-licenses.sh and commit the result." >&2; exit 1; }
-
-      # The tests that run the bridge the app ships for real run it with this Bun.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.2
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('box/bun.lock') }}
-
-      - name: Install the box's packages
-        working-directory: box
-        run: bun install --frozen-lockfile
-
-      - name: Test the app
-        run: ./scripts/test-app.sh
-        env:
-          # (The job's own time limit is what counts here, not heavy.sh's for a run on a busy Mac.)
-          KUVO_HEAVY_LIMIT: "0"
