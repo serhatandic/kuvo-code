@@ -23573,7 +23573,7 @@ function readTimes(folder, now) {
     const kept = JSON.parse(textOf(path84.join(folder, EDITED_FILE)) ?? "");
     if (!isObject(kept))
       return {};
-    return Object.fromEntries(Object.entries(kept).filter(([, at]) => typeof at === "number" && now - at < KEPT2));
+    return Object.fromEntries(Object.entries(kept).filter(([, at]) => typeof at === "number" && now - at < KEPT2).map(([field, at]) => [field, Math.min(at, now)]));
   } catch {
     return {};
   }
@@ -25455,6 +25455,7 @@ var MOST_CHANGE = 32000;
 var NOT_THERE_TRIES = 3;
 var heldSoon = { send: () => {} };
 var fileOf5 = (bot) => path91.join(HELD3, `${bot}.json`);
+var newEditID = () => `bte_${crypto34.randomBytes(16).toString("base64url")}`;
 var secretOf = (link) => IS_MAC ? macLink.overlay?.secret : link?.secret;
 function sealWith(value, link) {
   const secret = secretOf(link);
@@ -25498,9 +25499,9 @@ function writeHeld(held, link) {
 function allHeld(link = readLink()) {
   return listOf(HELD3).map((name) => /^(bot_[A-Za-z0-9]{1,60})\.json$/.exec(name)?.[1]).filter((bot) => Boolean(bot)).map((bot) => readHeld(bot, link)).filter((held) => Boolean(held)).sort((a, b) => a.since - b.since);
 }
-function keeperOf(bot, on, link = readLink(), except) {
-  const peers = peersOf(link).filter((peer) => peer.key !== except);
+function keeperOf(bot, on, link = readLink(), except, { ownOnly = true } = {}) {
   const told = readPeerAgents();
+  const peers = peersOf(link).filter((peer) => peer.key !== except && !(ownOnly && isApart(peer.key, link, told)));
   const listing = peers.filter((peer) => told[peer.key]?.list?.some((agent) => agent.kind === "bot" && agent.id === bot)).sort((a, b) => (told[b.key]?.heard ?? told[b.key]?.at ?? 0) - (told[a.key]?.heard ?? told[a.key]?.at ?? 0))[0];
   if (listing)
     return listing;
@@ -25557,7 +25558,7 @@ function holdEdit(bot, given, on, { removed = false, now = Date.now() } = {}) {
   if (!BOT_ID2.test(bot))
     return no(404, "That bot isn’t there any more.");
   const link = readLink();
-  const keeper = keeperOf(bot, on, link);
+  const keeper = keeperOf(bot, on, link, undefined, { ownOnly: false });
   const named = removed && on ? plainName(on).slice(0, 200) : "";
   if (!keeper && !named)
     return no(404, "That bot isn’t there any more.");
@@ -25579,12 +25580,12 @@ function holdEdit(bot, given, on, { removed = false, now = Date.now() } = {}) {
         return;
       }
       const given = checked ? Object.fromEntries(Object.keys(checked.change).map((field) => [field, now])) : {};
-      if (checked && JSON.stringify({ ...before?.change ?? {}, ...checked.change }).length > MOST_CHANGE) {
+      if (checked && Buffer.byteLength(JSON.stringify({ ...before?.change ?? {}, ...checked.change })) > MOST_CHANGE) {
         answer = no(400, "That’s too much to change at once.");
         return;
       }
       const held = {
-        id: `bte_${crypto34.randomBytes(16).toString("base64url")}`,
+        id: newEditID(),
         bot,
         to: keeper?.key ?? "",
         ...keeper ? {} : { on: named },
@@ -25625,7 +25626,7 @@ function sendHeld(host, link = readLink(), now = Date.now()) {
     return;
   const told = readPeerAgents();
   for (let held of allHeld(link)) {
-    const stillThere = Boolean(held.to) && told[held.to]?.list?.some((agent) => agent.kind === "bot" && agent.id === held.bot);
+    const stillThere = Boolean(held.to) && peersOf(link).some((peer) => peer.key === held.to) && told[held.to]?.list?.some((agent) => agent.kind === "bot" && agent.id === held.bot);
     const keeper = stillThere ? null : keeperOf(held.bot, held.on, link);
     if (keeper && keeper.key !== held.to) {
       const moved = locked(LOCK13, () => {
@@ -25700,21 +25701,20 @@ function takeBotEdited(sender, given, now = Date.now()) {
         return;
       }
       if (status === 404 && !held.delete) {
-        const keeper = keeperOf(bot, null, link, sender.key);
-        if (keeper) {
-          changed = writeHeld({ ...held, to: keeper.key }, link);
-          sent3.delete(bot);
-          notThere.delete(held.id);
-          return;
-        }
-        const tries = (notThere.get(held.id) ?? 0) + 1;
+        const tries = (notThere.get(bot) ?? 0) + 1;
         if (tries < NOT_THERE_TRIES) {
-          notThere.set(held.id, tries);
+          notThere.set(bot, tries);
+          const keeper = keeperOf(bot, null, link, sender.key);
+          if (keeper) {
+            changed = writeHeld({ ...held, id: newEditID(), to: keeper.key }, link);
+            sent3.delete(bot);
+            return;
+          }
           sent3.set(bot, { id: held.id, at: now });
           return;
         }
       }
-      notThere.delete(held.id);
+      notThere.delete(bot);
       fs90.rmSync(fileOf5(bot), { force: true });
       sent3.delete(bot);
       changed = true;
@@ -25807,6 +25807,8 @@ async function changeWhatItCan(bot, fields, times, steps) {
   let took = false;
   for (const field of fields) {
     const one = await steps.change(bot, Object.fromEntries([field]), times);
+    if (one.status === 409 || one.status >= 500)
+      return one;
     if (one.status < 300)
       took = true;
     else if (isObject(one.value) && typeof one.value.message === "string")
@@ -42002,7 +42004,7 @@ import fs137 from "node:fs";
 import path143 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "be36d2d2cccf";
+var BRIDGE_VERSION = "f82830ca0184";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

@@ -17,7 +17,8 @@ function readTimes(folder: string, now: number): Record<string, number> {
   try {
     const kept: unknown = JSON.parse(textOf(path.join(folder, EDITED_FILE)) ?? "");
     if (!isObject(kept)) return {};
-    return Object.fromEntries(Object.entries(kept).filter(([, at]) => typeof at === "number" && now - at < KEPT)) as Record<string, number>;
+    // (Never ahead of this clock: a bot from a computer whose clock was ahead brings its times.)
+    return Object.fromEntries(Object.entries(kept).filter(([, at]) => typeof at === "number" && now - at < KEPT).map(([field, at]) => [field, Math.min(at as number, now)]));
   } catch {
     return {};
   }

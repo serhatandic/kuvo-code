@@ -3962,22 +3962,24 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     last heard. A bot moving to another computer meanwhile: what's held goes where it lists now.
   - It goes as `{"botEdit": {id, bot, change?, ages?, delete?: true, at}}` (`id` `bte_…`, one for
     each version of what's held; `ages`, how long ago each field was given, ms, so no computer's
-    clock is read by another's) to that computer (once it no longer lists the bot, to the one
-    that does: it moved), if its `features` say `bots.held` (one that doesn't yet waits until it's
+    clock is read by another's) to that computer (once it no longer lists the bot, or is no
+    longer a peer, to the one of your own computers that does, the latest to say so: it moved), if its `features` say `bots.held` (one that doesn't yet waits until it's
     updated), again each minute while it isn't answered and at once when it's back ("Peers",
     `run/peer-reach.json`). That computer takes it only from one of its peers that's one of your own
     computers to it (`403` otherwise, as above), and does it as `PATCH` or `DELETE` there would, once for each `id`
     (remembered seven days; one it couldn't do now, `409` or `5xx`, is done when it comes again).
     Of a change, it takes only the fields given after that field last changed (by a client, the
     bot's set_job, or another held edit), each given at its own clock's now less its age: the bot's
-    folder keeps when (`edited.json`, by its computer's clock, a month, never ahead of it), so it
-    goes with the bot when it moves, and an edit made meanwhile is never undone by an older one;
+    folder keeps when (`edited.json`, a month, by the clock of the computer it was on then, and read
+    as never ahead of this one's), so it goes with the bot when it moves, and an edit made meanwhile is never undone by an older one;
     and never `work`. What it can't take of a change (a personality there isn't) doesn't hold up
-    the rest: each field is then done on its own, and the answer says what wasn't. It answers
+    the rest: each field is then done on its own, and the answer says what wasn't (a field it
+    can't do now, `409` or `5xx`, answers that for all of it, which comes again). It answers
     `{"botEdited": {id, bot, status, message?}}`, which the holder takes only from it: done (`2xx`,
     or `404` for a delete), it's let go, and a `message` with a `2xx` is refused as what wasn't
-    taken; `409` or `5xx`, it goes again later; `404` for a change, it goes to another computer that
-    lists the bot now, or, with none, is asked again twice more, a minute apart, then refused; any
+    taken; `409` or `5xx`, it goes again later; `404` for a change, it goes to another of your own computers
+    that lists the bot now (the sender left out, as a new `id`), or, with none, is asked again a
+    minute later; the third `404` for that bot, wherever it went, refuses it; any
     other, it's let go and refused, in words naming that computer.
 - `POST kuvo/bots/<id>/arrived`: a bot whose folder and conversation a client just brought to this
   box from another computer (Move to Computer: the client holds it where it was, copies its folder

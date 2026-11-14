@@ -62,7 +62,7 @@ const MOST_REFUSALS = 50;
  * minutes; a few days covers a holder that was itself off meanwhile), and how many at most. */
 const TAKEN_MEMORY = 7 * 86_400_000;
 const MOST_TAKEN = 1_000;
-/** The most a held change may be, as JSON (what's held goes in one mail). */
+/** The most a held change may be, in bytes as JSON (what's held goes in one mail). */
 const MOST_CHANGE = 32_000;
 /** How many times a computer may say a bot isn't there before a change held for it is refused,
  * while none lists it yet (one moving there). */
@@ -89,6 +89,7 @@ interface Held {
 export const heldSoon: { send: () => void } = { send: () => {} };
 
 const fileOf = (bot: string) => path.join(HELD, `${bot}.json`);
+const newEditID = () => `bte_${crypto.randomBytes(16).toString("base64url")}`;
 
 // The seal: an HMAC of the record with a key from this box's secret, which only it has (this Mac's
 // box from your Keychain, in memory).
@@ -136,9 +137,10 @@ function allHeld(link: LinkState | null = readLink()): Held[] {
 
 /** The computer that keeps `bot`, as its box last told this one (its agents), or else as the client
  * named it (`on`: its key, or its id on its Mac): one of this box's peers, never this box. */
-export function keeperOf(bot: string, on: string | null | undefined, link: LinkState | null = readLink(), except?: string): Peer | null {
-  const peers = peersOf(link).filter(peer => peer.key !== except);
+export function keeperOf(bot: string, on: string | null | undefined, link: LinkState | null = readLink(), except?: string, { ownOnly = true }: { ownOnly?: boolean } = {}): Peer | null {
   const told = readPeerAgents();
+  // (Only your own computers: never one that isn't only yours, whatever its list says.)
+  const peers = peersOf(link).filter(peer => peer.key !== except && !(ownOnly && isApart(peer.key, link, told)));
   // (Two that list it, one moving it to the other: the one that told this box last.)
   const listing = peers.filter(peer => told[peer.key]?.list?.some(agent => agent.kind === "bot" && agent.id === bot))
     .sort((a, b) => (told[b.key]?.heard ?? told[b.key]?.at ?? 0) - (told[a.key]?.heard ?? told[a.key]?.at ?? 0))[0];
@@ -203,7 +205,8 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
   const no = (status: 400 | 404 | 409 | 503, message: string): HoldAnswer => ({ status, value: { message } });
   if (!BOT_ID.test(bot)) return no(404, "That bot isn’t there any more.");
   const link = readLink();
-  const keeper = keeperOf(bot, on, link);
+  // (Found among all of this box's computers, so one that isn't only yours is said.)
+  const keeper = keeperOf(bot, on, link, undefined, { ownOnly: false });
   const named = removed && on ? plainName(on).slice(0, 200) : "";
   if (!keeper && !named) return no(404, "That bot isn’t there any more.");
   const computer = keeper ? shownName(keeper) : named;
@@ -224,12 +227,12 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
       }
       const given = checked ? Object.fromEntries(Object.keys(checked.change).map(field => [field, now])) : {};
       // (What's held goes in one mail: one too big for it never would.)
-      if (checked && JSON.stringify({ ...(before?.change ?? {}), ...checked.change }).length > MOST_CHANGE) {
+      if (checked && Buffer.byteLength(JSON.stringify({ ...(before?.change ?? {}), ...checked.change })) > MOST_CHANGE) {
         answer = no(400, "That’s too much to change at once.");
         return;
       }
       const held: Held = {
-        id: `bte_${crypto.randomBytes(16).toString("base64url")}`,
+        id: newEditID(),
         bot,
         to: keeper?.key ?? "",
         ...(keeper ? {} : { on: named }),
@@ -258,7 +261,7 @@ export const livesHere = (bot: string): boolean => Boolean(botHere(bot));
 
 // When each held edit last went, in this process, by bot.
 const sent = new Map<string, { id: string; at: number }>();
-// How many times each held change's computer said its bot isn't there, by the held edit's id.
+// How many times computers said a bot a change is held for isn't there, by bot.
 const notThere = new Map<string, number>();
 
 /** `key` answers again: what's held for it goes now, not at its next minute. */
@@ -282,7 +285,7 @@ export function sendHeld(host: Pick<LinkHost, "send" | "welcomed"> | null | unde
   for (let held of allHeld(link)) {
     // (Another computer only once the one it's held for doesn't list it: one that said it isn't there
     // is left for its answer, `takeBotEdited`.)
-    const stillThere = Boolean(held.to) && told[held.to]?.list?.some(agent => agent.kind === "bot" && agent.id === held.bot);
+    const stillThere = Boolean(held.to) && peersOf(link).some(peer => peer.key === held.to) && told[held.to]?.list?.some(agent => agent.kind === "bot" && agent.id === held.bot);
     const keeper = stillThere ? null : keeperOf(held.bot, held.on, link);
     if (keeper && keeper.key !== held.to) {
       const moved = locked(LOCK, () => {
@@ -357,23 +360,25 @@ export function takeBotEdited(sender: MailSender, given: unknown, now = Date.now
         return;
       }
       if (status === 404 && !held.delete) {
-        const keeper = keeperOf(bot, null, link, sender.key);
-        if (keeper) {
-          // (Moved meanwhile: it goes where the bot is now.)
-          changed = writeHeld({ ...held, to: keeper.key }, link);
-          sent.delete(bot);
-          notThere.delete(held.id);
-          return;
-        }
-        // (No other lists it yet: it may be on its way to one. Asked again a few times first.)
-        const tries = (notThere.get(held.id) ?? 0) + 1;
+        // (No more than a few times, wherever it's sent: two computers whose lists both still name
+        // it don't pass it between them for ever.)
+        const tries = (notThere.get(bot) ?? 0) + 1;
         if (tries < NOT_THERE_TRIES) {
-          notThere.set(held.id, tries);
+          notThere.set(bot, tries);
+          const keeper = keeperOf(bot, null, link, sender.key);
+          if (keeper) {
+            // (Moved meanwhile: it goes where the bot is now, as a new edit, which that computer
+            // hasn't answered yet.)
+            changed = writeHeld({ ...held, id: newEditID(), to: keeper.key }, link);
+            sent.delete(bot);
+            return;
+          }
+          // (No other lists it yet: it may be on its way to one. Asked again in a while.)
           sent.set(bot, { id: held.id, at: now });
           return;
         }
       }
-      notThere.delete(held.id);
+      notThere.delete(bot);
       fs.rmSync(fileOf(bot), { force: true });
       sent.delete(bot);
       changed = true;
@@ -485,6 +490,9 @@ async function changeWhatItCan(bot: string, fields: [string, unknown][], times: 
   let took = false;
   for (const field of fields) {
     const one = await steps.change(bot, Object.fromEntries([field]) as BotChange, times);
+    // (One that can't be done now, its engine starting say: all of it again later, what was done
+    // now skipped then by its time.)
+    if (one.status === 409 || one.status >= 500) return one;
     if (one.status < 300) took = true;
     else if (isObject(one.value) && typeof one.value.message === "string") refused.push(one.value.message);
   }

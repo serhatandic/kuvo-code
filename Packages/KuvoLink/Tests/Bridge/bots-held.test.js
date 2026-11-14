@@ -384,3 +384,36 @@ test("when a bot's fields last changed goes with it to another computer, and the
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout Moved", "the newer name stays");
   assert.ok(JSON.parse(fs.readFileSync(path.join(folder, "edited.json"), "utf8")).name <= Date.now(), "never a time ahead of this clock");
 });
+
+test("a computer that isn't only yours is never where a held edit goes, whatever its list says", async () => {
+  await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren II" });
+  const [toLab] = mailTo(lab);
+  // Lab says it isn't there; the Mac lists it, but says it's a machine two people's Macs share.
+  agentsTold({ labBots: [], macBots: [{ session: "ses_wren", name: "Wren", kind: "bot", id: wren }] });
+  const told = JSON.parse(fs.readFileSync(path.join(run, "peer-agents.json"), "utf8"));
+  told[mac.pub].shared = true;
+  write(path.join(run, "peer-agents.json"), told);
+  receive(lab, { botEdited: { id: toLab.botEdit.id, bot: wren, status: 404, message: "That bot isn’t there any more." } });
+  assert.equal((await listed()).held[0].computer, "lab");
+  assert.deepEqual(mailTo(mac), []);
+});
+
+test("a held change its computer can't do now (its engine starting) waits on, rather than being refused for a field it can't take", async () => {
+  write(path.join(bots, "kit.json"), kit);
+  const folder = path.join(bots, "bot_scout00001");
+  write(path.join(folder, "session"), "ses_scout");
+  write(path.join(folder, "bot.json"), { kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: { color: "sky", shape: "round", face: "calm" }, created: "2026-10-01T09:00:00Z" });
+  // Its engine not started yet.
+  fs.rmSync(path.join(run, "engine.json"));
+  const id = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  receive(lab, { botEdit: { id, bot: "bot_scout00001", change: { name: "Scout II", personality: "preset.gone" }, ages: { name: 0, personality: 0 }, at: Date.now() } });
+  for (;;) {
+    const [mail] = mailTo(lab);
+    if (mail) {
+      assert.equal(mail.botEdited.status, 503);
+      break;
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout");
+});

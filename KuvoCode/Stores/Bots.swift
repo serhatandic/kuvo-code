@@ -393,8 +393,7 @@ final class Bots {
                     for try await data in client.follow("kuvo/bots/events") {
                         guard let line = try? JSONDecoder().decode(Line.self, from: data) else { continue }
                         take(line.bots, from: box)
-                        // (What this Mac's box holds: the only box this Mac gives edits to hold.)
-                        if onThisMac { take(held: line.held, from: box) }
+                        take(held: line.held, from: box)
                     }
                 } catch let refusal as BoxRefusal {
                     older = !onThisMac && (refusal.status == 404 || refusal.status == 403)
@@ -422,7 +421,7 @@ final class Bots {
         // One changed here meanwhile as it is here (made, as made; deleted, gone).
         let touched = touchedWhileListing[box] ?? []
         take(listed.bots.filter { !touched.contains($0.id) } + known.filter { $0.box == box && touched.contains($0.id) }.map(Self.listed), from: box)
-        if BoxClient.isThisMac(box) { take(held: listed.held, from: box) }
+        take(held: listed.held, from: box)
     }
 
     /// A bot's run ended: on a machine, its box may have changed it meanwhile (its job, kept with
