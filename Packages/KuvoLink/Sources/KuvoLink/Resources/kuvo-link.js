@@ -37789,15 +37789,16 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           settleAskReview(settled);
         if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string")
           settleRunReviews(event.data.sessionID);
-        if (event.type === "kuvo.usage.notices") {
+        if (event.type === "kuvo.usage.notices" || event.type === "kuvo.limits.updated") {
+          const data = event.data ?? {};
           usageRevision++;
-          if (event.data?.push === false)
-            hold?.reconcileUsage([], (event.data.notices ?? []).map((n) => n.id));
-          usageNotices(event.data ?? {}, tell);
-        }
-        if (event.type === "kuvo.limits.updated" && event.data?.ownNotices) {
-          usageRevision++;
-          usageSnapshot(event.data, tell, hold);
+          if (event.type === "kuvo.usage.notices") {
+            if (data.push === false)
+              hold?.reconcileUsage([], takeNotices(data.notices).map((n) => n.id));
+            usageNotices(data, tell);
+          } else if (Array.isArray(data.ownNotices)) {
+            usageSnapshot(data, tell, hold);
+          }
         }
         if (!notices)
           continue;
@@ -40652,7 +40653,7 @@ import fs130 from "node:fs";
 import path136 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0e0d9e4a3ec5";
+var BRIDGE_VERSION = "5f9d4a32f6e4";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
