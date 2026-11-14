@@ -4,9 +4,9 @@
 //! conversation (`api/session/<id>/model`), and starting a conversation (`kuvo/sessions`,
 //! `sessions.start.empty`).
 //!
-//! The box decides what runs and which model a new one starts on; a client draws the chip and the
-//! picker from what it says. Kept here, as drawing: what the chip says and why Send waits, worded
-//! as KuvoClient's `SessionModelState` words it.
+//! The box decides what runs, which model a new one starts on, and what a model that can't run
+//! means for a composer, in its own words (`refusal`, `choose`, `action`); a client draws the chip,
+//! the picker and why Send waits from what it says.
 
 use std::collections::HashMap;
 
@@ -37,7 +37,20 @@ pub struct Plan {
     pub provider: String,
 }
 
-/// What a session's box says of its model.
+/// What to offer doing about a model that can't run, as its box words it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Action {
+    /// `signIn`, `addKey`, `install` (its account's) or `choose` (a model).
+    #[serde(rename = "do")]
+    pub kind: String,
+    /// A button's words ("Sign In", "Choose a Model").
+    pub label: String,
+    /// What it does ("Sign in to Anthropic").
+    pub help: String,
+}
+
+/// What a session's box says of its model, and what that means for a composer, decided and worded
+/// by the box (`models.readiness`): a client draws `refusal`, `choose` and `action` as they are.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ModelState {
     /// The model it runs on (its own, else the engine's default); none when there's none to run on.
@@ -54,62 +67,28 @@ pub struct ModelState {
     pub account: Option<Account>,
     #[serde(default)]
     pub plan: Option<Plan>,
+    /// Why a message on it can't go, and what to do, in the box's words; none where one can go.
+    #[serde(default)]
+    pub refusal: Option<String>,
+    /// The chip says "Choose a Model" and Send waits for one (a model gone, or none to run on).
+    #[serde(default)]
+    pub choose: bool,
+    /// What to offer doing about it.
+    #[serde(default)]
+    pub action: Option<Action>,
 }
 
 impl ModelState {
-    /// Whether the chip names the model and Send sends with it, as KuvoClient's
-    /// `SessionModelState.namesModel`: one that runs, or one whose account needs something (a
-    /// message on it says what instead of going). For one gone, or none chosen, the chip says
-    /// "Choose a Model" and Send waits for one.
-    pub fn names_model(&self) -> bool {
-        match self.missing.as_deref() {
-            None => self.runs,
-            Some("model" | "gone") => false,
-            Some(_) => true,
-        }
-    }
-
-    /// Whether the chip says "Choose a Model" and Send waits for one.
-    pub fn needs_choosing(&self) -> bool {
-        !self.names_model()
-    }
-
-    /// Why a message can't go on this model, as KuvoClient's `SessionModelState.refusal` says it
-    /// (`accounts`: where its accounts are); none for one that runs.
-    pub fn refusal(&self, accounts: &str) -> Option<String> {
-        if self.runs && self.missing.is_none() {
-            return None;
-        }
-        let name = self.name.clone().or_else(|| self.model.as_ref().map(|model| model.id.clone())).unwrap_or_else(|| "This model".into());
-        let account = self.account.as_ref().map(|account| account.name.clone()).or_else(|| self.model.as_ref().map(|model| model.provider_id.clone())).unwrap_or_else(|| "its account".into());
-        Some(match self.missing.as_deref() {
-            None | Some("model") => "Choose a model to send it.".into(),
-            Some("signIn") => format!("{name} needs a sign-in: sign in to {account} in {accounts}, or choose another model."),
-            Some("key") => match &self.plan {
-                Some(plan) => format!(
-                    "{name} needs {} {account} key: add one in {accounts}, or choose another model (with {} {} plan, one under {}).",
-                    article(&account),
-                    article(&plan.name),
-                    plan.name,
-                    plan.agent
-                ),
-                None => format!("{name} needs {} {account} key: add one in {accounts}, or choose another model.", article(&account)),
-            },
-            Some("install") => format!("{name} needs {account} installed: install it in {accounts}, or choose another model."),
-            Some("gone") => match &self.account {
-                Some(account) => format!("{name} is no longer among {}’s models: choose another model.", account.name),
-                None => format!("{name} is no longer available: choose another model."),
-            },
-            _ => format!("{name} can’t run now: choose another model."),
-        })
-    }
-}
-
-fn article(word: &str) -> &'static str {
-    match word.to_lowercase().chars().next() {
-        Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
-        _ if word.starts_with("xA") => "an",
-        _ => "a",
+    /// As without the box's word on it (a model just picked, or one it can't say about now): it
+    /// runs, as far as this client says, with no refusal of its own.
+    pub fn unsaid(&mut self) {
+        self.runs = true;
+        self.missing = None;
+        self.account = None;
+        self.plan = None;
+        self.refusal = None;
+        self.choose = false;
+        self.action = None;
     }
 }
 
@@ -266,15 +245,20 @@ impl BoxClient {
     }
 
     /// The models a picker offers here, and the one a new session starts on for `wanted` (the
-    /// model picked last on this client).
-    pub fn offered_models(&self, wanted: Option<&ModelRef>) -> Result<Offered> {
-        let mut path = "kuvo/models/offered".to_owned();
+    /// model picked last on this client), in `folder` (a project's or a conversation's: what its
+    /// own settings add is offered there too, `models.offered.folder`).
+    pub fn offered_models(&self, wanted: Option<&ModelRef>, folder: Option<&str>) -> Result<Offered> {
+        let mut query = Vec::new();
+        if let Some(folder) = folder.filter(|folder| !folder.is_empty()) {
+            query.push(format!("folder={}", paths::query_value(folder)));
+        }
         if let Some(wanted) = wanted {
-            path.push_str(&format!("?provider={}&model={}", paths::query_value(&wanted.provider_id), paths::query_value(&wanted.id)));
+            query.push(format!("provider={}&model={}", paths::query_value(&wanted.provider_id), paths::query_value(&wanted.id)));
             if let Some(variant) = &wanted.variant {
-                path.push_str(&format!("&variant={}", paths::query_value(variant)));
+                query.push(format!("variant={}", paths::query_value(variant)));
             }
         }
+        let path = if query.is_empty() { "kuvo/models/offered".to_owned() } else { format!("kuvo/models/offered?{}", query.join("&")) };
         self.get(&path)
     }
 
@@ -329,25 +313,11 @@ mod tests {
     }
 
     #[test]
-    fn the_chip_and_send_follow_what_the_box_says() {
-        let runs = state(json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": true }));
-        assert_eq!((runs.needs_choosing(), runs.refusal("Settings › Accounts")), (false, None));
-        let gone = state(json!({ "model": { "providerID": "openai", "id": "gpt-4" }, "name": "GPT-4", "runs": false, "missing": "gone", "account": { "id": "openai", "name": "OpenAI" } }));
-        assert!(gone.needs_choosing());
-        assert_eq!(gone.refusal("Settings › Accounts").as_deref(), Some("GPT-4 is no longer among OpenAI’s models: choose another model."));
-        let sign_in = state(json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": false, "missing": "signIn", "account": { "id": "anthropic", "name": "Anthropic" } }));
-        assert!(!sign_in.needs_choosing());
-        assert_eq!(sign_in.refusal("Settings › Accounts").as_deref(), Some("Claude Opus 5.5 needs a sign-in: sign in to Anthropic in Settings › Accounts, or choose another model."));
-        let key = state(json!({ "model": { "providerID": "openai", "id": "gpt-6" }, "runs": false, "missing": "key", "account": { "id": "openai", "name": "OpenAI" } }));
-        assert_eq!(key.refusal("Settings › Accounts").as_deref(), Some("gpt-6 needs an OpenAI key: add one in Settings › Accounts, or choose another model."));
-        // Can't run, with nothing said of why: one's to be chosen, as KuvoClient's `SessionModelState` says.
-        let unsaid = state(json!({ "model": null, "runs": false }));
-        assert!(unsaid.needs_choosing());
-        assert_eq!(unsaid.refusal("x").as_deref(), Some("Choose a model to send it."));
-        // What's missing counts whatever `runs` says, as in KuvoClient's `SessionModelState`.
-        let gone_but_runs = state(json!({ "model": { "providerID": "openai", "id": "gpt-4" }, "runs": true, "missing": "gone" }));
-        assert!(gone_but_runs.needs_choosing());
-        assert_eq!(gone_but_runs.refusal("x").as_deref(), Some("gpt-4 is no longer available: choose another model."));
+    fn what_the_box_didnt_say_is_drawn_as_running() {
+        let mut gone = state(json!({ "model": { "providerID": "openai", "id": "gpt-4" }, "runs": false, "missing": "gone", "refusal": "gpt-4 is no longer available: choose another model.", "choose": true, "action": { "do": "choose", "label": "Choose a Model", "help": "Choose another model" } }));
+        assert!(gone.choose);
+        gone.unsaid();
+        assert_eq!((gone.runs, gone.choose, gone.refusal, gone.action), (true, false, None, None));
     }
 
     fn offered(value: Value) -> Offered {

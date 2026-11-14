@@ -315,15 +315,21 @@ impl Workspace {
     /// `session`'s composer: the one it had, with its draft (its model read again, as it may have
     /// changed meanwhile), or a new one.
     fn composer_for(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
+        // Its folder, where its project's own settings may add models to what's offered.
+        let folder = self.listing.facts(session).map(|facts| facts.directory.clone());
         if let Some((composer, _)) = self.composers.get(session) {
             let composer = composer.clone();
             if self.live {
-                composer.update(cx, |composer, cx| composer.read_models(cx));
+                composer.update(cx, |composer, cx| {
+                    composer.set_folder(folder, cx);
+                    composer.read_models(cx);
+                });
             }
             return composer;
         }
         let (client, live) = (self.client.clone(), self.live);
         let composer = cx.new(|cx| Composer::new(client, Target::Session { id: session.to_owned(), place: Where::Engine }, live, cx));
+        composer.update(cx, |composer, cx| composer.set_folder(folder, cx));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
         // Not on screen until its conversation opens.
         composer.update(cx, |composer, cx| composer.set_shown(false, cx));
