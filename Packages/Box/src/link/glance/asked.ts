@@ -115,6 +115,16 @@ export function readAsks(): OpenAsk[] {
   }
 }
 
+/** When each ask waiting came (ms), by its id, as the long-running process noted them. */
+export function askTimes(): Map<string, number> {
+  try {
+    const kept = JSON.parse(fs.readFileSync(ASKS_FILE, "utf8")).asks;
+    return new Map(isObject(kept) ? Object.entries(kept).flatMap(([id, ask]) => (isObject(ask) && typeof ask.at === "number" ? [[id, ask.at] as [string, number]] : [])) : []);
+  } catch {
+    return new Map();
+  }
+}
+
 /** The conversation `session` is part of (a subagent's, the one it works for), as `targets` say. */
 async function rootOf(targets: Target[], session: string, signal?: AbortSignal): Promise<string> {
   let at = session;

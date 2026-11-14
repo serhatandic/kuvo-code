@@ -29,6 +29,8 @@ import { noticesRoute } from "../areas/notices";
 import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } from "../areas/personalities";
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
+import { SESSION_ASKS_ROUTE, sessionAsksRoute } from "../areas/session-asks";
+import { MENTIONS_ROUTE, mentionsRoute } from "../areas/mentions";
 import { GLANCE_ROUTE, glanceRoute } from "../areas/glance";
 import { LIST_ROUTE, listRoute } from "../lists/sessions";
 import { SESSION_MODELS_ROUTE, sessionModelsRoute } from "../areas/session-models";
@@ -133,6 +135,10 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(SEND_ROUTE), answer: sendRoute },
   { when: route => route === PARTS_ROUTE, answer: partsRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
+  // What a conversation waits on you for, worded, and answering it (PROTOCOL.md, "A conversation's asks").
+  { when: route => route.match(SESSION_ASKS_ROUTE), answer: sessionAsksRoute },
+  // What "@" and "&" suggest in a conversation (PROTOCOL.md, "Mentions").
+  { when: route => route.match(MENTIONS_ROUTE), answer: mentionsRoute },
   // A session at a glance: its row's and card's (PROTOCOL.md, "A session at a glance").
   { when: route => route.match(GLANCE_ROUTE), answer: glanceRoute },
   { when: route => route.match(LIST_ROUTE), answer: listRoute },

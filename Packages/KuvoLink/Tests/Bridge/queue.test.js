@@ -191,7 +191,9 @@ test("Stop holds what was for the next step ahead of the queue and pauses it; a 
   b.hear("session.execution.succeeded");
   b.wait(5000);
   assert.equal(asked.length, 2, "nothing started while it's paused");
-  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json, { paused: true, held: ["msg_s1"] });
+  // (Every message waiting, as clients show them: what Stop held first, `queue.items`.)
+  const item = (id, held) => ({ id, words: "", files: [], keyword: null, from: null, on: "engine", delivery: "queue", held });
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json, { paused: true, held: ["msg_s1"], items: [item("msg_s1", true), item("msg_q1", false)] });
   const resumed = await ask("POST", "kuvo/sessions/ses_1/queue/resume");
   assert.equal(resumed.status, 200);
   assert.deepEqual(asked.slice(2), ["ses_1 msg_s1 steer"], "what Stop held goes first");
@@ -203,7 +205,8 @@ test("a summary waiting at Stop isn't a message: what a lead's stop_session leav
   inboxes.ses_1 = [{ id: "msg_sum", type: "compaction", delivery: "steer" }];
   running.add("ses_1");
   await link.stopSession(target, "ses_1", false);
-  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json, { paused: false, held: [] });
+  // (A summary waiting isn't one of the messages waiting either.)
+  assert.deepEqual((await ask("GET", "kuvo/sessions/ses_1/queue")).json, { paused: false, held: [], items: [] });
   assert.deepEqual(asked, ["ses_1 stop"]);
   running.delete("ses_1");
   const b = box();

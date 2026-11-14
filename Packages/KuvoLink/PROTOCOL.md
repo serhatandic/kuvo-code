@@ -1229,11 +1229,90 @@ the same for every client and with none connected, and keeps them in `run/queues
   take the message. A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
   queue and what waited for it with it.
+- **Every message waiting, as one list** (`queue.items`): `GET kuvo/sessions/<id>/queue` also
+  answers `items`, every message waiting in the order clients show it (above), whatever holds it:
+  `[{id, words, files, keyword, from, on, delivery, held}]`. `words` is what was written, without
+  what the box added for the agent (a message's kept parts' words; another agent's letter, a
+  wake-up or the box's own note in its own words, its line); `files` its files' names; `keyword`
+  the one it was sent with (`/goal`), else null; `from` who it's from (an agent's name, `Wake-up`,
+  `Goal`…), null for yours; `on` `engine` (the engine's or the coding agents' bridge's inbox) or
+  `box`; `delivery` `steer` or `queue`; `held` whether Stop held it. `items` is null while the
+  place the session runs can't be read, or is slow to say (a client keeps what it showed). A client draws the list
+  from `items` alone, and offers Edit only on one with `from` null. `GET kuvo/sessions/<id>/queue/events`
+  (ndjson) sends the same now and again as it changes (the box's queue, and the engine's or the
+  bridge's `session.inbox.*` for it; every 15 s at least); through `box route`, its first line.
+  `DELETE …/queue/<item>` takes back one the engine (or the bridge) holds too, from its inbox,
+  answering `removed` as for one on the box: `text` as the agent would have read it, `words` for
+  the composer, `files` as a send takes them (`{uri, name?}`), so Edit puts them back and they can
+  go again; 404 when the agent took it first (or it isn't waiting anywhere), 502 when the engine
+  still holds it, 503 while it can't be read.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
   request before it asks the box to stop, and for its hold before it asks the box to resume.
 - A box without `queue` in its features is older than the update gate lets through: held until
   it's up to date, never carried by a client.
+
+### A conversation's asks
+
+What a conversation waits on you for (`sessions.asks`), worded by the box as the cards over the
+composer show it, so a client draws each card and works nothing out: every permission and question
+waiting in the conversation and its subagents, on the engine or the coding agents' bridge, but one
+Auto's reviewer took up.
+
+- `GET kuvo/sessions/<id>/asks` → `{"asks": [ask…]}`, oldest first. Each has `id`, `kind`,
+  `session` (the session asking: a subagent's own) and `title`:
+  - `permission`: `{message, command, files, resources, choices}`. `title` as the Mac's card says
+    it ("Allow editing src/App.swift and 2 more?", "Allow running this command?"); `message` the
+    engine's words, or null; `command` the whole command line the tool call runs (a shell's), or
+    null; `files` the changes it would make, `[{file, patch, additions, deletions, status}]`
+    (`status` `added`, `deleted`, `modified` or null); `resources` what it covers as the card shows
+    them (from the conversation's folder where inside it, folders outside it as people know them,
+    `~/notes`); `choices` its answers in order, `[{answer, title, named, placeholder}]`: `once`
+    "Allow Once", `always` (its `title`, then `named`, what Always saves, shown as code: "Always
+    Allow" `git push`; null where it names nothing, "Always Allow Edits"), `reject` "Don’t Allow",
+    `instead` "Tell It What to Do Instead…" with the line it opens (`placeholder`). A client shows
+    `command` in place of `resources` when it has one.
+  - `question`: the agent's questions (a form whose fields are all words or choices, none shown
+    only after another answer), `questions: [{key, title, question, options: [{value, label,
+    description}], multiple, custom, required}]`, asked one at a time: `multiple` takes several,
+    `custom` takes words of your own (one with no choices does), `required` needs an answer.
+  - `other`: any other form (an MCP server's, fields a card can't take): `message` says what it
+    asks, and a client says to answer it where it was asked (it can dismiss it).
+  `404 {"message"}` for no such session here, `503 {"message"}` while its place isn't answering.
+- `GET kuvo/sessions/<id>/asks/events` (ndjson): the same now, and again as an ask comes, is
+  answered, or its run ends (every 15 s at least); nothing while its place isn't answering, so
+  what it said last stands. Through `box route` it answers its first line.
+- `POST kuvo/sessions/<id>/asks/<ask>` answers one, to the place and session that asked: a
+  permission with `{"answer": "once"|"always"|"reject"}`, or `{"answer": "instead", "message"}`
+  (Don't Allow with your words, which the agent reads); a question with `{"answers": {<key>:
+  "words" | ["choice"…]}}`, only what was answered (the box adds the form's defaults for the rest),
+  or `{"dismiss": true}` for any form. `200 {}`; `404 {"message"}` when it isn't waiting any more;
+  `400 {"message"}` for an answer that doesn't fit (a choice it doesn't offer, a required one
+  missing, words for `other`); `503` while its place isn't answering, `502` when it refused.
+
+### Mentions
+
+What "@" and "&" suggest as you type in a conversation (`sessions.mentions`), ranked by the box as
+the Mac's composer ranked them, so every client shows the same list.
+
+- `GET kuvo/sessions/<id>/mentions?for=files|agents&q=<typed after the mark>[&limit=<n>]` (8
+  unless asked, 20 at most) → `{"mentions": [{text, title, detail, kind, session}]}`: `text` goes
+  in the message in place of what was typed (and a space), `title` is shown, `detail` beside it
+  (or null), `kind` `file`, `folder`, `bot` or `session`.
+- `files`: the conversation's folder's files (as `kuvo/folders/tree` lists them) and its project's
+  other folders' (each folder itself first, its files after its name). The name itself first, then
+  names starting with what's typed, names containing it, then paths containing it; among equals
+  the conversation's folder's, then shorter paths. Nothing typed: the folders, then the newest
+  files. `text` `@<path>` (from the conversation's folder; another folder's after its name, a
+  folder with a trailing `/`), `title` its name, `detail` the folder it's in (null at the top).
+- `agents`: who `kuvo/named` lists, but the conversation itself. Case and accents aside: the name
+  itself, then names starting with it, a word in a name starting with it, names containing it, then
+  projects containing it; past a space only names that go on that way; equals in the list's order.
+  Nothing typed: the list's first. `text` `&<name>`, `detail` as the Mac's list says it (a bot's
+  job, else "Bot"; a session's project, "Chat" for a chat, else "Session"; then " · on <computer>"
+  for one on another), `session` its session, which a client puts in the send's `named`.
+- `400 {"message"}` without `for`, `404 {"message"}` for no such session here, `503
+  {"message"}` while its place isn't answering. A folder that can't be read suggests nothing.
 
 ### A session at a glance
 
@@ -5480,6 +5559,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `projects.folders` | A project's `folders` reach each of its sessions as it's started or moved there, opened (`POST kuvo/sessions/<id>/folders`) and as each run starts where they changed ("Projects", #341) |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `queue.items` | `items` in `kuvo/sessions/<id>/queue`, `…/queue/events`, and `DELETE …/queue/<item>` taking back one the engine holds ("The queue") |
 | `queue.once` | `…/queue/add` sent again under its `id` adds it once ("Sending again"): a phone sends it with `idempotency-key` only to a box that says this (#144) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
@@ -5492,9 +5572,11 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
+| `sessions.asks` | `kuvo/sessions/<id>/asks`, `…/events`, and answering one ("A conversation's asks") |
 | `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `sessions.list` | `kuvo/sessions/list` and `…/events`: what each session is, the project it's filed under, and the projects the lists show ("Session lists") |
+| `sessions.mentions` | `GET kuvo/sessions/<id>/mentions` ("Mentions") |
 | `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
 | `sessions.move` | `POST kuvo/sessions/<id>/move`: a conversation moved into a project, given its folders ("Projects", #341) |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
