@@ -17,7 +17,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
-import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { NO_BUN, bunRunsAs, testBun } from "./bun-for-tests.js";
 
 const bun = testBun();
 const built = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
@@ -207,8 +207,9 @@ test("a newer bridge put in place while a turn runs: that turn ends on the bridg
   const box = await machine("kuvo-renewal-quiet-");
   // Its keeper names an engine a Mac didn't bring (sessions were at work), so it starts the one
   // there, which this bridge runs on: the bundle is for it.
-  fs.mkdirSync(path.join(box.home, "engine", path.basename(path.dirname(bun))), { recursive: true });
-  fs.writeFileSync(path.join(box.home, "engine", path.basename(path.dirname(bun)), "opencode"), "", { mode: 0o755 });
+  const runsOn = path.basename(path.dirname(bunRunsAs(bun)));
+  fs.mkdirSync(path.join(box.home, "engine", runsOn), { recursive: true });
+  fs.writeFileSync(path.join(box.home, "engine", runsOn, "opencode"), "", { mode: 0o755 });
   fs.writeFileSync(path.join(box.home, "bin", "kuvo-start"), "#!/bin/sh\nV=99.0.0\n");
   const first = await box.up();
   assert.equal((await box.pieces()).agents.behind, false, "it runs what's there");
