@@ -4547,7 +4547,7 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
 Feature `usage.notices` (required by apps): the box that read a limit decides quota notices.
 `GET kuvo/agents/api/kuvo/limits` and refresh answers add `data.notices`, also carried by
 `kuvo.limits.updated`. Each fact is `{id, row, service, window, milestone, at, remaining,
-resetsAt?, forwarder?}`: lasting occurrence ID, limits row ID, maker's window, trigger, decision time in
+resetsAt?, forwarder?, accountName?, windowName?}`: lasting occurrence ID, limits row ID, maker's window, trigger, decision time in
 milliseconds, remaining share, optional reset time. Milestones are `underTenPercent` (strictly
 below 10%), `healthyToClose`, and `closeToRunningOut`. Defaults are off; the shared usage
 notification, provider and visible-meter settings apply. The first trustworthy reading primes
@@ -4566,13 +4566,23 @@ readers; disconnected computers without a shared current peer view cannot guaran
 once background push delivery under an arbitrary network partition. Decisions
 and dedup survive box restarts. Facts are retained for 24 hours (at most 100 per account).
 
-The bridge emits `kuvo.usage.notices` `{notices, push}`: `push:true` when this box is the selected forwarder, false otherwise. The link delivers them on the existing `kuvo/notices[/events]` path as
-category `usage`, with box-worded title/subtitle/body, `data.notice` the stable ID and `data.row`
-the account. Usage entries there last 24 hours and are kept once per stable ID. The link catches
-up from limits on reconnect and retries unsent pushes each minute; `data.ownNotices` in the
-limits answer identifies decisions this box may forward. Only the selected account holder pushes to phones,
-through the existing encrypted notification path; each app remembers shown usage IDs across
-restarts. Apps do no threshold or pace evaluation and have no older-box fallback.
+The bridge emits `kuvo.usage.notices` `{notices, push}`: `push:true` when this box is the
+selected forwarder, false otherwise. The link delivers them on the existing
+`kuvo/notices[/events]` path as category `usage`, with box-worded title/subtitle/body
+(the panel's account and meter names, such as “Claude Weekly”), `data.notice` the stable ID,
+`data.row` the account, and `data.at`/`data.expires` the maker's decision/reset times as decimal
+milliseconds. Native entries keep the maker's timestamp, expire after ten minutes or at reset,
+and are kept once per stable ID. The link catches up from limits on reconnect and retries unsent
+pushes each minute while the fact is current; `data.ownNotices` identifies decisions this box
+may forward. Queue acceptance does not consume a push: only a successful relay send records a
+per-phone mark. Partial delivery retries only phones that did not take the push. The overall
+mark is recorded once all intended phones took it, or notifications were deliberately off.
+Journal write failures keep marks in memory and retry persistence without crashing the hold.
+Only the pinned account holder pushes, through the existing encrypted notification path.
+Relay push frames carry an address and sealed payload; clients cannot set an APNs collapse header.
+Each app remembers shown usage IDs across restarts. A Mac that has notifications off consumes
+incoming IDs silently, so enabling later shows no backlog. Apps do no threshold or pace
+evaluation and have no older-box fallback.
 
 ### Usage settings
 

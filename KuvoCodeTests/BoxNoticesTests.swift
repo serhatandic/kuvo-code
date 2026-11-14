@@ -87,4 +87,21 @@ import Testing
         #expect(shown == ["usage_stable"])
     }
 
+    @Test func turningNotificationsBackOnDoesNotShowSilentlyConsumedUsage() async throws {
+        let name = "BoxNoticesTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let data = Data(#"{"notices":[{"id":"ntc_off","notice":{"category":"usage","title":"Cutting It Close","subtitle":"Claude Weekly","data":{"notice":"usage_while_off"}}}]}"#.utf8)
+        let answer = try JSONDecoder().decode(BoxNotices.Told.self, from: data)
+        let notices = BoxNotices()
+        notices.usageDelivery = .init(defaults: defaults)
+        notices.usageEnabled = { false }
+        var count = 0
+        notices.showUsage = { _, _ in count += 1; return true }
+        await notices.take(answer, from: "one").value
+        notices.usageEnabled = { true }
+        await notices.take(answer, from: "one").value
+        #expect(count == 0)
+    }
+
 }

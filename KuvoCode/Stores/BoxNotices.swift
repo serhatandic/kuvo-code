@@ -18,6 +18,7 @@ final class BoxNotices {
     var show: ((_ notice: Told.Notice, _ box: String) -> Void)?
     /// Usage delivery is global to this app, survives relaunch, and includes the initial read.
     var usageDelivery = UsageNoticeDelivery()
+    var usageEnabled: () -> Bool = { Notifier.isEnabled }
     var showUsage: ((_ notice: Told.Notice, _ id: String) async -> Bool)?
     /// What's been shown, by box: a box's first read was news before this Mac was there.
     private var shown: [String: Set<String>] = [:]
@@ -113,7 +114,7 @@ final class BoxNotices {
         return Task {
             for entry in told.notices where entry.notice.category == .usage {
                 guard let id = entry.notice.data?["notice"], !id.isEmpty else { continue }
-                await usageDelivery.deliver(id: id) {
+                await usageDelivery.deliver(id: id, enabled: usageEnabled()) {
                     if let showUsage { return await showUsage(entry.notice, id) }
                     return await Notifier.shared.usage(id: id, title: entry.notice.title ?? "",
                                                        subtitle: entry.notice.subtitle, body: entry.notice.body ?? "")

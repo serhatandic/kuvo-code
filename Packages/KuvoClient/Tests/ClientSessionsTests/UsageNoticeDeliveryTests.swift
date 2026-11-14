@@ -43,4 +43,17 @@ struct UsageNoticeDeliveryTests {
         }
         #expect(attempts == 1)
     }
+    @Test func disabledNotificationsConsumeIdsWithoutAnEnableBacklog() async throws {
+        let name = "UsageNoticeDeliveryTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let delivery = UsageNoticeDelivery(defaults: defaults)
+        var attempts = 0
+        await delivery.deliver(id: "while-off", enabled: false) { attempts += 1; return true }
+        await UsageNoticeDelivery(defaults: defaults).deliver(id: "while-off") { attempts += 1; return true }
+        #expect(attempts == 0)
+        await delivery.deliver(id: "after-on") { attempts += 1; return true }
+        #expect(attempts == 1)
+    }
+
 }

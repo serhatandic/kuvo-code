@@ -17,10 +17,11 @@ public final class UsageNoticeDelivery {
 
     /// Failed OS delivery remains eligible on the next read. In-flight delivery is reserved before
     /// awaiting the OS, so concurrent reads from different boxes cannot schedule it twice.
-    public func deliver(id: String, post: () async -> Bool) async {
+    public func deliver(id: String, enabled: Bool = true, post: () async -> Bool) async {
         guard !id.isEmpty, !shown.contains(id), pending.insert(id).inserted else { return }
         defer { pending.remove(id) }
-        guard await post() else { return }
+        // Turning notifications off consumes incoming ids silently, so enabling later has no backlog.
+        if enabled { guard await post() else { return } }
         shown.insert(id)
         defaults.set(shown.sorted(), forKey: key)
     }

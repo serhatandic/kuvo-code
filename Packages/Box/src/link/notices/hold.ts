@@ -8,6 +8,8 @@
 // than a hold.
 
 import path from "node:path";
+import { NOTICE_CATCHUP_MS } from "../../agents/usage/notices";
+import { finishUsage, usageDelivered } from "./usage-delivery";
 import { isObject } from "../../shared/json";
 import { RUN } from "../home";
 import type { Notice, NoticeCategory } from "./notice";
@@ -199,6 +201,11 @@ export class NoticeHold {
 
   // A notice for your phones: it goes now, or once its hold ends. True: it's taken.
   tell(notice: Notice): boolean {
+    if (notice.category === "usage" && notice.data?.notice) {
+      if (usageDelivered(notice)) return true;
+      // Catch-up can hear a fact again while its earlier attempt waits for a client or relay.
+      if (this.held.some(entry => entry.notice.category === "usage" && entry.notice.data?.notice === notice.data?.notice)) return false;
+    }
     const answer = answeredBy(notice);
     if (answer !== undefined && this.answered.includes(answer)) return true;
     const now = this.now();
@@ -209,7 +216,7 @@ export class NoticeHold {
     if (seen) this.shown.splice(mark, 1);
     this.held.push({ notice, at: now, wall: this.wall(), due: inUse ? now + holdFor(notice.category) : now, seen });
     this.settle();
-    return true;
+    return notice.category !== "usage" || usageDelivered(notice);
   }
 
   // A request or an ask answered (or gone): its notice, waiting, never goes.
@@ -231,18 +238,29 @@ export class NoticeHold {
     const when = (entry: HeldNotice) => Math.max(waiting ? entry.due : -Infinity, entry.retry ?? -Infinity);
     const kept: HeldNotice[] = [];
     for (const entry of this.held) {
+      if (entry.notice.category === "usage") {
+        const expires = Number(entry.notice.data?.expires ?? Infinity);
+        const made = Number(entry.notice.data?.at ?? entry.wall);
+        if (this.wall() >= expires || this.wall() - made >= NOTICE_CATCHUP_MS) continue;
+      }
       if (when(entry) > now) {
         kept.push(entry);
         continue;
       }
       // Seen: news needs telling no more; what's asked of you waits until it's answered, and goes
       // once no one's at a client (you saw it, and left it unanswered).
-      if (entry.seen && !ASKED.has(entry.notice.category)) continue;
+      if (entry.seen && !ASKED.has(entry.notice.category)) {
+        finishUsage(entry.notice);
+        continue;
+      }
       if (entry.seen && waiting) {
         kept.push({ ...entry, due: Infinity });
         continue;
       }
-      if (this.send(entry.notice)) continue;
+      if (this.send(entry.notice)) {
+        finishUsage(entry.notice);
+        continue;
+      }
       if (now - entry.at < TRY_FOR) kept.push({ ...entry, retry: now + RETRY_EVERY });
     }
     this.held = kept;

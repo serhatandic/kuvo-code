@@ -14,6 +14,9 @@ export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "f
 export interface NoticeData {
   notice?: string;
   row?: string;
+  /** Usage fact time and reset expiry, as milliseconds since 1970. */
+  at?: string;
+  expires?: string;
   session?: string;
   group?: string;
   request?: string;
