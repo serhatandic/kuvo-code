@@ -5,11 +5,12 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// What you change of a machine's bot while that machine is away waits for it, as it always has:
-/// the bot shows as you left it, waiting for that computer; a later change goes on top of what
-/// waited; once the machine is back, it goes to its box once, and what the box then says is what
-/// shows (a change made there meanwhile included). The machine's box is the real one (`kuvo-link.js
-/// serve`), reached over HTTP where a Mac reaches it over SSH; its engine is a stand-in.
+/// What you change of a machine's bot while that machine is away goes to this Mac's box, which holds
+/// it for that machine (PROTOCOL.md, `kuvo/bots`, "Held for another computer"): the bot shows as you
+/// left it, waiting for that computer, a later change on top, and nothing waits in the app. What an
+/// earlier version kept here is handed to the box once. The boxes are the real ones (`kuvo-link.js
+/// serve`), a machine's reached over HTTP where a Mac reaches it over SSH; the engine is a stand-in.
+/// (Handing it on to the machine once it's back is the box's: `bots-held.test.js`.)
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct BotEditsTests {
     let engine = StubEngine(port: 47_985)
@@ -17,7 +18,7 @@ import Testing
 
     init() {
         TestEnvironment.prepare()
-        for key in ["botEditOutbox"] { UserDefaults.standard.removeObject(forKey: key) }
+        UserDefaults.standard.removeObject(forKey: Bots.oldOutboxKey)
         try? FileManager.default.removeItem(at: Bots.file)
         app.bots.app = app
         engine.on("PATCH", "/api/session/*", json: ["data": [:]])
@@ -25,12 +26,26 @@ import Testing
         engine.on("POST", "/api/session/*", json: [:])
     }
 
-    private func done(_ machine: MachineTestBox) {
+    private func done(_ machine: MachineTestBox, _ box: TestBox? = nil) {
         machine.stop()
+        box?.stop()
         StubWeb.stopListening(port: 47_985)
         engine.stop()
-        UserDefaults.standard.removeObject(forKey: "botEditOutbox")
+        UserDefaults.standard.removeObject(forKey: Bots.oldOutboxKey)
         try? FileManager.default.removeItem(at: Bots.file)
+    }
+
+    /// This Mac's box, which knows the machine "lab" as one of its computers (its key, its address on
+    /// the relay, its id here), as its app tells it, and has its keys.
+    private func ownBox() async throws -> TestBox {
+        let box = try await TestBox(engine: engine.url, environment: ["KUVO_TEST_NO_PEERS": "1"])
+        let link: [String: Any] = [
+            "secret": Data((0..<32).map { _ in UInt8.random(in: 0...255) }).base64URL,
+            "macPeers": [["key": String(repeating: "L", count: 43), "address": String(repeating: "a", count: 22), "kind": "machine", "name": "lab", "id": "lab"]],
+        ]
+        try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: link).write(to: BoxProcess.run.appending(path: "link.json"), options: .atomic)
+        return box
     }
 
     /// Ada, a bot on the machine, as its folder there has her; and what its box makes and tells
@@ -56,17 +71,25 @@ import Testing
         return try await machine.client.value(Listed.self, "GET", "kuvo/bots").bots.first
     }
 
-    @Test func aChangeWhileItsMachineIsAwayWaitsGoesOnceWhenItsBackAndItsBoxWins() async throws {
+    /// What this Mac's box holds, as any client reads it.
+    private func held(_ box: TestBox) async throws -> [HeldBotEdit] {
+        struct Listed: Decodable { var held: [HeldBotEdit]? }
+        return try await box.client(engine: engine.url).value(Listed.self, "GET", "kuvo/bots").held ?? []
+    }
+
+    @Test func aChangeWhileItsMachineIsAwayIsHeldByThisMacsBoxAndShowsAsYouLeftIt() async throws {
         let machine = try await lab()
-        defer { done(machine) }
+        let box = try await ownBox()
+        defer { done(machine, box) }
         var connected = true
-        app.bots.boxes = { box in box == "lab" ? machine.client : BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish() } }) }
+        let own = box.client(engine: engine.url)
+        app.bots.boxes = { name in name == "lab" ? machine.client : own }
         app.bots.reachable = { $0 == "lab" && connected }
         await app.bots.refresh("lab")
         let ada = try #require(app.bots.bot("bot_ada000001"))
         #expect(ada.machine == "lab" && ada.name == "Ada")
 
-        // Away: what you change waits, and shows as you left it.
+        // Away: what you change goes to this Mac's box, which holds it; it shows as you left it.
         connected = false
         var renamed = ada
         renamed.name = "Ada Lovelace"
@@ -74,7 +97,7 @@ import Testing
         #expect(app.bots.bot(ada.id)?.name == "Ada Lovelace")
         #expect(app.bots.waitingFor(try #require(app.bots.bot(ada.id))) == "lab")
         #expect(try await there(machine)?.name == "Ada", "nothing reached its box")
-        // A later change goes on top of what waited.
+        // A later change goes on top of what's held.
         var recolored = try #require(app.bots.bot(ada.id))
         recolored.look = BotLook(color: .sky, shape: .gem, face: .wink)
         recolored.job = "Keeps CI and the docs green"
@@ -82,26 +105,63 @@ import Testing
         try await app.bots.update(recolored, job: true)
         #expect(app.bots.bot(ada.id)?.name == "Ada Lovelace" && app.bots.bot(ada.id)?.look.color == .sky)
         #expect(app.bots.bot(ada.id)?.job == "Keeps CI and the docs green")
-        // Kept across launches.
-        #expect(BotEdits().waiting[ada.id]?.fields.keys.sorted() == ["job", "look", "name"])
-        // Meanwhile, a phone gives her a personality there.
-        _ = try await machine.client.send("PATCH", "kuvo/bots/bot_ada000001", body: Data(#"{"personality": "preset.straight"}"#.utf8))
+        let kept = try #require(try await held(box).first)
+        #expect(kept.bot == ada.id && kept.computer == "lab")
+        #expect(kept.change?.keys.sorted() == ["job", "look", "name"], "one edit, each field the last given")
+        #expect(UserDefaults.standard.data(forKey: Bots.oldOutboxKey) == nil, "nothing kept in the app")
 
-        // Back: it goes once, and what its box says is what shows.
+        // Back, and still held (the box hands it on): a change now goes on top of it there, not
+        // straight to the machine before it.
         connected = true
-        await app.bots.refresh("lab")
-        let now = try #require(app.bots.bot(ada.id))
-        #expect(app.bots.waitingFor(now) == nil)
-        #expect(app.bots.edits.waiting.isEmpty)
-        #expect(now.name == "Ada Lovelace" && now.look == BotLook(color: .sky, shape: .gem, face: .wink))
-        #expect(now.job == "Keeps CI and the docs green" && now.instructions == "Watch main and the docs site.")
-        #expect(now.personality == "preset.straight", "what changed there meanwhile stays")
-        let atBox = try #require(try await there(machine))
-        #expect(atBox.name == "Ada Lovelace" && atBox.job == "Keeps CI and the docs green")
-        #expect(engine.requests("PATCH", "/api/session/ses_ada").filter { $0.body["title"] as? String == "Ada Lovelace" }.count == 1, "once")
-        // Again: nothing waits, nothing goes.
-        await app.bots.refresh("lab")
-        #expect(engine.requests("PATCH", "/api/session/ses_ada").filter { $0.body["title"] as? String == "Ada Lovelace" }.count == 1)
+        var again = try #require(app.bots.bot(ada.id))
+        again.name = "Ada L."
+        try await app.bots.update(again)
+        #expect(try await held(box).first?.change?["name"]?.string == "Ada L.")
+        #expect(try await there(machine)?.name == "Ada")
+
+        // A new launch: what it shows comes from this Mac's box.
+        let later = AppModel()
+        later.bots.app = later
+        later.bots.boxes = app.bots.boxes
+        later.bots.reachable = { _ in false }
+        await later.bots.refresh(BoxClient.mac)
+        #expect(later.bots.bot(ada.id)?.name == "Ada L.")
+        #expect(later.bots.waitingFor(try #require(later.bots.bot(ada.id))) == "lab")
+    }
+
+    /// What an earlier version kept here for machines that were away (with a delete for a bot whose
+    /// machine you removed) is handed to this Mac's box once, at launch, which holds each for its
+    /// machine; then nothing's kept in the app.
+    @Test func whatAnEarlierVersionKeptForAMachineThatWasAwayGoesToThisMacsBoxOnce() async throws {
+        let machine = try await lab()
+        let box = try await ownBox()
+        defer { done(machine, box) }
+        let outbox: [String: Bots.OldEdit] = [
+            "bot_ada000001": Bots.OldEdit(box: "lab", fields: ["name": .string("Ada Lovelace")]),
+            "bot_gone00001": Bots.OldEdit(box: "attic", delete: true),
+        ]
+        UserDefaults.standard.set(try JSONEncoder().encode(outbox), forKey: Bots.oldOutboxKey)
+        let own = box.client(engine: engine.url)
+        await app.bots.handOverOldEdits(to: own)
+        #expect(UserDefaults.standard.data(forKey: Bots.oldOutboxKey) == nil)
+        let kept = try await held(box)
+        #expect(kept.first { $0.bot == "bot_ada000001" }?.change?["name"]?.string == "Ada Lovelace")
+        #expect(kept.first { $0.bot == "bot_ada000001" }?.computer == "lab")
+        #expect(kept.first { $0.bot == "bot_gone00001" }?.delete == true)
+        #expect(kept.first { $0.bot == "bot_gone00001" }?.computer == "attic", "a machine you removed: held until you add it again")
+        // Once only.
+        await app.bots.handOverOldEdits(to: own)
+        #expect(try await held(box).count == 2)
+    }
+
+    /// One this Mac's box can't keep now (it isn't answering) stays in the app until it can: never lost.
+    @Test func anEarlierVersionsEditStaysUntilThisMacsBoxTakesIt() async throws {
+        let outbox = ["bot_ada000001": Bots.OldEdit(box: "lab", fields: ["name": .string("Ada Lovelace")])]
+        UserDefaults.standard.set(try JSONEncoder().encode(outbox), forKey: Bots.oldOutboxKey)
+        defer { UserDefaults.standard.removeObject(forKey: Bots.oldOutboxKey) }
+        let down = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.cannotConnectToHost)) } })
+        await app.bots.handOverOldEdits(to: down)
+        #expect(Bots.oldOutbox() == outbox)
     }
 
     /// Its bots read again (a run of one ended there), slowly, while you rename one: the list, read
@@ -161,25 +221,6 @@ import Testing
         _ = try await machine.client.send("PATCH", "kuvo/bots/bot_ada000001", body: Data(#"{"name": "Ada Lovelace"}"#.utf8))
         try await until { app.bots.bot("bot_ada000001")?.name == "Ada Lovelace" }
         #expect(app.bots.bot("bot_ada000001")?.machine == "lab")
-    }
-
-    /// One its box won't take when it's back (a name that's only spaces, say) is let go, and the box's
-    /// bot shows as it is.
-    @Test func oneItsBoxTurnsDownIsLetGo() async throws {
-        let machine = try await lab()
-        defer { done(machine) }
-        var connected = true
-        app.bots.boxes = { box in box == "lab" ? machine.client : BoxClient(box: box, transport: LocalBox { _ in AsyncThrowingStream { $0.finish() } }) }
-        app.bots.reachable = { $0 == "lab" && connected }
-        await app.bots.refresh("lab")
-        connected = false
-        var blank = try #require(app.bots.bot("bot_ada000001"))
-        blank.name = "   "
-        try await app.bots.update(blank)
-        connected = true
-        await app.bots.refresh("lab")
-        #expect(app.bots.edits.waiting.isEmpty)
-        #expect(app.bots.bot("bot_ada000001")?.name == "Ada")
     }
 
     /// The bot keeps its job as you talk to it, Edit Bot open or not: while you haven't touched

@@ -15,8 +15,11 @@ public enum BoxGate {
     /// (`sessions.list`, `typed`, plan limits' `rows`, `kuvo/updates`, Cursor's limits,
     /// `kuvo/sessions/read`). `sessions.asks`, `queue.items` and `sessions.mentions` came last, for
     /// the desktop client (gpui), which draws asks, the queue and "@" and "&" as the box says them.
+    /// `bots.held` (#668 item 8): an edit to a bot whose computer is away is held by the box asked,
+    /// and no client keeps an outbox of its own.
     public static let required: [String] = [
         "agent-tools.own",
+        "bots.held",
         "folders.tree",
         "git.branches",
         "git.merge",

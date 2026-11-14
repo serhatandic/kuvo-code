@@ -108,20 +108,33 @@ struct ListedBot: Decodable, Equatable {
     var allowed: WorkActions?
 }
 
+/// An edit to a bot on another computer, held by a box until that computer answers (PROTOCOL.md,
+/// `kuvo/bots`, "Held for another computer"): the bot, that computer by its key and its name, the
+/// change (`PATCH kuvo/bots/<id>`'s fields) or a delete.
+struct HeldBotEdit: Decodable, Equatable {
+    var bot: String
+    var box: String
+    var computer: String
+    var change: [String: JSONValue]?
+    var delete: Bool?
+    var since: Double
+}
+
 /// Your bots, wherever each lives, as their computers' boxes keep them: this Mac's followed as they
 /// change (`kuvo/bots/events`), a machine's read as it connects, after a change from here, and as
 /// one of its bots' runs ends. What each box last said is kept (`bots.json`) to show while its
 /// computer is away, in the form an earlier version reads, so going back to one finds them. An
-/// edit for a computer that's away waits for it (`BotEdits`), shown as made meanwhile.
+/// edit for a machine that's away goes to this Mac's box, which holds it for that machine and
+/// says so; the bot shows as you left it meanwhile, and nothing waits here.
 @Observable
 final class Bots {
-    /// Your bots as you see them: as their boxes last said, with your edits waiting for their
+    /// Your bots as you see them: as their boxes last said, with the edits a box holds for their
     /// computer as made.
     private(set) var list: [Bot] = []
     /// As their boxes last said.
     @ObservationIgnored private var known: [Bot] = []
-    /// Edits waiting for their computer.
-    let edits: BotEdits
+    /// What each box holds for its other computers, by the box that holds it, as it last said.
+    private(set) var held: [String: [HeldBotEdit]] = [:]
     /// Each bot's waiting wake-ups, as last read, by its ID.
     var wakes: [String: [Wakes.Pending]] { app?.wakeUps.wakes ?? [:] }
     /// Each bot's watches, as last read.
@@ -153,8 +166,7 @@ final class Bots {
     /// The wake-up command on a machine.
     static var machineCommand: String { WakeUps.machineCommand }
 
-    init(edits: BotEdits = BotEdits()) {
-        self.edits = edits
+    init() {
         known = Self.load()
         show()
     }
@@ -179,10 +191,22 @@ final class Bots {
         reachable?(machine) ?? (app?.machines.engine(machine)?.isReady == true)
     }
 
-    /// The computer an edit of `bot`'s waits for, by name, while one does.
+    /// The computer an edit of `bot`'s waits for, by name, while a box holds one.
     func waitingFor(_ bot: Bot) -> String? {
-        guard edits.waiting[bot.id] != nil else { return nil }
-        return bot.machine.map { app?.machines.engine($0)?.machine.name ?? $0 } ?? AppInfo.name
+        heldEdit(for: bot.id)?.edit.computer
+    }
+
+    /// The edit a box holds for `id`'s computer, and that box.
+    private func heldEdit(for id: String) -> (box: String, edit: HeldBotEdit)? {
+        for (box, edits) in held { if let edit = edits.first(where: { $0.bot == id }) { return (box, edit) } }
+        return nil
+    }
+
+    /// What `box` holds now, as it said.
+    private func take(held edits: [HeldBotEdit]?, from box: String) {
+        guard let edits, held[box] ?? [] != edits else { return }
+        held[box] = edits.isEmpty ? nil : edits
+        show()
     }
 
     /// The model a bot talks on, as its editor shows it: the one picked for it in Edit Bot while
@@ -307,16 +331,19 @@ final class Bots {
                   created: ISO8601DateFormatter().string(from: bot.created), limits: bot.limits, allowed: bot.allowed)
     }
 
-    /// The list as you see it: as the boxes said, with your waiting edits as made.
+    /// The list as you see it: as the boxes said, with the edits held for them as made (one held
+    /// to be deleted gone).
     private func show() {
-        let shown = known.map { edits.applied(to: $0) }
+        let shown = known.compactMap { bot -> Bot? in
+            guard let edit = heldEdit(for: bot.id)?.edit else { return bot }
+            return edit.delete == true ? nil : Self.applied(edit.change ?? [:], to: bot)
+        }
         if shown != list { list = shown }
         noteSessions()
     }
 
     /// What's here of a bot its box no longer has: its tabs, wake-ups and conversation.
     private func forgetHere(_ bot: Bot) {
-        edits.drop(bot.id)
         app?.wakeUps.forget(key: bot.id)
         app?.botWork.forget(bot.id)
         app?.utilities.closeTabs(of: bot.id)
@@ -329,7 +356,7 @@ final class Bots {
     /// by an agent, a phone or here, shows as it happens. This Mac's always; a machine's while it's
     /// connected (its connection ends this).
     func follow(_ box: String = BoxClient.thisMac) async {
-        struct Line: Decodable { var bots: [ListedBot] }
+        struct Line: Decodable { var bots: [ListedBot]; var held: [HeldBotEdit]? }
         // (Followed as it changes on a box that streams (the app's own, and the one attached in place
         // while it's reached over its server: asked each round); read now and then on any other, which
         // answers once a read.)
@@ -346,10 +373,13 @@ final class Bots {
             // The app gone (a test's): nothing more to follow for it.
             guard let app else { return }
             if let client = onThisMac ? client(box) ?? app.box(box) : client(box) {
+                // COMPAT(0.7 mac-bot-edits): what an earlier version kept here for machines that were away, to this Mac's box once. Goes 3 months after 0.8.0.
+                if onThisMac { await handOverOldEdits(to: client) }
                 do {
                     for try await data in client.follow("kuvo/bots/events") {
                         guard let line = try? JSONDecoder().decode(Line.self, from: data) else { continue }
                         take(line.bots, from: box)
+                        take(held: line.held, from: box)
                     }
                 } catch let refusal as BoxRefusal {
                     older = !onThisMac && (refusal.status == 404 || refusal.status == 403)
@@ -360,14 +390,13 @@ final class Bots {
         }
     }
 
-    /// A box's bots as it has them now (a machine's while it's connected, with what you changed of
-    /// them while it was away sent first).
+    /// A box's bots as it has them now (a machine's while it's connected), and what it holds for
+    /// your other computers.
     func refresh(_ box: String) async {
         if box != BoxClient.mac {
             guard canReach(box) else { return }
-            await sendWaiting(to: box)
         }
-        struct Listed: Decodable { var bots: [ListedBot] }
+        struct Listed: Decodable { var bots: [ListedBot]; var held: [HeldBotEdit]? }
         if listing[box, default: 0] == 0 { touchedWhileListing[box] = [] }
         listing[box, default: 0] += 1
         defer {
@@ -378,6 +407,7 @@ final class Bots {
         // One changed here meanwhile as it is here (made, as made; deleted, gone).
         let touched = touchedWhileListing[box] ?? []
         take(listed.bots.filter { !touched.contains($0.id) } + known.filter { $0.box == box && touched.contains($0.id) }.map(Self.listed), from: box)
+        take(held: listed.held, from: box)
     }
 
     /// A bot's run ended: on a machine, its box may have changed it meanwhile (its job, kept with
@@ -472,13 +502,14 @@ final class Bots {
     }
 
     /// What Edit Bot changes (its name, look, model and personality, and its job with `job`), sent to
-    /// its box, which tells its conversation and its group chats. One for a computer that's away
-    /// waits for it (`BotEdits`), shown as made meanwhile, and goes as soon as it's back. Throws
-    /// what its box said no to.
+    /// its box, which tells its conversation and its group chats. One for a machine that's away goes
+    /// to this Mac's box, which holds it for that machine and hands it on once it's back (and one for
+    /// a bot with an edit held already goes there too, on top of it, never before it); it shows as
+    /// made meanwhile. Throws what a box said no to.
     func update(_ edited: Bot, job: Bool = false) async throws {
         guard let current = known.first(where: { $0.id == edited.id }) else { return }
-        // As you see it, with what waits for it.
-        let shown = edits.applied(to: current)
+        // As you see it, with what's held for it.
+        let shown = bot(edited.id) ?? current
         var fields: [String: JSONValue] = [:]
         if edited.name != shown.name { fields["name"] = .string(edited.name) }
         if edited.look != shown.look { fields["look"] = Self.value(edited.look) }
@@ -489,70 +520,79 @@ final class Bots {
         }
         guard !fields.isEmpty else { return }
         if Moves.isFrozen(edited.id) { throw Moves.Failure.moving }
-        if let machine = current.machine, !canReach(machine) {
-            edits.put(edited.id, box: current.box, fields: fields)
-            show()
-            return
-        }
-        // What waited for it goes with this, yours of now on top: nothing older goes after it.
-        let waiting = edits.waiting[edited.id]
-        if let waiting, !waiting.delete { fields = waiting.fields.merging(fields) { _, new in new } }
+        if let holder = heldEdit(for: edited.id)?.box { return try await hold(fields, for: current, on: holder) }
+        if let machine = current.machine, !canReach(machine) { return try await hold(fields, for: current) }
         do {
             try await send(fields, to: current)
-            if let waiting, edits.waiting[edited.id] == waiting { edits.drop(edited.id) }
         } catch let refusal as BoxRefusal {
             throw refusal
         } catch where current.machine != nil {
-            // It didn't get there (the connection dropped): it waits for its computer.
-            edits.put(edited.id, box: current.box, fields: fields)
-            show()
+            // It didn't get there (the connection dropped): held for its machine.
+            try await hold(fields, for: current)
         } catch {
-            // This Mac's box not answering (starting again): said, and nothing waits.
+            // This Mac's box not answering (starting again): said.
             throw BoxRefusal(status: 503, message: "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment.")
         }
+    }
+
+    /// `fields` changed on `bot` (nil: it deleted), held by `holder` (this Mac's box) for the machine
+    /// it lives on until that machine answers (PROTOCOL.md, `kuvo/bots`, "Held for another
+    /// computer"): what it holds then shows at once.
+    private func hold(_ fields: [String: JSONValue]?, for bot: Bot, on holder: String = BoxClient.thisMac) async throws {
+        guard let client = client(holder) else {
+            throw BoxRefusal(status: 503, message: "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment.")
+        }
+        struct Answer: Decodable { var held: HeldBotEdit }
+        let answer: Answer
+        do {
+            answer = try await client.value(Answer.self, fields == nil ? "DELETE" : "PATCH", Self.path(bot.id, on: bot.machine), body: fields.map(JSONValue.object))
+        } catch let refusal as BoxRefusal {
+            throw refusal
+        } catch {
+            throw BoxRefusal(status: 503, message: "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment.")
+        }
+        var edits = held[holder] ?? []
+        edits.removeAll { $0.bot == bot.id }
+        edits.append(answer.held)
+        held[holder] = edits
+        show()
+    }
+
+    /// A bot's route on a box (`kuvo/bots/<id>`), naming the machine it lives on (`on`) for a box
+    /// that holds an edit for it.
+    private static func path(_ id: String, on machine: String? = nil) -> String {
+        let path = "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)
+        let value = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#"))
+        return machine.map { path + "?on=" + ($0.addingPercentEncoding(withAllowedCharacters: value) ?? $0) } ?? path
+    }
+
+    /// `bot` with `change` (as `PATCH kuvo/bots/<id>` takes it) made, as it shows while it's held.
+    private static func applied(_ change: [String: JSONValue], to bot: Bot) -> Bot {
+        var shown = bot
+        if let name = change["name"]?.string { shown.name = oneLine(name) }
+        if let look = change["look"].flatMap({ decoded(BotLook.self, $0) }) { shown.look = look }
+        if let personality = change["personality"] { shown.personality = personality.string }
+        if let model = change["model"].flatMap({ decoded(ModelRef.self, $0) }) { shown.model = model }
+        if let job = change["job"] {
+            shown.job = job["line"]?.string ?? shown.job
+            shown.instructions = job["details"]?.string ?? shown.instructions
+        }
+        return shown
+    }
+
+    private static func decoded<T: Decodable>(_ type: T.Type, _ value: JSONValue) -> T? {
+        (try? JSONEncoder().encode(value)).flatMap { try? JSONDecoder().decode(type, from: $0) }
     }
 
     /// `fields` changed on `bot`'s box (`PATCH kuvo/bots/<id>`), and what it answered taken in.
     private func send(_ fields: [String: JSONValue], to bot: Bot) async throws {
         guard let client = client(bot.box) else { throw BoxRefusal(status: 503, data: Data()) }
         struct Answer: Decodable { var bot: ListedBot }
-        let path = "kuvo/bots/" + (bot.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? bot.id)
-        let answer = try await client.value(Answer.self, "PATCH", path, body: JSONValue.object(fields))
+        let answer = try await client.value(Answer.self, "PATCH", Self.path(bot.id), body: JSONValue.object(fields))
         let before = self.bot(bot.id)
         take(one: answer.bot, from: bot.box)
         // A conversation carried on with the coding agents: the new one, in the old one's place.
         if let before, before.sessionID != answer.bot.session, let now = self.bot(bot.id) { await carried(from: before.sessionID, to: now) }
-    }
-
-    /// Edits that waited for `box`'s computer, sent now it's back: one at a time, its box's answer
-    /// then what shows. One its box says no to (a name it won't take, a bot that's gone) is let go.
-    func sendWaiting(to box: String) async {
-        for (id, edit) in edits.waiting where edit.box == box {
-            if Moves.isFrozen(id) { continue }
-            do {
-                if edit.delete {
-                    // One deleted while its machine was removed: it's gone from the list already.
-                    guard let client = client(box) else { continue }
-                    let (status, data) = try await client.send("DELETE", "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id))
-                    guard (200..<300).contains(status) || status == 404 else { throw BoxRefusal(status: status, data: data) }
-                } else {
-                    guard let bot = known.first(where: { $0.id == id }) else {
-                        edits.drop(id)
-                        continue
-                    }
-                    // As it waits now: one saved directly meanwhile went already.
-                    guard edits.waiting[id] == edit else { continue }
-                    try await send(edit.fields, to: bot)
-                }
-                if edits.waiting[id] == edit { edits.drop(id) }
-            } catch let refusal as BoxRefusal where refusal.status != 409 && refusal.status < 500 {
-                log.error("A waiting edit to a bot was turned down: \(refusal.message, privacy: .public)")
-                if edits.waiting[id] == edit { edits.drop(id) }
-            } catch {
-                // Still not there: it waits on.
-            }
-        }
-        show()
     }
 
     /// A bot's conversation that its box carried on with the coding agents (a model of theirs): the
@@ -581,16 +621,20 @@ final class Bots {
     /// its folder goes to the Trash (on a machine, Kuvo Code's trash folder there), with what it made
     /// in it. A project it worked in stays. A machine's bot goes only once it's gone there, so while
     /// that machine can't be reached it stays, and this says so. One whose machine you removed from
-    /// Kuvo Code leaves the list, and goes there the next time that machine answers.
+    /// Kuvo Code leaves the list, and goes there the next time that machine answers (this Mac's box
+    /// holds it); so does one with an edit held already, after it.
     func delete(_ bot: Bot) async throws {
         if Moves.isFrozen(bot.id) { throw Moves.Failure.moving }
         if let machine = bot.machine {
-            guard reachable != nil || app?.machines.engine(machine) != nil else {
+            let removed = reachable == nil && app?.machines.engine(machine) == nil
+            if removed || heldEdit(for: bot.id) != nil {
+                try await hold(nil, for: bot, on: heldEdit(for: bot.id)?.box ?? BoxClient.thisMac)
                 // A machine you removed: it goes there if you add it again.
-                edits.put(bot.id, box: bot.box, delete: true)
-                known.removeAll { $0.id == bot.id }
-                save()
-                forgetHere(bot)
+                if removed {
+                    known.removeAll { $0.id == bot.id }
+                    save()
+                    forgetHere(bot)
+                }
                 return
             }
             guard canReach(machine) else { throw Failure.stillOn(placeName(machine)) }
@@ -601,8 +645,7 @@ final class Bots {
 
     private func deleteOnBox(_ bot: Bot) async throws {
         guard let client = client(bot.box) else { return }
-        let path = "kuvo/bots/" + (bot.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? bot.id)
-        let (status, data) = try await client.send("DELETE", path)
+        let (status, data) = try await client.send("DELETE", Self.path(bot.id))
         guard (200..<300).contains(status) || status == 404 else { throw BoxRefusal(status: status, data: data) }
         touchedWhileListing[bot.box]?.insert(bot.id)
         known.removeAll { $0.id == bot.id }
@@ -666,17 +709,62 @@ final class Bots {
     }
 
     /// For an update from a version that kept what you changed of a machine's bots while it was
-    /// away in its own list, still to tell the machine (`botEditsWaiting`): each such bot's edit
-    /// waits for its machine, as the list has it.
+    /// away in its own list, still to tell the machine (`botEditsWaiting`): each such bot's edit, as
+    /// the list has it, put with what a later version kept for this Mac's box to take
+    /// (`handOverOldEdits`).
     func takeOldWaitingEdits() {
         let old = UserDefaults.standard.dictionary(forKey: "botEditsWaiting") as? [String: [String]] ?? [:]
+        var outbox = Self.oldOutbox()
         for id in old.keys {
-            guard let bot = known.first(where: { $0.id == id }), bot.machine != nil, edits.waiting[id] == nil else { continue }
+            guard let bot = known.first(where: { $0.id == id }), bot.machine != nil, outbox[id] == nil else { continue }
             var fields: [String: JSONValue] = ["name": .string(bot.name), "look": Self.value(bot.look), "personality": bot.personality.map(JSONValue.string) ?? .null]
             if let model = bot.model { fields["model"] = Self.value(model) }
-            edits.put(id, box: bot.box, fields: fields)
+            outbox[id] = OldEdit(box: bot.box, fields: fields)
         }
-        show()
+        Self.keepOldOutbox(outbox)
+        if !outbox.isEmpty, let client = client(BoxClient.thisMac) { Task { await handOverOldEdits(to: client) } }
+    }
+
+    /// What an earlier version kept here of a machine's bot while that machine was away
+    /// (`botEditOutbox`): for its box ("mac", or a machine's id), the fields as `PATCH
+    /// kuvo/bots/<id>` takes them, or a delete.
+    struct OldEdit: Codable, Equatable {
+        var box: String
+        var fields: [String: JSONValue] = [:]
+        var delete = false
+    }
+
+    static let oldOutboxKey = "botEditOutbox"
+
+    static func oldOutbox() -> [String: OldEdit] {
+        UserDefaults.standard.data(forKey: oldOutboxKey).flatMap { try? JSONDecoder().decode([String: OldEdit].self, from: $0) } ?? [:]
+    }
+
+    private static func keepOldOutbox(_ outbox: [String: OldEdit]) {
+        UserDefaults.standard.set(outbox.isEmpty ? nil : try? JSONEncoder().encode(outbox), forKey: oldOutboxKey)
+    }
+
+    /// COMPAT(0.7 mac-bot-edits): edits to machines' bots an earlier version kept here while they were away (`botEditOutbox`), handed to this Mac's box once, which holds each for its machine; one it can't keep now stays for the next time. Goes 3 months after 0.8.0.
+    func handOverOldEdits(to client: BoxClient) async {
+        var outbox = Self.oldOutbox()
+        guard !outbox.isEmpty else { return }
+        for (id, edit) in outbox.sorted(by: { $0.key < $1.key }) {
+            let path = Self.path(id, on: edit.box)
+            let answer: (status: Int, body: Data)
+            do {
+                answer = try await client.send(edit.delete ? "DELETE" : "PATCH", path, body: edit.delete ? nil : try JSONEncoder().encode(JSONValue.object(edit.fields)))
+            } catch {
+                // Not answering: kept for the next time.
+                continue
+            }
+            // (Not now, or a box held for its update: kept for the next time.)
+            if answer.status >= 500 || answer.status == 409 { continue }
+            if answer.status >= 300, !(answer.status == 404 && edit.delete) {
+                log.error("An edit an earlier version kept for a bot wasn't taken: \(BoxRefusal(status: answer.status, data: answer.body).message, privacy: .public)")
+            }
+            outbox[id] = nil
+            Self.keepOldOutbox(outbox)
+        }
     }
 
     /// A bot's description, as `bot.json` has it.
@@ -709,7 +797,6 @@ final class Bots {
             }
             changed = true
         }
-        edits.fold(machine, into: other)
         if changed {
             save()
             show()
