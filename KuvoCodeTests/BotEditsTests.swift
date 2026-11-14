@@ -26,7 +26,7 @@ import Testing
         engine.on("POST", "/api/session/*", json: [:])
     }
 
-    private func done(_ machine: MachineTestBox, _ box: TestBox? = nil) {
+    private func done(_ machine: MachineTestBox, _ box: MachineTestBox? = nil) {
         machine.stop()
         box?.stop()
         StubWeb.stopListening(port: 47_985)
@@ -35,16 +35,20 @@ import Testing
         try? FileManager.default.removeItem(at: Bots.file)
     }
 
-    /// This Mac's box, which knows the machine "lab" as one of its computers (its key, its address on
-    /// the relay, its id here), as its app tells it, and has its keys.
-    private func ownBox() async throws -> TestBox {
-        let box = try await TestBox(engine: engine.url, environment: ["KUVO_TEST_NO_PEERS": "1"])
+    /// The box that holds what's changed for lab, in this Mac's box's place: the real box, which knows
+    /// lab as one of your computers (its key, its address on the relay, its id on this Mac) and has its
+    /// keys. (This Mac's own box has its keys only from the app's Keychain, in memory; its sealing with
+    /// them is the bridge's `bots-held-mac.test.js`.)
+    private func ownBox() async throws -> MachineTestBox {
+        let box = try await MachineTestBox(name: "holder")
+        let random = { Data((0..<32).map { _ in UInt8.random(in: 0...255) }).base64URL }
+        let mac = String(repeating: "M", count: 43)
         let link: [String: Any] = [
-            "secret": Data((0..<32).map { _ in UInt8.random(in: 0...255) }).base64URL,
-            "macPeers": [["key": String(repeating: "L", count: 43), "address": String(repeating: "a", count: 22), "kind": "machine", "name": "lab", "id": "lab"]],
+            "secret": random(), "key": random(), "relay": "wss://relay.invalid", "name": "holder", "mac": mac, "macs": [mac], "phones": [],
+            "legacy": [mac: ["at": 1, "peers": [["key": String(repeating: "L", count: 43), "address": String(repeating: "a", count: 22), "kind": "machine", "name": "lab", "id": "lab"]]]],
         ]
-        try FileManager.default.createDirectory(at: BoxProcess.run, withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: link).write(to: BoxProcess.run.appending(path: "link.json"), options: .atomic)
+        try FileManager.default.createDirectory(at: box.folder.appending(path: "run"), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: link).write(to: box.folder.appending(path: "run/link.json"), options: .atomic)
         return box
     }
 
@@ -72,9 +76,9 @@ import Testing
     }
 
     /// What this Mac's box holds, as any client reads it.
-    private func held(_ box: TestBox) async throws -> [HeldBotEdit] {
+    private func held(_ box: MachineTestBox) async throws -> [HeldBotEdit] {
         struct Listed: Decodable { var held: [HeldBotEdit]? }
-        return try await box.client(engine: engine.url).value(Listed.self, "GET", "kuvo/bots").held ?? []
+        return try await box.client.value(Listed.self, "GET", "kuvo/bots").held ?? []
     }
 
     @Test func aChangeWhileItsMachineIsAwayIsHeldByThisMacsBoxAndShowsAsYouLeftIt() async throws {
@@ -82,7 +86,7 @@ import Testing
         let box = try await ownBox()
         defer { done(machine, box) }
         var connected = true
-        let own = box.client(engine: engine.url)
+        let own = box.client
         app.bots.boxes = { name in name == "lab" ? machine.client : own }
         app.bots.reachable = { $0 == "lab" && connected }
         await app.bots.refresh("lab")
@@ -141,7 +145,7 @@ import Testing
             "bot_gone00001": Bots.OldEdit(box: "attic", delete: true),
         ]
         UserDefaults.standard.set(try JSONEncoder().encode(outbox), forKey: Bots.oldOutboxKey)
-        let own = box.client(engine: engine.url)
+        let own = box.client
         await app.bots.handOverOldEdits(to: own)
         #expect(UserDefaults.standard.data(forKey: Bots.oldOutboxKey) == nil)
         let kept = try await held(box)
@@ -154,13 +158,23 @@ import Testing
         #expect(try await held(box).count == 2)
     }
 
-    /// One this Mac's box can't keep now (it isn't answering) stays in the app until it can: never lost.
+    /// One this Mac's box can't keep now (it isn't answering, or doesn't know where the bot is yet)
+    /// stays in the app until it can: never lost.
     @Test func anEarlierVersionsEditStaysUntilThisMacsBoxTakesIt() async throws {
         let outbox = ["bot_ada000001": Bots.OldEdit(box: "lab", fields: ["name": .string("Ada Lovelace")])]
         UserDefaults.standard.set(try JSONEncoder().encode(outbox), forKey: Bots.oldOutboxKey)
         defer { UserDefaults.standard.removeObject(forKey: Bots.oldOutboxKey) }
         let down = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.cannotConnectToHost)) } })
         await app.bots.handOverOldEdits(to: down)
+        #expect(Bots.oldOutbox() == outbox)
+        let unsure = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(#"{"message": "That bot isn’t there any more."}"#.utf8)))
+                continuation.finish()
+            }
+        })
+        await app.bots.handOverOldEdits(to: unsure)
         #expect(Bots.oldOutbox() == outbox)
     }
 

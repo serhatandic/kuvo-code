@@ -88,7 +88,7 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
       if (bytes) try { host?.send(bytes); } catch {}
     };
     takeBotEdit(sender, payload.botEdit, reply, {
-      change: (bot, change) => changeBot(bot, change, readEngineFile, bridgeTarget),
+      change: (bot, change, at) => changeBot(bot, change, readEngineFile, bridgeTarget, undefined, undefined, at),
       delete: bot => deleteBot(bot, readEngineFile, bridgeTarget),
     }).catch(() => {});
   }

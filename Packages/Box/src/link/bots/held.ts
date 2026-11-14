@@ -20,14 +20,15 @@ import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { LOOKS } from "../../shared/routes/bots";
 import { listOf, locked, textOf, writePrivate } from "../files";
-import { RUN } from "../home";
+import { IS_MAC, RUN } from "../home";
 import { readPeerAgents } from "../peers/directory";
 import { computerName } from "../peers/computer-name";
 import { mailFor, peersOf } from "../peers/known";
 import { readTold } from "../work-queue/told";
 import { ownName } from "../letters/start";
-import { readLink } from "../state";
+import { macLink, readLink } from "../state";
 import { botHere, isModel, noteBotsChanged } from "./here";
+import { editedTimes } from "./edited";
 import { givenJob } from "./jobs";
 import { fitsLook } from "./make";
 import type { BotChange } from "./edit";
@@ -47,7 +48,9 @@ const REFUSED_FILE = path.join(HELD, "refused.json");
 const TAKEN_FILE = path.join(RUN, "bots-held-taken.json");
 const BOT_ID = /^bot_[A-Za-z0-9]{1,60}$/;
 const EDIT_ID = /^bte_[A-Za-z0-9_-]{16,40}$/;
-const FIELDS = ["name", "look", "personality", "job", "model", "work"] as const;
+/** What's held: Edit Bot's fields. A bot's work settings (its limits, what it may do without asking)
+ * aren't: they change only where it lives, while that computer answers. */
+const FIELDS = ["name", "look", "personality", "job", "model"] as const;
 
 /** How often what's held goes again to a computer that answers (the relay keeps nothing), and how
  * long a refusal shows. */
@@ -60,14 +63,16 @@ const TAKEN_MEMORY = 7 * 86_400_000;
 const MOST_TAKEN = 1_000;
 
 /** An edit held here: the bot's computer by its key (empty while this box doesn't know it: one you
- * removed, named by the client in `on`), the change (`PATCH kuvo/bots/<id>`'s fields) or a delete,
- * since when it's held and when it last changed, this version's id, and its seal. */
+ * removed, named by the client in `on`), the change (`PATCH kuvo/bots/<id>`'s fields) and when each
+ * field was given (`times`, by this box's clock), or a delete, since when it's held and when it last
+ * changed, this version's id, and its seal. */
 interface Held {
   id: string;
   bot: string;
   to: string;
   on?: string;
   change?: BotChange;
+  times?: Record<string, number>;
   delete?: true;
   since: number;
   at: number;
@@ -81,24 +86,33 @@ const fileOf = (bot: string) => path.join(HELD, `${bot}.json`);
 
 // The seal: an HMAC of the record with a key from this box's secret, which only it has (this Mac's
 // box from your Keychain, in memory).
-function sealOf(held: Omit<Held, "seal">, link: LinkState | null): string | null {
-  if (!link?.secret) return null;
-  const key = crypto.createHmac("sha256", Buffer.from(link.secret, "base64url")).update("kuvo bot edits held").digest();
-  const { id, bot, to, on, change, since, at } = held;
-  return crypto.createHmac("sha256", key).update(JSON.stringify([id, bot, to, on ?? null, change ?? null, held.delete === true, since, at])).digest("base64url");
+// This box's secret: this Mac's only as its app gave it (in memory), never one in a file there.
+const secretOf = (link: LinkState | null): string | undefined => (IS_MAC ? macLink.overlay?.secret : link?.secret);
+
+function sealWith(value: unknown, link: LinkState | null): string | null {
+  const secret = secretOf(link);
+  if (!secret) return null;
+  const key = crypto.createHmac("sha256", Buffer.from(secret, "base64url")).update("kuvo bot edits held").digest();
+  return crypto.createHmac("sha256", key).update(JSON.stringify(value)).digest("base64url");
 }
+
+const sealOf = (held: Omit<Held, "seal">, link: LinkState | null): string | null => {
+  const { id, bot, to, on, change, times, since, at } = held;
+  return sealWith([id, bot, to, on ?? null, change ?? null, times ?? null, held.delete === true, since, at], link);
+};
+
+const sealed = (given: unknown, seal: string | null): boolean => typeof given === "string" && Boolean(seal) && given.length === seal!.length && crypto.timingSafeEqual(Buffer.from(seal!), Buffer.from(given));
 
 function readHeld(bot: string, link: LinkState | null = readLink()): Held | null {
   let kept: unknown;
   try { kept = JSON.parse(textOf(fileOf(bot)) ?? ""); } catch { return null; }
   if (!isObject(kept) || kept.bot !== bot || typeof kept.id !== "string" || !EDIT_ID.test(kept.id) || typeof kept.to !== "string") return null;
   if (kept.on !== undefined && typeof kept.on !== "string") return null;
+  if (kept.times !== undefined && !isObject(kept.times)) return null;
   if (typeof kept.since !== "number" || typeof kept.at !== "number" || typeof kept.seal !== "string") return null;
   if (kept.delete !== true && !isObject(kept.change)) return null;
   const held = kept as unknown as Held;
-  const seal = sealOf(held, link);
-  if (!seal || held.seal!.length !== seal.length || !crypto.timingSafeEqual(Buffer.from(seal), Buffer.from(held.seal!))) return null;
-  return held;
+  return sealed(held.seal, sealOf(held, link)) ? held : null;
 }
 
 function writeHeld(held: Omit<Held, "seal">, link: LinkState | null): boolean {
@@ -142,9 +156,11 @@ const viewOf = (held: Held, link: LinkState | null): HeldEdit => ({
 });
 
 /** What's held here for your other computers, and what they refused lately, as `kuvo/bots` lists
- * them for clients to show. */
-export function heldLists(link: LinkState | null = readLink(), now = Date.now()): { held: HeldEdit[]; refused: RefusedEdit[] } {
-  return { held: allHeld(link).map(each => viewOf(each, link)), refused: readRefused(now) };
+ * them for clients to show; neither while this box can't tell its own from what's planted (this
+ * Mac's box before its app gives it its keys), so a client keeps what it last heard. */
+export function heldLists(link: LinkState | null = readLink(), now = Date.now()): { held?: HeldEdit[]; refused?: RefusedEdit[] } {
+  if (!secretOf(link)) return {};
+  return { held: allHeld(link).map(each => viewOf(each, link)), refused: readRefused(now, link) };
 }
 
 // A change as Edit Bot gives it, checked as far as this box can without the bot (its computer
@@ -165,34 +181,25 @@ function checkedChange(given: unknown): { change: BotChange } | { error: string 
     if (checked.error) return { error: checked.error };
   }
   if ("model" in change && !isModel(change.model)) return { error: "That isn’t a model." };
-  if ("work" in change && change.work !== null && !isObject(change.work)) return { error: "That isn’t a bot’s work settings." };
   return { change: change as BotChange };
 }
 
-// `later` on top of `earlier`, field by field: a work's settings each by its own.
-function merged(earlier: BotChange | undefined, later: BotChange): BotChange {
-  const next: Record<string, unknown> = { ...(earlier ?? {}) };
-  for (const [field, value] of Object.entries(later)) {
-    next[field] = field === "work" && isObject(value) && isObject(next.work) ? { ...next.work, ...value } : value;
-  }
-  return next as BotChange;
-}
-
 /** What `holdEdit` answers: held (202), or why not. */
-export type HoldAnswer = { status: 202; value: { held: HeldEdit } } | { status: 400 | 404 | 503; value: { message: string } };
+export type HoldAnswer = { status: 202; value: { held: HeldEdit } } | { status: 400 | 404 | 409 | 503; value: { message: string } };
 
 /** A change to `bot` (or its delete), which lives on another of your computers, held here for it:
  * on top of what's held already, a field at a time, a delete over all of it. `on`: the computer as
- * the client names it, for one this box hasn't heard of the bot from. */
-export function holdEdit(bot: string, given: { change: unknown } | { delete: true }, on: string | null | undefined, now = Date.now()): HoldAnswer {
-  const no = (status: 400 | 404 | 503, message: string): HoldAnswer => ({ status, value: { message } });
+ * the client names it, for one this box hasn't heard of the bot from; with `removed`, one this box
+ * doesn't know now (a machine you removed), held until it's one of its computers again. */
+export function holdEdit(bot: string, given: { change: unknown } | { delete: true }, on: string | null | undefined, { removed = false, now = Date.now() }: { removed?: boolean; now?: number } = {}): HoldAnswer {
+  const no = (status: 400 | 404 | 409 | 503, message: string): HoldAnswer => ({ status, value: { message } });
   if (!BOT_ID.test(bot)) return no(404, "That bot isn’t there any more.");
   const link = readLink();
   const keeper = keeperOf(bot, on, link);
-  // (A computer this box doesn't know now, named by the client: one you removed. It goes there if
-  // you add it again.)
-  const named = on ? plainName(on).slice(0, 200) : "";
+  const named = removed && on ? plainName(on).slice(0, 200) : "";
   if (!keeper && !named) return no(404, "That bot isn’t there any more.");
+  const computer = keeper ? shownName(keeper) : named;
+  if ("change" in given && isObject(given.change) && "work" in given.change) return no(409, `${computer} isn’t connected: change its work settings once it’s back.`);
   const checked = "change" in given ? checkedChange(given.change) : null;
   if (checked && "error" in checked) return no(400, checked.error);
   let answer: HoldAnswer | null = null;
@@ -201,15 +208,16 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
     locked(LOCK, () => {
       const before = readHeld(bot, link);
       if (before?.delete && checked) {
-        answer = no(404, `That bot is deleted: it goes from ${keeper ? shownName(keeper) : named} once it’s back.`);
+        answer = no(404, `That bot is deleted: it goes from ${computer} once it’s back.`);
         return;
       }
+      const given = checked ? Object.fromEntries(Object.keys(checked.change).map(field => [field, now])) : {};
       const held: Held = {
         id: `bte_${crypto.randomBytes(16).toString("base64url")}`,
         bot,
         to: keeper?.key ?? "",
         ...(keeper ? {} : { on: named }),
-        ...(checked ? { change: merged(before?.change, checked.change) } : { delete: true as const }),
+        ...(checked ? { change: { ...(before?.change ?? {}), ...checked.change }, times: { ...(before?.times ?? {}), ...given } } : { delete: true as const }),
         since: before?.since ?? now,
         at: now,
       };
@@ -218,7 +226,7 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
         return;
       }
       sent.delete(bot);
-      dropRefusal(bot);
+      dropRefusal(bot, link);
       answer = { status: 202, value: { held: viewOf(held, link) } };
     });
   } catch {
@@ -272,7 +280,7 @@ export function sendHeld(host: Pick<LinkHost, "send" | "welcomed"> | null | unde
     if (last?.id === held.id && now - last.at < AGAIN_AFTER) continue;
     const peer = peersOf(link).find(each => each.key === held.to);
     if (!peer || !(told[peer.key]?.features ?? []).includes(HELD_FEATURE)) continue;
-    const bytes = mailFor(peer, { botEdit: { id: held.id, bot: held.bot, ...(held.delete ? { delete: true } : { change: held.change }), at: held.at }, at: now }, link);
+    const bytes = mailFor(peer, { botEdit: { id: held.id, bot: held.bot, ...(held.delete ? { delete: true } : { change: held.change, times: held.times ?? {} }), at: held.at }, at: now }, link);
     if (!bytes) continue;
     try {
       host.send(bytes);
@@ -281,11 +289,11 @@ export function sendHeld(host: Pick<LinkHost, "send" | "welcomed"> | null | unde
   }
 }
 
-// What the computers held edits went to refused lately, the newest first.
-function readRefused(now = Date.now()): RefusedEdit[] {
+// What the computers held edits went to refused lately, the newest first (sealed as what's held is).
+function readRefused(now = Date.now(), link: LinkState | null = readLink()): RefusedEdit[] {
   try {
     const kept: unknown = JSON.parse(textOf(REFUSED_FILE) ?? "");
-    if (!isObject(kept) || !Array.isArray(kept.refused)) return [];
+    if (!isObject(kept) || !Array.isArray(kept.refused) || !sealed(kept.seal, sealWith(kept.refused, link))) return [];
     return kept.refused.filter((each): each is RefusedEdit => isObject(each) && typeof each.bot === "string" && typeof each.box === "string" && typeof each.computer === "string"
       && typeof each.message === "string" && typeof each.at === "number" && now - each.at < REFUSAL_SHOWS);
   } catch {
@@ -293,15 +301,17 @@ function readRefused(now = Date.now()): RefusedEdit[] {
   }
 }
 
-function writeRefused(refused: RefusedEdit[]): void {
+function writeRefused(refused: RefusedEdit[], link: LinkState | null): void {
   if (!refused.length) return void fs.rmSync(REFUSED_FILE, { force: true });
-  writePrivate(REFUSED_FILE, JSON.stringify({ refused: refused.slice(0, MOST_REFUSALS) }));
+  const kept = refused.slice(0, MOST_REFUSALS);
+  const seal = sealWith(kept, link);
+  if (seal) writePrivate(REFUSED_FILE, JSON.stringify({ refused: kept, seal }));
 }
 
 // (Under LOCK.)
-function dropRefusal(bot: string): void {
-  const refused = readRefused();
-  if (refused.some(each => each.bot === bot)) writeRefused(refused.filter(each => each.bot !== bot));
+function dropRefusal(bot: string, link: LinkState | null): void {
+  const refused = readRefused(Date.now(), link);
+  if (refused.some(each => each.bot === bot)) writeRefused(refused.filter(each => each.bot !== bot), link);
 }
 
 /** The answer from the computer a held edit went to, from that computer only: done, it's let go;
@@ -341,7 +351,7 @@ export function takeBotEdited(sender: MailSender, given: unknown, now = Date.now
       const message = held.delete
         ? `${computer} didn’t delete the bot as you asked while it was away.${why ? ` ${why}` : ""}`
         : `${computer} didn’t take the changes you made while it was away.${why ? ` ${why}` : ""}`;
-      writeRefused([{ bot, box: held.to, computer, message, at: now }, ...readRefused(now).filter(each => each.bot !== bot)]);
+      writeRefused([{ bot, box: held.to, computer, message, at: now }, ...readRefused(now, link).filter(each => each.bot !== bot)], link);
     });
   } catch {}
   if (changed) {
@@ -376,9 +386,10 @@ function keepTaken(key: string, taken: Taken, now: number): void {
 // Those under way in this process, by asker and id (one sent again meanwhile isn't done twice).
 const taking = new Set<string>();
 
-/** What this box does with a held edit: as Edit Bot changes a bot, or Delete Bot… deletes it. */
+/** What this box does with a held edit: as Edit Bot changes a bot (as of `at`, when you made it),
+ * or Delete Bot… deletes it. */
 export interface EditSteps {
-  change: (bot: string, change: BotChange) => Promise<{ status: number; value: unknown }>;
+  change: (bot: string, change: BotChange, at: number) => Promise<{ status: number; value: unknown }>;
   delete: (bot: string) => Promise<{ status: number; value: unknown }>;
 }
 
@@ -404,7 +415,18 @@ export async function takeBotEdit(sender: MailSender, given: unknown, reply: (pa
   try {
     let done: { status: number; value: unknown };
     try {
-      done = given.delete === true ? await steps.delete(bot) : await steps.change(bot, given.change as BotChange);
+      if (given.delete === true) done = await steps.delete(bot);
+      else {
+        // Only what was given after it last changed here (a change made here meanwhile stays), and
+        // never its work settings, which change only where it lives.
+        const times = isObject(given.times) ? given.times : {};
+        const edited = editedTimes(bot);
+        const fresh = Object.entries(given.change as Record<string, unknown>).filter(([field]) => (FIELDS as readonly string[]).includes(field)
+          && !(typeof times[field] === "number" && typeof edited[field] === "number" && (times[field] as number) <= edited[field]));
+        // (Each field as of when it was given; the newest for what's noted.)
+        const at = Math.max(0, ...fresh.map(([field]) => (typeof times[field] === "number" ? times[field] as number : 0))) || (typeof given.at === "number" ? given.at : Date.now());
+        done = fresh.length ? await steps.change(bot, Object.fromEntries(fresh) as BotChange, at) : { status: 200, value: {} };
+      }
     } catch {
       done = { status: 503, value: { message: `Something went wrong on ${ownName()}.` } };
     }

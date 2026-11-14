@@ -46,8 +46,8 @@ export async function* botRoute(context: RouteContext, oneBot: RegExpMatchArray)
   // One that lives on another of your computers: held here for it, and handed on once it answers
   // ("Held for another computer"). `on` names that computer for one this box hasn't heard of yet.
   if (!botHere(id)) {
-    const on = new URLSearchParams(request.path.split("?")[1] ?? "").get("on");
-    const held = holdEdit(id, deleting ? { delete: true } : { change: parsed(request.body) }, on);
+    const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+    const held = holdEdit(id, deleting ? { delete: true } : { change: parsed(request.body) }, query.get("on"), { removed: query.has("removed") });
     return yield* json(held.status, held.value);
   }
   const { status, value } = !deleting

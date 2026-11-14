@@ -170,7 +170,7 @@
         },
         {
           "send": "GET kuvo/bots",
-          "expect": { "status": 200, "json": { "bots": [], "held": [], "refused": [] } }
+          "expect": { "status": 200, "json": { "bots": [] } }
         }
       ]
     },

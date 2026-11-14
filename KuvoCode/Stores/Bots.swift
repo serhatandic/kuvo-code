@@ -198,8 +198,22 @@ final class Bots {
 
     /// The edit a box holds for `id`'s computer, and that box.
     private func heldEdit(for id: String) -> (box: String, edit: HeldBotEdit)? {
-        for (box, edits) in held { if let edit = edits.first(where: { $0.bot == id }) { return (box, edit) } }
+        for box in held.keys.sorted() { if let edit = held[box]?.first(where: { $0.bot == id }) { return (box, edit) } }
         return nil
+    }
+
+    /// `edit`, as `box` said it holds it now, in place of what it held for that bot.
+    private func take(held edit: HeldBotEdit, from box: String) {
+        var edits = held[box] ?? []
+        edits.removeAll { $0.bot == edit.bot }
+        edits.append(edit)
+        held[box] = edits
+        show()
+    }
+
+    /// A machine you removed from Kuvo Code (a test's stand-in for reaching machines knows none).
+    private func isRemoved(_ machine: String) -> Bool {
+        reachable == nil && app?.machines.engine(machine) == nil
     }
 
     /// What `box` holds now, as it said.
@@ -544,26 +558,25 @@ final class Bots {
         }
         struct Answer: Decodable { var held: HeldBotEdit }
         let answer: Answer
+        let removed = bot.machine.map(isRemoved) ?? false
         do {
-            answer = try await client.value(Answer.self, fields == nil ? "DELETE" : "PATCH", Self.path(bot.id, on: bot.machine), body: fields.map(JSONValue.object))
+            answer = try await client.value(Answer.self, fields == nil ? "DELETE" : "PATCH", Self.path(bot.id, on: bot.machine, removed: removed), body: fields.map(JSONValue.object))
         } catch let refusal as BoxRefusal {
             throw refusal
         } catch {
             throw BoxRefusal(status: 503, message: "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment.")
         }
-        var edits = held[holder] ?? []
-        edits.removeAll { $0.bot == bot.id }
-        edits.append(answer.held)
-        held[holder] = edits
-        show()
+        take(held: answer.held, from: holder)
     }
 
     /// A bot's route on a box (`kuvo/bots/<id>`), naming the machine it lives on (`on`) for a box
-    /// that holds an edit for it.
-    private static func path(_ id: String, on machine: String? = nil) -> String {
+    /// that holds an edit for it, and that it's one you removed (`removed`), which that box may not
+    /// know any more.
+    private static func path(_ id: String, on machine: String? = nil, removed: Bool = false) -> String {
         let path = "kuvo/bots/" + (id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)
         let value = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#"))
-        return machine.map { path + "?on=" + ($0.addingPercentEncoding(withAllowedCharacters: value) ?? $0) } ?? path
+        guard let machine else { return path }
+        return path + "?on=" + (machine.addingPercentEncoding(withAllowedCharacters: value) ?? machine) + (removed ? "&removed" : "")
     }
 
     /// `bot` with `change` (as `PATCH kuvo/bots/<id>` takes it) made, as it shows while it's held.
@@ -588,7 +601,12 @@ final class Bots {
     private func send(_ fields: [String: JSONValue], to bot: Bot) async throws {
         guard let client = client(bot.box) else { throw BoxRefusal(status: 503, data: Data()) }
         struct Answer: Decodable { var bot: ListedBot }
-        let answer = try await client.value(Answer.self, "PATCH", Self.path(bot.id), body: JSONValue.object(fields))
+        struct Held: Decodable { var held: HeldBotEdit }
+        let (status, data) = try await client.send("PATCH", Self.path(bot.id), body: try JSONEncoder().encode(JSONValue.object(fields)))
+        // (The bot moved off that box meanwhile: it holds the change for where it is now.)
+        if status == 202, let held = try? JSONDecoder().decode(Held.self, from: data).held { return take(held: held, from: bot.box) }
+        guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+        let answer = try JSONDecoder().decode(Answer.self, from: data)
         let before = self.bot(bot.id)
         take(one: answer.bot, from: bot.box)
         // A conversation carried on with the coding agents: the new one, in the old one's place.
@@ -626,7 +644,7 @@ final class Bots {
     func delete(_ bot: Bot) async throws {
         if Moves.isFrozen(bot.id) { throw Moves.Failure.moving }
         if let machine = bot.machine {
-            let removed = reachable == nil && app?.machines.engine(machine) == nil
+            let removed = isRemoved(machine)
             if removed || heldEdit(for: bot.id) != nil {
                 try await hold(nil, for: bot, on: heldEdit(for: bot.id)?.box ?? BoxClient.thisMac)
                 // A machine you removed: it goes there if you add it again.
@@ -749,7 +767,7 @@ final class Bots {
         var outbox = Self.oldOutbox()
         guard !outbox.isEmpty else { return }
         for (id, edit) in outbox.sorted(by: { $0.key < $1.key }) {
-            let path = Self.path(id, on: edit.box)
+            let path = Self.path(id, on: edit.box, removed: isRemoved(edit.box))
             let answer: (status: Int, body: Data)
             do {
                 answer = try await client.send(edit.delete ? "DELETE" : "PATCH", path, body: edit.delete ? nil : try JSONEncoder().encode(JSONValue.object(edit.fields)))
@@ -757,9 +775,10 @@ final class Bots {
                 // Not answering: kept for the next time.
                 continue
             }
-            // (Not now, or a box held for its update: kept for the next time.)
-            if answer.status >= 500 || answer.status == 409 { continue }
-            if answer.status >= 300, !(answer.status == 404 && edit.delete) {
+            // (Not now, a box held for its update, or one that doesn't know where the bot is yet:
+            // kept for the next time.)
+            if answer.status >= 500 || answer.status == 409 || answer.status == 404 { continue }
+            if answer.status >= 300 {
                 log.error("An edit an earlier version kept for a bot wasn't taken: \(BoxRefusal(status: answer.status, data: answer.body).message, privacy: .public)")
             }
             outbox[id] = nil

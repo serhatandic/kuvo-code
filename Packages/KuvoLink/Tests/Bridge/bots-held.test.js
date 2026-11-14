@@ -126,10 +126,14 @@ test("an edit to a bot whose computer is away is held by the box asked, merged a
   assert.equal(first.status, 202);
   assert.deepEqual({ ...first.body.held, since: 0 }, { bot: wren, box: lab.pub, computer: "lab", change: { name: "Wren the Second", look: { color: "mint", shape: "round", face: "calm" } }, since: 0 });
   // A later one on top: each field the last given.
-  const second = await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren III", personality: null, work: { limits: null } });
+  const second = await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren III", personality: null });
   assert.equal(second.status, 202);
   assert.equal(second.body.held.since, first.body.held.since, "held since the first");
-  assert.deepEqual(second.body.held.change, { name: "Wren III", look: { color: "mint", shape: "round", face: "calm" }, personality: null, work: { limits: null } });
+  assert.deepEqual(second.body.held.change, { name: "Wren III", look: { color: "mint", shape: "round", face: "calm" }, personality: null });
+  // Its work settings change only where it lives, while that computer answers.
+  const work = await route("PATCH", `kuvo/bots/${wren}`, { work: { limits: null } });
+  assert.equal(work.status, 409);
+  assert.match(work.body.message, /lab isn’t connected: change its work settings once it’s back/);
   // What every client following this box's bots sees: the edit held, for lab.
   const list = await listed();
   assert.deepEqual(list.held.map(each => [each.bot, each.computer, each.change.name]), [[wren, "lab", "Wren III"]]);
@@ -140,6 +144,7 @@ test("an edit to a bot whose computer is away is held by the box asked, merged a
   assert.ok(tries.length >= 1);
   const edit = tries.at(-1).botEdit;
   assert.deepEqual({ bot: edit.bot, change: edit.change }, { bot: wren, change: second.body.held.change });
+  assert.deepEqual(Object.keys(edit.times).sort(), ["look", "name", "personality"], "when each field was given");
   link.sendHeld(host);
   assert.deepEqual(mailTo(lab), [], "not again at once");
   // Lab is back (any mail from it): it goes now, not at its next minute.
@@ -199,7 +204,8 @@ test("what can't be held: a bot no computer lists (unless the client names its c
   }
   // A computer this box doesn't know now (a machine you removed), named by the client: held, and it
   // goes there once it's one of this box's computers again.
-  const removed = await route("DELETE", "kuvo/bots/bot_gone00000001?on=attic");
+  assert.equal((await route("DELETE", "kuvo/bots/bot_gone00000001?on=attic")).status, 404, "one it doesn't know, unless the client says it's one you removed");
+  const removed = await route("DELETE", "kuvo/bots/bot_gone00000001?on=attic&removed");
   assert.equal(removed.status, 202);
   assert.deepEqual([removed.body.held.box, removed.body.held.computer, removed.body.held.delete], ["", "attic", true]);
   const attic = box("machine", "attic", "attic");
@@ -211,6 +217,9 @@ test("what can't be held: a bot no computer lists (unless the client names its c
   // Left by something else on this computer, not sealed with this box's secret: never sent, never shown.
   sent.length = 0;
   write(path.join(held, "bot_planted00001.json"), { id: `bte_${"a".repeat(22)}`, bot: "bot_planted00001", to: lab.pub, delete: true, since: 1, at: 1, seal: "x".repeat(43) });
+  // (And a refusal: not shown.)
+  write(path.join(held, "refused.json"), { refused: [{ bot: wren, box: lab.pub, computer: "lab", message: "Planted.", at: Date.now() }], seal: "x".repeat(43) });
+  assert.deepEqual((await listed()).refused, []);
   link.forgetHeldSends();
   link.sendHeld(host);
   assert.deepEqual(mailTo(lab).filter(each => each.botEdit.bot === "bot_planted00001"), []);
@@ -256,6 +265,22 @@ test("the computer that keeps the bot does a held edit once, as Edit Bot would, 
   receive(lab, { botEdit: { id, bot: "bot_scout00001", change: { name: "Scout II" }, at: Date.now() } });
   assert.deepEqual(await answer(), { id, bot: "bot_scout00001", status: 200 });
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout III");
+  // One held elsewhere that you made before the change here (its Mac was offline): it doesn't undo
+  // it, though its look, given later, lands; one you made after it does.
+  const older = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  receive(lab, { botEdit: { id: older, bot: "bot_scout00001", change: { name: "Scout Old", look: { color: "mint", shape: "round", face: "happy" } }, times: { name: Date.now() - 60_000, look: Date.now() + 1_000 }, at: Date.now() } });
+  assert.equal((await answer()).status, 200);
+  const now = JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8"));
+  assert.deepEqual([now.name, now.look.face], ["Scout III", "happy"]);
+  const newer = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  receive(lab, { botEdit: { id: newer, bot: "bot_scout00001", change: { name: "Scout IV" }, times: { name: Date.now() + 2_000 }, at: Date.now() } });
+  assert.equal((await answer()).status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout IV");
+  // Its work settings never come this way.
+  const work = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  receive(lab, { botEdit: { id: work, bot: "bot_scout00001", change: { work: { limits: null, allowed: ["makeProject"] } }, at: Date.now() } });
+  assert.equal((await answer()).status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).work, undefined);
   // Refused: its words go back.
   const odd = `bte_${crypto.randomBytes(16).toString("base64url")}`;
   receive(lab, { botEdit: { id: odd, bot: "bot_scout00001", change: { personality: "preset.gone" }, at: Date.now() } });
