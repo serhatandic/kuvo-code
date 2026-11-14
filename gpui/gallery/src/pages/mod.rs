@@ -11,7 +11,7 @@ mod small;
 mod text_field;
 mod theme;
 
-use gpui::{AnyElement, Context, Window};
+use gpui::{AnyElement, AppContext as _, Context, Entity, IntoElement as _, Window};
 
 use crate::{Block, Gallery};
 
@@ -21,11 +21,12 @@ pub struct Demos {
     pub chats: chat_list::Chats,
     pub menus: menus::Menus,
     pub settings: small::Settings,
+    pub drafts: Entity<crate::drafts::Picker>,
 }
 
 impl Demos {
     pub fn new(_window: &mut Window, cx: &mut Context<Gallery>) -> Self {
-        Self { fields: text_field::Fields::new(cx), chats: chat_list::Chats::new(cx), menus: menus::Menus::new(cx), settings: Default::default() }
+        Self { fields: text_field::Fields::new(cx), chats: chat_list::Chats::new(cx), menus: menus::Menus::new(cx), settings: Default::default(), drafts: cx.new(|_| crate::drafts::Picker::new()) }
     }
 }
 
@@ -36,7 +37,7 @@ pub(crate) fn is_built(_block: Block) -> bool {
 pub(crate) fn shot_height(block: Block) -> f32 {
     match block {
         Block::Theme => 1640.,
-        Block::Icons => 1420.,
+        Block::Icons => 1600.,
         Block::Buttons => 1100.,
         Block::TextField => 1000.,
         Block::ChatList => 840.,
@@ -45,6 +46,7 @@ pub(crate) fn shot_height(block: Block) -> f32 {
         Block::Menus => 900.,
         Block::Rows => 760.,
         Block::SmallPieces => 900.,
+        Block::SidebarDrafts => 1000.,
     }
 }
 
@@ -65,6 +67,7 @@ pub(crate) fn render(
         Block::Menus => menus::page(&demos.menus, window, cx),
         Block::Rows => rows::page(window, cx),
         Block::SmallPieces => small::page(&demos.settings, window, cx),
+        Block::SidebarDrafts => demos.drafts.clone().into_any_element(),
     }
 }
 

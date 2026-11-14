@@ -2,6 +2,7 @@
 //!
 //! `main.rs` opens it in a window; `bin/shots.rs` renders each page offscreen to a PNG.
 
+pub mod drafts;
 mod pages;
 
 use gpui::{
@@ -32,6 +33,8 @@ pub enum Block {
     Menus,
     Rows,
     SmallPieces,
+    /// Drafts of the two-level sidebar, for the user to pick from.
+    SidebarDrafts,
 }
 
 impl Block {
@@ -46,6 +49,7 @@ impl Block {
         Block::Menus,
         Block::Rows,
         Block::SmallPieces,
+        Block::SidebarDrafts,
     ];
 
     pub fn title(self) -> &'static str {
@@ -60,6 +64,7 @@ impl Block {
             Block::Menus => "Menus and popovers",
             Block::Rows => "Rows and lists",
             Block::SmallPieces => "Small pieces",
+            Block::SidebarDrafts => "Sidebar drafts",
         }
     }
 
@@ -76,6 +81,7 @@ impl Block {
             Block::Menus => "menus",
             Block::Rows => "rows",
             Block::SmallPieces => "small-pieces",
+            Block::SidebarDrafts => "sidebar",
         }
     }
 
@@ -91,12 +97,18 @@ impl Block {
             Block::Menus => IconName::More,
             Block::Rows => IconName::Sidebar,
             Block::SmallPieces => IconName::Sliders,
+            Block::SidebarDrafts => IconName::Sidebar,
         }
     }
 
     /// Whether the block is built yet; later blocks show in the sidebar, dimmed.
     pub fn is_built(self) -> bool {
         pages::is_built(self)
+    }
+
+    /// Whether the shots draw the block as one page (the drafts draw each option and scene).
+    pub fn is_page_shot(self) -> bool {
+        self != Block::SidebarDrafts
     }
 
     /// The height of the block's page in its shot.

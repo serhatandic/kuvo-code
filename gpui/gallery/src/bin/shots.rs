@@ -6,8 +6,12 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use gpui::{HeadlessAppContext, px, size};
-use kuvo_gallery::{Block, bind_keys, new_gallery};
+use gpui::{AppContext as _, HeadlessAppContext, px, size};
+use kuvo_gallery::{
+    Block, bind_keys,
+    drafts::{Draft, DraftView, Scene},
+    new_gallery,
+};
 use kuvo_ui::{Appearance, Assets, Theme};
 
 const WIDTH: f32 = 1200.;
@@ -27,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     for &block in Block::ALL {
-        if !block.is_built() || (!only.is_empty() && !only.iter().any(|s| s == block.slug())) {
+        if !block.is_built() || !block.is_page_shot() || (!only.is_empty() && !only.iter().any(|s| s == block.slug())) {
             continue;
         }
         for appearance in [Appearance::Light, Appearance::Dark] {
@@ -49,6 +53,32 @@ fn main() -> anyhow::Result<()> {
             println!("{name}: {}x{}", image.width(), image.height());
             cx.update_window(any, |_, window, _| window.remove_window())?;
             cx.run_until_parked();
+        }
+    }
+    // The sidebar drafts: each option in each scene, `sidebar-<option>-<scene>-<appearance>.png`.
+    if only.is_empty() || only.iter().any(|s| s == Block::SidebarDrafts.slug()) {
+        for &draft in Draft::ALL {
+            for &scene in Scene::ALL {
+                for appearance in [Appearance::Light, Appearance::Dark] {
+                    cx.update(|cx| Theme::set_appearance(appearance, cx));
+                    let window = cx.open_window(scene.window_size(), |_, cx| cx.new(|_| DraftView { draft, scene }))?;
+                    let any = window.into();
+                    cx.run_until_parked();
+                    cx.update_window(any, |_, window, _| window.refresh())?;
+                    cx.run_until_parked();
+                    let image = cx.capture_screenshot(any)?;
+                    let name = format!(
+                        "sidebar-{}-{}-{}.png",
+                        draft.slug(),
+                        scene.slug(),
+                        if appearance.is_dark() { "dark" } else { "light" }
+                    );
+                    image.save(out.join(&name))?;
+                    println!("{name}: {}x{}", image.width(), image.height());
+                    cx.update_window(any, |_, window, _| window.remove_window())?;
+                    cx.run_until_parked();
+                }
+            }
         }
     }
     Ok(())

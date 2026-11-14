@@ -6,6 +6,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use gpui::{AppContext as _, Context, Focusable as _, HeadlessAppContext, Window, px, size};
+use kuvo::area::Area;
 use kuvo::panel::Tab;
 use kuvo_box::git::Group;
 use kuvo::stand_in::{Replies, StandIn};
@@ -61,7 +62,48 @@ const SCREENS: &[Screen] = &[
     Screen { slug: "worktree", width: 1280., height: 820., session: Some("ses_dark"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(branches) },
     Screen { slug: "pull-request", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(pull_request) },
     Screen { slug: "panel-narrow", width: 980., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(changes) },
+    // The rail's areas (`kuvo/src/rail.rs`, `areas.rs`): Sessions with what needs you on top, each
+    // other area with a row picked, a narrow window folded and opened, the first run, and a box from
+    // before #711 (no Needs you, no counts, rings without their share).
+    Screen { slug: "area-sessions", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "area-bots", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(bots) },
+    Screen { slug: "area-queue", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(queue) },
+    Screen { slug: "area-computers", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(computers) },
+    Screen { slug: "area-settings", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(usage) },
+    Screen { slug: "area-narrow", width: 760., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "area-narrow-open", width: 760., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(sessions_out) },
+    Screen { slug: "area-first-run", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "area-before-711", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(bots) },
 ];
+
+/// An area's row, picked: what its page shows.
+fn pick(workspace: &mut Workspace, area: Area, key: &str, window: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.show_area(area, window, cx);
+    if let Some(view) = workspace.area_view(area).cloned() {
+        view.update(cx, |view, cx| view.select(Some(key.to_owned()), cx));
+    }
+}
+
+fn bots(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    pick(workspace, Area::Bots, "bot:bot_mira", window, cx);
+}
+
+fn queue(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    pick(workspace, Area::Queue, "category:next", window, cx);
+}
+
+fn computers(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    pick(workspace, Area::Computers, "machine:devbox", window, cx);
+}
+
+fn usage(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.show_setting("Usage", window, cx);
+}
+
+/// In a narrow window, the Sessions sidebar brought out by its button.
+fn sessions_out(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.rail_pressed(Area::Sessions, window, cx);
+}
 
 fn changes(workspace: &mut Workspace, _: &mut Window, cx: &mut Context<Workspace>) {
     workspace.show_panel(Tab::Changes, cx);
@@ -140,6 +182,9 @@ fn main() -> anyhow::Result<()> {
         for appearance in [Appearance::Light, Appearance::Dark] {
             cx.update(|cx| Theme::set_appearance(appearance, cx));
             let stand_in = if screen.empty { StandIn::empty(Replies::Never) } else { StandIn::at(Replies::Never, NOW) };
+            if screen.slug == "area-before-711" {
+                stand_in.before_711();
+            }
             // The rate limits' conversation waits on a permission; another one waits behind it.
             let mut second = kuvo::stand_in::redis_permission();
             second["id"] = serde_json::json!("per_push");
@@ -150,7 +195,7 @@ fn main() -> anyhow::Result<()> {
             cx.update_window(any, |root, window, cx| {
                 let workspace = root.downcast::<Workspace>().expect("the workspace");
                 workspace.update(cx, |workspace, cx| {
-                    workspace.set_now(NOW);
+                    workspace.set_now(NOW, cx);
                     workspace.read_at_once(cx);
                     if let Some(session) = screen.session {
                         workspace.open_read_at_once(session, window, cx);
