@@ -2,6 +2,8 @@
 
 Kuvo Code is built on other projects, and keeps up with them. **The lead (Kuvo Foreman) checks each upstream below every week** and tells the user what it found. Sessions don't check them at their start: they update one only when their task needs it. Either way, this is how to check and update each. (CLAUDE.md points here.)
 
+**The retired Swift Mac app is frozen** (`swift/MAC-APP-REFERENCE.md`): its own upstreams aren't updated any more: OpenUsage (UsageKit), SwiftTerm, Sparkle, KeyboardShortcuts, `dmgbuild`, and Prism and Mermaid in `swift/KuvoCode/Resources`. The integrations' servers below are pinned in that app's code too, and still reach machines through the box release it's built for. Until the box holds them (#713), moving one means editing the retired app, so ask the user first.
+
 ## The opencode engine
 
 Kuvo Code runs one pinned build of `@opencode/cli`. A new opencode release brings model and provider support, fixes and new agent features, so the app should move to it quickly.

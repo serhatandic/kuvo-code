@@ -10,6 +10,14 @@ opencode engine, so the best changes keep it that way:
   prompts or providers) belong in [opencode](https://github.com/anomalyco/opencode).
 - **Few dependencies.** Lean on the system frameworks.
 
+**The Swift Mac app is retired: read it, never edit it.** Kuvo Code 1.0 is the desktop app in
+`gpui/` (its `README.md`). The Swift app's code (`swift/KuvoCode`, `swift/KuvoCodeTests`,
+`swift/Tests`, `swift/UsageKit`, `swift/Config`) stays only as the reference for logic still to
+move into the box and for what the desktop app must match; `swift/MAC-APP-REFERENCE.md` says what
+it's still built for. What this file says of building, testing and releasing the Mac app is how
+it was, and holds only for those uses. The packages the iPhone app builds against (`KuvoClient`,
+`KuvoLink`, `KuvoVoice`, `OpenCodeKit`, `Textual`) are kept up as before.
+
 ## Before opening a change
 
 - Search existing issues and pull requests first.
@@ -36,7 +44,7 @@ xcodebuild -project swift/KuvoCode.xcodeproj -scheme KuvoCode -configuration Deb
 open "build/DerivedData/Build/Products/Debug/Kuvo Code.app"
 ```
 
-To build the release app and its disk image the way CI does:
+To build the release app and its disk image the way the release workflow does:
 
 ```sh
 ./scripts/build-app.sh
@@ -70,15 +78,16 @@ and each run first clears a `127.0.0.1` feed an earlier one left
 (`python3 -m unittest discover -s swift/Tests/Guard -p test_try_update.py` checks each way).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
-generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
-Swift packages' tests, and the app's. It doesn't build the app itself: only the release workflow
-does, signed, for a tag or a dry run. So run a dry run from `main` (Actions › Release › Run
+generated files on Linux, the box's and the bridge's tests on macOS and Linux, and the shared
+Swift packages' tests. It doesn't build or test the retired Mac app: only the release workflow
+builds it, signed, for a tag or a dry run, for the box release machines update from. So run a dry run from `main` (Actions › Release › Run
 workflow) before tagging a release whose build changed. The release's signing job runs in the
 `release` environment (Settings › Environments), which should allow only `main` and `v*` tags and
 hold the signing, notarization and update keys.
 
 A release also carries what remote machines run, for them to update themselves
-with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
+with (today the only way they get updates, so the release workflow keeps building the retired
+Mac app until the box makes its own release), once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 (`scripts/set-box-key.sh` makes it once, keeps it in your login keychain, uploads
 it and prints the public key to pin): the app writes those files
 (`"Kuvo Code" --write-box-files <folder>`), `scripts/pack-box.sh` packs them with
@@ -152,46 +161,35 @@ waits for it, since they share the test copy's settings and temporary folders.
 
 #### Batches: one build of main for every session's runs
 
-The app's UI suite runs one job at a time, and a run that builds the app from its own worktree
-first spends about 8 minutes compiling, so with a dozen sessions they queued for most of an hour.
+The phone's suite takes a simulator slot per run, and a run that builds the app from its own
+worktree first spends minutes compiling, so with a dozen sessions they queued for most of an hour.
 Instead, main is built once, twice a day, and sessions take turns running their classes on that
-build without compiling anything: at 04:00 and 16:00, the lead runs
-`scripts/batch-build.sh` (`mac`, `phone` or `all`, the default), which exports main's files (each
-checkout's `main`, or `KUVO_BATCH_MAC_REF` and `KUVO_BATCH_PHONE_REF`; the phone's with kuvo-ai's
-beside it) into a new folder, `$(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/<mac|phone>/<when>-<commit>`,
-and builds it from nothing with `xcodebuild build-for-testing` as the tests' own copy (the settings
-and bundle IDs below), in a slot of heavy.sh's build lane (`mac-build`, `phone-build`). Its `stamp` says which commits, when, and
-where its `.xctestrun` is. The newest two batches are kept; an older one is deleted by the next
-build once no run has it open. One build of a platform's batches runs at a time: a second says so
-and stops.
+build without compiling anything: at 04:00 and 16:00, the lead runs `scripts/batch-build.sh`
+(`phone`, or `all`, the default, which is the phone's alone: the retired Mac app has no batch),
+which exports the phone's main and kuvo-ai's beside it (each checkout's `main`, or
+`KUVO_BATCH_PHONE_REF` and `KUVO_BATCH_MAC_REF`) into a new folder,
+`$(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/phone/<when>-<commit>`, and builds it from nothing with
+`xcodebuild build-for-testing` as the tests' own copy, in a slot of heavy.sh's build lane
+(`phone-build`). Its `stamp` says which commits, when, and where its `.xctestrun` is. The newest
+two batches are kept; an older one is deleted by the next build once no run has it open. One build
+of the batches runs at a time: a second says so and stops.
 
 Then each session, its work merged to main before the build, runs its classes from it:
 
 ```sh
-ONLY="KuvoCodeTests/WindowTabsTests KuvoCodeTests/WorkQueueTests" ~/Projects/kuvo-ai/scripts/test-app.sh --from-batch
 ONLY="KuvoCodeMobileTests/PairingTests" ~/Projects/kuvo-code-ios/scripts/test-app.sh --from-batch
 ```
 
-It takes the newest batch, refuses at once (before it waits in line) a class or test the batch
-hasn't, merged after the build, and notes when your HEAD isn't in it. While a batch is being built
-it waits for that build and tests the new batch; when the newest build failed (or stopped), it
-refuses, naming the commit and the first error, rather than test an older batch. Call it directly,
-never inside `scripts/heavy.sh`: it takes its turn itself, after any wait for a build, so it holds
-no slot while it waits. Then it waits for its turn in
-`mac` (or a `phone` slot) and runs `xcodebuild test-without-building` with the batch's `.xctestrun`:
-the same test copy, clean settings, `KUVO_TEST_BUN`, account check and guards as a run that builds.
-It prints the stamp of the batch it tested. The Mac's `scripts/test-app.sh` (not the phone's yet)
-ends, with or without `--from-batch`, with what the run's result bundle counts, then each failing
-test: `RESULT: <passed> passed, <failed> failed[, <skipped> skipped]`, a test with arguments counted
-once (`RESULT: no results, …` when none ran, the build failed or the run was stopped). Go by that
-line and the exit code (0 only when tests ran and none failed), not the last "Test run … passed":
-after a test that crashed or ran out of time, xcodebuild starts the test copy again ("Restarting
-after…"), and that line counts only its last launch. Problems found go to fixes merged to main, which the next batch
-checks. `scripts/test-app.sh` without `--from-batch` still builds from your worktree, for an urgent
-run only.
+It takes the newest batch (`scripts/batch.sh open`), refuses at once (before it waits in line) a
+class or test the batch hasn't, merged after the build (`batch.sh check`), and notes when your
+HEAD isn't in it (`batch.sh behind`). While a batch is being built it waits for that build and
+tests the new batch; when the newest build failed (or stopped), it refuses, naming the commit and
+the first error, rather than test an older batch. Call it directly, never inside
+`scripts/heavy.sh`: it takes its turn itself, after any wait for a build, so it holds no slot while
+it waits. Problems found go to fixes merged to main, which the next batch checks.
 
-Between batches, `scripts/batch-build.sh --compile-only [mac|phone|all]` checks that main still
-compiles, the apps and their tests, after each merge: in one folder kept from check to check
+Between batches, `scripts/batch-build.sh --compile-only [phone|all]` checks that main still
+compiles, the phone app and its tests, after each merge: in one folder kept from check to check
 (`KuvoBatch/compile`), whose files are brought to main's one by one (only those that changed are
 written again), so it compiles only what changed, in minutes. A batch, a compile check and test
 runs each take the lane slot heavy.sh gives them, and build in folders of their own, under locks
@@ -222,9 +220,10 @@ scripts/heavy.sh phone <phone-test-command>          # only a run that boots a s
 scripts/test-box.sh box <test-filter>
 ```
 
-- `mac`: the Mac app's UI test suite, `scripts/test-app.sh` (`KuvoCodeTests-build`), which drives the
-  real window and pointer, so one runs at a time and nothing else of this kind beside it. Older
-  scripts also say `mac` for a plain build, which still works, under the same lock;
+- `mac`: the retired Mac app's test suite, `scripts/test-app.sh` (`KuvoCodeTests-build`), which
+  drives the real window and pointer, so one runs at a time and nothing else of this kind beside
+  it. Only `scripts/route-vectors.sh` still runs it. Older scripts also say `mac` for a plain
+  build, which still works, under the same lock;
 - `mac-build`: what doesn't drive the UI: the Mac's `xcodebuild` (builds, demo builds) and the
   packages' `swift build` and `swift test`. It has two slots, so two of these run at once, and
   beside the app suite, since it doesn't take `mac`'s lock. A job takes whichever slot is free first
@@ -281,7 +280,7 @@ The compiler sees the sources as `/^src/…` (the project's folder), so `#filePa
 are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
 `#filePath` (the app's `scripts/test-app.sh` checks). An app test that reads the sources themselves finds
 them with `SourceRoot.url()` (`swift/KuvoCodeTests/Support/SourceRoot.swift`): `scripts/test-app.sh` gives it
-the checkout, or the batch's exported sources, as `KUVO_SOURCE_ROOT`.
+the checkout as `KUVO_SOURCE_ROOT`.
 
 Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
 a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
@@ -411,7 +410,7 @@ stand-in, the same small one on each. To add one:
   `swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json`, which every box reads and the
   runners use as it is; kuvo-web's `src/lib/bots.ts` copies its templates.
 
-`swift/Tests/E2E` tries the whole app the way people use it: a separate copy
+`swift/Tests/E2E` (the retired Mac app's, kept to read) tries the whole app the way people use it: a separate copy
 (`run.kuvo.code.e2e`) driven in the background through Accessibility, with
 OpenCode's free models, on real projects. Its README says how to run it, and
 `SCENARIOS.md` lists the cases and where each stands.
@@ -424,15 +423,15 @@ README says how.
 
 | Path | What's there |
 | --- | --- |
-| `box/` | The box (TypeScript): its link, built to `kuvo-link.js`, and the agents bridge (Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API), built to `kuvo-agents.js` (its `README.md`); its tests in `test/`, and the bridge's, on Node, in `bridge-tests/` |
+| `box/` | The box (TypeScript): its link, built to `kuvo-link.js`, and the agents bridge (Claude Code, Codex, Cursor, Grok and Antigravity in the engine's API) and the browser's keeper and tools, built to `dist/kuvo-agents.js` and `dist/kuvo-browser.js` (its `README.md`); its tests in `test/`, and the bridge's, on Node, in `bridge-tests/` |
 | `protocol/` | How boxes and clients talk (`PROTOCOL.md`), and the vectors every side is held to (`vectors/`) |
-| `swift/KuvoCode/` | The Mac app: views, stores and the design system; its project is `swift/KuvoCode.xcodeproj`, its tests `swift/KuvoCodeTests/` |
+| `swift/KuvoCode/` | The retired Swift Mac app, kept only to read (`swift/MAC-APP-REFERENCE.md`): views, stores and the design system; its project is `swift/KuvoCode.xcodeproj`, its tests `swift/KuvoCodeTests/` |
 | `swift/OpenCodeKit/` | The engine client: API, models, event stream, transcript reducer, engine installer |
-| `swift/UsageKit/` | The usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage) |
+| `swift/UsageKit/` | The retired Mac app's usage tracker in the menu bar, a fork of [OpenUsage](https://github.com/robinebers/openusage), kept only to read |
 | `swift/KuvoClient/` | What the Mac app and the iPhone app share as code: `ClientText`, the rules for what a message says (its `README.md`) |
 | `swift/KuvoLink/` | The phone link's Swift side, and the box's link as built (`kuvo-link.js`) |
 | `swift/Config/App.xcconfig` | The app's name and bundle ID, and signing defaults |
-| `swift/Tests/` | The app tried whole (`E2E`), measured (`Perf`), and the scripts' guards against the real app (`Guard`) |
+| `swift/Tests/` | The retired Mac app tried whole (`E2E`), measured (`Perf`), and the scripts' guards against the real app (`Guard`), kept only to read |
 | `gpui/` | The GPUI app, in Rust (its `README.md`) |
 | `scripts/` | Builds, checks and the test runners |
 | `Licenses/` | License texts for code copied into this repository |
@@ -450,7 +449,7 @@ against its size and SHA-256 before it's unpacked (by the box itself: no `unzip`
 on the machine). The Mac only shows how it goes (`kuvo/browser`). Its tests serve stand-ins
 (`box/bridge-tests/browser-source-stand-in.js`): never the real sources, never a real `~/.kuvo-code`.
 One script,
-`swift/KuvoCode/Resources/kuvo-browser.js`, built from `box/src/browser`, runs with the
+`box/dist/kuvo-browser.js`, built from `box/src/browser`, runs with the
 engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
@@ -778,16 +777,16 @@ the app's usual views; `Workspace` sends a session to it when its metadata names
 
 The SDKs are installed from npm the first time each is needed (`runtime/<agent>`), at the
 versions in the agents' files, and aren't part of the app. After changing `box/src/agents`, run
-`./scripts/build-agents.sh` and commit `swift/KuvoCode/Resources/kuvo-agents.js`, the bundle the app
-ships; CI fails when it isn't built from the sources as they are (`build-agents.sh --check`). In a
+`./scripts/build-agents.sh` and commit `box/dist/kuvo-agents.js`, the bundle a box's release
+carries; CI fails when it isn't built from the sources as they are (`build-agents.sh --check`). In a
 debug build, `KUVO_AGENTS_SCRIPT=<checkout>/box/src/agents/main.ts` runs the source
 instead.
 
 ### Dependencies
 
-Kuvo Code depends on Textual, SwiftUIMath (which Textual uses too; replies'
+The retired Mac app depended on Textual, SwiftUIMath (which Textual uses too; replies'
 math is drawn with it directly), SwiftTerm, Sparkle and, through UsageKit,
-KeyboardShortcuts. SwiftTerm stays on 1.11, because 1.12 and later need the
+KeyboardShortcuts; the shared packages' own dependencies are in their `Package.swift`. SwiftTerm stays on 1.11, because 1.12 and later need the
 Metal toolchain to build. Textual is a copy in `swift/Textual`, changed so
 replies are laid out in one pass (its README says what's different and how to
 bring in upstream's changes).
@@ -795,7 +794,7 @@ bring in upstream's changes).
 If you add or update a package, or change code copied from another project
 (`prism-bundle.js`, `mermaid.min.js`, `buildDomTree.js`, UsageKit, Textual), run
 `./scripts/third-party-licenses.sh` and commit the updated
-`THIRD_PARTY_LICENSES.txt`; CI checks that it's current.
+`THIRD_PARTY_LICENSES.txt` (CI no longer checks it, as it built the Mac app to).
 
 ## Workflow
 
@@ -835,9 +834,8 @@ Every change starts from an issue and lands on `main` through a pull request.
      `settings/<page>`) after its line. A release with headline features lists
      a few under `### Highlights` at the top of its section, each
      `- **Title**: one line. <!-- symbol: <SF Symbol>; open: settings/<page> -->`,
-     which What's New shows once after an update; then run
-     `python3 scripts/whats-new.py` and commit `swift/KuvoCode/Resources/whats-new.json`
-     (CI checks it, and the release workflow writes it again).
+     which What's New shows once after an update. (The retired Mac app's
+     `whats-new.json` is written only as the release workflow builds it: never by hand.)
      (`.gitattributes` merges `CHANGELOG.md` line by line, so branches that
      each add a line there merge without a conflict; if two edit the same line,
      both versions stay, so tidy that one by hand.)
