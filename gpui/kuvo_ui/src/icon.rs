@@ -57,6 +57,7 @@ macro_rules! icons {
 icons! {
     ArrowDown => "arrow-down",
     ArrowLeft => "arrow-left",
+    ArrowRight => "arrow-right",
     ArrowUp => "arrow-up",
     Bell => "bell",
     Bot => "bot",
@@ -88,8 +89,10 @@ icons! {
     Pin => "pin",
     Plus => "plus",
     Question => "question",
+    Queue => "queue",
     Return => "return",
     Search => "search",
+    Settings => "settings",
     Shield => "shield",
     Sidebar => "sidebar",
     Sliders => "sliders",
