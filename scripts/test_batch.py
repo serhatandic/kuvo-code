@@ -11,6 +11,7 @@ makes what a build would and says what it was asked.
 
     cd scripts && python3 -m unittest test_batch
 """
+import json
 import os
 import shutil
 import signal
@@ -33,14 +34,38 @@ TEST_APP = str(SCRIPTS / "test-app.sh")
 XCODEBUILD = r"""#!/bin/sh
 echo "$*" >> "$FAKE_XCODE_LOG"
 echo "source root: ${TEST_RUNNER_KUVO_SOURCE_ROOT:-none}" >> "$FAKE_XCODE_LOG"
+# Its result bundle (-resultBundlePath), unless FAKE_XCODE_NO_BUNDLE: the summary xcresulttool reads
+# from it (the xcrun stand-in), FAKE_XCODE_SUMMARY's, else one test that passed (none, with
+# FAKE_XCODE_NO_TESTS).
+bundle=
+previous=
+for argument in "$@"; do
+    [ "$previous" != -resultBundlePath ] || bundle=$argument
+    previous=$argument
+done
+summary=${FAKE_XCODE_SUMMARY:-}
+if [ -z "$summary" ]; then
+    passed=1
+    [ -z "${FAKE_XCODE_NO_TESTS:-}" ] || passed=0
+    summary='{"passedTests": '$passed', "failedTests": 0, "skippedTests": 0, "expectedFailures": 0, "testFailures": []}'
+fi
+if [ -n "$bundle" ] && [ -z "${FAKE_XCODE_NO_BUNDLE:-}" ]; then
+    mkdir -p "$bundle"
+    printf '%s\n' "$summary" > "$bundle/summary.json"
+fi
 if [ "$1" = test-without-building ]; then
     if [ -n "${FAKE_XCODE_TEST_HOLD:-}" ]; then
         : > "$FAKE_XCODE_TEST_HOLD.running"
         read x < "$FAKE_XCODE_TEST_HOLD"
     fi
-    [ -n "${FAKE_XCODE_NO_TESTS:-}" ] || echo "✔ Test run with 1 test in 1 suite passed after 0.001 seconds."
-    echo "** TEST EXECUTE SUCCEEDED **"
-    exit 0
+    # (FAKE_XCODE_OUTPUT: what it says of the tests instead.)
+    if [ -n "${FAKE_XCODE_OUTPUT:-}" ]; then
+        printf '%s\n' "$FAKE_XCODE_OUTPUT"
+    elif [ -z "${FAKE_XCODE_NO_TESTS:-}" ]; then
+        echo "✔ Test run with 1 test in 1 suite passed after 0.001 seconds."
+    fi
+    if [ "${FAKE_XCODE_STATUS:-0}" -eq 0 ]; then echo "** TEST EXECUTE SUCCEEDED **"; else echo "** TEST EXECUTE FAILED **"; fi
+    exit "${FAKE_XCODE_STATUS:-0}"
 fi
 if [ -n "${FAKE_XCODE_HOLD:-}" ]; then
     : > "$FAKE_XCODE_HOLD.running"
@@ -59,6 +84,16 @@ fi
 mkdir -p "$derived/Build/Products/Debug/Kuvo Code.app/Contents/MacOS" "$derived/Build/Intermediates.noindex/KuvoCode.build" "$derived/Index.noindex"
 printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>KuvoCodeTests</key><dict><key>TestHostBundleIdentifier</key><string>run.kuvo.code.tests</string></dict></dict></plist>\n' > "$derived/Build/Products/KuvoCode_macosx-arm64.xctestrun"
 echo "** TEST BUILD SUCCEEDED **"
+"""
+
+# xcresulttool's summary of a result bundle: what the xcodebuild stand-in left in it.
+XCRUN = r"""#!/bin/sh
+[ "$1 $2 $3 $4" = "xcresulttool get test-results summary" ] || exec /usr/bin/xcrun "$@"
+while [ $# -gt 0 ]; do
+    if [ "$1" = --path ]; then exec cat "$2/summary.json"; fi
+    shift
+done
+exit 1
 """
 
 # The user's temporary and cache folders, the test's own (test-app.sh's lock and build folders).
@@ -131,7 +166,7 @@ class Batches(unittest.TestCase):
             "KuvoCodeMobileTests/PairingTests.swift": "@Suite struct PairingTests {}\n",
         })
         bin_folder = os.path.join(self.root, "bin")
-        for tool, script in [("xcodebuild", XCODEBUILD), ("getconf", GETCONF)]:
+        for tool, script in [("xcodebuild", XCODEBUILD), ("xcrun", XCRUN), ("getconf", GETCONF)]:
             write(os.path.join(bin_folder, tool), script)
             os.chmod(os.path.join(bin_folder, tool), 0o755)
         for folder in ["home", "tmp", "user-temp", "user-cache"]:
@@ -497,6 +532,57 @@ class FromBatch(Batches):
         done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_NO_TESTS="1")
         self.assertEqual(done.returncode, 1)
         self.assertIn("No tests ran", done.stderr)
+
+    def result(self, done):
+        """Its RESULT line and the failing tests listed under it, as the run ends."""
+        lines = done.stdout.splitlines()
+        start = max(i for i, line in enumerate(lines) if line.startswith("RESULT: "))
+        return lines[start:]
+
+    def test_a_run_that_passes_ends_saying_so_from_its_results(self):
+        self.assertEqual(self.build("mac").returncode, 0)
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.result(done), ["RESULT: 1 passed, 0 failed"])
+        self.assertIn("-resultBundlePath ", self.xcode_said())
+
+    def test_after_a_restart_whose_last_launch_passed_the_run_still_fails_and_lists_what_failed(self):
+        # A test ran out of time, the test copy started again, and its last launch's tests passed:
+        # the bundle counts every launch.
+        failures = [{"testIdentifierString": "SlowTests/waits()", "failureText": "Time limit was exceeded"},
+                    {"testIdentifierString": "SlowTests/waits()", "failureText": "Test exceeded execution time allowance"},
+                    {"testIdentifierString": "OtherTests/breaks()", "failureText": "Expectation failed"}]
+        summary = json.dumps({"passedTests": 7, "failedTests": 2, "skippedTests": 1, "expectedFailures": 0, "testFailures": failures})
+        output = ("✘ Test waits() recorded an issue at SlowTests.swift:3:6: Time limit was exceeded: 60.000 seconds\n"
+                  "Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.\n"
+                  "✔ Test run with 8 tests in 1 suite passed after 1.000 seconds.")
+        self.assertEqual(self.build("mac").returncode, 0)
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch",
+                              FAKE_XCODE_SUMMARY=summary, FAKE_XCODE_OUTPUT=output, FAKE_XCODE_STATUS="65")
+        self.assertEqual(done.returncode, 65)
+        self.assertIn("Restarting after unexpected exit", done.stdout)
+        self.assertEqual(self.result(done), ["RESULT: 7 passed, 2 failed, 1 skipped", "  SlowTests/waits()", "  OtherTests/breaks()"])
+
+    def test_a_failure_in_the_results_fails_the_run_though_xcodebuild_passed(self):
+        summary = json.dumps({"passedTests": 3, "failedTests": 1, "skippedTests": 0, "expectedFailures": 0,
+                              "testFailures": [{"testIdentifierString": "OtherTests/breaks()", "failureText": "Expectation failed"}]})
+        self.assertEqual(self.build("mac").returncode, 0)
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_SUMMARY=summary)
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.result(done), ["RESULT: 3 passed, 1 failed", "  OtherTests/breaks()"])
+
+    def test_xcodebuild_failing_with_no_test_failing_fails_and_says_so(self):
+        self.assertEqual(self.build("mac").returncode, 0)
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_STATUS="65")
+        self.assertEqual(done.returncode, 65)
+        self.assertIn("xcodebuild exited 65 though no test failed", done.stderr)
+        self.assertEqual(self.result(done), ["RESULT: 1 passed, 0 failed"])
+
+    def test_a_run_with_no_results_to_read_fails(self):
+        self.assertEqual(self.build("mac").returncode, 0)
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_NO_BUNDLE="1")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.result(done), ["RESULT: no results, xcodebuild exited 0"])
 
     def test_a_run_started_while_a_batch_is_built_waits_for_it_and_tests_that_one(self):
         self.assertEqual(self.build("mac").returncode, 0)

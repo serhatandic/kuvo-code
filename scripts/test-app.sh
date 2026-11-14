@@ -10,6 +10,13 @@
 #          failed, it refuses, saying why. It says which batch it tested (its stamp). The same test
 #          copy, settings and checks as a run that builds.
 #
+# It ends with what the run's result bundle counts, on a line of its own, then each failing test:
+#   RESULT: <passed> passed, <failed> failed[, <skipped> skipped]
+#     <failing test>
+# (`RESULT: no results, …` when there's no bundle to read, as when the build failed.) It exits 0
+# only when xcodebuild says every test passed and nothing failed: after a test that crashed or ran
+# out of time, the test copy starts again and its last "Test run … passed" counts only itself.
+#
 # The test copy is built outside the checkout: a copy of the app loading its code from Desktop or
 # Documents would wait on a privacy prompt nobody can answer while tests run. It has a bundle ID
 # of its own, so it never shares the app's settings or keychain items.
@@ -151,6 +158,10 @@ else
         APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 fi
 for only in ${ONLY:-}; do set -- "$@" -only-testing:"$only"; done
+# This run's result bundle, which its RESULT line counts (only this run's: none left from the last).
+RESULTS="$BUILD/Results.xcresult"
+rm -rf "$RESULTS"
+set -- "$@" -resultBundlePath "$RESULTS"
 
 # The Bun that runs the agents bridge the app ships, for the tests that run it for real: a `bun` on
 # PATH (not one in the Desktop or Documents, whose privacy prompt hangs the test copy), else
@@ -256,12 +267,39 @@ xcodebuild "$@" > "$BUILD/test.log" 2>&1 &
 xcode_pid=$!
 wait "$xcode_pid" || status=$?
 xcode_pid=
+xcode_status=$status
 if [ "$(account_state)" != "$account_before" ]; then
     echo "This run changed your real crontab or login agent. Before:" >&2
     printf '%s\n' "$account_before" >&2
     status=1
 fi
-grep -aE '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|\*\* TEST' "$BUILD/test.log" | grep -v 'warning:\|\[Connection\]' || true
+grep -aE '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|Restarting after|\*\* TEST' "$BUILD/test.log" | grep -v 'warning:\|\[Connection\]' || true
+
+# What the result bundle counts, over every launch of the test copy (RESULT, at the end).
+SUMMARY="$BUILD/results.json"
+rm -f "$SUMMARY"
+counted() { plutil -extract "$1" raw -o - "$SUMMARY" 2>/dev/null || true; }
+passed= failed= skipped= failures=
+if [ -d "$RESULTS" ] && xcrun xcresulttool get test-results summary --path "$RESULTS" > "$SUMMARY" 2>/dev/null; then
+    passed=$(counted passedTests)
+    failed=$(counted failedTests)
+    skipped=$(counted skippedTests)
+    failures=$(counted testFailures)
+fi
+for number in "$passed" "$failed" "$skipped" "$failures"; do
+    case "$number" in "" | *[!0-9]*) passed= ;; esac
+done
+if [ -z "$passed" ]; then
+    result="RESULT: no results, xcodebuild exited $xcode_status"
+    [ $status -ne 0 ] || status=1
+else
+    result="RESULT: $passed passed, $failed failed"
+    [ "$skipped" -eq 0 ] || result="$result, $skipped skipped"
+    [ "$failed" -eq 0 ] || [ $status -ne 0 ] || status=1
+    if [ "$xcode_status" -ne 0 ] && [ "$failed" -eq 0 ]; then
+        echo "xcodebuild exited $xcode_status though no test failed (a crash between tests, or before they ran?)." >&2
+    fi
+fi
 if [ -n "$BATCH" ]; then
     # A name that matches nothing runs nothing, which xcodebuild counts as passing.
     if [ $status -eq 0 ] && ! grep -qaE 'Test run with [1-9]|Executed [1-9]' "$BUILD/test.log"; then
@@ -271,5 +309,13 @@ if [ -n "$BATCH" ]; then
     echo "Tested the $(/bin/sh scripts/batch.sh stamp "$BATCH")"
 fi
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
+# Last: the counts, and each failing test once (a test failing in several ways is listed once).
+echo "$result"
+i=0
+while [ "$i" -lt "${failures:-0}" ]; do
+    plutil -extract "testFailures.$i.testIdentifierString" raw -o - "$SUMMARY" 2>/dev/null || true
+    i=$((i + 1))
+done | awk 'NF && !seen[$0]++ { print "  " $0 }'
+rm -f "$SUMMARY"
 finished=1
 exit $status
