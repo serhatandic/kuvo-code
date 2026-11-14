@@ -85,11 +85,18 @@ struct UsageSpendTests {
     @Test func theCardsGoInTheLayoutsOrderAndShowItsMeters() throws {
         let settings = try JSONDecoder().decode(BoxUsageSettings.self, from: Data("""
         {"settings": {"layout": {"providerOrder": ["codex", "claude@1f2e", "claude", "openrouter"],
-          "placed": ["claude@1f2e.today", "codex.last30", "codex.trend"]}}, "versions": {}, "imported": true}
+          "placed": ["claude@1f2e.today", "claude.yesterday", "codex.last30", "codex.trend"],
+          "metricOrder": {"codex": ["codex.session", "codex.last30", "codex.trend"]}}}, "versions": {}, "imported": true}
         """.utf8))
         let layout = UsageLayout(settings)
-        #expect(layout.ordered(["grok", "claude", "mystery", "openrouter", "codex", "cursor"]) == ["codex", "claude", "openrouter", "cursor", "grok", "mystery"])
+        #expect(layout.ordered(["devin", "grok", "claude", "mystery", "openrouter", "codex", "cursor"]) == ["codex", "claude", "openrouter", "cursor", "grok", "devin", "mystery"])
+        // A service's spend is its first card's: Claude's first is `claude@1f2e`, so what's placed
+        // on the later `claude` card doesn't show.
+        #expect(layout.card(of: "claude") == "claude@1f2e")
         #expect(layout.shows("today", of: "claude"))
+        // In its card's order, the rest in the panel's own.
+        #expect(layout.spendOrder(of: "codex") == ["last30", "trend", "today", "yesterday"])
+        #expect(layout.spendOrder(of: "claude") == ["trend", "today", "yesterday", "last30"])
         #expect(!layout.shows("yesterday", of: "claude"))
         #expect(layout.shows("trend", of: "codex"))
         #expect(!layout.shows("trend", of: "claude"))

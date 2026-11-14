@@ -4488,10 +4488,12 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   $0, and a box that couldn't be read gives none. A service with use and no plan limits row
   (OpenCode's Zen alone) is a row of its own. The cards go in the order of the usage settings'
   `layout.providerOrder` (a card `claude@…` is Claude's place), the rest in the panel's own
-  (Claude, Codex, Cursor, Antigravity, Copilot, Grok, Ollama, OpenCode, OpenRouter, Z.ai), the
-  trend after an account's limits and the periods last; a line shows
-  where `layout.placed` holds its meter (`<service>.today`, `.yesterday`, `.last30`, `.trend`),
-  and all of them while `layout` was never set. A box that lists a service without its `totals`
+  (Claude, Codex, Cursor, Antigravity, Copilot, Grok, Ollama, OpenCode, OpenRouter, Z.ai, Devin
+  last). The spend goes after the account's own lines (its limits, credits, extras and resets),
+  in its service's first card's `layout.metricOrder` (the trend, Today, Yesterday and Last 30 Days
+  where that names none), a line where `layout.placed` holds its meter on that first card
+  (`<card>.today`, `.yesterday`, `.last30`, `.trend`; a card `claude@…` before `claude` is
+  Claude's first), and all of them while `layout` was never set. A box that lists a service without its `totals`
   doesn't speak for it. Not yet followed: cards turned off (`providers`) and the limits' own
   meters in `placed`, which the Mac judges by what it finds there (#631 H1 moves that to the box).
   The phone reads every box it reaches this way, a

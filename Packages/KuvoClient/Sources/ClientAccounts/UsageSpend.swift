@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 
 /// What a service's accounts spent, as both apps' usage panels show it under its first account
 /// (UsageKit's spend tiles and Usage Trend), worked out from the days a box states (`BoxUsage`,
@@ -97,13 +98,22 @@ public struct UsageSpend: Hashable, Sendable {
 public struct UsageLayout: Hashable, Sendable {
     /// The cards' order, by service (`claude`…); never set: the panel's own.
     public var order: [String]
-    /// The meters shown (`<service>.<meter>`); nil where it was never set (the panel's own: all of
+    /// The meters shown (`<card>.<meter>`); nil where it was never set (the panel's own: all of
     /// what a client draws).
     public var placed: Set<String>?
+    /// Each card's meters in order (`{<card>: [<card>.<meter>]}`), shown or not.
+    public var metricOrder: [String: [String]]
+    /// The first card of each service in the layout's order (`claude@1f2e` where that comes before
+    /// `claude`): the one its spend shows under.
+    var firstCard: [String: String]
 
-    public init(order: [String] = [], placed: Set<String>? = nil) {
+    public init(order: [String] = [], placed: Set<String>? = nil, metricOrder: [String: [String]] = [:], cards: [String] = []) {
         self.order = order
         self.placed = placed
+        self.metricOrder = metricOrder
+        var first: [String: String] = [:]
+        for card in cards where first[Self.service(of: card)] == nil { first[Self.service(of: card)] = card }
+        firstCard = first
     }
 
     /// From a box's settings (`settings`), its `layout` part.
@@ -112,18 +122,24 @@ public struct UsageLayout: Hashable, Sendable {
             self.init()
             return
         }
-        let strings = { (key: String) -> [String]? in
-            guard case .array(let values)? = layout[key] else { return nil }
+        let strings = { (value: JSONValue?) -> [String]? in
+            guard case .array(let values)? = value else { return nil }
             return values.compactMap { if case .string(let value) = $0 { value } else { nil } }
         }
+        var metricOrder: [String: [String]] = [:]
+        if case .object(let cards)? = layout["metricOrder"] {
+            for (card, meters) in cards { metricOrder[card] = strings(meters) }
+        }
+        let cards = strings(layout["providerOrder"]) ?? []
         var seen = Set<String>()
         // (A card of one of several accounts, `claude@…`, is its service's place.)
-        self.init(order: (strings("providerOrder") ?? []).map(Self.service(of:)).filter { seen.insert($0).inserted }, placed: strings("placed").map(Set.init))
+        self.init(order: cards.map(Self.service(of:)).filter { seen.insert($0).inserted }, placed: strings(layout["placed"]).map(Set.init),
+                  metricOrder: metricOrder, cards: cards)
     }
 
     /// The panel's own order, where the layout says none (UsageKit's `ProviderCatalog`): the three
-    /// it began with, then the rest by name.
-    public static let defaultOrder = ["claude", "codex", "cursor", "antigravity", "copilot", "grok", "ollama", "opencode", "openrouter", "zai"]
+    /// it began with, then the rest by name, Devin (which Kuvo Code doesn't read) last.
+    public static let defaultOrder = ["claude", "codex", "cursor", "antigravity", "copilot", "grok", "ollama", "opencode", "openrouter", "zai", "devin"]
 
     /// `services` in the layout's order: those it names first, as it names them, then the rest in the
     /// panel's own order, then any it doesn't know, as given.
@@ -134,14 +150,29 @@ public struct UsageLayout: Hashable, Sendable {
         return unique.enumerated().sorted { (rank[$0.element] ?? Int.max, $0.offset) < (rank[$1.element] ?? Int.max, $1.offset) }.map(\.element)
     }
 
-    /// Whether a card's meter shows (`today`, `last30`, `trend`…): placed on the service's card, or
-    /// on one of its accounts' (`claude@1f2e.today`).
+    /// The card a service's spend shows under: its first in the layout's order, else the service's own.
+    public func card(of service: String) -> String { firstCard[service] ?? service }
+
+    /// Whether a service's meter shows (`today`, `last30`, `trend`…): placed on its first card, as
+    /// the Mac shows a service's spend there alone.
     public func shows(_ meter: String, of service: String) -> Bool {
-        guard let placed else { return true }
-        return placed.contains { id in
-            guard id.hasSuffix("." + meter) else { return false }
-            return Self.service(of: String(id.dropLast(meter.count + 1))) == service
+        placed.map { $0.contains("\(card(of: service)).\(meter)") } ?? true
+    }
+
+    /// The Mac's own order of a card's spend meters: the trend, then the periods.
+    public static let spendMeters = ["trend", "today", "yesterday", "last30"]
+
+    /// A service's spend meters in its first card's order (`metricOrder`), those it doesn't name
+    /// after in the panel's own: the trend, Today, Yesterday, Last 30 Days.
+    public func spendOrder(of service: String) -> [String] {
+        let card = card(of: service)
+        let named = (metricOrder[card] ?? []).compactMap { id -> String? in
+            guard id.hasPrefix(card + ".") else { return nil }
+            let meter = String(id.dropFirst(card.count + 1))
+            return Self.spendMeters.contains(meter) ? meter : nil
         }
+        var seen = Set<String>()
+        return (named + Self.spendMeters).filter { seen.insert($0).inserted }
     }
 
     /// A card's service: `claude@1f2e` is one of Claude's.
