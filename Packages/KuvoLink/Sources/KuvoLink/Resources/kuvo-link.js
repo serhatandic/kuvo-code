@@ -40276,7 +40276,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4c822219f898";
+var BRIDGE_VERSION = "7a96f06e7381";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45866,7 +45866,7 @@ function offeredAnswer(lists, wanted) {
   const starting = startingModel([wanted], lists);
   const listing = stillListing(lists);
   return {
-    models: offeredHere(lists).map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, side: model.agents ? "agents" : "engine", efforts: model.efforts, ...model.retiring ? { retiring: true } : {}, ...model.hidden ? { hidden: true } : {} })),
+    models: offeredHere(lists).map((model) => ({ providerID: model.providerID, id: model.id, name: model.name, side: model.agents ? "agents" : "engine", efforts: model.efforts, aliases: model.aliases, ...model.retiring ? { retiring: true } : {}, ...model.hidden ? { hidden: true } : {} })),
     known: { engine: lists.engine !== null, agents: lists.bridge !== null },
     ...listing.length ? { listing } : {},
     ...starting !== undefined ? { starting: starting?.model ?? null } : {}

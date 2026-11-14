@@ -34,8 +34,9 @@ export function offeredAnswer(lists: Lists, wanted: Ref | null) {
   const listing = stillListing(lists);
   return {
     // `side`: where a conversation on it runs (the engine, or the coding agents' bridge, Custom
-    // Auto's lists too), so a client offers in place only its own side's; `efforts`, its variants.
-    models: offeredHere(lists).map(model => ({ providerID: model.providerID, id: model.id, name: model.name, side: model.agents ? "agents" : "engine", efforts: model.efforts, ...(model.retiring ? { retiring: true } : {}), ...(model.hidden ? { hidden: true } : {}) })),
+    // Auto's lists too), so a client offers in place only its own side's; `efforts`, its variants;
+    // `aliases`, other ids a conversation may name it by (Claude Code's `default`).
+    models: offeredHere(lists).map(model => ({ providerID: model.providerID, id: model.id, name: model.name, side: model.agents ? "agents" : "engine", efforts: model.efforts, aliases: model.aliases, ...(model.retiring ? { retiring: true } : {}), ...(model.hidden ? { hidden: true } : {}) })),
     // (The bridge not running is one that can't say yet: it's starting, or started again.)
     known: { engine: lists.engine !== null, agents: lists.bridge !== null },
     ...(listing.length ? { listing } : {}),

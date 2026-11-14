@@ -1425,7 +1425,7 @@ the same, and a new conversation, a new bot and a lead's session started from an
 start on a model by the same rule.
 
 - `GET kuvo/models/offered[?provider=<id>&model=<id>&variant=<effort>]` → `{"models":
-  [{providerID, id, name, side, efforts, retiring?, hidden?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
+  [{providerID, id, name, side, efforts, aliases, retiring?, hidden?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
   "starting"?: {providerID, id, variant?} | null}`. `405` for anything but `GET`; `503` with
   neither the engine nor the coding agents' bridge running.
 - `models`: every model that runs there now (`runs` in "A session's model"): the engine's, its
@@ -1438,7 +1438,8 @@ start on a model by the same rule.
   `engine` or `agents` (the coding agents' bridge, Custom Auto's lists too): a conversation is put
   on one of its own side's in place (`api/session/<id>/model` there), and goes to another side's by
   `kuvo/sessions/<id>/agents`. `efforts`: its efforts (variants) as its side lists them, none for
-  one that has none.
+  one that has none. `aliases`: other ids a conversation may name it by (Claude Code's `default`,
+  the model it stands for now).
 - `known`: whether the engine's models, and the coding agents' with Custom Auto's lists, could be
   said. One that couldn't (not answering, an engine that hasn't loaded yet, or the bridge not
   running: starting, or started again) has none in `models`, rather than none at all: a client

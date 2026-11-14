@@ -14,7 +14,7 @@ const listed = (providerID: string, id: string, name: string, efforts: string[])
 const lists: Lists = {
   engine: { ready: new Set(["anthropic"]), models: [listed("anthropic", "claude-opus-5-5", "Claude Opus 5.5", ["low", "high", "max"])], accounts: new Map(), fallback: null },
   bridge: {
-    models: [listed("claude-code", "opus", "Opus", ["low", "medium", "high"])],
+    models: [{ ...listed("claude-code", "opus", "Opus", ["low", "medium", "high"]), aliases: ["default"] }],
     accounts: new Map([["claude-code", { id: "claude-code", name: "Claude Code", methods: [], signedIn: true, installed: true, complete: true }]]),
     auto: [{ id: "auto_1", name: "Everyday", entries: 2 }],
   },
@@ -28,6 +28,8 @@ test("each model says its side and its efforts: the engine's, the coding agents'
     ["auto", "auto_1", "agents", []],
   ])
   expect(answer.known).toEqual({ engine: true, agents: true })
+  // Other ids a conversation may name one by: Claude Code's `default`, the model it stands for.
+  expect(answer.models[1].aliases).toEqual(["default"])
 })
 
 test("a side that can't say has none of its models, and says so", () => {

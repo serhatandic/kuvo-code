@@ -9279,6 +9279,9 @@
          "efforts": {
           "list": "string"
          },
+         "aliases": {
+          "list": "string"
+         },
          "retiring?": "bool",
          "hidden?": "bool"
         }
