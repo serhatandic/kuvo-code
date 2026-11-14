@@ -36,13 +36,15 @@ async function folderIn(requestPath: string): Promise<string | undefined> {
   return (await fs.promises.stat(resolved).then(found => found.isDirectory(), () => false)) ? resolved : undefined;
 }
 
-/** Whether `folder` is one of this box's: a project's (or one of its folders), a worktree it keeps,
- * or one of its sessions' as its list has them. */
+/** Whether `folder` (resolved) is one of this box's: a project's not removed (or one of its
+ * folders), a worktree it keeps, or one of its sessions' as its list has them; each as resolved
+ * too (one kept with a trailing "/" is the same folder). */
 function isKnown(folder: string): boolean {
-  if (readProjects().some(project => project.directory === folder || project.folders.includes(folder))) return true;
-  if (readWorktrees().some(worktree => worktree.root === folder || worktree.folder === folder)) return true;
+  const same = (other: unknown) => typeof other === "string" && path.isAbsolute(other) && path.resolve(other) === folder;
+  if (readProjects().some(project => !project.removed && (same(project.directory) || project.folders.some(same)))) return true;
+  if (readWorktrees().some(worktree => same(worktree.root) || same(worktree.folder))) return true;
   const list = keptList();
-  return list ? Object.values(list.sessions).some(each => each.facts.directory === folder) : false;
+  return list ? Object.values(list.sessions).some(each => same(each.facts.directory)) : false;
 }
 
 export async function* modelsOfferedRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {

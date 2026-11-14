@@ -117,8 +117,10 @@ export function forgetModelNames(restart = false): void {
     if (restart) saveNames();
   }
   saving = undefined;
+  process.removeListener("exit", saveIfWaiting);
   lastNames.clear();
   savedNames = undefined;
+  noted.clear();
   if (!restart) try { fs.rmSync(NAMES_FILE, { force: true }); } catch {}
 }
 
@@ -132,20 +134,26 @@ const nameKey = (ref: { providerID: string; id: string }) => `${ref.providerID}\
 const NAMES_FILE = path.join(BOX, "model-names.json");
 const SAVED_MOST = 2_000;
 let savedNames: Map<string, string> | undefined;
+/** Those noted here since the last save: what this process adds to the file. */
+const noted = new Map<string, string>();
 let saving: ReturnType<typeof setTimeout> | undefined;
 
-function saved(): Map<string, string> {
-  if (savedNames) return savedNames;
-  savedNames = new Map();
+/** The names the file has now, most recent last (none for none, or one that can't be read). */
+function namesSaved(): Map<string, string> {
+  const names = new Map<string, string>();
   try {
     const read = JSON.parse(fs.readFileSync(NAMES_FILE, "utf8"));
     if (isObject(read) && Array.isArray(read.names)) {
       for (const each of read.names.slice(-SAVED_MOST)) {
-        if (Array.isArray(each) && each.length === 3 && each.every(part => typeof part === "string")) savedNames.set(nameKey({ providerID: each[0], id: each[1] }), each[2]);
+        if (Array.isArray(each) && each.length === 3 && each.every(part => typeof part === "string")) names.set(nameKey({ providerID: each[0], id: each[1] }), each[2]);
       }
     }
   } catch {}
-  return savedNames;
+  return names;
+}
+
+function saved(): Map<string, string> {
+  return (savedNames ??= namesSaved());
 }
 
 /** `ref`, which a session here runs on, kept as named `name` (saved a moment later, at once for
@@ -156,6 +164,8 @@ export function rememberName(ref: { providerID: string; id: string }, name: stri
   names.delete(key);
   names.set(key, name);
   while (names.size > SAVED_MOST) names.delete(names.keys().next().value!);
+  noted.delete(key);
+  noted.set(key, name);
   if (!saving) {
     saving = setTimeout(saveNames, 1_000);
     saving.unref?.();
@@ -170,10 +180,20 @@ function saveIfWaiting(): void {
   saveNames();
 }
 
+/** What's noted here, written into the file as it is now: another of this box's processes (its
+ * relay link and its own server each keep names) may have saved its own since this one read it. */
 function saveNames(): void {
   saving = undefined;
   process.removeListener("exit", saveIfWaiting);
-  const names = [...saved()].map(([key, name]) => [...key.split("\u0000"), name]);
+  const merged = namesSaved();
+  for (const [key, name] of noted) {
+    merged.delete(key);
+    merged.set(key, name);
+  }
+  while (merged.size > SAVED_MOST) merged.delete(merged.keys().next().value!);
+  noted.clear();
+  savedNames = merged;
+  const names = [...merged].map(([key, name]) => [...key.split("\u0000"), name]);
   try {
     fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });
     placeWhole(NAMES_FILE, JSON.stringify({ names }));

@@ -471,6 +471,18 @@ test("the models offered in a project's folder: the engine's lists there, where 
   const local = there.models.find(each => each.providerID === "my-own");
   assert.deepEqual(local, { providerID: "my-own", id: "local-7b", name: "Local 7B", side: "engine", efforts: ["high"], aliases: [] });
   assert.deepEqual(there.starting, { providerID: "my-own", id: "local-7b" });
+  // Kept with a trailing "/", it's the same folder; a project removed isn't one of the box's.
+  fs.writeFileSync(path.join(home, "box", "projects.json"), JSON.stringify({ projects: [{ directory: project + "/", folders: [] }] }));
+  link.forgetModelLists();
+  folders.length = 0;
+  await offeredOn(on, `?folder=${encodeURIComponent(project)}`);
+  assert.ok(folders.includes(project), `a project kept with a trailing "/" (${folders})`);
+  fs.writeFileSync(path.join(home, "box", "projects.json"), JSON.stringify({ projects: [{ directory: project, folders: [], removed: true }] }));
+  link.forgetModelLists();
+  folders.length = 0;
+  await offeredOn(on, `?folder=${encodeURIComponent(project)}`);
+  assert.ok(!folders.includes(project), `a project removed: the box's own lists (${folders})`);
+  fs.writeFileSync(path.join(home, "box", "projects.json"), JSON.stringify({ projects: [{ directory: project, folders: [] }] }));
   // A session's folder (as the box's list has it) and a worktree's are read there too.
   const worktree = fs.mkdtempSync(path.join(home, "worktree-")), sessionFolder = fs.mkdtempSync(path.join(home, "chat-"));
   fs.writeFileSync(path.join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [{ project, root: worktree, folder: worktree, branch: "kuvo/x" }] }));

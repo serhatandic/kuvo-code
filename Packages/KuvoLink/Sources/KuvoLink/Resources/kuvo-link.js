@@ -17316,8 +17316,10 @@ function forgetModelNames(restart = false) {
       saveNames();
   }
   saving = undefined;
+  process.removeListener("exit", saveIfWaiting);
   lastNames.clear();
   savedNames = undefined;
+  noted2.clear();
   if (!restart)
     try {
       fs66.rmSync(NAMES_FILE, { force: true });
@@ -17328,21 +17330,23 @@ var nameKey = (ref) => `${ref.providerID}\x00${ref.id}`;
 var NAMES_FILE = path66.join(BOX, "model-names.json");
 var SAVED_MOST = 2000;
 var savedNames;
+var noted2 = new Map;
 var saving;
-function saved() {
-  if (savedNames)
-    return savedNames;
-  savedNames = new Map;
+function namesSaved() {
+  const names = new Map;
   try {
     const read = JSON.parse(fs66.readFileSync(NAMES_FILE, "utf8"));
     if (isObject(read) && Array.isArray(read.names)) {
       for (const each of read.names.slice(-SAVED_MOST)) {
         if (Array.isArray(each) && each.length === 3 && each.every((part) => typeof part === "string"))
-          savedNames.set(nameKey({ providerID: each[0], id: each[1] }), each[2]);
+          names.set(nameKey({ providerID: each[0], id: each[1] }), each[2]);
       }
     }
   } catch {}
-  return savedNames;
+  return names;
+}
+function saved() {
+  return savedNames ??= namesSaved();
 }
 function rememberName(ref, name) {
   const names = saved(), key = nameKey(ref);
@@ -17352,6 +17356,8 @@ function rememberName(ref, name) {
   names.set(key, name);
   while (names.size > SAVED_MOST)
     names.delete(names.keys().next().value);
+  noted2.delete(key);
+  noted2.set(key, name);
   if (!saving) {
     saving = setTimeout(saveNames, 1000);
     saving.unref?.();
@@ -17367,7 +17373,16 @@ function saveIfWaiting() {
 function saveNames() {
   saving = undefined;
   process.removeListener("exit", saveIfWaiting);
-  const names = [...saved()].map(([key, name]) => [...key.split("\x00"), name]);
+  const merged = namesSaved();
+  for (const [key, name] of noted2) {
+    merged.delete(key);
+    merged.set(key, name);
+  }
+  while (merged.size > SAVED_MOST)
+    merged.delete(merged.keys().next().value);
+  noted2.clear();
+  savedNames = merged;
+  const names = [...merged].map(([key, name]) => [...key.split("\x00"), name]);
   try {
     fs66.mkdirSync(BOX, { recursive: true, mode: 448 });
     placeWhole(NAMES_FILE, JSON.stringify({ names }));
@@ -41248,7 +41263,7 @@ import fs136 from "node:fs";
 import path141 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "70e5bf98f350";
+var BRIDGE_VERSION = "38f364e377c3";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -47397,12 +47412,13 @@ async function folderIn(requestPath) {
   return await fs149.promises.stat(resolved).then((found) => found.isDirectory(), () => false) ? resolved : undefined;
 }
 function isKnown(folder) {
-  if (readProjects().some((project) => project.directory === folder || project.folders.includes(folder)))
+  const same = (other) => typeof other === "string" && path155.isAbsolute(other) && path155.resolve(other) === folder;
+  if (readProjects().some((project) => !project.removed && (same(project.directory) || project.folders.some(same))))
     return true;
-  if (readWorktrees().some((worktree) => worktree.root === folder || worktree.folder === folder))
+  if (readWorktrees().some((worktree) => same(worktree.root) || same(worktree.folder)))
     return true;
   const list = keptList();
-  return list ? Object.values(list.sessions).some((each) => each.facts.directory === folder) : false;
+  return list ? Object.values(list.sessions).some((each) => same(each.facts.directory)) : false;
 }
 async function* modelsOfferedRoute(context) {
   const { request, readEngine, bridge, json } = context;
