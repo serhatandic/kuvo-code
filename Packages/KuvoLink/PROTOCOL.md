@@ -5402,6 +5402,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions` and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
 | `approval.seen` | `seen` in `kuvo/sessions/<id>/decisions`, and `POST` `{seen: true}` as you open them: what's held back since is news on every client ("Auto's reviewer", bridge 0.9.187) |
 | `approval.stopped` | In Auto, a command the sandbox stops goes to Auto's reviewer by itself, with no `sandbox_ask`: allowed, it runs outside the sandbox and the agent gets that output; each lands in Decisions ("Asks", "Stopped commands", bridge 0.9.190) |
+| `artifacts` | `kuvo/artifacts…`: the record of what its agents made, each file with a version for each turn that changed it, passed on to the coding agents' bridge ("Artifacts") |
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
 | `attention` | `kuvo/attention` |
 | `autopilot` | `kuvo/sessions/<id>/autopilot`, `autopilot` in `POST kuvo/sessions`: a conversation on Autopilot, its questions with a recommendation going ahead ("Autopilot"; bridge 0.9.200); a goal's `mode` and `decided`, `mode` on start and change, `{action: decided}` ("Work", Goals, Interactive or Autopilot) |
@@ -5461,7 +5462,11 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
+| `messages.send` | `POST kuvo/sessions/<id>/send` and `…/queue/add` with fields: a message sent as what was written and what goes with it, the box writing what the agent reads and keeping its parts; `POST kuvo/messages/parts` for messages from before ("A message's parts", #668) |
+| `models.offered` | `GET kuvo/models/offered`: which models a session can use here, and the one a new session starts on, by the box's rule ("The models offered", #341) |
 | `moves` | `kuvo/moves`, `…/places`, `…/events`: Move to Computer, done by the boxes (bridge 0.9.108) |
+| `moves.agents` | a bot or chat whose conversations are on the coding agents' bridge moves too, with each agent's own conversation and memory (`api/kuvo/carry/…` on the bridge; "kuvo/moves") |
+| `moves.check` | between boxes, `check` before a move holds anything: whether the box it goes to can run it; a move's `note` says what it does differently there ("kuvo/moves") |
 | `named` | `kuvo/named` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |
@@ -5470,6 +5475,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `pieces` | a machine only: `kuvo/info`'s `pieces`, which version its link, coding agents' bridge and engine run ("Updates", "A new version while it works") |
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
+| `projects` | `kuvo/projects…`: the box keeps its own projects, and any client reads and changes them there ("Projects", bridge 0.9.33) |
 | `projects.folders` | A project's `folders` reach each of its sessions as it's started or moved there, opened (`POST kuvo/sessions/<id>/folders`) and as each run starts where they changed ("Projects", #341) |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
@@ -5502,6 +5508,10 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `typed` | `kuvo/sessions/<id>/typed`: what "/" offers, and what a typed text means ("What a typed message means") |
 | `update` | a machine only: `kuvo/update` |
 | `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
+| `usage.history` | `kuvo/agents/api/kuvo/usage…`: what your accounts used, by the day, read, priced and added up by the boxes ("Usage history") |
+| `usage.settings` | `kuvo/agents/api/kuvo/usage/settings…`: the usage panel's settings, kept by each box and shared by yours ("Usage settings", #631) |
+| `vault` | `kuvo/vault…`: the box's own vault of sign-ins, keys, files and notes its agents use without seeing a value ("Vault", bridge 0.9.100) |
+| `vault.same` | `POST kuvo/vault/items/<id>/same`: whether values given are the ones kept, without giving them ("Vault") |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
@@ -5517,6 +5527,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
 | `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
 | `worktrees` | `kuvo/worktrees…` |
+| `worktrees.events` | `GET kuvo/worktrees/events`: its worktrees' records now and as they change; the box keeps and names its worktrees itself, a Mac's included |
 | `worktrees.where` | `kuvo/worktrees/where` |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,
