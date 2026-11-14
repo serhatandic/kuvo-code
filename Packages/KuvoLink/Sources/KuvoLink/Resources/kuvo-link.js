@@ -40458,7 +40458,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "2c83c9b8df99";
+var BRIDGE_VERSION = "c31e5da51e21";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -46179,7 +46179,8 @@ ${why}` : asked.command, dismiss: false };
 `) || "It asks for something from the vault.";
     found.push({ at: asked.at, ask: { shown: { id: asked.id, kind: "other", session: asked.session, title, message, dismiss: false }, target, asker: asked.session } });
   }
-  return found.sort((a, b) => a.at - b.at).map((each) => each.ask);
+  const elsewhere = (ask) => ask.shown.kind === "other" ? 1 : 0;
+  return found.sort((a, b) => elsewhere(a.ask) - elsewhere(b.ask) || a.at - b.at).map((each) => each.ask);
 }
 async function placeOf(context, session) {
   const targets = targetsOf({ readEngine: context.readEngine, bridge: context.bridge });
