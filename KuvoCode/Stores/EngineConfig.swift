@@ -80,18 +80,6 @@ final class EngineConfig {
         return Self.machine(machine)
     }
 
-    /// Settings › Permissions' rules of the computer a session is on (nil: this Mac), from its
-    /// own settings: none for one not read yet (this Mac's are read before its engine starts, a
-    /// machine's before its engine is reached), whose sessions wait for them (`knowsRules`).
-    static func rules(on machine: String?) -> [PermissionRule] {
-        guard let config = of(machine), config.isLoaded else { return [] }
-        return config.permissionRules
-    }
-
-    /// The computer's rules are known: once its settings are read.
-    static func knowsRules(on machine: String?) -> Bool {
-        of(machine)?.isLoaded == true
-    }
 
     /// Its settings as they were just read some other way (as a machine's engine is started, or
     /// Also Apply's answer).
@@ -108,14 +96,7 @@ final class EngineConfig {
         // A change that didn't get there is said once it's shown as it is there; read again
         // after that, all's as it is.
         if keepsNotice { keepsNotice = false } else { notSaved = nil }
-        // Known now, rules or none: sessions there that waited for them take them.
-        if first {
-            rules = settings["permissions"]
-            onRulesChanged()
-        } else {
-            noteRules()
-            if before != read { onChanged() }
-        }
+        if !first, before != read { onChanged() }
     }
 
     /// Once what's been changed here has reached its box: nil, or why it didn't get there (or
@@ -130,17 +111,6 @@ final class EngineConfig {
 
     /// Changed, wherever from (Settings, a phone, the file edited by hand), once its box says so.
     @ObservationIgnored var onChanged: () -> Void = {}
-    /// Settings › Permissions' rules changed, wherever from (Settings, a phone, the file edited
-    /// by hand): open sessions follow (`Workspace.syncPermissions`).
-    @ObservationIgnored var onRulesChanged: () -> Void = {}
-    /// The rules as they were last, to tell when they change.
-    @ObservationIgnored private var rules: JSONValue?
-
-    private func noteRules() {
-        guard settings["permissions"] != rules else { return }
-        rules = settings["permissions"]
-        onRulesChanged()
-    }
 
     /// Bots may change their memory (`Bot.memoryFile`) whatever their conversation's mode: a rule
     /// each box adds to its settings once (`kuvo-link.js`'s defaults).
@@ -184,11 +154,7 @@ final class EngineConfig {
                 // Its box read the file, and it can't be used (comments in it): left alone until
                 // it's fixed, and said on its pages, which show what was read before, if anything.
                 problem = unusable
-                if !isLoaded {
-                    isLoaded = true
-                    rules = settings["permissions"]
-                    onRulesChanged()
-                }
+                if !isLoaded { isLoaded = true }
             } else if !isLoaded {
                 problem = "Its settings couldn't be read: \(error.localizedDescription)"
             }
@@ -323,7 +289,6 @@ final class EngineConfig {
                     reads += 1
                     settings = Self.applying(pending, to: confirmed)
                     notSaved = nil
-                    noteRules()
                     if before != confirmed { onChanged() }
                 } catch {
                     notSaved = (error as? BoxRefusal).map { $0.status == 409 && $0.message == Self.changedMeanwhile } == true
@@ -332,7 +297,6 @@ final class EngineConfig {
                     sent.removeAll()
                     // As it is there, rather than as it would have been, and read again.
                     settings = Self.applying(pending, to: confirmed)
-                    noteRules()
                     keepsNotice = true
                     reload()
                 }

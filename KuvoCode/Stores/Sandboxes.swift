@@ -37,17 +37,8 @@ final class Sandboxes {
     private(set) var released: [String: Set<String>] = [:]
     /// How Auto's reviewer takes up asks to work outside a folder, by box and ask.
     private(set) var reviews: [String: [String: AskReview]] = [:]
-    /// Boxes whose word on them is whole (`sandbox.reviews.whole`): one they haven't listed isn't
-    /// yours yet. This Mac's box is this app's version; a machine's says so in its `kuvo/info`.
-    private(set) var listAll: Set<String> = [BoxClient.mac]
-    /// Boxes that list the asks their reviewer took up to their end (`sandbox.reviews.settled`):
-    /// answered or gone, so nothing of them is kept here. This Mac's box is this app's version; a
-    /// machine's says so in its `kuvo/info`.
-    private(set) var settling: Set<String> = [BoxClient.mac]
-    /// Machines whose `kuvo/info` was read for it on this connection.
-    @ObservationIgnored private var featuresRead: Set<String> = []
     /// Told when its box lists an ask as yours (one held back meanwhile), for its notification;
-    /// nil when every one held back is to be looked at again (a box whose word isn't whole).
+    /// nil when every one held back is to be looked at again (a box not heard now).
     @ObservationIgnored var onYours: ((String?) -> Void)?
     /// Told when its box lists an ask its reviewer took up as over (answered or gone), so nothing
     /// says it waits on you, though its answer or its run's end wasn't heard here.
@@ -140,16 +131,6 @@ final class Sandboxes {
         while !Task.isCancelled {
             if let client = client(box) {
                 do {
-                    // Whether its word on the reviewer's asks is whole: read once a connection.
-                    // (Counted once read: one that fails is read again on the next try.)
-                    if !BoxClient.hasEveryFeature(box), !featuresRead.contains(box) {
-                        struct Info: Decodable { var features: [String]? }
-                        if let info = try? await client.value(Info.self, "GET", "kuvo/info") {
-                            featuresRead.insert(box)
-                            takeListsAll(info.features?.contains(AskReview.listsAllFeature) == true, from: box)
-                            takeSettles(info.features?.contains(AskReview.settlesFeature) == true, from: box)
-                        }
-                    }
                     for try await line in client.follow(SandboxRoutes.asks + "/events") {
                         guard let list = try? JSONDecoder().decode(SandboxAsks.self, from: line) else { continue }
                         take(list.asks, from: box)
@@ -172,7 +153,6 @@ final class Sandboxes {
         // asks keeps its notification, and isn't told again when it's back.
         guard following[box] == me else { return }
         following[box] = nil
-        featuresRead.remove(box)
         setLive(false, box)
         asks[box] = nil
         heard.remove(box)
@@ -229,7 +209,7 @@ final class Sandboxes {
     func isYours(_ request: PermissionRequest, on box: String) -> Bool {
         // Whole only while its asks are heard: its link down, nothing reviews or lists them, and an
         // ask not listed is yours, not hidden.
-        AskReview.isYours(action: request.action, review: reviews[box]?[request.id], listsAll: listAll.contains(box), heard: live.contains(box))
+        AskReview.isYours(action: request.action, review: reviews[box]?[request.id], heard: live.contains(box))
     }
 
     /// Boxes whose asks are being heard now: this Mac's while its stream runs, a machine's while
@@ -241,21 +221,6 @@ final class Sandboxes {
         if isLive { live.insert(box) } else { live.remove(box) }
         // Not heard now: what was held for its word is looked at again (yours, if not listed).
         if !isLive { onYours?(nil) }
-    }
-
-    /// Whether `box`'s word on its reviewer's asks is whole (`sandbox.reviews.whole`).
-    func takeListsAll(_ whole: Bool, from box: String) {
-        guard whole != listAll.contains(box) else { return }
-        if whole { listAll.insert(box) } else { listAll.remove(box) }
-        // Not whole: what it hasn't listed is yours now.
-        if !whole { onYours?(nil) }
-    }
-
-    /// Whether `box` lists the asks its reviewer took up to their end (`sandbox.reviews.settled`).
-    func settles(_ box: String) -> Bool { settling.contains(box) }
-
-    func takeSettles(_ settles: Bool, from box: String) {
-        if settles { settling.insert(box) } else { settling.remove(box) }
     }
 
     /// An ask Auto's reviewer took up, as a box last listed it, with that box.

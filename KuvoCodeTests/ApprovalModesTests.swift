@@ -273,29 +273,27 @@ import Testing
         #expect(model.decisions?.waiting.count == 1, "what it held back is still yours to approve")
     }
 
+    /// A new conversation on a machine is made by its box with the mode picked, which it keeps: Ask
+    /// First's asks from its first moment for Accept Edits, so nothing runs unasked.
     @Test func aNewConversationIsMadeWithTheModePickedForItsBoxToKeep() async throws {
-        let machine = "lab"
+        let machine = try await lab()
+        defer { done(machine) }
+        // (A folder there, as its box makes a session only in one.)
+        let projects = AppInfo.testRoot.appending(path: "ApprovalModes-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: projects) }
+        let folder = projects.appending(path: "app").path
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        engine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_new", directory: folder)])
+        engine.on("GET", "/api/session/ses_new", json: ["data": StubEngine.session("ses_new", directory: folder)])
         let workspace = Workspace()
-        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: machine))
-        workspace.machineAPI = { $0 == machine ? api : nil }
-        defer { engine.stop() }
-        engine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_new", directory: "/srv/app")])
+        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: "lab"))
+        workspace.machineAPI = { $0 == "lab" ? api : nil }
+        workspace.boxes = { $0 == "lab" ? machine.client : nil }
 
-        _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: machine), model: nil, agent: "build", approval: .acceptEdits)
+        _ = try await workspace.createSession(in: RemoteFolder.folder(folder, on: "lab"), model: nil, agent: "build", approval: .acceptEdits)
         let picked = try #require(engine.requests("POST", "/api/session").last?.body)
         #expect(((picked["metadata"] as? [String: Any])?["kuvo"] as? [String: Any])?["approval"] as? String == "acceptEdits")
-        // Until its box makes its rules a moment later, it asks before commands.
         #expect((picked["permissions"] as? [[String: Any]])?.contains { $0["action"] as? String == "shell" && $0["effect"] as? String == "ask" } == true)
-
-        // None picked: its box gives it that computer's default.
-        _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: machine), model: nil, agent: "build")
-        #expect(engine.requests("POST", "/api/session").last?.body["metadata"] == nil)
-
-        // Auto, where it asks first for now (no sandbox there): it asks before commands from the start too.
-        workspace.approvalsHere[machine] = ApprovalHere(fullAccess: false, default: .auto, auto: .init(engine: .init(held: .init(reason: "sandbox", why: "No sandbox here.")), agents: .init(held: nil)))
-        _ = try await workspace.createSession(in: RemoteFolder.folder("/srv/app", on: machine), model: nil, agent: "build", approval: .auto)
-        let auto = try #require(engine.requests("POST", "/api/session").last?.body)
-        #expect((auto["permissions"] as? [[String: Any]])?.contains { $0["action"] as? String == "shell" && $0["effect"] as? String == "ask" } == true)
     }
 }
 

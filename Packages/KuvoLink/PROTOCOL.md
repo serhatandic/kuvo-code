@@ -1232,8 +1232,8 @@ the same for every client and with none connected, and keeps them in `run/queues
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
   still on its way (and that Stop held it) stays with the client that sends it, which waits for its
   request before it asks the box to stop, and for its hold before it asks the box to resume.
-- A box without `queue` in its features (its update didn't get through): each client carries that
-  box's queues itself, as clients did before.
+- A box without `queue` in its features is older than the update gate lets through: held until
+  it's up to date, never carried by a client.
 
 ### A session at a glance
 
@@ -5372,6 +5372,14 @@ with its app closed, when what needs the app answers `503 {"message"}`.
 A note of when a name came in names the bridge's version up to 0.9.211; after that, the bridge's
 version is a hash, and a name is its own mark.
 
+A client reads a box's features in one place (KuvoClient's `BoxFeatures`), once a box, and keeps
+them until the box connects again or the update gate lets it go, when it reads them again. The rule
+is the gate's ("The update gate"): an answer with `features` says them; one without `features`, or
+a `404` or `405` (no `kuvo/info`), says none, so the box is held; any other answer, or none, can't
+tell: nothing is assumed, old or new, and the next ask reads it again. Each saying goes to the gate.
+A client checks only names newer than the gate's (`BoxGate.required` and what came before them,
+which a box that isn't held has) and a kind's own (`update`, `engine.start`).
+
 One row a name, in order, so branches that each add one merge cleanly.
 
 | Name | What it answers |
@@ -7831,8 +7839,8 @@ vault does (`run/vault.sock`); another passes them on.
   nothing of its own. An answered ask (or one gone with its run) leaves the list unless the reviewer
   decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
   (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
-  it never listed is yours, as nothing would list it. From a box without that word, a client takes
-  one not listed as yours at once.
+  it never listed is yours, as nothing would list it. (A box without that word is older than the
+  update gate lets through: held, never taken at its word.)
   `settled` (`sandbox.reviews.settled`): each ask the reviewer was checking or had left for you
   that's over without its word, the latest 200, each `{id, session, call?, state, at}`, `state`
   `answered` (by you, on any client, or by its engine: `permission.replied`) or `gone` (its run
@@ -7850,8 +7858,7 @@ vault does (`run/vault.sock`); another passes them on.
   can't be read, it's told without its words), and lets go of one listed in `settled`. The
   reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's
   process started again lists what still waits as it takes it up again (`checking` at once) and
-  none from before. From a box without `settled`, a client keeps what it heard asked until the box
-  lists it, as before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  none from before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

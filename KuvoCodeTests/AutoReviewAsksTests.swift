@@ -9,8 +9,7 @@ import Testing
 /// only a quiet mark on the step that asked; one the box leaves for you is yours as any ask. The
 /// box's word is the whole of it (`sandbox.reviews.whole`): nothing waits on a timer of the app's.
 /// It keeps each ask to its end (`sandbox.reviews.settled`: answered or gone), so the app keeps
-/// nothing of its own for one; from a box before that, the app keeps what it heard asked until the
-/// box lists it (the old-box path). The engine and the box's word are stubbed.
+/// nothing of its own for one. The engine and the box's word are stubbed.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct AutoReviewAsksTests {
     let engine = StubEngine(port: 47993)
@@ -37,13 +36,6 @@ import Testing
 
     private func review(_ request: String, _ state: AskReview.State) -> AskReview {
         AskReview(id: request, session: id, call: "call_" + request, state: state, at: 1)
-    }
-
-    /// Its box from before `sandbox.reviews.settled`, for `test`: the old-box path.
-    private func onAnOldBox(_ test: () async throws -> Void) async rethrows {
-        Sandboxes.shared.takeSettles(false, from: box)
-        defer { Sandboxes.shared.takeSettles(true, from: box) }
-        try await test()
     }
 
     @Test func whatAutosReviewerTakesUpDoesntWaitOnYou() async throws {
@@ -159,31 +151,6 @@ import Testing
         #expect(workspace.asking["per_s1"] == nil, "nor told")
     }
 
-    /// The same from a box before `sandbox.reviews.settled`, which only stops listing it: what the
-    /// app kept of it goes with its run (the old-box path, #425).
-    @Test func onAnOldBoxAnAskStoppedWhileCheckedIsGoneWithItsRun() async throws {
-        let workspace = workspace
-        Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
-        defer {
-            Sandboxes.shared.forget(box)
-            Sandboxes.shared.onYours = nil
-            engine.stop()
-        }
-        try await onAnOldBox {
-            let model = try await open()
-            Sandboxes.shared.setLive(true, box)
-            workspace.handle(try engine.event("permission.asked", outside("per_s1")))
-            Sandboxes.shared.take(reviews: [review("per_s1", .checking)], from: box)
-            #expect(!workspace.needsAttention(id), "being checked")
-            workspace.handle(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
-            Sandboxes.shared.take(reviews: [], from: box)
-            #expect(model.permissions.isEmpty)
-            Sandboxes.shared.setLive(false, box)
-            #expect(!workspace.needsAttention(id), "an ask gone with its run isn't yours later")
-            #expect(workspace.asking["per_s1"] == nil, "nor told")
-        }
-    }
-
     /// An ask its box lists as over (answered elsewhere, or gone with its run or its engine) is
     /// never yours, though this Mac still has it (the run's end went by unheard) and its box isn't
     /// heard now: nothing of it is kept here to turn into yours (#575).
@@ -293,51 +260,15 @@ import Testing
         #expect(workspace.asking["per_k1"] == id, "still asked, and yours now")
     }
 
-    /// The same from a box before `sandbox.reviews.settled`, which only stops listing one its
-    /// engine no longer asks: what the app kept of it goes as the resync finds it gone (the old-box
-    /// path, #425).
-    @Test func onAnOldBoxAResyncLetsGoOfWhatsNoLongerAsked() async throws {
-        let workspace = workspace
-        Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
-        defer {
-            Sandboxes.shared.forget(box)
-            Sandboxes.shared.onYours = nil
-            engine.stop()
-        }
-        try await onAnOldBox {
-            _ = try await open()
-            Sandboxes.shared.setLive(true, box)
-            workspace.handle(try engine.event("permission.asked", outside("per_g1")))
-            workspace.handle(try engine.event("permission.asked", outside("per_k1")))
-            Sandboxes.shared.take(reviews: [review("per_g1", .checking), review("per_k1", .checking)], from: box)
-            engine.on("GET", "/api/session/\(id)/permission", json: ["data": [outside("per_k1")]])
-            engine.on("GET", "/api/session/\(id)/form", json: ["data": [Any]()])
-            await workspace.resync()
-            Sandboxes.shared.take(reviews: [review("per_k1", .checking)], from: box)
-            Sandboxes.shared.setLive(false, box)
-            #expect(workspace.asking["per_g1"] == nil, "gone with its run")
-            #expect(!workspace.needsAttention(id))
-            Sandboxes.shared.setLive(true, box)
-            Sandboxes.shared.take(reviews: [review("per_k1", .yours)], from: box)
-            #expect(workspace.asking["per_k1"] == id, "still asked, and yours now")
-        }
-    }
-
-    /// A command isn't the reviewer's to take up, and a box whose word isn't whole (from before
-    /// `sandbox.reviews.whole`) has one it hasn't listed yours at once.
+    /// A command isn't the reviewer's to take up: one it hasn't listed is yours at once.
     @Test func whatTheReviewerNeverTakesUpIsYoursAtOnce() async throws {
         defer {
-            Sandboxes.shared.takeListsAll(true, from: box)
             Sandboxes.shared.forget(box)
             engine.stop()
         }
         _ = try await open()
         Sandboxes.shared.take(reviews: [], from: box)
         workspace.handle(try engine.event("permission.asked", ["id": "per_c1", "sessionID": id, "action": "shell", "resources": ["npm test"]]))
-        #expect(workspace.needsAttention(id))
-        workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_c1"]))
-        Sandboxes.shared.takeListsAll(false, from: box)
-        workspace.handle(try engine.event("permission.asked", outside("per_c2")))
         #expect(workspace.needsAttention(id))
     }
 }

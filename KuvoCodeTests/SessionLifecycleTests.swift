@@ -13,7 +13,9 @@ import Testing
 @Suite(.serialized, .timeLimit(.minutes(1))) struct SessionLifecycleTests {
     let engine = StubEngine(port: 47987)
     let workspace = Workspace()
-    let project = "/tmp/kuvo-tests-lifecycle/web"
+    /// (A folder of the test's own: the box makes and moves sessions only into one that's there.)
+    let projects = AppInfo.testRoot.appending(path: "Lifecycle-\(UUID().uuidString.prefix(8))")
+    var project: String { projects.appending(path: "web").path }
 
     init() {
         workspace.api = engine.api
@@ -26,6 +28,15 @@ import Testing
         engine.on("PATCH", "/api/session/*", json: [:])
         await workspace.refresh()
         try await engine.listed(for: workspace)
+    }
+
+    /// This Mac's box, its engine the stand-in: what makes and moves sessions, as the app asks it.
+    private func box() async throws -> TestBox {
+        let box = try await TestBox(engine: engine.url)
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        let url = engine.url
+        workspace.boxes = { $0 == BoxClient.mac ? box.client(engine: url) : nil }
+        return box
     }
 
     private func listed() -> [String] {
@@ -133,17 +144,14 @@ import Testing
     /// A new session, made and sent to at once (as a demo copy's prompt does): what's said shows
     /// in its conversation as it comes, and it has its row.
     @Test func aNewSessionShowsItsFirstTurn() async throws {
-        defer { engine.stop() }
+        let box = try await box()
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(at: projects) }
         try await start([])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
         engine.on("GET", "/api/session/ses_new", json: ["data": made])
         engine.conversation("ses_new", [])
         let session = try await workspace.createSession(in: project, model: nil, agent: "build")
-        // (Made by the engine here; its messages go through this Mac's box.)
-        let box = SessionsBox()
-        try await box.start(engine, for: workspace)
-        defer { box.stop() }
         let model = try #require(workspace.model(for: session.id))
         model.submit("Say hi in three words.", files: [], for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/ses_new/prompt").isEmpty }
@@ -176,10 +184,12 @@ import Testing
     /// window, asking again for the conversation as soon as anything it follows changes, shows the
     /// same one its turn goes to, not one of its own that stays empty.
     @Test func aSessionOpenedAsItsMadeShowsItsTurn() async throws {
-        defer { engine.stop() }
+        let box = try await box()
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(at: projects) }
         try await start([StubEngine.session("ses_open", title: "Open", directory: project)])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
+        engine.on("GET", "/api/session/ses_new", json: ["data": made])
         engine.conversation("ses_new", [])
         let session = try await workspace.createSession(in: project, model: nil, agent: "build")
         // The window, showing a conversation, looks again whenever what it read changes.
@@ -237,7 +247,8 @@ import Testing
     /// A chat that turns into work, moved into a project (D4): the engine moves it, and it's the
     /// project's, with the conversation it had.
     @Test func aChatMovedIntoAProject() async throws {
-        defer { engine.stop() }
+        let box = try await box()
+        defer { box.stop(); engine.stop(); try? FileManager.default.removeItem(at: projects) }
         try await start([StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
         engine.on("GET", "/api/session/ses_chat", json: ["data": StubEngine.session("ses_chat", title: "Question", directory: project)])
         try await workspace.move("ses_chat", toProject: project)
