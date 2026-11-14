@@ -2365,8 +2365,8 @@ A client never keeps an older box's way of doing something (#679): it brings a b
 before it uses it, and meanwhile says so. A box is older than a client needs when its `kuvo/info`
 `features` lack any name the client uses with no way around it (or it has no `kuvo/info`): today
 `agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
-`models.offered`, `models.offered.sides`, `sessions.list`, `sessions.models`, `sessions.start.empty`
-and `typed`
+`models.offered`, `models.offered.sides`, `queue.items`, `sessions.asks`, `sessions.list`,
+`sessions.mentions`, `sessions.models`, `sessions.start.empty` and `typed`
 (KuvoClient's `BoxGate.required`, and the same list in every client, gpui's `kuvo_box` too, so
 every client holds the same boxes; a box with `sessions.list` and `typed` has what came before them
 too). A client adds a name there as it drops its fallback for a box without it, or its words that
