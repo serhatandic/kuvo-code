@@ -74,6 +74,16 @@ impl AskPlace {
     }
 }
 
+/// One numbered answer on a card: its number, its words, what Always names (as code), and for a
+/// question that takes several, whether it's picked.
+struct AnswerRow {
+    id: SharedString,
+    number: usize,
+    title: String,
+    named: Option<String>,
+    checked: Option<bool>,
+}
+
 pub struct AskCard {
     client: BoxClient,
     session: String,
@@ -380,7 +390,8 @@ impl AskCard {
     }
 
     /// A numbered answer: its keycap, its words (and what Always names, as code), picked or not.
-    fn answer_row(&self, id: SharedString, number: usize, title: String, named: Option<String>, checked: Option<bool>, on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static, cx: &mut Context<Self>) -> AnyElement {
+    fn answer_row(&self, row: AnswerRow, on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static, cx: &mut Context<Self>) -> AnyElement {
+        let AnswerRow { id, number, title, named, checked } = row;
         let c = cx.theme().colors.clone();
         let busy = self.answering.is_some();
         let (hover, pressed) = (c.hover, c.pressed);
@@ -454,7 +465,8 @@ impl AskCard {
                 );
                 continue;
             }
-            choices.push(self.answer_row(SharedString::from(format!("ask-choice-{}", choice.answer)), at + 1, choice.title.clone(), choice.named.clone(), None, move |this, window, cx| this.choose(at, window, cx), cx));
+            let row = AnswerRow { id: SharedString::from(format!("ask-choice-{}", choice.answer)), number: at + 1, title: choice.title.clone(), named: choice.named.clone(), checked: None };
+            choices.push(self.answer_row(row, move |this, window, cx| this.choose(at, window, cx), cx));
         }
         parts.push(div().flex().flex_col().gap(space::S0_5).children(choices).into_any_element());
         parts
@@ -480,7 +492,8 @@ impl AskCard {
                     _ => option.label.clone(),
                 };
                 let checked = asked.multiple.then(|| picked.contains(&option.value));
-                self.answer_row(SharedString::from(format!("ask-option-{at}")), at + 1, title, None, checked, move |this, _, cx| this.pick(at, cx), cx)
+                let row = AnswerRow { id: SharedString::from(format!("ask-option-{at}")), number: at + 1, title, named: None, checked };
+                self.answer_row(row, move |this, _, cx| this.pick(at, cx), cx)
             })
             .collect();
         parts.push(div().flex().flex_col().gap(space::S0_5).children(rows).into_any_element());

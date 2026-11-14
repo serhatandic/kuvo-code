@@ -17,6 +17,7 @@ use crate::{
 };
 
 type ChangeHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+type RemoveHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// A switch, for settings that take effect at once.
 #[derive(IntoElement)]
@@ -192,7 +193,7 @@ pub struct Chip {
     dot: bool,
     tone: ChipTone,
     selected: bool,
-    on_remove: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_remove: Option<RemoveHandler>,
 }
 
 impl Chip {

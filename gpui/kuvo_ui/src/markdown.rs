@@ -132,31 +132,28 @@ pub fn parse(source: &str) -> Vec<Block> {
             }
             Event::End(TagEnd::BlockQuote(_)) => {
                 flush(&mut stack, &mut inline);
-                if let Some(Container::Quote(blocks)) = stack.pop() {
-                    if let Some(top) = stack.last_mut() {
+                if let Some(Container::Quote(blocks)) = stack.pop()
+                    && let Some(top) = stack.last_mut() {
                         top.push(Block::Quote(blocks));
                     }
-                }
             }
             Event::Start(Tag::List(start)) => {
                 flush(&mut stack, &mut inline);
                 stack.push(Container::List { start, items: Vec::new() });
             }
             Event::End(TagEnd::List(_)) => {
-                if let Some(Container::List { start, items }) = stack.pop() {
-                    if let Some(top) = stack.last_mut() {
+                if let Some(Container::List { start, items }) = stack.pop()
+                    && let Some(top) = stack.last_mut() {
                         top.push(Block::List { start, items });
                     }
-                }
             }
             Event::Start(Tag::Item) => stack.push(Container::Item(Item::default())),
             Event::End(TagEnd::Item) => {
                 flush(&mut stack, &mut inline);
-                if let Some(Container::Item(item)) = stack.pop() {
-                    if let Some(Container::List { items, .. }) = stack.last_mut() {
+                if let Some(Container::Item(item)) = stack.pop()
+                    && let Some(Container::List { items, .. }) = stack.last_mut() {
                         items.push(item);
                     }
-                }
             }
             Event::TaskListMarker(done) => {
                 if let Some(Container::Item(item)) = stack.last_mut() {
@@ -172,11 +169,10 @@ pub fn parse(source: &str) -> Vec<Block> {
                 code = Some((language, String::new()));
             }
             Event::End(TagEnd::CodeBlock) => {
-                if let Some((language, text)) = code.take() {
-                    if let Some(top) = stack.last_mut() {
+                if let Some((language, text)) = code.take()
+                    && let Some(top) = stack.last_mut() {
                         top.push(Block::Code { language, code: text });
                     }
-                }
             }
             Event::Start(Tag::Table(_)) => {
                 flush(&mut stack, &mut inline);
@@ -205,11 +201,10 @@ pub fn parse(source: &str) -> Vec<Block> {
                 }
             }
             Event::End(TagEnd::Table) => {
-                if let Some(Container::Table { header, rows, .. }) = stack.pop() {
-                    if let Some(top) = stack.last_mut() {
+                if let Some(Container::Table { header, rows, .. }) = stack.pop()
+                    && let Some(top) = stack.last_mut() {
                         top.push(Block::Table { header, rows });
                     }
-                }
             }
             Event::Start(Tag::Strong) => bold += 1,
             Event::End(TagEnd::Strong) => bold -= 1,

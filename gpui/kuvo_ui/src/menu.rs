@@ -385,11 +385,10 @@ impl PopoverMenuHandle {
         if let Some(open) = open {
             let menu_focus = open.menu.focus_handle(cx);
             OpenMenus::remove(&menu_focus, cx);
-            if menu_focus.contains_focused(window, cx) {
-                if let Some(target) = &open.return_to {
+            if menu_focus.contains_focused(window, cx)
+                && let Some(target) = &open.return_to {
                     window.focus(target, cx);
                 }
-            }
         }
         window.refresh();
     }
@@ -539,10 +538,13 @@ impl RenderOnce for ContextMenuArea {
     }
 }
 
+
+/// Draws what a popover shows.
+type Builder = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 /// A hover card: richer than a tooltip (a person, a session, a file), shown after the pointer
 /// rests on its trigger, and kept open while the pointer moves onto it.
 pub struct HoverCard {
-    build: Box<dyn Fn(&mut Window, &mut App) -> AnyElement>,
+    build: Builder,
 }
 
 impl HoverCard {

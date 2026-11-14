@@ -27,10 +27,13 @@ impl Render for Host {
     }
 }
 
+/// Where the field was last drawn.
+type Shown = Rc<Cell<Option<Bounds<Pixels>>>>;
+
 fn field(
     cx: &mut TestAppContext,
     build: impl FnOnce(TextField) -> TextField + 'static,
-) -> (Entity<TextField>, Rc<Cell<Option<Bounds<Pixels>>>>, &mut VisualTestContext) {
+) -> (Entity<TextField>, Shown, &mut VisualTestContext) {
     cx.update(|cx| {
         Theme::init(Appearance::Light, cx);
         kuvo_ui::bind_keys(cx);

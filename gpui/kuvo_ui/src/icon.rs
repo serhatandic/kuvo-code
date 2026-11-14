@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn every_icon_loads_as_an_svg() {
         for icon in IconName::ALL {
-            let bytes = Assets.load(icon.path()).unwrap().expect(icon.name());
+            let bytes = Assets.load(icon.path()).unwrap().unwrap_or_else(|| panic!("{}", icon.name()));
             let text = std::str::from_utf8(&bytes).unwrap();
             assert!(text.starts_with("<svg") && text.contains("viewBox=\"0 0 16 16\""));
         }
