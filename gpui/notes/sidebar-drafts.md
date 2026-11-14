@@ -98,3 +98,9 @@ Settings › Usage, or of the Sessions tab, with the same colours.
 - The rail's icons at 20 px in A and B (OpenBot's size; the brief keeps 20 for cards), or 14 as C.
 - The services' marks in the rings (letters stand in), a brand question.
 - Icons beside Settings' sections, as the Mac's sidebar has (not drawn: most aren't in our set).
+
+## Picked (2026-11-14)
+
+Option A's layout, with B's "Needs you"; ⌃1 to ⌃5 for the areas; large rail icons; the services'
+real marks in the rings; bot faces still. Built into the app in #707: `notes/screens-rail.md`,
+`notes/sidebar-handover.md`.

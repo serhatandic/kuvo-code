@@ -1,5 +1,7 @@
-//! The window: the sidebar on the window's background, and beside it a card holding either the
-//! conversation open or, for a new one, the landing view.
+//! The window: the title bar across the top; under it the rail, and beside the rail one raised
+//! panel holding the open area's sidebar and its main view (OpenBot's layout). In Sessions the main
+//! view is the conversation open or, for a new one, the landing view, with the side panel beside it;
+//! the other areas' pages aren't in the app yet. In a narrow window the area's sidebar folds away.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,19 +16,36 @@ use kuvo_box::follow::{Follow, ListUpdate, Timing};
 use kuvo_box::models::StartIn;
 use kuvo_box::search::{Found, SEARCHED_FROM};
 use kuvo_box::sessions::project_name;
+use kuvo_box::areas::Waiting;
 use kuvo_box::{BoxClient, BoxInfo, Listing, Where};
-use kuvo_ui::{ActiveTheme, Button, ButtonSize, IconName, StyledType, TextField, TextFieldEvent, Theme, TypeSize, theme::{radius, space}};
+use kuvo_ui::{ActiveTheme, StyledType, TextField, TextFieldEvent, Theme, TypeSize, theme::radius};
 
+use crate::area::{Area, Back, Forward, OpenHelp, ShowAccounts, ShowBots, ShowComputers, ShowQueue, ShowSessions, ShowSettings, ShowUsage};
+use crate::areas::{AreaView, Picked};
 use crate::composer::{Composer, ComposerEvent, Target};
 use crate::conversation::ConversationView;
+use crate::rail::{self, Rings};
 use crate::sidebar::{FocusSearch, Line};
 use crate::panel::{self, Place, SidePanel, Tab};
-use crate::{NewSession, ShowChanges, ShowFiles, ToggleAppearance, TogglePanel, landing, sidebar, time};
+use crate::{NewSession, ShowChanges, ShowFiles, ToggleAppearance, TogglePanel, areas, landing, sidebar, time, title_bar};
 
 /// How long typing pauses before the box is asked to search conversations.
 const SEARCH_PAUSE: Duration = Duration::from_millis(300);
 /// How many conversations a search shows.
 const SEARCH_MOST: usize = 20;
+/// Narrower than this, the area's sidebar folds away (the rail stays).
+pub const NARROW: Pixels = px(820.);
+/// How far back the window remembers where it's been.
+const HISTORY: usize = 100;
+
+/// Where the window was: a place back and forward go to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Nav {
+    Landing,
+    Session(String),
+    /// Another area, and the row picked in it (none: its own page).
+    Area(Area, Option<String>),
+}
 
 /// How the session lists stand.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,10 +119,28 @@ pub struct Workspace {
     panel_open: bool,
     panel_width: Pixels,
     resizing: Option<(Pixels, Pixels)>,
+    /// The area open, the other areas' sidebars (kept while hidden), and the accounts' rings.
+    area: Area,
+    areas: Vec<(Area, Entity<AreaView>)>,
+    rings: Entity<Rings>,
+    /// What waits on you in each area, as the box says it; `waiting_said` turns false once a box
+    /// says it doesn't say (one from before #711), so it isn't asked again.
+    waiting: Option<Waiting>,
+    waiting_said: bool,
+    waiting_task: Option<Task<()>>,
+    /// The area's sidebar folded away by its button (a wide window), or brought out (a narrow
+    /// one, where it starts folded); and whether the window was narrow when last drawn.
+    folded: bool,
+    shown_narrow: bool,
+    narrow: bool,
+    /// Where the window has been, and where in that it is now.
+    history: Vec<Nav>,
+    at: usize,
     _sessions: Option<Follow<ListUpdate>>,
     tasks: Vec<Task<()>>,
     _landing: Subscription,
     _search: Subscription,
+    _areas: Vec<Subscription>,
 }
 
 impl Workspace {
@@ -116,6 +153,9 @@ impl Workspace {
                 this.search_changed(cx);
             }
         });
+        let areas = areas::views(&client, live, cx);
+        let area_subscriptions = areas.iter().map(|(_, view)| cx.subscribe(view, |this: &mut Workspace, view, _: &Picked, cx| this.area_picked(&view, cx))).collect();
+        let rings = cx.new(|cx| Rings::new(client.clone(), live, cx));
         let mut workspace = Workspace {
             client: client.clone(),
             live,
@@ -147,10 +187,22 @@ impl Workspace {
             panel_open: false,
             panel_width: panel::WIDTH,
             resizing: None,
+            area: Area::Sessions,
+            areas,
+            rings,
+            waiting: None,
+            waiting_said: true,
+            waiting_task: None,
+            folded: false,
+            shown_narrow: false,
+            narrow: false,
+            history: vec![Nav::Landing],
+            at: 0,
             _sessions: None,
             tasks: Vec::new(),
             _landing: subscription,
             _search: search_subscription,
+            _areas: area_subscriptions,
         };
         if live {
             let connecting = client.clone();
@@ -189,6 +241,7 @@ impl Workspace {
         };
         self.take_list(update, cx);
         self.landing.update(cx, |composer, cx| composer.read_at_once(cx));
+        self.rings.update(cx, |rings, cx| rings.read_at_once(cx));
     }
 
     /// Opens `session` and reads it at once, on this thread (shots and tests, against a stand-in).
@@ -219,6 +272,10 @@ impl Workspace {
             Ok(info) => {
                 self.info = Some(info);
                 self.box_state = BoxState::Connected;
+                let name = self.box_name();
+                for (_, view) in self.areas.clone() {
+                    view.update(cx, |view, cx| view.set_this_box(name.clone(), cx));
+                }
             }
             Err(kuvo_box::Error::NeedsUpdating { .. }) => self.box_state = BoxState::Updating,
             Err(error) => self.box_state = BoxState::Unreachable(error.to_string()),
@@ -247,6 +304,8 @@ impl Workspace {
                 // The panel's folder, as the list says it now (a session opened before the list had
                 // it, a worktree's folder said later).
                 self.place_panel(cx);
+                // What waits on you may have changed with it.
+                self.read_waiting(cx);
             }
             ListUpdate::Waiting(why) => self.lists = Lists::Waiting(why),
             ListUpdate::Held { .. } => {
@@ -292,8 +351,12 @@ impl Workspace {
     }
 
     /// Counts the sidebar's times from `now` (shots, so they read the same each time).
-    pub fn set_now(&mut self, now: f64) {
+    pub fn set_now(&mut self, now: f64, cx: &mut Context<Self>) {
         self.now = Some(now);
+        self.rings.update(cx, |rings, _| rings.set_now(now));
+        for (_, view) in self.areas.clone() {
+            view.update(cx, |view, _| view.set_now(now));
+        }
     }
 
     pub fn is_landing(&self) -> bool {
@@ -348,7 +411,10 @@ impl Workspace {
 
     /// Opens a session's conversation.
     pub fn open_session(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.area = Area::Sessions;
+        self.record(Nav::Session(session.to_owned()));
         if self.opened() == Some(session) {
+            cx.notify();
             return;
         }
         self.unsent.remove(session);
@@ -384,6 +450,8 @@ impl Workspace {
 
     /// The landing view, for a new conversation in `project` (or the one picked last).
     pub fn new_session(&mut self, project: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.area = Area::Sessions;
+        self.record(Nav::Landing);
         if let Some(project) = project {
             self.landing_place = Some(StartIn::Project(project));
             self.landing_picked = true;
@@ -515,7 +583,7 @@ impl Workspace {
     /// bounds, never leaving the conversation narrower than its narrowest.
     pub fn resize_to(&mut self, x: Pixels, wide: Pixels, cx: &mut Context<Self>) {
         let Some((from, width)) = self.resizing else { return };
-        self.panel_width = (width + (from - x)).clamp(panel::NARROWEST, widest_panel(wide));
+        self.panel_width = (width + (from - x)).clamp(panel::NARROWEST, self.widest_panel(wide));
         cx.notify();
     }
 
@@ -531,26 +599,31 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The side panel, in the raised panel beside the conversation, with its edge to drag.
     fn panel_card(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let c = cx.theme().colors.clone();
         // In a window narrower than it was made for, the panel gives way before the conversation
         // does; its width is kept for a wider one.
-        let width = self.panel_width.min(widest_panel(window.viewport_size().width));
+        let width = self.panel_width.min(self.widest_panel(window.viewport_size().width));
         let resizing = self.resizing.is_some();
         div()
+            .relative()
             .flex()
             .flex_none()
             .h_full()
-            .py(space::S2)
-            .pr(space::S2)
+            .border_l_1()
+            .border_color(c.border)
+            .child(div().w(width).h_full().flex().flex_col().overflow_hidden().child(self.panel.clone()))
             .child(
-                // The edge to drag: wider than it looks, between the two cards.
+                // The edge to drag: wider than it looks, over the line between the two.
                 div()
                     .id("panel-edge")
                     .debug_selector(|| "panel-edge".into())
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-5.))
                     .w(px(8.))
-                    .h_full()
-                    .flex_none()
                     .flex()
                     .justify_center()
                     .cursor_col_resize()
@@ -561,20 +634,7 @@ impl Workspace {
                             this.start_resize(event.position.x, cx);
                         }
                     }))
-                    .child(div().w(px(2.)).h_full().rounded_full().when(resizing, |d| d.bg(c.accent)).hover(|s| s.bg(c.border_strong))),
-            )
-            .child(
-                div()
-                    .w(width)
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .rounded(radius::CARD - px(4.))
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(c.border)
-                    .bg(c.surface)
-                    .child(self.panel.clone()),
+                    .child(div().w(px(2.)).h_full().when(resizing, |d| d.bg(c.accent)).hover(|s| s.bg(c.border_strong))),
             )
             .into_any_element()
     }
@@ -583,6 +643,11 @@ impl Workspace {
 
     pub fn search(&self) -> &Entity<TextField> {
         &self.search
+    }
+
+    /// Whether nothing's typed in the search (cheaply, as the sidebar's rows ask while drawn).
+    pub fn search_is_empty(&self) -> bool {
+        self.finds_for.is_empty()
     }
 
     pub fn search_text(&self, cx: &App) -> String {
@@ -669,6 +734,11 @@ impl Workspace {
 
     /// Puts the keyboard in the sidebar's search.
     pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.area != Area::Sessions {
+            self.show_area(Area::Sessions, window, cx);
+        }
+        self.folded = false;
+        self.shown_narrow = true;
         self.walked = None;
         window.focus(&self.search.focus_handle(cx), cx);
         cx.notify();
@@ -721,7 +791,7 @@ impl Workspace {
                 self.toggle_project(&directory, cx);
             }
             Some(Line::More(directory)) => self.toggle_all(&directory, cx),
-            Some(Line::Session { id, .. }) | Some(Line::Found { id, .. }) => {
+            Some(Line::Session { id, .. }) | Some(Line::Found { id, .. }) | Some(Line::Needs { id, .. }) => {
                 self.walked = None;
                 self.open_session(&id, window, cx);
                 // (One already open: the keyboard goes back to it all the same.)
@@ -750,55 +820,226 @@ impl Workspace {
         cx.notify();
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let c = &cx.theme().colors;
-        let (title, project) = match self.opened() {
+    // MARK: The rail and its areas
+
+    pub fn area(&self) -> Area {
+        self.area
+    }
+
+    pub fn rings(&self) -> &Entity<Rings> {
+        &self.rings
+    }
+
+    /// What waits on you in each area, once the box says it.
+    pub fn waiting(&self) -> Option<&Waiting> {
+        self.waiting.as_ref()
+    }
+
+    /// An area's sidebar view (none for Sessions, which the workspace draws itself).
+    pub fn area_view(&self, area: Area) -> Option<&Entity<AreaView>> {
+        self.areas.iter().find(|(of, _)| *of == area).map(|(_, view)| view)
+    }
+
+    /// Whether the area's sidebar shows now: in a wide window unless folded by its button, in a
+    /// narrow one only once brought out.
+    pub fn sidebar_shown(&self) -> bool {
+        if self.narrow { self.shown_narrow } else { !self.folded }
+    }
+
+    pub fn is_narrow(&self) -> bool {
+        self.narrow
+    }
+
+    /// Opens `area`, its sidebar shown; Sessions comes back to the conversation (or landing view)
+    /// it showed.
+    pub fn show_area(&mut self, area: Area, window: &mut Window, cx: &mut Context<Self>) {
+        self.area = area;
+        self.folded = false;
+        self.shown_narrow = true;
+        match area {
+            Area::Sessions => {
+                let nav = self.opened().map_or(Nav::Landing, |session| Nav::Session(session.to_owned()));
+                self.record(nav);
+                match self.conversation() {
+                    Some(view) => window.focus(&view.focus_handle(cx), cx),
+                    None => window.focus(&self.landing.focus_handle(cx), cx),
+                }
+            }
+            _ => {
+                if let Some(view) = self.area_view(area).cloned() {
+                    let picked = view.read(cx).selected().map(str::to_owned);
+                    self.record(Nav::Area(area, picked));
+                    view.update(cx, |view, cx| view.shown(cx));
+                }
+                // The keyboard stays in the window, where the areas' keys are.
+                window.focus(&self.focus, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// A press on an area's rail button: the area open folds its sidebar away (or brings it back);
+    /// another opens.
+    pub fn rail_pressed(&mut self, area: Area, window: &mut Window, cx: &mut Context<Self>) {
+        if area != self.area {
+            self.show_area(area, window, cx);
+            return;
+        }
+        // (The window as it is now, should it have changed since it was last drawn.)
+        self.narrow = window.viewport_size().width < NARROW;
+        if self.narrow {
+            self.shown_narrow = !self.shown_narrow;
+        } else {
+            self.folded = !self.folded;
+        }
+        cx.notify();
+    }
+
+    /// Settings, on `section`.
+    pub fn show_setting(&mut self, section: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(view) = self.area_view(Area::Settings).cloned() {
+            view.update(cx, |view, cx| view.select(Some(section.to_owned()), cx));
+        }
+        self.show_area(Area::Settings, window, cx);
+    }
+
+    fn area_picked(&mut self, view: &Entity<AreaView>, cx: &mut Context<Self>) {
+        let (area, picked) = view.read_with(cx, |view, _| (view.area(), view.selected().map(str::to_owned)));
+        self.record(Nav::Area(area, picked));
+        cx.notify();
+    }
+
+    /// Asks the box what waits on you (unless it's said it doesn't say).
+    fn read_waiting(&mut self, cx: &mut Context<Self>) {
+        if !self.waiting_said {
+            return;
+        }
+        let client = self.client.clone();
+        if !self.live {
+            let read = client.waiting();
+            self.take_waiting(read, cx);
+            return;
+        }
+        self.waiting_task = Some(cx.spawn(async move |this, cx| {
+            let read = cx.background_executor().spawn(async move { client.waiting() }).await;
+            this.update(cx, |this, cx| this.take_waiting(read, cx)).ok();
+        }));
+    }
+
+    fn take_waiting(&mut self, read: kuvo_box::Result<Option<Waiting>>, cx: &mut Context<Self>) {
+        match read {
+            Ok(Some(waiting)) => self.waiting = Some(waiting),
+            Ok(None) => {
+                self.waiting = None;
+                self.waiting_said = false;
+            }
+            // Couldn't be read now: what was said stands until it can.
+            Err(_) => {}
+        }
+        cx.notify();
+    }
+
+    // MARK: Back and forward
+
+    /// Notes going to `nav`, unless that's where the window is (or it's going back or forward).
+    fn record(&mut self, nav: Nav) {
+        if self.history.get(self.at) == Some(&nav) {
+            return;
+        }
+        self.history.truncate(self.at + 1);
+        self.history.push(nav);
+        if self.history.len() > HISTORY {
+            self.history.remove(0);
+        }
+        self.at = self.history.len() - 1;
+    }
+
+    pub fn can_go_back(&self) -> bool {
+        self.at > 0
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        self.at + 1 < self.history.len()
+    }
+
+    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.can_go_back() {
+            self.go(self.at - 1, window, cx);
+        }
+    }
+
+    pub fn go_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.can_go_forward() {
+            self.go(self.at + 1, window, cx);
+        }
+    }
+
+    /// Goes to the place noted at `at` without noting it again. A session gone from the list
+    /// since is passed over, as a way back to nothing.
+    fn go(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let nav = self.history[at].clone();
+        if let Nav::Session(session) = &nav
+            && self.listing.is_read()
+            && self.listing.facts(session).is_none()
+            && !self.started.contains_key(session)
+        {
+            self.history.remove(at);
+            if self.at > at {
+                self.at -= 1;
+            }
+            self.at = self.at.min(self.history.len() - 1);
+            cx.notify();
+            return;
+        }
+        let history = std::mem::take(&mut self.history);
+        match &nav {
+            Nav::Landing => self.new_session(None, window, cx),
+            Nav::Session(session) => self.open_session(session, window, cx),
+            Nav::Area(area, picked) => {
+                if let Some(view) = self.area_view(*area).cloned() {
+                    view.update(cx, |view, cx| view.select(picked.clone(), cx));
+                }
+                self.show_area(*area, window, cx);
+            }
+        }
+        self.history = history;
+        self.at = at;
+        cx.notify();
+    }
+
+    /// The main view's title and what's beside it, as the title bar shows them: a conversation's
+    /// title and its project, or the page an area shows.
+    pub fn title(&self, cx: &App) -> (Option<SharedString>, Option<SharedString>) {
+        if self.area != Area::Sessions {
+            let Some(view) = self.area_view(self.area) else { return (None, None) };
+            let title = view.read(cx).title();
+            let area = self.area.name();
+            let beside = (title.as_ref() != area).then(|| SharedString::from(area));
+            return (Some(title), beside);
+        }
+        match self.opened() {
             Some(session) => {
                 let facts = self.listing.facts(session);
                 let title = facts.and_then(|facts| facts.title.clone()).filter(|title| !title.trim().is_empty()).unwrap_or_else(|| "New Session".into());
                 // (One started here, before the list has it: the project its box said.)
                 let project = facts.and_then(|facts| facts.project.clone()).or_else(|| self.started.get(session).cloned().flatten()).map(|project| self.project_name(&project));
-                (Some(title), project)
+                (Some(title.into()), project.map(SharedString::from))
             }
             None => (None, None),
-        };
-        div()
-            .id("content-header")
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(space::S2)
-            .h(px(44.))
-            .px(space::S5)
-            .when(self.opened().is_some(), |d| d.border_b_1().border_color(c.border))
-            .on_mouse_down(MouseButton::Left, |event, window, _| {
-                if event.click_count == 1 {
-                    window.start_window_move();
-                }
-            })
-            .children(title.map(|title| div().min_w_0().truncate().text_ui(TypeSize::Small).medium().text_color(c.text).child(title)))
-            .children(project.map(|project| div().flex_none().text_ui(TypeSize::Small).text_color(c.text_faint).child(project)))
-            .child(div().flex_1())
-            .child(
-                // A press here is the button's, never the header's window move.
-                div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(
-                    Button::icon_only("toggle-panel", IconName::PanelRight, if self.panel_open { "Hide Panel" } else { "Show Panel" })
-                        .ghost()
-                        .size(ButtonSize::Small)
-                        .selected(self.panel_open)
-                        .tooltip("⌥⌘0")
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(cx))),
-                ),
-            )
-            .into_any_element()
+        }
     }
-}
 
-/// The widest the side panel goes in a window `wide`: never leaving the conversation narrower than
-/// its narrowest (the sidebar, the cards' margins and the panel's edge apart).
-fn widest_panel(wide: Pixels) -> Pixels {
-    let room = wide - px(sidebar::WIDTH) - panel::CONVERSATION_NARROWEST - px(24.);
-    panel::WIDEST.min(room).max(panel::NARROWEST)
+    /// How wide the area's sidebar and the rail are now, together.
+    fn sidebars_width(&self) -> Pixels {
+        rail::WIDTH + if self.sidebar_shown() { px(sidebar::WIDTH) } else { px(0.) }
+    }
+
+    /// The widest the side panel goes in a window `wide`: never leaving the conversation narrower
+    /// than its narrowest (the rail, the area's sidebar and the panel's edge apart).
+    fn widest_panel(&self, wide: Pixels) -> Pixels {
+        let room = wide - self.sidebars_width() - panel::CONVERSATION_NARROWEST - px(8.);
+        panel::WIDEST.min(room).max(panel::NARROWEST)
+    }
 }
 
 impl Focusable for Workspace {
@@ -811,20 +1052,58 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let c = &theme.colors;
-        let content: AnyElement = match &self.open {
-            Open::Landing => landing::render(self, window, cx),
-            Open::Conversation { view, .. } => view.clone().into_any_element(),
+        // A narrow window folds the area's sidebar away; brought out there, it folds again once
+        // the window has been wide.
+        let narrow = window.viewport_size().width < NARROW;
+        if self.narrow && !narrow {
+            self.shown_narrow = false;
+        }
+        self.narrow = narrow;
+
+        let sessions = self.area == Area::Sessions;
+        let content: AnyElement = match (&self.open, self.area_view(self.area)) {
+            (_, Some(view)) if !sessions => areas::placeholder(self.area, view.read(cx).title(), cx),
+            (Open::Conversation { view, .. }, _) => view.clone().into_any_element(),
+            _ => landing::render(self, window, cx),
         };
-        let header = self.header(cx);
-        let panel = self.panel_open.then(|| self.panel_card(window, cx));
+        let sidebar: Option<AnyElement> = self.sidebar_shown().then(|| match self.area_view(self.area) {
+            Some(view) if !sessions => view.clone().into_any_element(),
+            _ => sidebar::render(self, window, cx),
+        });
+        let panel = (sessions && self.panel_open).then(|| self.panel_card(window, cx));
         div()
             .key_context("Workspace")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &NewSession, window, cx| this.new_session(None, window, cx)))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
-            .on_action(cx.listener(|this, _: &TogglePanel, _, cx| this.toggle_panel(cx)))
-            .on_action(cx.listener(|this, _: &ShowChanges, _, cx| this.show_panel(Tab::Changes, cx)))
-            .on_action(cx.listener(|this, _: &ShowFiles, _, cx| this.show_panel(Tab::Files, cx)))
+            .on_action(cx.listener(|this, _: &TogglePanel, window, cx| {
+                if this.area != Area::Sessions {
+                    this.show_area(Area::Sessions, window, cx);
+                }
+                this.toggle_panel(cx);
+            }))
+            .on_action(cx.listener(|this, _: &ShowChanges, window, cx| {
+                if this.area != Area::Sessions {
+                    this.show_area(Area::Sessions, window, cx);
+                }
+                this.show_panel(Tab::Changes, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ShowFiles, window, cx| {
+                if this.area != Area::Sessions {
+                    this.show_area(Area::Sessions, window, cx);
+                }
+                this.show_panel(Tab::Files, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ShowSessions, window, cx| this.show_area(Area::Sessions, window, cx)))
+            .on_action(cx.listener(|this, _: &ShowBots, window, cx| this.show_area(Area::Bots, window, cx)))
+            .on_action(cx.listener(|this, _: &ShowQueue, window, cx| this.show_area(Area::Queue, window, cx)))
+            .on_action(cx.listener(|this, _: &ShowComputers, window, cx| this.show_area(Area::Computers, window, cx)))
+            .on_action(cx.listener(|this, _: &ShowSettings, window, cx| this.show_area(Area::Settings, window, cx)))
+            .on_action(cx.listener(|this, _: &ShowUsage, window, cx| this.show_setting("Usage", window, cx)))
+            .on_action(cx.listener(|this, _: &ShowAccounts, window, cx| this.show_setting("Accounts", window, cx)))
+            .on_action(cx.listener(|this, _: &Back, window, cx| this.go_back(window, cx)))
+            .on_action(cx.listener(|this, _: &Forward, window, cx| this.go_forward(window, cx)))
+            .on_action(|_: &OpenHelp, _, cx| cx.open_url(crate::area::HELP))
             // A drag of the panel's edge, wherever the pointer goes meanwhile.
             .when(self.resizing.is_some(), |d| {
                 d.cursor_col_resize()
@@ -843,26 +1122,33 @@ impl Render for Workspace {
                 Theme::set_appearance(next, cx);
             }))
             .flex()
+            .flex_col()
             .size_full()
             .bg(c.background)
             .text_ui(TypeSize::Small)
             .text_color(c.text)
-            .child(sidebar::render(self, window, cx))
+            .child(title_bar::render(self, cx))
             .child(
-                div().flex_1().min_w_0().h_full().py(space::S2).when(panel.is_none(), |d| d.pr(space::S2)).child(
+                div().flex_1().min_h_0().flex().child(rail::render(self, cx)).child(
+                    // The area's sidebar and its main view share one raised panel, its corner
+                    // rounded against the rail.
                     div()
-                        .size_full()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
                         .flex()
-                        .flex_col()
-                        .rounded(radius::CARD - px(4.))
-                        .overflow_hidden()
-                        .border_1()
-                        .border_color(c.border)
                         .bg(c.surface)
-                        .child(header)
-                        .child(div().relative().flex_1().min_h_0().child(content)),
+                        .rounded_tl(radius::CARD)
+                        .border_t_1()
+                        .border_l_1()
+                        .border_color(c.border)
+                        .overflow_hidden()
+                        .children(sidebar.map(|sidebar| {
+                            div().id("area-sidebar").debug_selector(|| "area-sidebar".into()).w(px(sidebar::WIDTH)).h_full().flex_none().border_r_1().border_color(c.border).child(sidebar)
+                        }))
+                        .child(div().relative().flex_1().min_w_0().h_full().child(content))
+                        .children(panel),
                 ),
             )
-            .children(panel)
     }
 }

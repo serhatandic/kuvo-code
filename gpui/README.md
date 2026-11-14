@@ -40,7 +40,18 @@ cargo run -p kuvo --features stand-in -- --stand-in   # against a made-up box: n
 cargo run -p kuvo                                       # this Mac's own box (Kuvo Code running here)
 ```
 
-- **The sidebar** lists the box's sessions as its list says them: pinned, each project with its
+- **The rail** (`notes/screens-rail.md`) switches between the areas, Sessions, Bots, Work Queue,
+  Computers and Settings (⌃1 to ⌃5), each with its own sidebar beside it in one raised panel with
+  the main view; what waits on you shows on an area's icon, and clicking the open area folds its
+  sidebar away. At its foot, a usage ring per account (its service's mark; resting on one shows
+  its windows), then Help and Settings. In a window under 820 px the area's sidebar folds away and
+  its button brings it out. The other areas' pages aren't in the app yet: a row picked there shows
+  a page saying so.
+- **The title bar**: the computer switcher (this Mac's box; switching isn't in the app yet), back
+  and forward (⌘[ and ⌘]), New Session (⌘N), then the conversation's title and project and the
+  side panel's button.
+- **The Sessions sidebar** lists what's waiting on you across projects first ("Needs you", with
+  what each asks), then the box's sessions as its list says them: pinned, each project with its
   sessions nested under it, chats; a spinner on one at work, a dot on one waiting on you, a count
   on its project. ⌘N (or a project's "+") opens the landing view.
 - **A conversation** follows the box live: your messages by their parts, the agent's words as
@@ -51,7 +62,7 @@ cargo run -p kuvo                                       # this Mac's own box (Ku
   box offers. Stop (or Esc) with nothing written while it works.
 - **The landing view**: the composer in the middle with a project chip above it; Send starts the
   session on the box there and opens it.
-- **The side panel** (⌥⌘0, or the button at the conversation's top right) beside the
+- **The side panel** (⌥⌘0, or the button at the title bar's right) beside the
   conversation, resized by its edge: the session's folder's **Changes** as the box groups them
   (conflicts, staged, unstaged, new), followed live, each opening to its diff, with stage, unstage,
   discard (asked first) and commit; its **Files**, a folder at a time, one the box can't read saying
@@ -99,7 +110,10 @@ cargo test
 The app's scenarios (`kuvo/tests/screens.rs`) run its screens in a window against the stand-in
 box, with real clicks and keystrokes: the sidebar opening a session and folding a project, sending
 a message and a typed keyword, "/"'s list, a model that can't run, a new session from the landing
-view, a run streaming in and paging back. The side panel's are `kuvo/tests/panel.rs`, against the
+view, a run streaming in and paging back. The rail and its areas' are `kuvo/tests/areas.rs` (switching areas by the rail and ⌃1 to ⌃5,
+folding the sidebar by its button and in a narrow window, "Needs you", back and forward, the
+rings), against the stand-in's sample bots, queue, machines and accounts, and as a box from before
+#711. The side panel's are `kuvo/tests/panel.rs`, against the
 stand-in's made-up repositories (no git runs). The follows' threads are left off: what they'd hand the
 screens is read from the stand-in at once and handed over the same way.
 
@@ -158,7 +172,10 @@ What it uses of the box: `kuvo/info`; `kuvo/sessions/list` and `…/events` (wit
 `kuvo/agents/` for a coding agent's conversation; `kuvo/sessions/<id>/typed` (`GET` and `POST`);
 `api/session/active` (whether a run is under way); `kuvo/sessions/<id>/send` (a message's fields,
 #668 item 3) and `kuvo/messages/parts` (the parts of messages from before); and
-`kuvo/work-queue?owner=all&glance=1` and `kuvo/asks` for the counts. A message's parts and fields
+`kuvo/work-queue?owner=all&glance=1` and `kuvo/asks` for the counts; for the rail's areas
+(`kuvo_box::areas`), `kuvo/bots`, `kuvo/groups`, `kuvo/work-queue?owner=all&glance=1`'s
+categories, `kuvo/machines` and `kuvo/agents/api/kuvo/limits`' rows, and `kuvo/waiting` once a box
+has it (#711; a box without it is asked once). A message's parts and fields
 are held to `Packages/KuvoLink/Vectors/message-parts.json`.
 
 Over a box's own server, what's followed streams. Its record is read again for each request, so

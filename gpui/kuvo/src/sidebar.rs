@@ -1,6 +1,8 @@
-//! The sidebar: New Session and the search, then the box's sessions as its list says them: pinned,
-//! each project with its sessions nested under it (newest first), and chats. A session at work shows
-//! a spinner; one waiting on you, a dot, and its project counts them. Under it all, the box it's on.
+//! The Sessions area's sidebar: the search, then what's waiting on you across projects ("Needs
+//! you", with what each asks, once the box says it), then the box's sessions as its list says them:
+//! pinned, each project with its sessions nested under it (newest first), and chats. A session at
+//! work shows a spinner; one waiting on you, a dot, and its project counts them. New Session and
+//! the computer it's on are the title bar's.
 //!
 //! Searching shows sessions whose names have the words as you type, then, from three characters,
 //! the conversations the box finds them in (`kuvo/search`). The arrows walk the list (from the
@@ -8,7 +10,7 @@
 //! cursor (a project folds), Escape leaves it.
 
 use gpui::{
-    AnyElement, App, Context, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, SharedString,
+    AnyElement, App, Context, InteractiveElement, IntoElement, KeyBinding, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder as _, px,
 };
 use kuvo_box::search::SEARCHED_FROM;
@@ -21,14 +23,12 @@ use kuvo_ui::{
 };
 
 use crate::time;
-use crate::workspace::{BoxState, Lists, Workspace};
+use crate::workspace::{Lists, Workspace};
 
 actions!(sidebar, [WalkNext, WalkPrevious, WalkOpen, WalkLeave, FocusSearch]);
 
-/// How wide it is.
+/// How wide an area's sidebar is.
 pub const WIDTH: f32 = 272.;
-/// The room the window's buttons take above it (macOS's traffic lights).
-pub const TOP: f32 = 44.;
 /// How many of a project's sessions show before "Show more".
 pub const SHOWN: usize = 6;
 /// The key context of the list while the keyboard walks it, and of the search around its field.
@@ -73,12 +73,14 @@ pub enum Line {
     Found { id: String, snippet: String },
     /// The box is searching conversations.
     Searching,
+    /// A session waiting on you, on top, with what it asks.
+    Needs { id: String, asks: String },
 }
 
 impl Line {
     /// Whether the keyboard stops on it.
     pub fn walkable(&self) -> bool {
-        matches!(self, Line::Project(_) | Line::Session { .. } | Line::More(_) | Line::Found { .. })
+        matches!(self, Line::Project(_) | Line::Session { .. } | Line::More(_) | Line::Found { .. } | Line::Needs { .. })
     }
 
     /// What it's known by while the list changes under it.
@@ -92,6 +94,7 @@ impl Line {
             Line::Quiet(words) => format!("quiet:{words}"),
             Line::Empty(directory) => format!("empty:{directory}"),
             Line::Searching => "searching".into(),
+            Line::Needs { id, .. } => format!("needs:{id}"),
         }
     }
 }
@@ -105,6 +108,15 @@ pub fn lines(workspace: &Workspace, cx: &App) -> Vec<Line> {
     let listing = workspace.listing();
     let sidebar = listing.sidebar();
     let mut lines = Vec::new();
+    // BOX-NEEDED: the sessions waiting on you across projects, in the box's order, each with what it asks, `needsYou: [{session, asks}]` in `GET kuvo/waiting` (#711): no group until the box says it.
+    let needs: Vec<Line> = workspace
+        .waiting()
+        .map(|waiting| waiting.needs_you.iter().filter(|needs| listing.facts(&needs.session).is_some()).map(|needs| Line::Needs { id: needs.session.clone(), asks: needs.asks.clone() }).collect())
+        .unwrap_or_default();
+    if !needs.is_empty() {
+        lines.push(Line::Header("Needs you"));
+        lines.extend(needs);
+    }
     if !sidebar.pinned.is_empty() {
         lines.push(Line::Header("Pinned"));
         lines.extend(sidebar.pinned.iter().map(|id| Line::Session { id: id.clone(), section: "pinned", nested: false }));
@@ -168,14 +180,6 @@ fn found_lines(workspace: &Workspace, query: &str) -> Vec<Line> {
 }
 
 pub fn render(workspace: &Workspace, window: &mut Window, cx: &mut Context<Workspace>) -> AnyElement {
-    let c = cx.theme().colors.clone();
-    let landing = workspace.is_landing();
-    let new_session = NavRow::new("new-session", "New Session")
-        .icon(IconName::Compose)
-        .selected(landing)
-        .trailing(div().text_ui(TypeSize::Caption).text_color(c.text_faint).child("⌘N"))
-        .on_click(cx.listener(|this, _, window, cx| this.new_session(None, window, cx)));
-
     let lists: Vec<AnyElement> = match workspace.lists() {
         Lists::Loading => vec![quiet(Some("Loading sessions…"), true, cx)],
         Lists::Waiting(why) => vec![quiet(Some(&format!("Loading sessions… {why}")), true, cx)],
@@ -195,19 +199,7 @@ pub fn render(workspace: &Workspace, window: &mut Window, cx: &mut Context<Works
         .w(px(WIDTH))
         .h_full()
         .flex_none()
-        // The window's buttons sit here; dragging it moves the window.
-        .child(
-            div()
-                .h(px(TOP))
-                .flex_none()
-                .on_mouse_down(MouseButton::Left, |event, window, _| {
-                    if event.click_count == 1 {
-                        window.start_window_move();
-                    }
-                }),
-        )
-        .child(div().px(space::S2).pb(space::S1).child(new_session))
-        .child(div().px(space::S2).pb(space::S2).child(search_field(workspace, cx)))
+        .child(div().px(space::S2).pt(space::S2).pb(space::S2).child(search_field(workspace, cx)))
         .child(
             div()
                 .id("sidebar-lists")
@@ -222,7 +214,6 @@ pub fn render(workspace: &Workspace, window: &mut Window, cx: &mut Context<Works
                 .pb(space::S4)
                 .children(lists),
         )
-        .child(footer(workspace, cx))
         .into_any_element()
 }
 
@@ -263,6 +254,21 @@ fn line_row(workspace: &Workspace, line: &Line, cursor: bool, cx: &mut Context<W
     let c = cx.theme().colors.clone();
     let listing = workspace.listing();
     let row: AnyElement = match line {
+        Line::Header("Needs you") => {
+            let count = lines_needing(workspace);
+            div()
+                .debug_selector(|| "header-Needs you".into())
+                .flex()
+                .items_center()
+                .gap(space::S1_5)
+                .h(px(28.))
+                .pl(space::S2)
+                .pt(space::S2)
+                .text_ui(TypeSize::Caption)
+                .child(div().text_color(c.text_muted).medium().child("Needs you"))
+                .child(div().text_color(c.text_faint).child(count.to_string()))
+                .into_any_element()
+        }
         Line::Header(title) => {
             let selector = format!("header-{title}");
             div().debug_selector(move || selector).child(SectionHeader::new(SharedString::from(format!("header-{title}")), *title)).into_any_element()
@@ -284,6 +290,7 @@ fn line_row(workspace: &Workspace, line: &Line, cursor: bool, cx: &mut Context<W
             let sidebar = listing.sidebar();
             let Some(group) = sidebar.projects.iter().find(|group| &group.directory == directory) else { return div().into_any_element() };
             let collapsed = workspace.is_collapsed(directory);
+            // BOX-NEEDED: a project's sums, `projects[<dir>].{asking, working}` in the sessions listing (`GET kuvo/sessions/list` and its events) (#711): phase 2 counts them here from each session's facts, left to move, not extended.
             let asking = group.sessions.iter().filter(|id| listing.facts(id).is_some_and(|facts| facts.asked.is_some())).count();
             let running = group.sessions.iter().any(|id| listing.facts(id).is_some_and(Facts::is_running));
             let trailing: Option<AnyElement> = if asking > 0 {
@@ -321,6 +328,7 @@ fn line_row(workspace: &Workspace, line: &Line, cursor: bool, cx: &mut Context<W
             NavRow::new(SharedString::from(format!("more-{directory}")), label).muted(true).cursor(cursor).on_click(cx.listener(move |this, _, _, cx| this.toggle_all(&toggle, cx))).into_any_element()
         }
         Line::Found { id, snippet } => found_row(workspace, id, snippet, cursor, cx),
+        Line::Needs { id, asks } => needs_row(workspace, id, asks, cursor, cx),
     };
     // A project's own rows hang off a thin line under it, unbroken from one to the next.
     let nested = matches!(line, Line::Session { nested: true, .. } | Line::More(_) | Line::Empty(_));
@@ -360,7 +368,8 @@ fn session_row(workspace: &Workspace, id: &str, section: &str, cursor: bool, cx:
             NavRow::new(SharedString::from(format!("session-{section}-{id}")), title)
                 .leading(leading)
                 .trailing(trailing)
-                .selected(workspace.opened() == Some(id))
+                // With "Needs you" on top, the open session is highlighted there only, never twice.
+                .selected(workspace.opened() == Some(id) && !needs_you(workspace, id))
                 .cursor(cursor)
                 .on_click(cx.listener(move |this, _, window, cx| this.open_session(&open, window, cx))),
         )
@@ -413,42 +422,58 @@ fn quiet(words: Option<&str>, busy: bool, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// The box it's on, and how it's reached.
-fn footer(workspace: &Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+/// How many sessions "Needs you" shows.
+fn lines_needing(workspace: &Workspace) -> usize {
+    workspace.waiting().map_or(0, |waiting| waiting.needs_you.iter().filter(|needs| workspace.listing().facts(&needs.session).is_some()).count())
+}
+
+/// Whether `session` shows in "Needs you".
+fn needs_you(workspace: &Workspace, session: &str) -> bool {
+    workspace.waiting().is_some_and(|waiting| waiting.needs_you.iter().any(|needs| needs.session == session)) && workspace.search_is_empty()
+}
+
+/// A session waiting on you, on top: its title, then its project and what it asks, in the box's words.
+fn needs_row(workspace: &Workspace, id: &str, asks: &str, cursor: bool, cx: &mut Context<Workspace>) -> AnyElement {
     let c = cx.theme().colors.clone();
-    let (dot, said) = match workspace.box_state() {
-        BoxState::Connecting => (c.text_faint, "Connecting…".to_owned()),
-        BoxState::Connected => (c.success, String::new()),
-        BoxState::Updating => (c.warning, kuvo_box::gate::UPDATING.to_owned()),
-        BoxState::Unreachable(why) => (c.danger, why.clone()),
+    let listing = workspace.listing();
+    let facts = listing.facts(id);
+    let title = facts.and_then(|facts| facts.title.clone()).filter(|title| !title.trim().is_empty()).unwrap_or_else(|| "New Session".into());
+    let project = facts.and_then(|facts| facts.project.clone()).map(|project| workspace.project_name(&project));
+    let detail = match project {
+        Some(project) if !asks.is_empty() => format!("{project} · {asks}"),
+        Some(project) => project,
+        None => asks.to_owned(),
     };
-    let appearance = cx.theme().appearance;
+    let when = facts.and_then(|facts| facts.asked).map(|asked| time::ago(asked, workspace.now())).unwrap_or_default();
+    let selected = workspace.opened() == Some(id);
+    let (hover, selected_bg) = (c.hover, c.selected);
+    let open = id.to_owned();
+    let selector = format!("needs-{id}");
     div()
+        .id(SharedString::from(format!("needs-{id}")))
+        .debug_selector(move || selector)
         .flex()
-        .items_center()
         .gap(space::S2)
-        .h(px(48.))
-        .px(space::S4)
-        .border_t_1()
-        .border_color(c.border)
-        .child(kuvo_ui::Icon::new(IconName::Computer).size(IconSize::Nav).color(c.text_muted))
+        .px(space::S2)
+        .py(space::S1_5)
+        .rounded(radius::NAV)
+        .border_1()
+        .border_color(if cursor { c.accent } else { gpui::transparent_black() })
+        .cursor_pointer()
+        .when(selected, |r| r.bg(selected_bg))
+        .when(cursor && !selected, |r| r.bg(hover))
+        .hover(move |s| s.bg(if selected { selected_bg } else { hover }))
+        .on_click(cx.listener(move |this, _, window, cx| this.open_session(&open, window, cx)))
+        .child(div().flex().flex_none().justify_center().w(IconSize::Nav.pixels()).pt(px(6.)).child(status_dot(c.accent)))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(div().flex().items_center().gap(space::S1_5).text_ui(TypeSize::Small).text_color(c.text).child(workspace.box_name()).child(status_dot(dot)))
-                .when(!said.is_empty(), |d| d.child(div().truncate().text_ui(TypeSize::Caption).text_color(c.text_faint).child(said))),
+                .child(div().truncate().text_ui(TypeSize::Small).text_color(c.text).when(selected, |t| t.medium()).child(title))
+                .child(div().truncate().text_ui(TypeSize::Caption).text_color(c.text_muted).child(detail)),
         )
-        .child(
-            Button::icon_only(
-                "appearance",
-                if appearance.is_dark() { IconName::Sun } else { IconName::Moon },
-                if appearance.is_dark() { "Light Appearance" } else { "Dark Appearance" },
-            )
-            .size(ButtonSize::Small)
-            .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::ToggleAppearance), cx)),
-        )
+        .child(div().flex_none().text_ui(TypeSize::Caption).text_color(c.accent).child(when))
         .into_any_element()
 }

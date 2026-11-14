@@ -33,6 +33,16 @@ GPUI also brings in other crates from Zed's repository, all Apache-2.0: `gpui_ap
 `gpui_macos`, `gpui_macros`, `gpui_shared_string`, `gpui_util`, `collections`, `refineable`,
 `sum_tree`, `http_client`, `scheduler` and the like (listed in full below).
 
+**Services' marks** (`assets/marks/<service>.svg`, the usage rings' marks): OpenUsage's provider
+icons (MIT, Copyright 2026 Robin Ebers), unchanged, as Kuvo Code already ships them in
+`Packages/UsageKit/Sources/UsageKit/Resources/ProviderIcons` (its licence:
+`Packages/UsageKit/LICENSE`, and its entry in `THIRD_PARTY_LICENSES.txt`). They're named by the
+box's `service` ids (`claude`, `codex`, `copilot`, `cursor`, `grok`, `antigravity`, `openrouter`,
+`zai`, `ollama`, `opencode`), which models.dev's logos (MIT, by provider: `anthropic`, `openai`…)
+aren't, and models.dev has none for Cursor or Antigravity. The engine (opencode) is installed as a
+single binary, with no provider marks to take. None comes from Zed. Each mark is its owner's trademark, shown only to name its
+service.
+
 **Adapted code:** parts of `kuvo_ui/src/text_field/` are adapted from GPUI's
 `examples/input.rs` (Copyright 2022 - 2025 Zed Industries, Inc., Apache-2.0), modified; the
 files say so. The license text is `Licenses/gpui.txt`, and GPUI has its entry in the repo's
