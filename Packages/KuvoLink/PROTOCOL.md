@@ -3524,25 +3524,32 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     for a path that isn't one in the repository.
   - `GET kuvo/git/files?directory=<folder>` (`git.files`): the folder's changed files as a Changes
     panel groups them, what `git status` says of each → `{"repository": false}`, or `{"repository":
-    true, root, branch, files, uncommitted, commits}`: `branch` the one checked out (null on none);
-    `commits`, what `kuvo/git/commit` takes now (`staged`, else `all` of the folder's); `files`
+    true, root, branch, files, uncommitted, commits, stagedElsewhere, more?, underway?}`: `branch`
+    the one checked out (null on none); `commits`, what `kuvo/git/commit` takes now (`staged`, what's
+    staged anywhere in the repository, else `all` of the folder's), and `stagedElsewhere`, how many
+    staged files outside the folder it takes along; `more`, how many new files past the first 1,000
+    are left out of `files`; `underway`, what git is in the middle of (`merging`, `rebasing`,
+    `cherry-picking`, `reverting`); `files`
     in the order they show, conflicts, then staged, unstaged and new files (`group`: `conflicted`,
     `staged`, `unstaged`, `untracked`), by name in each; each `{path, oldPath?, group, status,
-    scope, additions?, deletions?, discard?, repository?}`, `path` in the repository (`oldPath` where
+    scope, additions?, deletions?, discard?, stamp?, repository?}`, `path` in the repository (`oldPath` where
     a staged move came from), `status` and `scope` what its stage, unstage, discard and diff (with
     `path`) take (a staged one `staged`, a conflicted one `uncommitted`, the rest `unstaged`), git's
     count of its lines (none for a binary file, a new one or a conflicted one), what its discard does
     (`trash`, a new file to the Trash; `unstaged`, what isn't staged thrown away; `head`, back to the
-    last commit, what's staged too; none for a conflict), and `repository` for a repository of its
-    own inside this one ("web/"), whose commits go with it. A file partly staged is in both
+    last commit, what's staged too; none for a conflict) with its `stamp` (what the file is now,
+    opaque), and `repository` for a repository of its own inside this one ("web/"), whose commits go
+    with it. A file partly staged is in both
     groups; one in conflict only in `conflicted`. A client stages an `unstaged` or `untracked` one,
     unstages a `staged` one, and marks a conflicted one resolved by staging it. `404` for a folder
     that isn't there, `500 {"message"}` when git couldn't say. `GET kuvo/git/files/events?directory=`
     (`application/x-ndjson`): the same now, and again as it changes: within a second of the
     repository's index or `HEAD` changing (staged, committed, switched); for what an agent edits, on a
-    Mac as the system says the folder's files change (and every 30 seconds for a change it missed),
-    on Linux every 10 seconds (a watch there would take one of the system's watches per folder);
-    when git can't say, what was said last stands. Through `box
+    Mac as the system says the folder's files change (outside its git folder, and only in a
+    repository; every 30 seconds for a change it missed), on Linux every 10 seconds (a watch there
+    would take one of the system's watches per folder); git asked again no sooner than twice as long
+    as it took last (a second at least), one read shared by every client following the folder; when
+    git can't say, what was said last stands. Through `box
     route` it answers its first line.
   - `POST kuvo/git/changes/count {"directory", "scope"?, "base"?}` (`git.changes.count`, bridge
     0.9.211): how much `kuvo/git/changes` would show, without the diff, for a count (the phone's
@@ -3557,7 +3564,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went
     wrong. `path` as `kuvo/git/changes` lists it: a repository inside this one may end in "/"
-    ("web/", bridge 0.9.95). Discard follows the scope (in `unstaged` only what isn't staged, otherwise back to the
+    ("web/", bridge 0.9.95). A discard is refused, `409 {"message"}`, for an `added` file the last
+    commit has (committed since it was listed), and with `"stamp"` (`kuvo/git/files`' for the file)
+    for one that changed since: what came later is never thrown away. A staged deletion of a file
+    still on disk sends what's there to the Trash before the last commit's comes back. Discard follows the scope (in `unstaged` only what isn't staged, otherwise back to the
     last commit); a new file, and anything in the way of one coming back (a folder where a file
     was, a file where a folder was), goes to the Trash on a Mac and to `~/.kuvo-code/trash`
     elsewhere, never deleted for good.
@@ -3669,8 +3679,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   why as the computer says it (`Permission denied`, `No such folder`, `Not a folder`), so a client
   never shows a folder it couldn't read as empty. With `files=1` (`folders.files`), its files too,
   as a Files panel lists a folder: `files`, their names in the same order (with `hidden=1`, hidden
-  ones too; `.DS_Store` left out), and `folders` without version control's own (`.git`, `.hg`,
-  `.svn`), which nobody works in by hand.
+  ones too; `.DS_Store` left out), without version control's own (`.git`, `.hg`, `.svn`, a folder
+  or, in a linked worktree, a file), which nobody works in by hand.
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.

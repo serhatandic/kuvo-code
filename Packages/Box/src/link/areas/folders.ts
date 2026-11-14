@@ -157,7 +157,8 @@ export function listFolders(requestPath: string): JSONAnswer<FolderList | Folder
     .map(entry => (!asks.has(entry.name) && fs.existsSync(path.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }))
     .sort((a, b) => byName(a.name, b.name));
   const files = panel
-    ? entries.filter(entry => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map(entry => entry.name).sort(byName)
+    // (A linked worktree's `.git` is a file naming its repository: left out too.)
+    ? entries.filter(entry => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !VERSION_CONTROL.has(entry.name) && !isFolder(entry)).map(entry => entry.name).sort(byName)
     : undefined;
   return { status: 200, value: { path: at, home, parent: at === path.dirname(at) ? null : path.dirname(at), folders, ...(files ? { files } : {}) } };
 }

@@ -183,6 +183,9 @@ pub struct Colors {
     pub success: Hsla,
     pub warning: Hsla,
     pub danger: Hsla,
+    /// A destructive button (Discard, Delete): its fill under the pointer and pressed.
+    pub danger_hover: Hsla,
+    pub danger_pressed: Hsla,
 
     /// Behind a diff's added and removed lines, and their signs and counts.
     pub diff_added_wash: Hsla,
@@ -259,6 +262,8 @@ impl Colors {
             success: hex(0x2E9E5B),
             warning: hex(0xC7820E),
             danger: hex(0xD93B3B),
+            danger_hover: hex(0xC43030),
+            danger_pressed: hex(0xAD2828),
 
             diff_added_wash: hexa(0x2E9E5B1A),
             diff_removed_wash: hexa(0xD93B3B17),
@@ -319,6 +324,8 @@ impl Colors {
             success: hex(0x4CC27A),
             warning: hex(0xE0A43A),
             danger: hex(0xF06363),
+            danger_hover: hex(0xF27878),
+            danger_pressed: hex(0xDB5050),
 
             diff_added_wash: hexa(0x4CC27A1F),
             diff_removed_wash: hexa(0xF0636324),

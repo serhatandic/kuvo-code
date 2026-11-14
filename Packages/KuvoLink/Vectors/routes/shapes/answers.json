@@ -5896,6 +5896,7 @@
              }
             ]
            },
+           "stamp?": "string",
            "repository?": {
             "literal": true
            }
@@ -5910,6 +5911,24 @@
           },
           {
            "literal": "all"
+          }
+         ]
+        },
+        "stagedElsewhere": "number",
+        "more?": "number",
+        "underway?": {
+         "oneOf": [
+          {
+           "literal": "merging"
+          },
+          {
+           "literal": "rebasing"
+          },
+          {
+           "literal": "cherry-picking"
+          },
+          {
+           "literal": "reverting"
           }
          ]
         }
@@ -6018,6 +6037,7 @@
              }
             ]
            },
+           "stamp?": "string",
            "repository?": {
             "literal": true
            }
@@ -6032,6 +6052,24 @@
           },
           {
            "literal": "all"
+          }
+         ]
+        },
+        "stagedElsewhere": "number",
+        "more?": "number",
+        "underway?": {
+         "oneOf": [
+          {
+           "literal": "merging"
+          },
+          {
+           "literal": "rebasing"
+          },
+          {
+           "literal": "cherry-picking"
+          },
+          {
+           "literal": "reverting"
           }
          ]
         }
@@ -6188,6 +6226,11 @@
    "answers": {
     "200": {
      "object": {}
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },

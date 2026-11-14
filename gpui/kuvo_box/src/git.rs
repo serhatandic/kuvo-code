@@ -50,6 +50,9 @@ pub struct ChangedFile {
     /// conflict, which is resolved).
     #[serde(default)]
     pub discard: Option<String>,
+    /// What it was as listed, which its discard sends back: the box refuses once it changed since.
+    #[serde(default)]
+    pub stamp: Option<String>,
     /// A repository of its own inside this one, whose commits go with it.
     #[serde(default)]
     pub repository: bool,
@@ -89,9 +92,18 @@ pub struct GitFiles {
     pub files: Vec<ChangedFile>,
     #[serde(default)]
     pub uncommitted: bool,
-    /// What a commit takes now: `staged`, or `all` of the folder's changes.
+    /// What a commit takes now: `staged` (anywhere in the repository), or `all` of the folder's.
     #[serde(default)]
     pub commits: String,
+    /// How many staged files outside the folder a commit takes along.
+    #[serde(default, rename = "stagedElsewhere")]
+    pub staged_elsewhere: usize,
+    /// How many new files past the most the box lists are left out.
+    #[serde(default)]
+    pub more: usize,
+    /// What git is in the middle of: `merging`, `rebasing`, `cherry-picking`, `reverting`.
+    #[serde(default)]
+    pub underway: Option<String>,
 }
 
 impl GitFiles {
@@ -224,6 +236,12 @@ impl BoxClient {
         let mut body = json!({ "root": root, "path": file.path, "status": file.status, "scope": file.scope });
         if let Some(old) = &file.old_path {
             body["oldPath"] = json!(old);
+        }
+        // A discard says what it was shown, so the box never throws away what came after.
+        if action == "discard"
+            && let Some(stamp) = &file.stamp
+        {
+            body["stamp"] = json!(stamp);
         }
         done(self.send(&Request::post(format!("kuvo/git/{action}"), body))?)
     }

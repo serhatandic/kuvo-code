@@ -34,6 +34,9 @@ pub struct Repo {
     pub into: Option<String>,
     /// Each file's diff, by its path.
     pub patches: HashMap<String, String>,
+    /// Staged files outside the folder, and what git is in the middle of.
+    pub staged_elsewhere: usize,
+    pub underway: Option<&'static str>,
 }
 
 /// A folder's folders and files, or why it can't be read.
@@ -68,6 +71,7 @@ fn file(path: &str, group: &str, status: &str, lines: Option<(u32, u32)>) -> Val
     let mut file = json!({ "path": path, "group": group, "status": status, "scope": scope });
     if let Some(discard) = discard {
         file["discard"] = json!(discard);
+        file["stamp"] = json!(format!("{group}:{path}:1"));
     }
     if let Some((added, removed)) = lines {
         file["additions"] = json!(added);
@@ -99,6 +103,8 @@ impl Git {
                 ],
                 into: None,
                 patches: website_patches(),
+                staged_elsewhere: 0,
+                underway: None,
             },
         );
         repos.insert(
@@ -109,9 +115,11 @@ impl Git {
                 files: vec![file("src/pages/settings.tsx", "unstaged", "modified", Some((4, 2))), file("src/styles/theme.css", "unstaged", "modified", Some((12, 0)))],
                 into: Some("main".into()),
                 patches: HashMap::new(),
+                staged_elsewhere: 0,
+                underway: None,
             },
         );
-        repos.insert(api(), Repo { branch: Some("main".into()), branches: vec!["main".into(), "rate-limits".into()], files: Vec::new(), into: None, patches: HashMap::new() });
+        repos.insert(api(), Repo { branch: Some("main".into()), branches: vec!["main".into(), "rate-limits".into()], files: Vec::new(), into: None, patches: HashMap::new(), staged_elsewhere: 0, underway: None });
         let at = |path: &str| format!("{}/{path}", website()).trim_end_matches('/').to_owned();
         let mut folders = HashMap::new();
         folders.insert(website(), Ok((vec![".github", "public", "secrets", "src"], vec![".env.example", ".gitignore", "README.md", "package.json", "tsconfig.json"])));
@@ -144,7 +152,12 @@ impl Git {
             Some(root) => {
                 let repo = &self.repos[root];
                 let commits = if repo.files.iter().any(|file| file["group"] == json!("staged")) { "staged" } else { "all" };
-                json!({ "repository": true, "root": root, "branch": repo.branch, "files": repo.files, "uncommitted": !repo.files.is_empty(), "commits": commits })
+                let commits = if repo.staged_elsewhere > 0 { "staged" } else { commits };
+                let mut answer = json!({ "repository": true, "root": root, "branch": repo.branch, "files": repo.files, "uncommitted": !repo.files.is_empty(), "commits": commits, "stagedElsewhere": repo.staged_elsewhere });
+                if let Some(underway) = repo.underway {
+                    answer["underway"] = json!(underway);
+                }
+                answer
             }
             None => json!({ "repository": false }),
         }
@@ -171,6 +184,10 @@ impl Git {
                 let repo = self.repos.get_mut(&root)?;
                 let at = repo.files.iter().position(|file| file["path"] == json!(path) && file["scope"] == json!(scope));
                 let Some(at) = at else { return found(422, json!({ "message": format!("git couldn’t find {path}.") })) };
+                // A discard of what it was shown, only: changed since, refused.
+                if route == "kuvo/git/discard" && body.get("stamp").is_some() && body["stamp"] != repo.files[at]["stamp"] {
+                    return found(409, json!({ "message": format!("{path} changed since it was listed. Look at it again before you discard it.") }));
+                }
                 let mut moved = repo.files.remove(at);
                 match route {
                     "kuvo/git/stage" => {

@@ -198,6 +198,16 @@ impl StandIn {
         state.git_changed(root);
     }
 
+    /// Staged files outside the folder from now on, and what git is in the middle of there.
+    pub fn set_git_state(&self, root: &str, staged_elsewhere: usize, underway: Option<&'static str>) {
+        let mut state = self.state();
+        if let Some(repo) = state.git.as_mut().and_then(|git| git.repos.get_mut(root)) {
+            repo.staged_elsewhere = staged_elsewhere;
+            repo.underway = underway;
+        }
+        state.git_changed(root);
+    }
+
     /// The next commit that pushes lands, but its push doesn't go through.
     pub fn fail_next_push(&self) {
         if let Some(git) = self.state().git.as_mut() {

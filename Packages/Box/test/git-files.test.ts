@@ -1,7 +1,7 @@
 import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ask, follow } from "./route-answer"
@@ -58,8 +58,11 @@ test("a folder's changes come grouped, a file partly staged in both groups, each
   writeFileSync(join(top, "docs", "Plan 2.md"), "plan\n")
 
   const listed = await files(top)
+  // A stamp for each that can be discarded, which a discard sends back.
+  for (const file of listed.files) expect(typeof file.stamp).toBe("string")
+  for (const file of listed.files) delete file.stamp
   expect(listed).toEqual({
-    repository: true, root: top, branch: "main", uncommitted: true, commits: "staged",
+    repository: true, root: top, branch: "main", uncommitted: true, commits: "staged", stagedElsewhere: 0,
     files: [
       { path: "app/Form.tsx", group: "staged", status: "modified", scope: "staged", additions: 1, deletions: 1, discard: "head" },
       { path: "app/new.ts", oldPath: "app/old.ts", group: "staged", status: "renamed", scope: "staged", additions: 0, deletions: 0, discard: "head" },
@@ -75,7 +78,7 @@ test("a folder's changes come grouped, a file partly staged in both groups, each
 
   // Nothing changed: an empty list, nothing uncommitted; outside a repository, none.
   const clean = repository("clean")
-  expect(await files(clean)).toEqual({ repository: true, root: clean, branch: "main", files: [], uncommitted: false, commits: "all" })
+  expect(await files(clean)).toEqual({ repository: true, root: clean, branch: "main", files: [], uncommitted: false, commits: "all", stagedElsewhere: 0 })
   mkdirSync(join(box, "plain"))
   expect(await files(join(box, "plain"))).toEqual({ repository: false })
   expect((await ask(handler, "GET", `kuvo/git/files?directory=${encodeURIComponent(join(box, "gone"))}`)).status).toBe(404)
@@ -93,6 +96,7 @@ test("a file both sides changed in a merge is a conflict, once, and nothing else
 
   const listed = await files(top)
   expect(listed.files).toEqual([{ path: "app/Form.tsx", group: "conflicted", status: "modified", scope: "uncommitted" }])
+  expect(listed.underway).toBe("merging")
 })
 
 test("names with spaces are read whole, a move's both sides; a new file staged goes to the Trash; a repository inside says so", async () => {
@@ -110,6 +114,7 @@ test("names with spaces are read whole, a move's both sides; a new file staged g
   git(join(top, "web"), "commit", "-q", "-m", "Web")
 
   const listed = await files(top)
+  for (const file of listed.files) delete file.stamp
   expect(listed.files).toEqual([
     { path: "a b.ts", group: "staged", status: "added", scope: "staged", additions: 1, deletions: 0, discard: "trash" },
     { path: "app/Your  Form.tsx", oldPath: "app/My Form.tsx", group: "staged", status: "renamed", scope: "staged", additions: 0, deletions: 0, discard: "head" },
@@ -188,4 +193,91 @@ test("a Files panel's folder leaves out version control's own folder, and says w
   const gone = await ask(handler, "GET", `kuvo/folders?path=${encodeURIComponent(join(top, "nowhere"))}&files=1`)
   expect(gone.status).toBe(404)
   expect(gone.json.reason).toBe("No such folder")
+})
+
+const discard = async (file: any, stamp = file.stamp) =>
+  ask(handler, "POST", "kuvo/git/discard", { root: file.root, path: file.path, status: file.status, scope: file.scope, ...(stamp ? { stamp } : {}) })
+
+test("what a commit takes is said for the whole repository, a staged file outside the folder counted", async () => {
+  const top = repository("inside")
+  mkdirSync(join(top, "other"))
+  writeFileSync(join(top, "other", "x.ts"), "x\n")
+  git(top, "add", "other/x.ts")
+  writeFileSync(join(top, "app", "Form.tsx"), "changed\n")
+  // Only the folder's own file changed, but another folder's is staged: a commit takes that one.
+  const app = await files(join(top, "app"))
+  expect(app.files.map((file: any) => file.group)).toEqual(["unstaged"])
+  expect(app.commits).toBe("staged")
+  expect(app.stagedElsewhere).toBe(1)
+  // Staged in both: it takes both, one of them outside.
+  git(top, "add", "app/Form.tsx")
+  const both = await files(join(top, "app"))
+  expect([both.commits, both.stagedElsewhere, both.files.length]).toEqual(["staged", 1, 1])
+})
+
+test("a discard is refused once its file changed since it was listed, and a new file committed since isn't trashed", async () => {
+  const top = repository("stale")
+  writeFileSync(join(top, "notes.txt"), "mine\n")
+  writeFileSync(join(top, "README.md"), "# App\nOne edit.\n")
+  const listed = await files(top)
+  const note = { ...listed.files.find((file: any) => file.path === "notes.txt"), root: top }
+  const readme = { ...listed.files.find((file: any) => file.path === "README.md"), root: top }
+
+  // An agent commits the new file, then edits the README again.
+  git(top, "add", "notes.txt")
+  git(top, "commit", "-q", "-m", "Notes")
+  writeFileSync(join(top, "README.md"), "# App\nOne edit.\nThe agent's later edit.\n")
+  const trashed = await discard(note, undefined)
+  expect(trashed.status).toBe(409)
+  expect(readFileSync(join(top, "notes.txt"), "utf8")).toBe("mine\n")
+  const edited = await discard(readme)
+  expect(edited.status).toBe(409)
+  expect(readFileSync(join(top, "README.md"), "utf8")).toContain("The agent's later edit.")
+
+  // Listed again, as it is now: it goes.
+  const again = { ...(await files(top)).files.find((file: any) => file.path === "README.md"), root: top }
+  expect((await discard(again)).status).toBe(200)
+  expect(readFileSync(join(top, "README.md"), "utf8")).toBe("# App\n")
+})
+
+test("discarding a staged deletion of a file still there keeps what was on disk in the Trash", async () => {
+  const top = repository("deleted")
+  const trash = join(box, "trash")
+  process.env.KUVO_CHANGES_TRASH = trash
+  try {
+    git(top, "rm", "-q", "--cached", "README.md")
+    writeFileSync(join(top, "README.md"), "# App\nEdits of mine.\n")
+    const row = { ...(await files(top)).files.find((file: any) => file.group === "staged"), root: top }
+    expect([row.status, row.discard]).toEqual(["deleted", "head"])
+    expect((await discard(row)).status).toBe(200)
+    expect(readFileSync(join(top, "README.md"), "utf8")).toBe("# App\n")
+    const kept = spawnSync("grep", ["-rl", "Edits of mine.", trash], { encoding: "utf8" }).stdout.trim()
+    expect(kept).not.toBe("")
+  } finally {
+    delete process.env.KUVO_CHANGES_TRASH
+  }
+})
+
+test("new files past the most a list names are counted, and a big file's diff isn't read", async () => {
+  const top = repository("many")
+  mkdirSync(join(top, "out"))
+  for (let at = 0; at < 1_005; at++) writeFileSync(join(top, "out", `f${at}.txt`), "x\n")
+  const listed = await files(top)
+  expect(listed.files.length).toBe(1_000)
+  expect(listed.more).toBe(5)
+  rmSync(join(top, "out"), { recursive: true, force: true })
+  writeFileSync(join(top, "big.txt"), "x\n".repeat(3 * 1024 * 1024))
+  git(top, "add", "big.txt")
+  git(top, "commit", "-q", "-m", "Big")
+  writeFileSync(join(top, "big.txt"), "y\n".repeat(3 * 1024 * 1024))
+  const diff = (await ask(handler, "POST", "kuvo/git/changes", { directory: top, scope: "unstaged", path: "big.txt" })).json
+  expect(diff).toMatchObject({ patch: "", big: true })
+})
+
+test("a linked worktree's .git file isn't listed in its Files", async () => {
+  const top = repository("linked")
+  const tree = join(box, "linked-tree")
+  git(top, "worktree", "add", "-q", "-b", "side", tree)
+  const { json } = await ask(handler, "GET", `kuvo/folders?path=${encodeURIComponent(tree)}&files=1&hidden=1`)
+  expect(json.files).toEqual(["README.md"])
 })

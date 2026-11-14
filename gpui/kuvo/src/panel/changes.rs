@@ -208,6 +208,13 @@ impl ChangesView {
                 if changed {
                     self.lines = Rc::new(lines_of(&files));
                 }
+                // A discard waiting for its confirm is for the file as it was shown: changed or gone
+                // since, it's put away (the box would refuse it too).
+                if let Some(confirming) = &self.confirming
+                    && !files.files.contains(confirming)
+                {
+                    self.confirming = None;
+                }
                 self.files = Load::Ready(files);
                 self.stale = None;
             }
@@ -413,6 +420,7 @@ impl ChangesView {
             .debug_selector(move || selector)
             .group(group.clone())
             .flex()
+            .w_full()
             .items_center()
             .gap(space::S2)
             .h(px(28.))
@@ -505,6 +513,10 @@ impl ChangesView {
                     .child(div().text_color(c.text_faint).child(count.to_string()))
                     .into_any_element();
             }
+            Some(Line::More(more)) => {
+                let said = if *more == 1 { "and 1 more new file".to_owned() } else { format!("and {more} more new files") };
+                return div().flex().items_center().h(px(28.)).pl(space::S2 + px(22.)).text_ui(TypeSize::Caption).text_color(c.text_faint).child(said).into_any_element();
+            }
             Some(Line::File(at)) => self.files.ready().and_then(|files| files.files.get(*at)).cloned(),
             None => None,
         };
@@ -529,18 +541,7 @@ impl ChangesView {
         if let Some(file) = &self.confirming {
             return self.confirm(file, cx);
         }
-        // What the box says a commit takes now, counted.
-        let takes = if files.commits_staged() {
-            match files.files.iter().filter(|file| file.group == Group::Staged).count() {
-                1 => "Commits the staged file.".to_owned(),
-                staged => format!("Commits the {staged} staged files."),
-            }
-        } else {
-            match files.files.iter().map(|file| file.path.as_str()).collect::<HashSet<_>>().len() {
-                1 => "Commits the one changed file.".to_owned(),
-                all => format!("Commits all {all} changed files."),
-            }
-        };
+        let takes = commit_takes(files);
         let written = !self.message.read(cx).text().trim().is_empty();
         let said = self.said.clone().map(|said| {
             let (text, color, push) = match said {
@@ -631,7 +632,7 @@ impl ChangesView {
                     .justify_end()
                     .gap(space::S2)
                     .child(Button::new("discard-cancel", "Cancel").size(ButtonSize::Small).on_click(cx.listener(|this, _, _, cx| this.cancel_discard(cx))))
-                    .child(Button::new("discard-confirmed", button).primary().size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard, file.clone(), cx)))),
+                    .child(Button::new("discard-confirmed", button).destructive().size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard, file.clone(), cx)))),
             )
             .into_any_element()
     }
@@ -691,6 +692,27 @@ impl ChangesView {
     }
 }
 
+/// What a commit takes, as the box says it (`commits`, `stagedElsewhere`), counted: staged files
+/// outside this folder too.
+pub fn commit_takes(files: &GitFiles) -> String {
+    if files.commits_staged() {
+        let here = files.files.iter().filter(|file| file.group == Group::Staged).count();
+        match (here, files.staged_elsewhere) {
+            (1, 0) => "Commits the staged file.".to_owned(),
+            (here, 0) => format!("Commits the {here} staged files."),
+            (0, 1) => "Commits the file staged outside this folder.".to_owned(),
+            (0, elsewhere) => format!("Commits the {elsewhere} files staged outside this folder."),
+            (here, elsewhere) => format!("Commits the {} staged files, {elsewhere} of them outside this folder.", here + elsewhere),
+        }
+    } else {
+        // (New files past the most the box lists go too.)
+        match files.files.iter().map(|file| file.path.as_str()).collect::<HashSet<_>>().len() + files.more {
+            1 => "Commits the one changed file.".to_owned(),
+            all => format!("Commits all {all} changed files."),
+        }
+    }
+}
+
 /// A row of the list.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Line {
@@ -698,6 +720,8 @@ pub enum Line {
     Header(Group, usize),
     /// A file, by where it is in the box's list.
     File(usize),
+    /// New files past the most the box lists, counted.
+    More(usize),
 }
 
 /// The list's rows: each group's header, then its files, in the box's order.
@@ -710,6 +734,9 @@ fn lines_of(files: &GitFiles) -> Vec<Line> {
         lines.push(Line::Header(group, count));
         lines.extend((at..at + count).map(Line::File));
         at += count;
+    }
+    if files.more > 0 {
+        lines.push(Line::More(files.more));
     }
     lines
 }
@@ -802,6 +829,30 @@ impl Render for ChangesView {
                         .flex_col()
                         .size_full()
                         .child(self.header(&files, cx))
+                        .children(files.underway.as_deref().map(|underway| {
+                            let said = match underway {
+                                "rebasing" => "A rebase is under way here: finish it, or stop it, in a terminal.",
+                                "cherry-picking" => "A cherry-pick is under way here: finish it, or stop it, in a terminal.",
+                                "reverting" => "A revert is under way here: finish it, or stop it, in a terminal.",
+                                _ => "A merge is under way here: resolve its conflicts, then commit.",
+                            };
+                            div()
+                                .id("changes-underway")
+                                .debug_selector(|| "changes-underway".into())
+                                .flex()
+                                .items_center()
+                                .gap(space::S2)
+                                .mx(space::S3)
+                                .mb(space::S1)
+                                .px(space::S3)
+                                .py(space::S2)
+                                .rounded(radius::NAV)
+                                .bg(c.sunken)
+                                .text_ui(TypeSize::Caption)
+                                .text_color(c.text_muted)
+                                .child(Icon::new(IconName::Warning).size(IconSize::Nav).color(c.warning))
+                                .child(said)
+                        }))
                         .children(failed.map(|why| {
                             div().id("changes-failed").debug_selector(|| "changes-failed".into()).mx(space::S3).mb(space::S1).px(space::S3).py(space::S2).rounded(radius::NAV).bg(c.sunken).text_ui(TypeSize::Caption).text_color(c.danger).child(why)
                         }))
@@ -828,5 +879,28 @@ impl Render for ChangesView {
             .flex_col()
             .size_full()
             .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listed(json: &str) -> GitFiles {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_commit_is_said_to_take_what_the_box_says_staged_files_elsewhere_counted() {
+        let file = |group: &str| format!(r#"{{"path":"app/{group}.ts","group":"{group}","status":"modified","scope":"unstaged"}}"#);
+        // Only the folder's own file changed, another folder's staged: it takes that one.
+        let elsewhere = listed(&format!(r#"{{"repository":true,"commits":"staged","stagedElsewhere":1,"files":[{}]}}"#, file("unstaged")));
+        assert_eq!(commit_takes(&elsewhere), "Commits the file staged outside this folder.");
+        let both = listed(&format!(r#"{{"repository":true,"commits":"staged","stagedElsewhere":2,"files":[{}]}}"#, file("staged")));
+        assert_eq!(commit_takes(&both), "Commits the 3 staged files, 2 of them outside this folder.");
+        let here = listed(&format!(r#"{{"repository":true,"commits":"staged","stagedElsewhere":0,"files":[{}]}}"#, file("staged")));
+        assert_eq!(commit_takes(&here), "Commits the staged file.");
+        let all = listed(&format!(r#"{{"repository":true,"commits":"all","stagedElsewhere":0,"more":4,"files":[{}]}}"#, file("unstaged")));
+        assert_eq!(commit_takes(&all), "Commits all 5 changed files.");
     }
 }

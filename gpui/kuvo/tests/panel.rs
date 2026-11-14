@@ -180,7 +180,57 @@ fn staging_sends_back_what_the_box_listed_and_a_discard_is_asked_first(cx: &mut 
 
     click(cx, "discard-Unstaged:src/styles/legacy.css");
     click(cx, "discard-confirmed");
-    assert_eq!(sent(&stand_in, "kuvo/git/discard"), [json!({ "root": website(), "path": "src/styles/legacy.css", "status": "deleted", "scope": "unstaged" })]);
+    assert_eq!(
+        sent(&stand_in, "kuvo/git/discard"),
+        [json!({ "root": website(), "path": "src/styles/legacy.css", "status": "deleted", "scope": "unstaged", "stamp": "unstaged:src/styles/legacy.css:1" })],
+        "with what it was shown, so the box refuses it once it changed"
+    );
+}
+
+#[gpui::test]
+fn a_discard_waiting_for_its_confirm_goes_once_its_file_changes(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone(), "ses_signup");
+    cx.simulate_keystrokes("cmd-alt-0");
+    cx.run_until_parked();
+    click(cx, "discard-Unstaged:src/lib/validate.ts");
+    assert!(bounds(cx, "discard-confirm").is_some());
+
+    // An agent edits it again meanwhile: the list the follow hands on has it changed.
+    let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
+    let mut files = client.git_files(&website()).unwrap().files;
+    let edited = files.iter_mut().find(|file| file.path == "src/lib/validate.ts").unwrap();
+    edited.additions = Some(12);
+    edited.stamp = Some("unstaged:src/lib/validate.ts:2".into());
+    let files: Vec<serde_json::Value> = files
+        .iter()
+        .map(|file| {
+            let mut value = json!({ "path": file.path, "group": format!("{:?}", file.group).to_lowercase(), "status": file.status, "scope": file.scope, "additions": file.additions, "deletions": file.deletions });
+            if let Some(discard) = &file.discard {
+                value["discard"] = json!(discard);
+                value["stamp"] = json!(file.stamp);
+            }
+            value
+        })
+        .collect();
+    stand_in.set_git_files(&website(), files);
+    let view = workspace.read_with(cx, |workspace, cx| workspace.panel().read(cx).changes().clone());
+    view.update(cx, |view, cx| view.take(client.git_files(&website()), cx));
+    cx.run_until_parked();
+    assert!(bounds(cx, "discard-confirm").is_none(), "an old confirm never discards what came after");
+    assert!(sent(&stand_in, "kuvo/git/discard").is_empty());
+}
+
+#[gpui::test]
+fn a_merge_under_way_and_files_staged_elsewhere_are_said(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone(), "ses_signup");
+    stand_in.set_git_state(&website(), 2, Some("merging"));
+    cx.simulate_keystrokes("cmd-alt-0");
+    cx.run_until_parked();
+    assert!(bounds(cx, "changes-underway").is_some());
+    let files = workspace.read_with(cx, |workspace, cx| workspace.panel().read(cx).changes().read(cx).files().ready().cloned()).unwrap();
+    assert_eq!(kuvo::panel::changes::commit_takes(&files), "Commits the 3 staged files, 2 of them outside this folder.");
 }
 
 #[gpui::test]

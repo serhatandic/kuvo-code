@@ -28,6 +28,8 @@ pub enum ButtonStyle {
     Ghost,
     /// Filled with the accent, for the one action that sends something (the composer's send).
     Accent,
+    /// Filled with the danger colour, for what can't be taken back (Discard, Delete).
+    Destructive,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -146,6 +148,10 @@ impl Button {
         self.style(ButtonStyle::Ghost)
     }
 
+    pub fn destructive(self) -> Self {
+        self.style(ButtonStyle::Destructive)
+    }
+
     pub fn accent(self) -> Self {
         self.style(ButtonStyle::Accent)
     }
@@ -243,6 +249,13 @@ impl RenderOnce for Button {
                 text: c.text_on_accent,
                 border: None,
             },
+            ButtonStyle::Destructive => Look {
+                fill: Some(c.danger),
+                hover: c.danger_hover,
+                pressed: c.danger_pressed,
+                text: c.text_on_accent,
+                border: None,
+            },
             ButtonStyle::Secondary => Look {
                 fill: Some(if self.selected { c.selected } else { c.surface }),
                 hover: c.hover,
@@ -265,7 +278,7 @@ impl RenderOnce for Button {
         let accent = c.accent;
         let gap = c.surface;
         let faint = c.text_faint;
-        let keycap_border = if matches!(self.style, ButtonStyle::Primary | ButtonStyle::Accent) {
+        let keycap_border = if matches!(self.style, ButtonStyle::Primary | ButtonStyle::Accent | ButtonStyle::Destructive) {
             look.text.opacity(0.35)
         } else {
             c.border_strong
