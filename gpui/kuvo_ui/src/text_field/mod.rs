@@ -68,7 +68,8 @@ actions!(
     ]
 );
 
-const CONTEXT: &str = "KuvoTextField";
+/// The key context a field sets, for bindings that apply in fields within something else.
+pub const CONTEXT: &str = "KuvoTextField";
 
 /// The keys a text field answers to. Called from [`crate::bind_keys`].
 pub fn bind_keys(cx: &mut App) {
@@ -263,6 +264,11 @@ impl TextField {
     pub fn set_error(&mut self, error: Option<SharedString>, cx: &mut Context<Self>) {
         self.error = error;
         cx.notify();
+    }
+
+    /// What's wrong with the text, as shown under the field.
+    pub fn error(&self) -> Option<&SharedString> {
+        self.error.as_ref()
     }
 
     pub fn text(&self) -> &str {

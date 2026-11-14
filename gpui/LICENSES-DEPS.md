@@ -8,9 +8,9 @@ before adding. Nothing from Zed's GPL-3.0 crates is used or copied: only `gpui` 
 
 | Crate | Licence | What for | Used by |
 |---|---|---|---|
-| gpui (Zed, rev dc93abce) | Apache-2.0 | The UI framework | kuvo_ui, kuvo_gallery |
-| gpui_platform (same rev) | Apache-2.0 | Opens the app on macOS (Linux, Windows later) | kuvo_gallery |
-| anyhow | MIT OR Apache-2.0 | Errors at the edges (asset loading, shots) | kuvo_ui, kuvo_gallery |
+| gpui (Zed, rev dc93abce) | Apache-2.0 | The UI framework | kuvo_ui, kuvo_gallery, kuvo |
+| gpui_platform (same rev) | Apache-2.0 | Opens the app on macOS (Linux, Windows later) | kuvo_gallery, kuvo |
+| anyhow | MIT OR Apache-2.0 | Errors at the edges (asset loading, shots) | kuvo_ui, kuvo_gallery, kuvo |
 | smallvec | MIT OR Apache-2.0 | Shaped lines in the text field | kuvo_ui |
 | unicode-segmentation | MIT OR Apache-2.0 | Graphemes and words in the text field | kuvo_ui |
 | pulldown-cmark | MIT | Parsing markdown | kuvo_ui |
@@ -22,11 +22,12 @@ before adding. Nothing from Zed's GPL-3.0 crates is used or copied: only `gpui` 
 | getrandom | MIT OR Apache-2.0 | The random part of a message's id | kuvo_box |
 | libc | MIT OR Apache-2.0 | Reading a process's command line on macOS (is it the box's server?) | kuvo_box |
 | percent-encoding | MIT OR Apache-2.0 | Writing a route's path and query | kuvo_box |
-| serde, serde_json | MIT OR Apache-2.0 | Reading and writing a box's JSON | kuvo_box |
+| serde, serde_json | MIT OR Apache-2.0 | Reading and writing a box's JSON | kuvo_box, kuvo (its stand-in box) |
 
 GPUI's `test-support` feature (Apache-2.0, same crate) is used only by the tests and the
 `shots` binary. `tempfile` (MIT OR Apache-2.0) gives `kuvo_box`'s tests and example folders of
-their own. Every crate `kuvo_box` uses was already in the build (below); it adds none.
+their own. Every crate `kuvo_box` uses was already in the build (below); it adds none, and nor
+does the app, `kuvo` (phase 2): it uses only crates already listed here.
 
 GPUI also brings in other crates from Zed's repository, all Apache-2.0: `gpui_apple`,
 `gpui_macos`, `gpui_macros`, `gpui_shared_string`, `gpui_util`, `collections`, `refineable`,

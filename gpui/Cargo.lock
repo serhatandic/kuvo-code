@@ -2579,6 +2579,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kuvo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui_platform",
+ "kuvo",
+ "kuvo_box",
+ "kuvo_ui",
+ "serde_json",
+]
+
+[[package]]
 name = "kuvo_box"
 version = "0.1.0"
 dependencies = [
