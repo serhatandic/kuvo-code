@@ -19,7 +19,7 @@ use kuvo_ui::{
 };
 
 use crate::composer::Composer;
-use crate::entries::{self, Block, COLUMN, Entry};
+use crate::entries::{self, COLUMN, Entry, Fold};
 
 /// What's wrong, said over the conversation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,8 +49,8 @@ pub struct ConversationView {
     earlier_failed: Option<String>,
     /// The way back already asked for, so it's asked once.
     asked_earlier: Rc<RefCell<Option<String>>>,
-    /// Thinking blocks opened.
-    expanded: HashSet<Block>,
+    /// Thinking blocks and tool steps opened, and outputs shown whole.
+    open: HashSet<Fold>,
     /// Its composer, which the workspace keeps (with its draft) while you're elsewhere.
     composer: Entity<Composer>,
     follow: Option<Rc<Follow<ConversationUpdate>>>,
@@ -80,7 +80,7 @@ impl ConversationView {
             problem: None,
             earlier_failed: None,
             asked_earlier: Rc::default(),
-            expanded: HashSet::new(),
+            open: HashSet::new(),
             composer,
             follow: None,
             _follow_task: None,
@@ -251,10 +251,11 @@ impl ConversationView {
         debug_assert_eq!(state.item_count(), self.entries.len());
     }
 
-    fn toggle(&mut self, block: Block, cx: &mut Context<Self>) {
-        let step = block.0.clone();
-        if !self.expanded.remove(&block) {
-            self.expanded.insert(block);
+    /// Opens or closes a thinking block or a tool step, or folds an output again.
+    pub fn toggle(&mut self, fold: Fold, cx: &mut Context<Self>) {
+        let step = fold.step().to_owned();
+        if !self.open.remove(&fold) {
+            self.open.insert(fold);
         }
         if let Some(ix) = self.entries.iter().position(|entry| entry.key() == step) {
             self.list.changed(ix);
@@ -348,8 +349,8 @@ impl Render for ConversationView {
                 let Some(entry) = this.entries.get(ix) else { return div().into_any_element() };
                 let earlier = if matches!(entry, Entry::Earlier) { this.earlier_row(&view, cx) } else { div().into_any_element() };
                 let toggle_view = view.clone();
-                let toggle = move |block: Block, cx: &mut App| toggle_view.update(cx, |this, cx| this.toggle(block, cx));
-                entries::render(ix, entry, &this.expanded, toggle, earlier, cx)
+                let toggle = move |fold: Fold, cx: &mut App| toggle_view.update(cx, |this, cx| this.toggle(fold, cx));
+                entries::render(ix, entry, &this.open, toggle, earlier, cx)
             })
             .into_any_element()
         };

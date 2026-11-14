@@ -184,6 +184,12 @@ pub struct Colors {
     pub warning: Hsla,
     pub danger: Hsla,
 
+    /// Behind a diff's added and removed lines, and their signs and counts.
+    pub diff_added_wash: Hsla,
+    pub diff_removed_wash: Hsla,
+    pub diff_added: Hsla,
+    pub diff_removed: Hsla,
+
     /// Fills for avatars without a picture, picked by name so a person keeps theirs.
     pub avatars: [Hsla; 6],
 
@@ -254,6 +260,11 @@ impl Colors {
             warning: hex(0xC7820E),
             danger: hex(0xD93B3B),
 
+            diff_added_wash: hexa(0x2E9E5B1A),
+            diff_removed_wash: hexa(0xD93B3B17),
+            diff_added: hex(0x237A46),
+            diff_removed: hex(0xB52E2E),
+
             avatars: [hex(0xD9E4F5), hex(0xF5E1D3), hex(0xDCEFDF), hex(0xEDDDF3), hex(0xF3E9C9), hex(0xD7ECEE)],
 
             syntax: Syntax {
@@ -308,6 +319,11 @@ impl Colors {
             success: hex(0x4CC27A),
             warning: hex(0xE0A43A),
             danger: hex(0xF06363),
+
+            diff_added_wash: hexa(0x4CC27A1F),
+            diff_removed_wash: hexa(0xF0636324),
+            diff_added: hex(0x6FD394),
+            diff_removed: hex(0xF58080),
 
             avatars: [hex(0x2B3A52), hex(0x4A3528), hex(0x2A4232), hex(0x3E2F4A), hex(0x463D24), hex(0x24404A)],
 

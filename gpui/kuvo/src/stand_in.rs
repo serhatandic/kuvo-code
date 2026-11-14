@@ -206,15 +206,16 @@ fn signup(now: f64) -> Vec<Value> {
         json!({ "type": "assistant", "id": "msg_s2", "time": { "created": t + 1000.0, "completed": t + 25_000.0 }, "agent": "build", "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "finish": "stop", "content": [
             { "type": "reasoning", "text": "The form likely resets its state on any error from the server, not only on success.", "time": { "created": t + 1000.0, "completed": t + 3000.0 } },
             tool("call_1", "read", "completed", json!({ "filePath": "web/src/signup/Form.tsx" })),
-            tool("call_2", "grep", "completed", json!({ "pattern": "reset\\(" })),
+            tool_with("call_2", "grep", "completed", json!({ "pattern": "reset\\(" }), json!({ "content": [{ "type": "text", "text": "Found 3 matches\nweb/src/signup/Form.tsx:\n  Line 48:     reset();\n  Line 71:   const { reset, setError } = useForm();\nweb/src/settings/Profile.tsx:\n  Line 33:     reset(profile);" }] })),
             { "type": "text", "text": "Found it. When the server answers **409** (the email is taken), the error path calls `reset()` before it shows the message, so every field is cleared:\n\n```tsx\n} catch (error) {\n  reset();\n  setError(error.message);\n}\n```\n\nMoving `reset()` into the success path keeps what was typed. Want me to do that, and put the error under the email field?" }
         ] }),
         json!({ "type": "idle", "id": "msg_s3", "time": { "created": t + 25_000.0 }, "outcome": "succeeded" }),
         user("msg_s4", t + 120_000.0, "Keep what they typed, and say which field is wrong", Some("/plan")),
         json!({ "type": "assistant", "id": "msg_s5", "time": { "created": t + 121_000.0 }, "agent": "build", "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "content": [
-            tool("call_3", "edit", "completed", json!({ "filePath": "web/src/signup/Form.tsx" })),
-            tool("call_4", "shell", "running", json!({ "command": "npm test -- signup" })),
-            { "type": "text", "text": "Moved the reset into the success path, and the 409 now sets the error on the email field. Running the sign-up tests" }
+            tool_with("call_3", "edit", "completed", json!({ "filePath": "web/src/signup/Form.tsx" }), json!({ "metadata": { "files": [{ "file": "web/src/signup/Form.tsx", "additions": 4, "deletions": 2, "status": "modified", "patch": SIGNUP_PATCH }] } })),
+            tool_with("call_4", "shell", "completed", json!({ "command": "npm test -- signup" }), json!({ "content": [{ "type": "text", "text": test_output() }], "metadata": { "exit": 0 } })),
+            { "type": "text", "text": "Moved the reset into the success path, and the 409 now sets the error on the email field. The sign-up tests pass; checking the lint" },
+            tool("call_5", "shell", "running", json!({ "command": "npm run lint" }))
         ] }),
     ]
 }
@@ -271,6 +272,29 @@ fn user(id: &str, at: f64, words: &str, keyword: Option<&str>) -> Value {
 
 fn tool(id: &str, name: &str, status: &str, input: Value) -> Value {
     json!({ "type": "tool", "id": id, "name": name, "state": { "status": status, "input": input } })
+}
+
+/// A tool step with more to its state: what it printed (`content`), what it changed (`metadata`).
+fn tool_with(id: &str, name: &str, status: &str, input: Value, more: Value) -> Value {
+    let mut step = tool(id, name, status, input);
+    if let (Some(state), Some(more)) = (step["state"].as_object_mut(), more.as_object()) {
+        state.extend(more.clone());
+    }
+    step
+}
+
+/// The sign-up form's fix, as the engine keeps an edit's changes.
+const SIGNUP_PATCH: &str = "Index: web/src/signup/Form.tsx\n===================================================================\n--- web/src/signup/Form.tsx\n+++ web/src/signup/Form.tsx\n@@ -44,9 +44,11 @@ export function SignupForm() {\n   async function save(values: Values) {\n     try {\n       await api.post(\"/accounts\", values);\n+      reset();\n     } catch (error) {\n-      reset();\n-      setError(error.message);\n+      if (error.status === 409) {\n+        setError(\"email\", { message: \"That email already has an account.\" });\n+      }\n     }\n   }\n \n";
+
+/// What the sign-up tests printed: long enough to fold.
+fn test_output() -> String {
+    let mut lines = vec!["> web@2.4.0 test".to_owned(), "> vitest run signup".to_owned(), String::new(), " RUN  v3.2.4 /Users/sam/Projects/website/web".to_owned(), String::new()];
+    let cases = ["keeps what was typed when the email is taken", "says which field is wrong", "clears the form once the account is made", "shows the server's message for other errors", "doesn't send twice on a double click", "trims spaces around the email", "accepts a plus in the email", "asks for a longer password", "remembers the plan picked", "focuses the first field with an error"];
+    for (n, case) in cases.iter().enumerate() {
+        lines.push(format!(" ✓ signup/Form.test.tsx > SignupForm > {case} {}ms", 12 + n * 7));
+    }
+    lines.extend([String::new(), " Test Files  1 passed (1)".to_owned(), "      Tests  10 passed (10)".to_owned(), "   Start at  10:42:17".to_owned(), "   Duration  1.84s (transform 210ms, setup 0ms, collect 640ms, tests 96ms)".to_owned()]);
+    lines.join("\n")
 }
 
 impl State {

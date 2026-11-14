@@ -10,6 +10,7 @@ pub mod code_block;
 pub mod icon;
 pub mod markdown;
 pub mod menu;
+pub mod output;
 pub mod row;
 pub mod small;
 pub mod text_field;

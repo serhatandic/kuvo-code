@@ -296,7 +296,7 @@ fn a_run_streams_into_the_conversation_and_its_end_shows(cx: &mut TestAppContext
             _ => None,
         })
     });
-    assert!(streamed.unwrap().ends_with("Running the sign-up tests now. All 14 pass."));
+    assert!(streamed.unwrap().ends_with("checking the lint now. All 14 pass."));
     assert!(view.read_with(cx, |view, _| view.list().is_following()));
     let step = bounds(cx, "entry-msg_s5").unwrap();
     let working = bounds(cx, "entry-working").unwrap();
@@ -626,4 +626,39 @@ fn what_is_said_of_the_model_before_a_pick_comes_back_is_left(cx: &mut TestAppCo
     cx.run_until_parked();
     composer.update(cx, |composer, cx| composer.take_state(opus, cx));
     assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Claude Opus 5.5".to_owned()));
+}
+
+#[gpui::test]
+fn a_tool_step_opens_to_what_it_printed_and_long_output_unfolds(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in);
+    open_session(&workspace, "ses_signup", cx);
+
+    // Closed, a step is one line; a click opens it to the command and what it printed, folded.
+    assert!(bounds(cx, "output-msg_s5:1").is_none());
+    let row = bounds(cx, "tool-msg_s5:1").expect("the test run's row");
+    cx.simulate_click(row.center(), Modifiers::default());
+    cx.run_until_parked();
+    let folded = bounds(cx, "output-msg_s5:1").expect("its output, under it");
+
+    // Show all: the rest of it, then folded again.
+    let fold = bounds(cx, "output-msg_s5:1-fold").expect("the fold's button");
+    cx.simulate_click(fold.center(), Modifiers::default());
+    cx.run_until_parked();
+    let whole = bounds(cx, "output-msg_s5:1").expect("its output, whole");
+    assert!(whole.size.height > folded.size.height + px(100.), "{whole:?} vs {folded:?}");
+    let fold = bounds(cx, "output-msg_s5:1-fold").expect("Show less");
+    cx.simulate_click(fold.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(bounds(cx, "output-msg_s5:1").map(|b| b.size.height), Some(folded.size.height));
+
+    // An edit opens to its changes; a step still running has nothing to open.
+    let edit = bounds(cx, "tool-msg_s5:0").expect("the edit's row");
+    cx.simulate_click(edit.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(bounds(cx, "diff-msg_s5:0-0").is_some());
+    let running = bounds(cx, "tool-msg_s5:3").expect("the lint running");
+    cx.simulate_click(running.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(bounds(cx, "output-msg_s5:3").is_none());
 }

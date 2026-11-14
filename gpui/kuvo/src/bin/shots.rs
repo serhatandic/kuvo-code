@@ -23,15 +23,18 @@ struct Screen {
     /// What's typed in the composer.
     typed: Option<&'static str>,
     empty: bool,
+    /// Tool steps opened (a step's id, and which of its blocks), and outputs shown whole.
+    opens: &'static [(&'static str, usize)],
 }
 
 const SCREENS: &[Screen] = &[
-    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false },
-    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false },
-    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false },
-    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false },
-    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false },
-    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true },
+    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[] },
+    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[] },
+    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false, opens: &[] },
+    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[] },
+    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[] },
+    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)] },
+    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[] },
 ];
 
 fn main() -> anyhow::Result<()> {
@@ -61,6 +64,11 @@ fn main() -> anyhow::Result<()> {
                     workspace.read_at_once(cx);
                     if let Some(session) = screen.session {
                         workspace.open_read_at_once(session, window, cx);
+                    }
+                    if let Some(view) = workspace.conversation() {
+                        for (step, n) in screen.opens {
+                            view.update(cx, |view, cx| view.toggle(kuvo::entries::Fold::Step((*step).to_owned(), *n), cx));
+                        }
                     }
                     let composer = match workspace.conversation() {
                         Some(view) => view.read(cx).composer().clone(),

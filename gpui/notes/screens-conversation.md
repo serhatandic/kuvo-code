@@ -43,5 +43,5 @@ Read: `crates/agent_ui/src/conversation_view/thread_view.rs`, `crates/agent_ui/s
 ## Where we differ, and why
 
 - Your message isn't editable in place (Zed's is): the box has no route for it yet.
-- Tool steps don't expand yet; their output comes in phase 3, with permission asks as cards.
+- Tool steps open to their output, diffs and results: `screens-tool-output.md`.
 - Paging exists because the box pages (`api/session/<id>/message` with a cursor).
