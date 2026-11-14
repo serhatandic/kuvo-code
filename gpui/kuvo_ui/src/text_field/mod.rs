@@ -379,6 +379,10 @@ impl TextField {
 
     /// The start of the word before an offset, skipping spaces and punctuation, as on a Mac.
     fn previous_word(&self, offset: usize) -> usize {
+        // A key is one word, as in a password field: its shape isn't given away.
+        if self.masked {
+            return 0;
+        }
         self.content
             .split_word_bound_indices()
             .rfind(|(ix, word)| *ix < offset && word.chars().any(char::is_alphanumeric))
@@ -387,6 +391,9 @@ impl TextField {
     }
 
     fn next_word(&self, offset: usize) -> usize {
+        if self.masked {
+            return self.content.len();
+        }
         self.content
             .split_word_bound_indices()
             .find(|(ix, word)| ix + word.len() > offset && word.chars().any(char::is_alphanumeric))
@@ -395,6 +402,9 @@ impl TextField {
     }
 
     fn word_around(&self, offset: usize) -> Range<usize> {
+        if self.masked {
+            return 0..self.content.len();
+        }
         self.content
             .split_word_bound_indices()
             .find(|(ix, word)| *ix <= offset && offset < ix + word.len())
@@ -806,6 +816,10 @@ impl EntityInputHandler for TextField {
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
+        // A key isn't handed to input methods or the system's text services, only its dots.
+        if self.masked {
+            return Some(layout::dots(&self.content[range]));
+        }
         Some(self.content[range].to_string())
     }
 

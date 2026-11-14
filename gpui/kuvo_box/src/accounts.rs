@@ -247,7 +247,12 @@ pub struct Accounts {
     pub agents: Vec<AccountEntry>,
     /// The engine's plans and providers, in its order, less those Accounts doesn't list.
     pub engine: Vec<AccountEntry>,
+    /// Why the coding agents' bridge, or the engine, couldn't list its accounts just now (`503`).
     pub agents_down: Option<String>,
+    pub engine_down: Option<String>,
+    /// The box couldn't say which sign-ins ended just now (`503`): none is marked, and a client
+    /// keeps what it last read.
+    pub ended_unknown: bool,
 }
 
 /// A sign-in under way, as the engine or the bridge started it.
@@ -375,15 +380,20 @@ impl BoxClient {
             #[serde(default)]
             providers: Vec<String>,
         }
-        // A box that can't say which sign-ins ended just now (503) says none.
-        let ended = self.get::<Ended>("kuvo/accounts/ended").map(|ended| ended.providers).unwrap_or_default();
-        let engine = self.side_accounts(Side::Engine, &ended)?;
-        let (agents, agents_down) = match self.side_accounts(Side::Agents, &ended) {
-            Ok(agents) => (agents, None),
-            Err(Error::Refused(refusal)) if refusal.status == 503 => (Vec::new(), Some(refusal.message)),
+        let (ended, ended_unknown) = match self.get::<Ended>("kuvo/accounts/ended") {
+            Ok(ended) => (ended.providers, false),
+            Err(Error::Refused(refusal)) if refusal.status == 503 => (Vec::new(), true),
             Err(error) => return Err(error),
         };
-        Ok(Accounts { agents, engine, agents_down })
+        // Either side not running (503) leaves its accounts out, saying why; the other's stay.
+        let side = |side: Side| match self.side_accounts(side, &ended) {
+            Ok(accounts) => Ok((accounts, None)),
+            Err(Error::Refused(refusal)) if refusal.status == 503 => Ok((Vec::new(), Some(refusal.message))),
+            Err(error) => Err(error),
+        };
+        let (engine, engine_down) = side(Side::Engine)?;
+        let (agents, agents_down) = side(Side::Agents)?;
+        Ok(Accounts { agents, engine, agents_down, engine_down, ended_unknown })
     }
 
     /// An account's ways in, as the box offers them now.

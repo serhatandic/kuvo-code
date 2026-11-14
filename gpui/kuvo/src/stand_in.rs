@@ -150,6 +150,16 @@ impl StandIn {
         self.state().settings.set_config(path, value);
     }
 
+    /// Sign-ins under way are forgotten, as by an engine that started over.
+    pub fn forget_sign_ins(&self) {
+        self.state().settings.forget_sign_ins();
+    }
+
+    /// Whether it can say which sign-ins ended (`kuvo/accounts/ended` answers `503` while not).
+    pub fn ended_readable(&self, readable: bool) {
+        self.state().settings.ended_unreadable = !readable;
+    }
+
     /// Whether the coding agents' bridge runs (it answers `503` while not).
     pub fn agents_running(&self, running: bool) {
         self.state().settings.agents_down = !running;

@@ -267,11 +267,11 @@ fn ring_button(ix: usize, account: &Account, now: f64, cx: &mut Context<Rings>) 
         rings
             .iter()
             .enumerate()
-            .map(|(ix, window)| {
+            .map(|(ix, (used, level))| {
                 let size = RING - (STROKE + INNER_GAP) * 2. * ix as f32;
                 let inset = (STROKE + INNER_GAP) * ix as f32;
                 let selector = format!("ring-{}-arc-{ix}", account_key(account));
-                div().debug_selector(move || selector).absolute().top(inset).left(inset).size(size).child(arcs(size, STROKE, window.used, level_color(window.level, cx), c.border)).into_any_element()
+                div().debug_selector(move || selector).absolute().top(inset).left(inset).size(size).child(arcs(size, STROKE, *used, level_color(*level, cx), c.border)).into_any_element()
             })
             .collect()
     };

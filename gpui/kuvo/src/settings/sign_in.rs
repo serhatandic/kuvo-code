@@ -7,13 +7,15 @@
 //!
 //! The steps are the Mac's (`ConnectView`): its words where it has them.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AppContext as _, ClipboardItem, Focusable as _, Context, Entity, EventEmitter, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    AnyElement, AppContext as _, ClipboardItem, FocusHandle, Focusable as _, KeyDownEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder as _, px,
 };
-use kuvo_box::BoxClient;
+use kuvo_box::{BoxClient, Error};
 use kuvo_box::accounts::{Attempt, FormField, Method, Side, Status, Ways, said};
 use kuvo_ui::{
     ActiveTheme, Icon, IconName, IconSize, StyledType, TextField, TextFieldEvent, TypeSize,
@@ -79,6 +81,9 @@ pub struct SignIn {
     fields: Vec<Field>,
     misses: u32,
     wants_focus: bool,
+    /// Closed: a sign-in still starting is given up on as soon as it has started.
+    closed: Arc<AtomicBool>,
+    focus: FocusHandle,
     poll: Option<Task<()>>,
     work: Option<Task<()>>,
 }
@@ -89,16 +94,17 @@ impl SignIn {
     pub fn new(client: BoxClient, live: bool, side: Side, account: &str, name: &str, cx: &mut Context<Self>) -> SignIn {
         let key = cx.new(|cx| TextField::new(cx).masked().placeholder("Paste your key"));
         let code = cx.new(|cx| TextField::new(cx).placeholder("Paste the code"));
-        cx.subscribe(&key, |this: &mut SignIn, _, event: &TextFieldEvent, cx| {
-            if let TextFieldEvent::Submit(_) = event {
-                this.connect_key(cx);
-            }
+        // Return sends what's in a field; Escape closes the sheet, as anywhere in it.
+        cx.subscribe(&key, |this: &mut SignIn, _, event: &TextFieldEvent, cx| match event {
+            TextFieldEvent::Submit(_) => this.connect_key(cx),
+            TextFieldEvent::Cancel => this.close(cx),
+            TextFieldEvent::Changed => {}
         })
         .detach();
-        cx.subscribe(&code, |this: &mut SignIn, _, event: &TextFieldEvent, cx| {
-            if let TextFieldEvent::Submit(_) = event {
-                this.send_code(cx);
-            }
+        cx.subscribe(&code, |this: &mut SignIn, _, event: &TextFieldEvent, cx| match event {
+            TextFieldEvent::Submit(_) => this.send_code(cx),
+            TextFieldEvent::Cancel => this.close(cx),
+            TextFieldEvent::Changed => {}
         })
         .detach();
         SignIn {
@@ -117,7 +123,9 @@ impl SignIn {
             copied: false,
             fields: Vec::new(),
             misses: 0,
-            wants_focus: false,
+            wants_focus: true,
+            closed: Arc::new(AtomicBool::new(false)),
+            focus: cx.focus_handle(),
             poll: None,
             work: None,
         }
@@ -160,6 +168,7 @@ impl SignIn {
 
     /// Reads the ways in; with one alone, it starts at once (the Mac's).
     pub fn start(&mut self, cx: &mut Context<Self>) {
+        self.wants_focus = true;
         self.step = Step::Loading;
         let (side, account) = (self.side, self.account.clone());
         self.run(
@@ -246,9 +255,20 @@ impl SignIn {
             return;
         }
         self.step = Step::Working("Starting the sign-in…".into());
+        let closed = self.closed.clone();
         self.run(
-            move |client| client.start_sign_in(side, &account, &id, Some(&answer)),
+            move |client| {
+                let started = client.start_sign_in(side, &account, &id, Some(&answer));
+                // Closed while it started: given up on the engine at once, not left waiting.
+                if closed.load(Ordering::SeqCst)
+                    && let Ok(attempt) = &started
+                {
+                    client.cancel_sign_in(side, &account, &attempt.id).ok();
+                }
+                started
+            },
             |this, started, cx| match started {
+                Ok(_) if this.closed.load(Ordering::SeqCst) => {}
                 Ok(attempt) => {
                     if let Some(code) = &attempt.user_code {
                         cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
@@ -295,9 +315,15 @@ impl SignIn {
         cx.notify();
         let status = match status {
             Ok(status) => status,
+            // Turned down for another reason (its engine not running, a bad ask): the box's words.
+            Err(Error::Refused(refusal)) if refusal.status != 404 && refusal.status != 504 => {
+                self.step = Step::Failed(refusal.message);
+                return false;
+            }
             Err(_) => {
-                // Not heard (the engine started over, or didn't answer in time): a while of those
-                // and it's given up on, as the box says to.
+                // Not heard (the engine started over and doesn't know it, it didn't answer in
+                // time, or the box couldn't be reached): a while of those and it's given up on,
+                // as the box says to.
                 self.misses += 1;
                 if self.misses >= MISSES {
                     let who = if self.side == Side::Agents { "The coding agents" } else { "The engine" };
@@ -431,6 +457,7 @@ impl SignIn {
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        self.closed.store(true, Ordering::SeqCst);
         self.cancel_attempt();
         let signed_in = self.step == Step::Done;
         cx.emit(Closed { signed_in });
@@ -462,7 +489,8 @@ impl Render for SignIn {
                         window.focus(&text.focus_handle(cx), cx);
                     }
                 }
-                _ => {}
+                // The sheet itself, so Escape closes it.
+                _ => window.focus(&self.focus, cx),
             }
         }
         let title = match &self.step {
@@ -491,6 +519,12 @@ impl Render for SignIn {
         div()
             .id("sign-in")
             .debug_selector(|| "sign-in".into())
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    this.close(cx);
+                }
+            }))
             .w(px(440.))
             .max_w_full()
             .flex()

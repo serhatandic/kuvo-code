@@ -67,6 +67,10 @@ pub struct SettingsView {
     problem: Option<String>,
     confirm: Option<Confirm>,
     sign_in: Option<Entity<SignIn>>,
+    sign_in_closed: Option<Subscription>,
+    /// The confirm asks for the keyboard as it opens (Escape cancels it).
+    confirm_focus: FocusHandle,
+    focus_confirm: bool,
     /// Drawn in dark (the Theme row says which is on).
     dark: bool,
     this_box: String,
@@ -129,6 +133,9 @@ impl SettingsView {
             problem: None,
             confirm: None,
             sign_in: None,
+            sign_in_closed: None,
+            confirm_focus: cx.focus_handle(),
+            focus_confirm: false,
             dark: cx.theme().appearance.is_dark(),
             this_box: "this Mac".into(),
             now: None,
@@ -196,14 +203,21 @@ impl SettingsView {
             }
         }
         self.query = query;
-        // The page open has nothing found: the first section that has.
+        self.rebuild(cx);
+    }
+
+    /// While searching, the page open has nothing found: the first section that has (again as
+    /// each page's reading comes in, so a search typed before they came finds them).
+    fn follow_search(&mut self, cx: &mut Context<Self>) {
+        if self.query.is_empty() {
+            return;
+        }
         let sections = self.sections_found();
-        if !self.query.is_empty() && !sections.iter().any(|section| *section == self.section)
+        if !sections.iter().any(|section| *section == self.section)
             && let Some(first) = sections.first()
         {
             cx.emit(Pick { section: (*first).to_owned(), record: false });
         }
-        self.rebuild(cx);
     }
 
     /// The sections the search finds something on (all of them without one).
@@ -257,11 +271,15 @@ impl SettingsView {
             items.push(Item::Placeholder);
         }
         items.push(Item::End);
+        // Only the items that changed are laid out again; the rest keep their places and the
+        // page keeps its scroll (a reset would take it back to the top).
         if items != self.items {
-            let count = items.len();
+            let start = self.items.iter().zip(&items).take_while(|(old, new)| old == new).count();
+            let tail = self.items[start..].iter().rev().zip(items[start..].iter().rev()).take_while(|(old, new)| old == new).count();
+            self.list.splice(start..self.items.len() - tail, items.len() - tail - start);
             self.items = items;
-            self.list.reset(count);
         }
+        self.follow_search(cx);
         cx.notify();
     }
 
@@ -296,7 +314,7 @@ impl SettingsView {
 
     fn read_section(&mut self, section: &str, cx: &mut Context<Self>) {
         match section {
-            "Accounts" => self.run("read-accounts", |client| client.sign_in_accounts(), |this, read, _| this.accounts = reading(read, &this.accounts), cx),
+            "Accounts" => self.run("read-accounts", |client| client.sign_in_accounts(), |this, read, _| this.accounts = accounts_reading(read, &this.accounts), cx),
             "Usage" => self.run("read-limits", |client| client.accounts(), |this, read, _| this.limits = reading(read, &this.limits), cx),
             "Models" => {
                 self.run("read-config", |client| client.config(), |this, read, _| this.config = reading(read, &this.config), cx);
@@ -340,7 +358,7 @@ impl SettingsView {
                         this.done(&key);
                         match done {
                             Ok(installed) if installed.installed => {
-                                this.run("read-accounts", |client| client.sign_in_accounts(), |this, read, _| this.accounts = reading(read, &this.accounts), cx);
+                                this.run("read-accounts", |client| client.sign_in_accounts(), |this, read, _| this.accounts = accounts_reading(read, &this.accounts), cx);
                                 // Installed: on to signing in, as the Mac does.
                                 if this.offers_sign_in(Side::Agents, &account) {
                                     this.open_sign_in(Side::Agents, &account, &name, cx);
@@ -354,6 +372,7 @@ impl SettingsView {
                 );
             }
             Act::Disconnect { account, name } => {
+                self.focus_confirm = true;
                 self.confirm = Some(Confirm {
                     title: format!("Disconnect {name}?"),
                     body: format!("{} forgets its sign-ins and keys for {name}. Sessions on its models stop until you sign in again.", capitalized(&self.this_box)),
@@ -362,6 +381,7 @@ impl SettingsView {
                 });
             }
             Act::RemoveAgent { account, name } => {
+                self.focus_confirm = true;
                 self.confirm = Some(Confirm {
                     title: format!("Remove {name}?"),
                     body: "Kuvo Code signs it out and forgets it. Sessions on its models go on when you pick another model.".into(),
@@ -490,7 +510,7 @@ impl SettingsView {
             move |this, done, _| {
                 this.done(&done_key);
                 match done {
-                    Ok(accounts) => this.accounts = Reading::Ready(accounts),
+                    Ok(accounts) => this.accounts = accounts_reading(Ok(accounts), &this.accounts),
                     Err(error) => this.problem = Some(said(&error)),
                 }
             },
@@ -524,14 +544,13 @@ impl SettingsView {
 
     pub fn open_sign_in(&mut self, side: Side, account: &str, name: &str, cx: &mut Context<Self>) {
         let sheet = cx.new(|cx| SignIn::new(self.client.clone(), self.live, side, account, name, cx));
-        let subscription = cx.subscribe(&sheet, |this: &mut SettingsView, _, event: &sign_in::Closed, cx| {
+        // Closed, however it ended (a key may have gone in as it closed): Accounts read again.
+        self.sign_in_closed = Some(cx.subscribe(&sheet, |this: &mut SettingsView, _, _: &sign_in::Closed, cx| {
             this.sign_in = None;
-            if event.signed_in {
-                this.run("read-accounts", |client| client.sign_in_accounts(), |this, read, _| this.accounts = reading(read, &this.accounts), cx);
-            }
+            this.sign_in_closed = None;
+            this.run("read-accounts", |client| client.sign_in_accounts(), |this, read, _| this.accounts = accounts_reading(read, &this.accounts), cx);
             cx.notify();
-        });
-        self._subscriptions.push(subscription);
+        }));
         sheet.update(cx, |sheet, cx| sheet.start(cx));
         self.sign_in = Some(sheet);
         cx.notify();
@@ -547,6 +566,22 @@ fn rows_model_key(path: &[&str]) -> String {
 fn capitalized(words: &str) -> String {
     let mut chars = words.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// Accounts as read, where the box couldn't say which sign-ins ended just now keeping what it
+/// said before (PROTOCOL.md: `kuvo/accounts/ended` answers 503 then, and a client keeps it).
+fn accounts_reading(read: kuvo_box::Result<Accounts>, before: &Reading<Accounts>) -> Reading<Accounts> {
+    let read = read.map(|mut accounts| {
+        if accounts.ended_unknown
+            && let Reading::Ready(before) = before
+        {
+            for entry in accounts.engine.iter_mut().chain(accounts.agents.iter_mut()) {
+                entry.ended = before.engine.iter().chain(&before.agents).any(|was| was.integration.id == entry.integration.id && was.ended);
+            }
+        }
+        accounts
+    });
+    reading(read, before)
 }
 
 /// What a read makes of what's shown: what it read, or (failing) what was there, else why.

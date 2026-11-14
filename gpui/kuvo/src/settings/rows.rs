@@ -83,8 +83,11 @@ pub enum Control {
     None,
     /// Plain words (a state that's read, not set here).
     Text(String),
-    /// A switch, and what flipping it does.
-    Switch { on: bool, act: Act },
+    /// A switch, and what flipping it does; `held` while another change in its group is under
+    /// way (each is sent whole, from what the box last said, so two at once would undo one).
+    Switch { on: bool, act: Act, held: bool },
+    /// A button that can't be used until another change in its group is answered.
+    HeldButton(String),
     /// A menu: what it shows now, and its choices (words, what picking one does, whether it's it).
     Menu { shown: String, choices: Vec<(String, Act, bool)> },
     /// Buttons, the first the main one.
@@ -179,6 +182,11 @@ pub struct Facts<'a> {
 impl Facts<'_> {
     fn busy(&self, key: &str) -> Option<Control> {
         self.busy.iter().find(|(busy, _)| busy == key).map(|(_, words)| Control::Busy(words.clone()))
+    }
+
+    /// Whether a change to a row whose key starts with `group` is under way.
+    fn group_busy(&self, group: &str) -> bool {
+        self.busy.iter().any(|(busy, _)| busy.starts_with(group))
     }
 }
 
@@ -339,6 +347,9 @@ fn accounts(facts: &Facts) -> Vec<Block> {
     } else if !accounts.agents.is_empty() {
         blocks.push(Block::Group("Coding Agents".into(), accounts.agents.iter().map(|entry| agent_row(entry, facts)).collect()));
     }
+    if let Some(why) = &accounts.engine_down {
+        blocks.push(note("note-engine-down", format!("The engine isn’t running on {}: {why}", facts.this_box), false));
+    }
     // Signed in (or once signed in, now ended), then the rest to add, each in the engine's order.
     let (connected, others): (Vec<&AccountEntry>, Vec<&AccountEntry>) = accounts.engine.iter().partition(|entry| entry.integration.connected() || entry.sign_in_ended());
     if !connected.is_empty() {
@@ -447,7 +458,7 @@ fn permissions(facts: &Facts) -> Vec<Block> {
             }
             if let Some(allowed) = approval.other_computers {
                 rows.push(facts.busy("row-other-computers").map_or_else(
-                    || Row::new("row-other-computers", "Let your other computers start work here", format!("Their bots and agents can start sessions on {}.", facts.this_box), Control::Switch { on: allowed, act: Act::SetOtherComputers(!allowed) }),
+                    || Row::new("row-other-computers", "Let your other computers start work here", format!("Their bots and agents can start sessions on {}.", facts.this_box), Control::Switch { on: allowed, act: Act::SetOtherComputers(!allowed), held: false }),
                     |busy| Row::new("row-other-computers", "Let your other computers start work here", format!("Their bots and agents can start sessions on {}.", facts.this_box), busy),
                 ));
             }
@@ -500,7 +511,7 @@ fn notifications(facts: &Facts) -> Vec<Block> {
         Reading::Ready(usage) => {
             let notices = usage.notices;
             let row = |key: &str, title: &str, detail: &str, on: bool, act: fn(bool) -> Act| {
-                Row::new(key, title, detail, facts.busy(key).unwrap_or(Control::Switch { on, act: act(!on) }))
+                Row::new(key, title, detail, facts.busy(key).unwrap_or(Control::Switch { on, act: act(!on), held: facts.group_busy("notice-") }))
             };
             let rows = vec![
                 row("notice-almost-out", "Almost Out", "When a limit drops below 10% left.", notices.under_ten_percent, |on| Act::SetNotice(Notice::AlmostOut, on)),
@@ -535,13 +546,13 @@ fn browser(facts: &Facts) -> Vec<Block> {
             "row-tidies",
             "Close agents’ tabs you haven’t looked at",
             "An hour after an agent last used one, so tabs don’t pile up.",
-            facts.busy("row-tidies").unwrap_or(Control::Switch { on: settings.tidies_agent_tabs, act: Act::SetTidies(!settings.tidies_agent_tabs) }),
+            facts.busy("row-tidies").unwrap_or(Control::Switch { on: settings.tidies_agent_tabs, act: Act::SetTidies(!settings.tidies_agent_tabs), held: false }),
         ),
         Row::new(
             "row-offers",
             "Offer to save sign-ins",
             "When you sign in to a site in the browser.",
-            facts.busy("row-offers").unwrap_or(Control::Switch { on: settings.offers_to_save, act: Act::SetOffersToSave(!settings.offers_to_save) }),
+            facts.busy("row-offers").unwrap_or(Control::Switch { on: settings.offers_to_save, act: Act::SetOffersToSave(!settings.offers_to_save), held: false }),
         ),
     ];
     let mut blocks = vec![Block::Group("Browser".into(), rows)];
@@ -551,7 +562,10 @@ fn browser(facts: &Facts) -> Vec<Block> {
             .iter()
             .map(|host| {
                 let key = format!("never-{host}");
-                Row::new(key.clone(), host.clone(), "Never offered to save a sign-in", facts.busy(&key).unwrap_or(Control::Buttons(vec![("Offer Again".into(), Act::OfferAgain(host.clone()))])))
+                let control = facts.busy(&key).unwrap_or_else(|| {
+                    if facts.group_busy("never-") { Control::HeldButton("Offer Again".into()) } else { Control::Buttons(vec![("Offer Again".into(), Act::OfferAgain(host.clone()))]) }
+                });
+                Row::new(key.clone(), host.clone(), "Never offered to save a sign-in", control)
             })
             .collect();
         blocks.push(Block::Group("Never Offered".into(), rows));

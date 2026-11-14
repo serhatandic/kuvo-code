@@ -2,7 +2,7 @@
 
 ## Done
 
-Notes: `notes/screens-settings.md` (with the Zed study). Scenarios: `kuvo/tests/settings.rs` (21,
+Notes: `notes/screens-settings.md` (with the Zed study). Scenarios: `kuvo/tests/settings.rs` (27,
 real clicks and keys against the stand-in, a sign-in followed on the test's clock), two more in
 `kuvo/tests/areas.rs` (the rings), a masked field in `kuvo_ui/tests/text_field.rs`, unit tests
 for the box reads (`kuvo_box`: the shared `Vectors/sign-in.json` ways and failures, usage
@@ -71,6 +71,36 @@ the shapes are proposals.
 | A device code, the engine's too | `userCode` on `POST api/integration/<id>/connect/oauth`'s answer or `GET kuvo/sign-in/status`, for Copilot, OpenCode, SuperGrok | `settings/sign_in.rs`, `waiting` | the page and its instructions, no code apart (the bridge says it for agents) |
 | The sandbox's words | `why` for every `reason`, and a button's words for `action`, in `GET kuvo/sandbox` | `settings/rows.rs`, `permissions` | "Sandbox is on/off", the box's `why` where it gives one, Check Again |
 | A window's level (#711, as before) | `windows[].level` | `rail.rs`, `settings/page.rs` `windows` | quiet grey meters and arcs |
+
+## Review
+
+One reviewer pass. Fixed, each with a test that fails on the code before where one can:
+- **MUST:** the page jumped to the top whenever a row changed (a busy row, an answer):
+  `ListState::reset` cleared the scroll. Only the items that differ are spliced now
+  (`the_page_keeps_its_place_when_a_row_changes`).
+- A search typed before the pages were read found nothing until typed again: the page found is
+  picked again as each reading comes in (`live::a_search_typed_before_the_pages_are_read_…`, run the
+  app's way, the box asked off the window's thread); the Settings sidebar is redrawn as Settings
+  changes (it wasn't, in the app).
+- Two quick changes in one group (the notices, the sites never offered) could undo each other, as
+  each is sent whole: the group's other controls are held until the box answers.
+- Closing a sheet mid-request: Accounts is read again however it closed; a sign-in still starting
+  is given up on the engine as soon as it has started (`closing_a_sign_in_under_way_…`).
+- The give-up said "the engine started over" for any error: only unanswered asks (404, 504, no
+  answer) count now; any other refusal shows the box's words at once
+  (`a_sign_in_the_engine_forgot_is_given_up_after_a_while`).
+- `kuvo/accounts/ended` answering 503 dropped "Sign-in ended": what was last read is kept
+  (`sign_ins_ended_stay_marked_while_the_box_cant_say`); the engine not running leaves the agents'
+  accounts on the page with a note (it failed the page).
+- The sheet and the confirm weren't dialogs: Escape closes both, and the sidebar is dimmed and
+  blocked under them (`escape_closes_the_sign_in_and_the_confirm`).
+- A `span` or `level` a newer box names otherwise no longer drops the window (read as none).
+- NITs fixed: a masked field is one word to the keyboard and hands input methods its dots only; a
+  ring whose window started over keeps its place, empty; the Usage test checks each window; one
+  subscription for the open sheet, not one kept per sheet ever opened.
+- NITs left: Permissions', Vault's and Privacy's icons are all the shield (the set has no better
+  yet); clearing the search doesn't go back to the section open before it; the composer's and the
+  Files panel's selections keep the grey wash (they sit on white, not the sidebar grey).
 
 ## Left
 

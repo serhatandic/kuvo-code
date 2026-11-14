@@ -56,6 +56,8 @@ pub struct AreaView {
     /// Settings' own view: its sidebar drawn here, its pages as the main view.
     settings: Option<gpui::Entity<SettingsView>>,
     _settings_picks: Option<gpui::Subscription>,
+    /// Settings' sidebar is drawn here: redrawn as Settings changes (a search, a reading, a sheet).
+    _settings_changes: Option<gpui::Subscription>,
 }
 
 impl EventEmitter<Picked> for AreaView {}
@@ -74,7 +76,8 @@ impl AreaView {
                 }
             })
         });
-        AreaView { area, client, live, bots: Reading::NotYet, queue: Reading::NotYet, machines: Reading::NotYet, this_box: "This Mac".into(), selected, now: None, reading: None, settings, _settings_picks: picks }
+        let changes = settings.as_ref().map(|settings| cx.observe(settings, |_, _, cx| cx.notify()));
+        AreaView { area, client, live, bots: Reading::NotYet, queue: Reading::NotYet, machines: Reading::NotYet, this_box: "This Mac".into(), selected, now: None, reading: None, settings, _settings_picks: picks, _settings_changes: changes }
     }
 
     /// Settings' view, in the Settings area.

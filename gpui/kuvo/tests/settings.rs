@@ -399,6 +399,11 @@ fn usage_lists_each_accounts_windows_as_the_rings_do(cx: &mut TestAppContext) {
     for row in ["usage-0", "usage-1", "usage-2", "usage-3", "usage-4", "usage-5"] {
         assert!(shown(cx, row), "{row}");
     }
+    // Each account's windows, by KuvoClient's names: Claude · Work has its session, week and Sonnet.
+    for window in ["usage-0-window-0", "usage-0-window-1", "usage-0-window-2"] {
+        assert!(shown(cx, window), "{window}");
+    }
+    assert!(!shown(cx, "usage-0-window-3"));
     let _ = view;
 }
 
@@ -422,4 +427,124 @@ fn a_change_the_box_turns_down_is_said_over_the_page(cx: &mut TestAppContext) {
     assert_eq!(stand_in.seen_at("GET", "kuvo/config").len(), 2);
     click(cx, "settings-problem-close");
     assert!(!shown(cx, "settings-problem"));
+}
+
+#[gpui::test]
+fn the_page_keeps_its_place_when_a_row_changes(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    cx.simulate_resize(size(px(1280.), px(700.)));
+    cx.run_until_parked();
+    section(&workspace, cx, "Accounts");
+    // Scrolled down to the providers.
+    let page = bounds(cx, "settings-page").unwrap();
+    cx.simulate_event(gpui::ScrollEvent { position: page.center(), delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-700.))), ..Default::default() });
+    cx.run_until_parked();
+    let before = bounds(cx, "account-openrouter").expect("scrolled to it");
+    click(cx, "account-github-copilot-disconnect");
+    click(cx, "confirm-go");
+    let after = bounds(cx, "account-openrouter").expect("still on screen");
+    assert!(after.origin.y < px(400.), "not back at the top: {after:?} (was {before:?})");
+}
+
+#[gpui::test]
+fn closing_a_sign_in_under_way_gives_it_up_and_reads_accounts_again(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    section(&workspace, cx, "Accounts");
+    click(cx, "account-gitlab-sign-in-again");
+    let reads = stand_in.seen_at("GET", "kuvo/sign-in/accounts").len();
+    click(cx, "sign-in-x");
+    assert_eq!(stand_in.seen_at("DELETE", "api/integration/gitlab/connect/oauth/att_1").len(), 1);
+    assert!(stand_in.seen_at("GET", "kuvo/sign-in/accounts").len() > reads, "read again however it closed");
+    let asked = stand_in.seen_at("GET", "kuvo/sign-in/status").len();
+    tick(cx);
+    assert_eq!(stand_in.seen_at("GET", "kuvo/sign-in/status").len(), asked, "no more asking");
+}
+
+#[gpui::test]
+fn escape_closes_the_sign_in_and_the_confirm(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    section(&workspace, cx, "Accounts");
+    click(cx, "account-anthropic-connect");
+    assert!(shown(cx, "sign-in"));
+    // The sidebar waits under the dimming (drawn as the sheet opens, by the area's own view): a
+    // section clicked there isn't opened.
+    assert!(shown(cx, "settings-sidebar-dim"));
+    click(cx, "setting-General");
+    assert!(shown(cx, "sign-in") && !shown(cx, "row-theme"));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!shown(cx, "sign-in"));
+    click(cx, "account-github-copilot-disconnect");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!shown(cx, "settings-confirm"));
+}
+
+#[gpui::test]
+fn a_sign_in_the_engine_forgot_is_given_up_after_a_while(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let view = section(&workspace, cx, "Accounts");
+    click(cx, "account-gitlab-sign-in-again");
+    stand_in.forget_sign_ins();
+    for _ in 0..9 {
+        tick(cx);
+    }
+    assert!(matches!(step(&view, cx), Some(Step::Waiting { .. })), "a few not heard is waited through");
+    tick(cx);
+    assert_eq!(step(&view, cx), Some(Step::Failed("The engine started over while you were signing in. Try again.".into())));
+}
+
+#[gpui::test]
+fn sign_ins_ended_stay_marked_while_the_box_cant_say(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    section(&workspace, cx, "Accounts");
+    assert!(shown(cx, "account-gitlab-sign-in-again"));
+    stand_in.ended_readable(false);
+    section(&workspace, cx, "Usage");
+    section(&workspace, cx, "Accounts");
+    assert!(shown(cx, "account-gitlab-sign-in-again"), "kept from the last reading");
+}
+
+/// The app's way: the box asked off the window's thread, its answers coming in later.
+mod live {
+    use super::*;
+    use gpui::{AppContext as _, Context, IntoElement, ParentElement, Render, Styled, Window, div};
+    use kuvo::settings::Pick;
+
+    struct Host {
+        settings: Entity<SettingsView>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let sidebar = self.settings.update(cx, |settings, cx| settings.sidebar(cx));
+            div().size_full().flex().child(div().w(px(272.)).h_full().child(sidebar)).child(div().flex_1().h_full().child(self.settings.clone()))
+        }
+    }
+
+    #[gpui::test]
+    fn a_search_typed_before_the_pages_are_read_finds_them_as_they_come(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            Theme::init(Appearance::Light, cx);
+            kuvo::bind_keys(cx);
+        });
+        let client = BoxClient::new(StandIn::at(Replies::Never, NOW));
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let settings = cx.new(|cx| SettingsView::new(client, true, cx));
+            cx.subscribe(&settings, |host: &mut Host, _, pick: &Pick, cx| host.settings.update(cx, |settings, cx| settings.set_section(&pick.section, cx))).detach();
+            Host { settings }
+        });
+        cx.simulate_resize(size(px(1280.), px(1400.)));
+        cx.run_until_parked();
+        click(cx, "settings-search");
+        cx.simulate_input("copilot");
+        cx.run_until_parked();
+        assert!(shown(cx, "setting-Accounts"));
+        assert!(shown(cx, "account-github-copilot"), "the page with it, once Accounts is read");
+        let _ = host;
+    }
 }

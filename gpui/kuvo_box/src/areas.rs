@@ -151,11 +151,17 @@ pub struct LimitWindow {
     #[serde(default)]
     pub name: Option<String>,
     // BOX-NEEDED: a window's level, `windows[].level: calm|near|over` in `GET kuvo/agents/api/kuvo/limits`' rows, so every client colours alike (#711).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub level: Option<Level>,
     // BOX-NEEDED: which ring a window is, `windows[].span: short|long` in `GET kuvo/agents/api/kuvo/limits`' rows (the short window outside, the long one inside), so no client works out which is which from its minutes (#711).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub span: Option<Span>,
+}
+
+/// A value a newer box may name in a way this doesn't know: none, not the whole window.
+fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(deserializer: D) -> std::result::Result<Option<T>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
 /// An account across your computers, as the limits' `rows` list it.
@@ -207,12 +213,18 @@ impl Account {
         self.windows.iter().filter(move |window| window.resets_at.is_none_or(|at| at > now))
     }
 
-    /// The rings to draw, outside first: the box's short and long windows still current where it
-    /// says which is which (one where it has only one); else the window with the least left, alone.
-    pub fn rings(&self, now: f64) -> Vec<&LimitWindow> {
-        let spanned = |span: Span| self.windows_at(now).find(|window| window.span == Some(span));
-        let rings: Vec<&LimitWindow> = [spanned(Span::Short), spanned(Span::Long)].into_iter().flatten().collect();
-        if rings.is_empty() { self.tightest(now).into_iter().collect() } else { rings }
+    /// The rings to draw, outside first, each as its share and level: the box's short and long
+    /// windows where it says which is which (one where it has only one; a window that started over
+    /// since it was read keeps its place, empty: what's used now isn't known); else the window with
+    /// the least left, alone.
+    pub fn rings(&self, now: f64) -> Vec<(f32, Option<Level>)> {
+        let current = |window: &LimitWindow| window.resets_at.is_none_or(|at| at > now);
+        let spanned: Vec<(f32, Option<Level>)> = [Span::Short, Span::Long]
+            .into_iter()
+            .filter_map(|span| self.windows.iter().find(|window| window.span == Some(span)))
+            .map(|window| if current(window) { (window.used, window.level) } else { (0., None) })
+            .collect();
+        if spanned.is_empty() { self.tightest(now).map(|window| (window.used, window.level)).into_iter().collect() } else { spanned }
     }
 
     /// The window with the least left, as the ring shows it (KuvoClient's `tightest(at:)`).
@@ -418,7 +430,7 @@ mod tests {
         let account = row(r#"{"service":"codex","windows":[{"id":"a","used":0.9,"resetsAt":100,"read":1},{"id":"b","used":0.4,"resetsAt":500,"read":1},{"id":"c","used":0.2,"read":1}]}"#);
         assert_eq!(account.tightest(50.).map(|window| window.id.as_str()), Some("a"));
         assert_eq!(account.tightest(200.).map(|window| window.id.as_str()), Some("b"));
-        assert_eq!(account.rings(50.).iter().map(|window| window.id.as_str()).collect::<Vec<_>>(), ["a"], "a box that doesn't say spans: one ring");
+        assert_eq!(account.rings(50.), vec![(0.9, None)], "a box that doesn't say spans: one ring, the fullest");
     }
 
     /// Two rings where the box says which window is short and which long; one where it has one.
@@ -426,10 +438,13 @@ mod tests {
     fn the_rings_are_the_boxs_short_and_long_windows() {
         let row = |json: &str| serde_json::from_str::<Account>(json).unwrap();
         let both = row(r#"{"service":"claude","windows":[{"id":"week","used":0.2,"span":"long"},{"id":"model","used":0.9},{"id":"five","used":0.5,"span":"short"}]}"#);
-        assert_eq!(both.rings(0.).iter().map(|window| window.id.as_str()).collect::<Vec<_>>(), ["five", "week"]);
+        assert_eq!(both.rings(0.), vec![(0.5, None), (0.2, None)], "the short window outside, the long inside");
         let one = row(r#"{"service":"grok","windows":[{"id":"week","used":0.2,"span":"long"}]}"#);
         assert_eq!(one.rings(0.).len(), 1);
         let started_over = row(r#"{"service":"codex","windows":[{"id":"five","used":0.5,"span":"short","resetsAt":10},{"id":"week","used":0.2,"span":"long"}]}"#);
-        assert_eq!(started_over.rings(20.).iter().map(|window| window.id.as_str()).collect::<Vec<_>>(), ["week"]);
+        assert_eq!(started_over.rings(20.), vec![(0., None), (0.2, None)], "one that started over keeps its place, empty");
+        // A span or level a newer box names otherwise leaves the window, unringed.
+        let newer = row(r#"{"service":"claude","windows":[{"id":"x","used":0.3,"span":"medium","level":"dire"}]}"#);
+        assert_eq!((newer.windows.len(), newer.windows[0].span, newer.windows[0].level), (1, None, None));
     }
 }

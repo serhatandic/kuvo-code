@@ -39,6 +39,7 @@ impl SettingsView {
         let nothing = built.is_empty() && elsewhere.is_empty();
         div()
             .id("settings-sidebar")
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -80,6 +81,8 @@ impl SettingsView {
                     .when(!elsewhere.is_empty(), |d| d.child(SectionHeader::new("settings-elsewhere", "In Kuvo Code on Your Mac")).children(elsewhere))
                     .when(nothing, |d| d.child(div().px(space::S2).pt(space::S2).text_ui(TypeSize::Small).text_color(c.text_muted).child("No settings match."))),
             )
+            // A sign-in or a confirm open: the sidebar waits under the same dimming as the page.
+            .when(self.sign_in.is_some() || self.confirm.is_some(), |d| d.child(div().id("settings-sidebar-dim").debug_selector(|| "settings-sidebar-dim".into()).absolute().inset_0().bg(dim(cx)).occlude()))
             .into_any_element()
     }
 
@@ -160,9 +163,11 @@ impl SettingsView {
             Control::None => div().into_any_element(),
             Control::Text(words) => div().text_ui(TypeSize::Body).text_color(c.text_muted).child(words).into_any_element(),
             Control::Busy(words) => div().flex().items_center().gap(space::S2).text_ui(TypeSize::Small).text_color(c.text_muted).child(spinner(SharedString::from(format!("{key}-busy")), IconSize::Nav, c.text_muted)).child(words).into_any_element(),
-            Control::Switch { on, act } => {
+            Control::HeldButton(label) => Button::new(SharedString::from(format!("{key}-held")), label).size(ButtonSize::Small).disabled(true).into_any_element(),
+            Control::Switch { on, act, held } => {
                 let this = cx.entity().downgrade();
                 Switch::new(SharedString::from(format!("{key}-switch")), on)
+                    .disabled(held)
                     .on_change(move |_, _, cx| {
                         this.update(cx, |this, cx| this.act(act.clone(), cx)).ok();
                     })
@@ -220,7 +225,7 @@ impl SettingsView {
                 .align_right()
                 .into_any_element()
             }
-            Control::Windows(account) => windows(&account, self.now.unwrap_or_else(time::now_ms), cx),
+            Control::Windows(account) => windows(key, &account, self.now.unwrap_or_else(time::now_ms), cx),
         }
     }
 }
@@ -244,14 +249,15 @@ fn level_color(level: Option<Level>, cx: &App) -> Hsla {
 
 /// An account's windows, as the rail's hover card shows them: each one's name, share and meter,
 /// and when it starts over.
-fn windows(account: &Account, now: f64, cx: &App) -> AnyElement {
+fn windows(key: &str, account: &Account, now: f64, cx: &App) -> AnyElement {
     let c = cx.theme().colors.clone();
     div()
         .w(px(260.))
         .flex()
         .flex_col()
         .gap(space::S3)
-        .children(account.windows.iter().map(|window| {
+        .children(account.windows.iter().enumerate().map(|(ix, window)| {
+            let selector = format!("{key}-window-{ix}");
             // A window whose time has passed has started over: not read since (PROTOCOL.md).
             let over = window.resets_at.is_some_and(|at| at <= now);
             // BOX-NEEDED: each window's level, `windows[].level` in `GET kuvo/agents/api/kuvo/limits`' rows (#711): the meter is quiet until the box says it.
@@ -260,6 +266,7 @@ fn windows(account: &Account, now: f64, cx: &App) -> AnyElement {
             let said = if over { "Not read since it started over".to_owned() } else { format!("{}% used", (window.used * 100.).round() as u32) };
             let resets = window.resets_at.filter(|_| !over).map(|at| format!("Starts over in {}", time::until(at, now)));
             div()
+                .debug_selector(move || selector)
                 .flex()
                 .flex_col()
                 .gap(space::S1)
@@ -280,8 +287,11 @@ fn windows(account: &Account, now: f64, cx: &App) -> AnyElement {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.theme().colors.clone();
+        if std::mem::take(&mut self.focus_confirm) && self.confirm.is_some() {
+            window.focus(&self.confirm_focus, cx);
+        }
         if self.dark != cx.theme().appearance.is_dark() {
             self.rebuild(cx);
         }
@@ -322,6 +332,13 @@ impl Render for SettingsView {
             sheet(
                 div()
                     .debug_selector(|| "settings-confirm".into())
+                    .track_focus(&self.confirm_focus)
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape" {
+                            this.confirm = None;
+                            cx.notify();
+                        }
+                    }))
                     .w(px(400.))
                     .flex()
                     .flex_col()
@@ -364,9 +381,14 @@ impl Render for SettingsView {
     }
 }
 
+/// What's under a sheet is dimmed by.
+fn dim(cx: &App) -> Hsla {
+    if cx.theme().appearance.is_dark() { gpui::hsla(0., 0., 0., 0.45) } else { gpui::hsla(0., 0., 0., 0.12) }
+}
+
 /// A sheet over the page, on a dimmed backdrop that takes the clicks.
 fn sheet(content: AnyElement, cx: &App) -> AnyElement {
-    let dim = if cx.theme().appearance.is_dark() { gpui::hsla(0., 0., 0., 0.45) } else { gpui::hsla(0., 0., 0., 0.12) };
+    let dim = dim(cx);
     div()
         .id("settings-sheet")
         .absolute()

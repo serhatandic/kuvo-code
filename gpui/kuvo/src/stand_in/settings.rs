@@ -30,6 +30,8 @@ pub struct Settings {
     next: u32,
     /// The bridge isn't running (`503`).
     pub agents_down: bool,
+    /// It can't say just now which sign-ins ended (`503`).
+    pub ended_unreadable: bool,
     /// Sign-ins finish by themselves after a few asks (the app's `--stand-in`).
     pub finishes: bool,
     config: Value,
@@ -118,6 +120,7 @@ impl Default for Settings {
             attempts: BTreeMap::new(),
             next: 1,
             agents_down: false,
+            ended_unreadable: false,
             finishes: false,
             config: json!({ "$schema": "https://opencode.ai/config.json", "model": "anthropic/claude-sonnet-5-5", "agents": { "title": { "model": "google/gemini-3-pro" } } }),
             approval: json!({ "fullAccess": false, "default": "auto", "auto": { "engine": {}, "agents": {} }, "otherComputers": false }),
@@ -144,6 +147,11 @@ impl Settings {
         for id in attempts {
             self.end(&id, ending, message);
         }
+    }
+
+    /// Forgets every sign-in under way, as an engine that started over does (its status: `404`).
+    pub fn forget_sign_ins(&mut self) {
+        self.attempts.clear();
     }
 
     /// From now on, a sign-in's status carries this device code, as the bridge says it once its
@@ -233,6 +241,7 @@ impl Settings {
                 }
                 (200, self.attempts[&attempt].status.clone())
             }
+            ("GET", ["kuvo", "accounts", "ended"]) if self.ended_unreadable => (503, json!({ "message": "The engine can’t say which sign-in each plan uses just now." })),
             ("GET", ["kuvo", "accounts", "ended"]) => (200, json!({ "providers": self.ended })),
             ("POST", ["kuvo", "accounts", provider, "forget"]) => {
                 let provider = path_part(provider);

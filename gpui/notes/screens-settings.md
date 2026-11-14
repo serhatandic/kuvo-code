@@ -35,12 +35,16 @@ Read (GPL-3.0, behaviour only): `crates/settings_ui/src/settings_ui.rs` (`Settin
 
 - The page is a `gpui::list` over a flat `Vec<Item>` (title, group labels, rows, notes), worked out
   in `rebuild` only when what it's drawn from changes (a reading, the search, a change on its way,
-  the appearance) and compared, so an unchanged page keeps its measured rows; `ListState::reset`
-  only when the items differ. Accounts' 20-odd rows, or a long list of providers, cost only those
-  on screen.
+  the appearance) and compared with the last: only the run of items that differ is `splice`d, so
+  the rest keep their measured heights and the page keeps its scroll (`ListState::reset` would take
+  it to the top on every busy row). Accounts' 20-odd rows, or a long list of providers, cost only
+  those on screen.
 - Search filters sections and rows by name and line, case-insensitively (the list is short, so
   no background task); a section's name keeps its whole page; a page with nothing found shows the
-  first that has something. The first search reads every page, so it can find on all of them.
+  first that has something, again as each page's reading comes in. The first search reads every
+  page, so it can find on all of them.
+- A sheet (a sign-in, a confirm) dims the page and the Settings sidebar, takes the keyboard, and
+  Escape closes it.
 - Each page reads the box only as it opens (and again each time), each change goes to the box's
   route with the row busy meanwhile, and the box's answer is what's drawn after; a refusal shows
   over the page in the box's words. The sign-in sheet is made once per sign-in and keeps its fields.
