@@ -120,6 +120,12 @@ fn accounts(now: f64, full: bool) -> Vec<Value> {
         }
         if full {
             window["level"] = json!(level(used));
+            // #711's span: the 5-hour window outside, the week inside; others (a model's, credits) none.
+            match minutes {
+                Some(300) if model.is_none() => window["span"] = json!("short"),
+                Some(10080) if model.is_none() => window["span"] = json!("long"),
+                _ => {}
+            }
         }
         window
     };

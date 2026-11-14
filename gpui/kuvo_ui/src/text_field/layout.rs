@@ -38,6 +38,16 @@ pub(super) struct Layout {
     /// Where the text's top-left is drawn, in window coordinates (scroll included).
     pub origin: Point<Pixels>,
     pub content_height: Pixels,
+    /// Drawn as dots (a key): the lines are the dots', and offsets are mapped to and from the text.
+    pub masked: bool,
+}
+
+/// What a masked field shows for each character.
+const DOT: char = '•';
+
+/// What a masked field draws for `text`: a dot a character.
+pub(super) fn dots(text: &str) -> String {
+    std::iter::repeat_n(DOT, text.chars().count()).collect()
 }
 
 impl Layout {
@@ -51,13 +61,24 @@ impl Layout {
             self.tops = vec![px(0.)];
             self.content_height = self.line_height;
         } else {
-            let (lines, starts, tops, height) = shape(text, marked, gpui::black(), self.wrap, window);
+            let shown = if self.masked { dots(text) } else { text.to_owned() };
+            let (lines, starts, tops, height) = shape(&shown, if self.masked { None } else { marked }, gpui::black(), self.wrap, window);
             self.lines = lines;
             self.starts = starts;
             self.tops = tops;
             self.content_height = height;
         }
         self.text = text.to_string();
+    }
+
+    /// Where a text offset is in what's drawn (the same but for a masked field).
+    fn shown(&self, offset: usize) -> usize {
+        if self.masked { self.text[..offset.min(self.text.len())].chars().count() * DOT.len_utf8() } else { offset }
+    }
+
+    /// The text offset of an offset in what's drawn.
+    fn unshown(&self, offset: usize) -> usize {
+        if self.masked { self.text.char_indices().nth(offset / DOT.len_utf8()).map_or(self.text.len(), |(ix, _)| ix) } else { offset }
     }
 
     fn line_of(&self, offset: usize) -> usize {
@@ -81,6 +102,7 @@ impl Layout {
         if self.lines.is_empty() {
             return Point::default();
         }
+        let offset = self.shown(offset);
         let ix = self.line_of(offset);
         let local = offset.saturating_sub(self.starts[ix]).min(self.lines[ix].len());
         let at = self.lines[ix].position_for_index(local, self.line_height).unwrap_or_default();
@@ -98,6 +120,11 @@ impl Layout {
         if at.y >= self.content_height {
             return self.text.len();
         }
+        let shown = self.offset_shown(at);
+        self.unshown(shown)
+    }
+
+    fn offset_shown(&self, at: Point<Pixels>) -> usize {
         let ix = self.tops.partition_point(|top| *top <= at.y).saturating_sub(1);
         let line = &self.lines[ix];
         let rows = line.wrap_boundaries.len() + 1;
@@ -114,6 +141,7 @@ impl Layout {
         if range.is_empty() {
             return rects;
         }
+        let range = &(self.shown(range.start)..self.shown(range.end));
         let newline_width = px(6.);
         for (ix, line) in self.lines.iter().enumerate() {
             let start = self.starts[ix];
@@ -269,11 +297,11 @@ impl Element for TextElement {
             let (text, color) = if showing_placeholder {
                 (field.placeholder.to_string(), colors.text_faint)
             } else {
-                (field.content.clone(), if field.disabled { colors.text_faint } else { colors.text })
+                (if field.masked { dots(&field.content) } else { field.content.clone() }, if field.disabled { colors.text_faint } else { colors.text })
             };
             let wrap = multi.then_some(bounds.size.width);
             let (lines, starts, tops, content_height) =
-                shape(&text, field.marked.as_ref(), color, wrap, window);
+                shape(&text, if field.masked { None } else { field.marked.as_ref() }, color, wrap, window);
             let line_height = FIELD_TYPE.line_height();
 
             // Keep the caret in view: vertically for many lines, sideways for one.
@@ -288,6 +316,7 @@ impl Element for TextElement {
                 wrap,
                 origin: bounds.origin,
                 content_height: if showing_placeholder { line_height } else { content_height },
+                masked: field.masked,
             };
             let caret_at = if showing_placeholder {
                 point(px(0.), px(0.))

@@ -188,6 +188,8 @@ pub struct TextField {
     disabled: bool,
     /// What's wrong with the text, shown under the field with a red edge.
     error: Option<SharedString>,
+    /// Drawn as dots and never copied (a key).
+    masked: bool,
     layout: Option<Layout>,
     /// Where Up and Down aim, so moving through short lines keeps the column.
     goal_x: Option<Pixels>,
@@ -221,6 +223,7 @@ impl TextField {
             bare: false,
             disabled: false,
             error: None,
+            masked: false,
             layout: None,
             goal_x: None,
             scroll: px(0.),
@@ -251,6 +254,12 @@ impl TextField {
     /// Whether Return submits (the default) or adds a line.
     pub fn submits_on_enter(mut self, submits: bool) -> Self {
         self.submits = submits;
+        self
+    }
+
+    /// Drawn as a dot a character, and never copied or cut: for a key or a password.
+    pub fn masked(mut self) -> Self {
+        self.masked = true;
         self
     }
 
@@ -370,6 +379,10 @@ impl TextField {
 
     /// The start of the word before an offset, skipping spaces and punctuation, as on a Mac.
     fn previous_word(&self, offset: usize) -> usize {
+        // A key is one word, as in a password field: its shape isn't given away.
+        if self.masked {
+            return 0;
+        }
         self.content
             .split_word_bound_indices()
             .rfind(|(ix, word)| *ix < offset && word.chars().any(char::is_alphanumeric))
@@ -378,6 +391,9 @@ impl TextField {
     }
 
     fn next_word(&self, offset: usize) -> usize {
+        if self.masked {
+            return self.content.len();
+        }
         self.content
             .split_word_bound_indices()
             .find(|(ix, word)| ix + word.len() > offset && word.chars().any(char::is_alphanumeric))
@@ -386,6 +402,9 @@ impl TextField {
     }
 
     fn word_around(&self, offset: usize) -> Range<usize> {
+        if self.masked {
+            return 0..self.content.len();
+        }
         self.content
             .split_word_bound_indices()
             .find(|(ix, word)| *ix <= offset && offset < ix + word.len())
@@ -638,13 +657,13 @@ impl TextField {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() {
+        if !self.selection.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(self.content[self.selection.clone()].to_string()));
         }
     }
 
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() {
+        if !self.selection.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(self.content[self.selection.clone()].to_string()));
             self.edit(self.selection.clone(), "", EditKind::Other, cx);
         }
@@ -797,6 +816,10 @@ impl EntityInputHandler for TextField {
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
+        // A key isn't handed to input methods or the system's text services, only its dots.
+        if self.masked {
+            return Some(layout::dots(&self.content[range]));
+        }
         Some(self.content[range].to_string())
     }
 

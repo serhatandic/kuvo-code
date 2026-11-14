@@ -259,3 +259,22 @@ fn text_set_from_code_follows_the_same_rules_as_typing(cx: &mut TestAppContext) 
     one_line.update(cx, |f, cx| f.set_text("first\nsecond\r\nthird", cx));
     assert_eq!(text(&one_line, cx), "first second  third");
 }
+
+/// A key's field: typed and edited as any, drawn as dots, and never copied or cut out of it.
+#[gpui::test]
+fn a_masked_field_takes_a_key_but_never_gives_it_back(cx: &mut TestAppContext) {
+    let (field, drawn, cx) = field(cx, |f| f.masked());
+    cx.simulate_input("sk-stand-in-0123");
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(text(&field, cx), "sk-stand-in-012");
+    cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+    cx.simulate_keystrokes("cmd-a cmd-c");
+    cx.simulate_keystrokes("cmd-x");
+    assert_eq!(cx.read_from_clipboard().and_then(|c| c.text()).as_deref(), Some("before"), "nothing copied or cut");
+    assert_eq!(text(&field, cx), "sk-stand-in-012", "cut leaves the key");
+    // Clicking at the end of the dots puts the caret after the last character, not part way.
+    let bounds = drawn.get().expect("drawn");
+    cx.simulate_click(gpui::point(bounds.right() - px(4.), bounds.center().y), gpui::Modifiers::default());
+    cx.simulate_input("3");
+    assert_eq!(text(&field, cx), "sk-stand-in-0123");
+}

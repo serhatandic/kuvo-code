@@ -58,7 +58,9 @@ impl RenderOnce for Switch {
         let (track, thumb) = if self.on { (c.accent, c.text_on_accent) } else { (c.border_strong, c.text_on_accent) };
         let ring = c.focus_ring;
         let on = self.on;
+        let selector = self.id.to_string();
         let mut root = div()
+            .debug_selector(move || selector)
             .id(self.id)
             .flex()
             .items_center()
@@ -294,9 +296,9 @@ pub fn count_badge(count: usize, cx: &App) -> impl IntoElement {
         .flex_none()
         .items_center()
         .justify_center()
-        .min_w(px(18.))
-        .h(px(18.))
-        .px(px(5.))
+        .min_w(px(16.))
+        .h(px(16.))
+        .px(px(4.))
         .rounded(radius::PILL)
         .bg(c.accent)
         .text_ui(TypeSize::Caption)

@@ -28,9 +28,10 @@ use crate::workspace::Workspace;
 pub const WIDTH: Pixels = px(60.);
 /// Its buttons' size.
 const BUTTON: Pixels = px(40.);
-/// A ring's size and stroke.
+/// A ring's size and stroke; an account's second ring sits just inside the first.
 const RING: Pixels = px(34.);
-const STROKE: Pixels = px(3.);
+const STROKE: Pixels = px(2.5);
+const INNER_GAP: Pixels = px(1.5);
 /// How many rings show before "+N", where the window is tall enough.
 const MOST_RINGS: usize = 4;
 /// The room a ring takes in the rail, its gap included.
@@ -89,7 +90,7 @@ fn area_button(area: Area, selected: bool, waiting: usize, cx: &mut Context<Work
 
 fn button(id: impl Into<SharedString>, icon: IconName, selected: bool, waiting: usize, cx: &App) -> gpui::Stateful<gpui::Div> {
     let c = &cx.theme().colors;
-    let (hover, selected_bg) = (c.hover, c.selected);
+    let (hover, selected_bg) = (c.hover, c.selected_card);
     let id: SharedString = id.into();
     let selector = id.to_string();
     div()
@@ -103,9 +104,9 @@ fn button(id: impl Into<SharedString>, icon: IconName, selected: bool, waiting: 
         .size(BUTTON)
         .rounded(radius::NAV)
         .cursor_pointer()
-        .when(selected, |t| t.bg(selected_bg))
+        .map(|t| kuvo_ui::row::selected_card(t, selected, cx))
         .hover(move |s| s.bg(if selected { selected_bg } else { hover }))
-        .child(Icon::new(icon).size(IconSize::Card).color(if selected { c.text } else { c.text_muted }))
+        .child(Icon::new(icon).size(IconSize::Card).color(if selected { c.text } else { c.icon }))
         .when(waiting > 0, |t| t.child(div().absolute().top(px(-3.)).right(px(-5.)).child(count_badge(waiting, cx))))
 }
 
@@ -202,7 +203,7 @@ impl Render for Rings {
                     .size(RING)
                     .rounded(radius::PILL)
                     .border_1()
-                    .border_color(c.border_strong)
+                    .border_color(c.border)
                     .cursor_pointer()
                     .hover(move |s| s.bg(hover))
                     .text_ui(TypeSize::Caption)
@@ -228,10 +229,10 @@ impl Render for Rings {
                     .size(RING)
                     .rounded(radius::PILL)
                     .border_1()
-                    .border_color(c.border_strong)
+                    .border_color(c.border)
                     .cursor_pointer()
                     .hover(move |s| s.bg(hover))
-                    .child(Icon::new(IconName::Plus).color(c.text_muted))
+                    .child(Icon::new(IconName::Plus).color(c.icon))
                     .tooltip(|_, cx| Tooltip::new("Sign in to an account to see its limits here").build(cx))
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowAccounts), cx))
                     .into_any_element(),
@@ -255,14 +256,28 @@ fn level_color(level: Option<Level>, cx: &App) -> Hsla {
 fn ring_button(ix: usize, account: &Account, now: f64, cx: &mut Context<Rings>) -> AnyElement {
     let c = cx.theme().colors.clone();
     let hover = c.hover;
-    // The share of its fullest window still current (KuvoClient's `tightest(at:)`, a view).
-    let tightest = account.tightest(now);
-    let used = tightest.map_or(0., |window| window.used);
-    // BOX-NEEDED: how close to its limit, `windows[].level: calm|near|over` in `GET kuvo/agents/api/kuvo/limits`' rows (#711): until the box says it, the arc is drawn quiet, never coloured by a threshold here.
-    let color = level_color(tightest.and_then(|window| window.level), cx);
+    // BOX-NEEDED: which window is each ring, `windows[].span: short|long` in `GET kuvo/agents/api/kuvo/limits`' rows (#711): the short window outside and the long one inside where the box says them; until then one ring, the share of its fullest window still current (KuvoClient's `tightest(at:)`, a view).
+    let rings = account.rings(now);
     let card = account.clone();
+    // Each ring by its own window: its share, and its colour by the box's level.
+    // BOX-NEEDED: how close to its limit, `windows[].level: calm|near|over` in `GET kuvo/agents/api/kuvo/limits`' rows (#711): until the box says it, an arc is drawn quiet, never coloured by a threshold here.
+    let arcs_drawn: Vec<AnyElement> = if rings.is_empty() {
+        vec![arcs(RING, STROKE, 0., c.text_muted, c.border).into_any_element()]
+    } else {
+        rings
+            .iter()
+            .enumerate()
+            .map(|(ix, (used, level))| {
+                let size = RING - (STROKE + INNER_GAP) * 2. * ix as f32;
+                let inset = (STROKE + INNER_GAP) * ix as f32;
+                let selector = format!("ring-{}-arc-{ix}", account_key(account));
+                div().debug_selector(move || selector).absolute().top(inset).left(inset).size(size).child(arcs(size, STROKE, *used, level_color(*level, cx), c.border)).into_any_element()
+            })
+            .collect()
+    };
+    let mark_size = if rings.len() > 1 { px(12.) } else { px(15.) };
     let mark: AnyElement = match kuvo_ui::icon::mark_path(&account.service) {
-        Some(path) => svg().path(path).size(px(15.)).flex_none().text_color(c.text_muted).into_any_element(),
+        Some(path) => svg().path(path).size(mark_size).flex_none().text_color(kuvo_ui::icon::mark_color(&account.service).unwrap_or(c.text)).into_any_element(),
         // A service a newer box names, with no mark here: its first letter.
         None => div().text_ui(TypeSize::Caption).medium().text_color(c.text_muted).child(account.service.chars().next().map(|first| first.to_uppercase().to_string()).unwrap_or_default()).into_any_element(),
     };
@@ -287,7 +302,7 @@ fn ring_button(ix: usize, account: &Account, now: f64, cx: &mut Context<Rings>) 
                 .items_center()
                 .justify_center()
                 .size(RING)
-                .child(arcs(RING, STROKE, used, color, c.border_strong))
+                .children(arcs_drawn)
                 .child(mark),
         )
         .hoverable_tooltip(move |_, cx| {
@@ -296,6 +311,11 @@ fn ring_button(ix: usize, account: &Account, now: f64, cx: &mut Context<Rings>) 
         })
         .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowUsage), cx))
         .into_any_element()
+}
+
+/// How a ring's arcs are named in tests: the account's service and label.
+fn account_key(account: &Account) -> String {
+    format!("{}{}", account.service, account.label.as_deref().map(|label| format!("-{label}")).unwrap_or_default())
 }
 
 /// Paints a ring: a faint track, and an arc from the top, clockwise, for `used` (0 to 1).

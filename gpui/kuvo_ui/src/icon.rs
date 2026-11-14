@@ -123,9 +123,31 @@ const MARKS: &[(&str, &str, &[u8])] = &[
     ("zai", "marks/zai.svg", include_bytes!("../../assets/marks/zai.svg")),
 ];
 
+/// The colour a service's mark is drawn in, where its maker's mark has one (Claude's orange);
+/// `None` for a mark that's black or white, drawn in the text's colour. The user asked for marks
+/// in their makers' colours (a brand question: `notes/phase-5-handover.md`).
+pub fn mark_color(service: &str) -> Option<Hsla> {
+    match service {
+        "claude" => Some(gpui::rgb(0xD97757).into()),
+        _ => None,
+    }
+}
+
 /// The asset path of `service`'s mark, if Kuvo has one (a service a newer box names may not).
 pub fn mark_path(service: &str) -> Option<&'static str> {
     MARKS.iter().find(|(id, ..)| *id == service).map(|(_, path, _)| *path)
+}
+
+/// The width of every outline icon's stroke, in its 16-unit box: 1.25 px at the rail's 20 px,
+/// 1 px at a row's 16 px. The files are drawn at 1.3; this is applied as they load, in one place.
+pub const STROKE: &str = "1.0";
+
+/// An icon's file with its stroke at [`STROKE`].
+fn thinned(bytes: &'static [u8]) -> Cow<'static, [u8]> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) if text.contains("stroke-width=\"1.3\"") => Cow::Owned(text.replace("stroke-width=\"1.3\"", &format!("stroke-width=\"{STROKE}\"")).into_bytes()),
+        _ => Cow::Borrowed(bytes),
+    }
 }
 
 /// The assets Kuvo's blocks need: hand this to `Application::with_assets`.
@@ -139,7 +161,7 @@ impl AssetSource for Assets {
         Ok(IconName::ALL
             .iter()
             .find(|icon| icon.path() == path)
-            .map(|icon| Cow::Borrowed(icon.bytes())))
+            .map(|icon| thinned(icon.bytes())))
     }
 
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
@@ -153,7 +175,7 @@ impl AssetSource for Assets {
     }
 }
 
-/// An icon, tinted with the colour it's given (the muted text colour unless told otherwise).
+/// An icon, tinted with the colour it's given (the theme's `icon` grey unless told otherwise).
 #[derive(IntoElement)]
 pub struct Icon {
     name: IconName,
@@ -180,7 +202,7 @@ impl Icon {
 impl RenderOnce for Icon {
     fn render(self, _window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         use crate::theme::ActiveTheme;
-        let color = self.color.unwrap_or(cx.theme().colors.text_muted);
+        let color = self.color.unwrap_or(cx.theme().colors.icon);
         svg()
             .path(self.name.path())
             .size(self.size.pixels())
@@ -202,6 +224,20 @@ mod tests {
             assert!(text.starts_with("<svg") && text.contains("viewBox=\"0 0 16 16\""));
         }
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
+    }
+
+    /// Every outline icon loads with the thin stroke, whatever its file says.
+    #[test]
+    fn every_outline_icon_loads_thin() {
+        for icon in IconName::ALL {
+            let bytes = Assets.load(icon.path()).unwrap().unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            assert!(!text.contains("stroke-width=\"1.3\""), "{}", icon.name());
+            // The spinner's arc is a progress mark, not an outline icon: it keeps its weight.
+            if text.contains("stroke-width") && *icon != IconName::Spinner {
+                assert!(text.contains(&format!("stroke-width=\"{STROKE}\"")), "{}", icon.name());
+            }
+        }
     }
 
     /// Every service the box reads limits of has its mark, and it loads as an SVG.

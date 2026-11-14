@@ -281,6 +281,27 @@ fn the_rings_show_each_account_and_the_rest_wait_behind_more(cx: &mut TestAppCon
     assert_eq!(title(&workspace, cx).as_deref(), Some("Usage"));
 }
 
+/// Two rings an account, where the box says which window is short and which long (#711): the
+/// 5-hour one outside, the week inside; an account with one such window, one ring; a box from
+/// before it, one ring for the fullest window.
+#[gpui::test]
+fn an_account_has_a_ring_for_its_short_window_and_one_for_its_long(cx: &mut TestAppContext) {
+    let (_workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    assert!(bounds(cx, "ring-claude-Work-arc-0").is_some() && bounds(cx, "ring-claude-Work-arc-1").is_some());
+    let (outer, inner) = (bounds(cx, "ring-claude-Work-arc-0").unwrap(), bounds(cx, "ring-claude-Work-arc-1").unwrap());
+    assert!(inner.size.width < outer.size.width && outer.contains(&inner.center()), "the long window inside the short one");
+    assert!(bounds(cx, "ring-copilot-arc-0").is_none() || bounds(cx, "ring-copilot-arc-1").is_none());
+}
+
+#[gpui::test]
+fn a_box_from_before_711_draws_one_ring_an_account(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.before_711();
+    let (_workspace, cx) = open(cx, stand_in);
+    assert!(bounds(cx, "ring-claude-Work-arc-0").is_some());
+    assert!(bounds(cx, "ring-claude-Work-arc-1").is_none());
+}
+
 #[gpui::test]
 fn with_no_account_an_empty_ring_goes_to_sign_in(cx: &mut TestAppContext) {
     let (workspace, cx) = open(cx, StandIn::empty(Replies::Never));

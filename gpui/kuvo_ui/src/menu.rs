@@ -253,7 +253,9 @@ impl Render for Menu {
                         c.text
                     };
                     let icon_color = if entry.disabled { c.text_faint } else if entry.destructive { c.danger } else { c.text_muted };
+                    let selector = format!("menu-item-{}", entry.label);
                     div()
+                        .debug_selector(move || selector)
                         .id(ix)
                         .flex()
                         .items_center()

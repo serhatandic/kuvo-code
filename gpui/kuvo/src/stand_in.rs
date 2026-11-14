@@ -19,6 +19,7 @@ pub use crate::time::now_ms;
 
 pub mod areas;
 pub mod git;
+pub mod settings;
 
 use kuvo_box::Result;
 use kuvo_box::transport::{Closer, Request, Response, Stream, Transport};
@@ -98,6 +99,8 @@ struct State {
     /// How it answers for the rail's areas, and the moment its samples are made at.
     areas: areas::Areas,
     made: Option<f64>,
+    /// Its accounts, sign-ins and settings.
+    settings: settings::Settings,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -130,6 +133,41 @@ impl StandIn {
     /// is doing, no queue counts, no rings' shares or levels.
     pub fn before_711(&self) {
         self.state().areas.before_711 = true;
+    }
+
+    /// Every sign-in under way ends so (the box's words for a failure: `message`, the engine's).
+    pub fn end_sign_ins(&self, ending: settings::Ending, message: Option<&str>) {
+        self.state().settings.end_sign_ins(ending, message);
+    }
+
+    /// From now on, sign-ins under way say this device code.
+    pub fn set_user_code(&self, code: &str) {
+        self.state().settings.set_user_code(code);
+    }
+
+    /// A value in this computer's settings changes, as on its computer meanwhile.
+    pub fn set_config_value(&self, path: &[&str], value: Value) {
+        self.state().settings.set_config(path, value);
+    }
+
+    /// From now on, it says this of its sandbox (`kuvo/sandbox`).
+    pub fn set_sandbox(&self, sandbox: Value) {
+        self.state().settings.set_sandbox(sandbox);
+    }
+
+    /// Sign-ins under way are forgotten, as by an engine that started over.
+    pub fn forget_sign_ins(&self) {
+        self.state().settings.forget_sign_ins();
+    }
+
+    /// Whether it can say which sign-ins ended (`kuvo/accounts/ended` answers `503` while not).
+    pub fn ended_readable(&self, readable: bool) {
+        self.state().settings.ended_unreadable = !readable;
+    }
+
+    /// Whether the coding agents' bridge runs (it answers `503` while not).
+    pub fn agents_running(&self, running: bool) {
+        self.state().settings.agents_down = !running;
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -236,6 +274,7 @@ impl StandIn {
     fn fill(&self, now: f64) {
         let mut state = self.state();
         state.made = Some(now);
+        state.settings.finishes = self.inner.replies == Replies::Live;
         let website = format!("{HOME}/Projects/website");
         let api = format!("{HOME}/Projects/api");
         let mobile = format!("{HOME}/Projects/mobile");
@@ -644,6 +683,10 @@ impl StandIn {
             .filter_map(|(id, facts)| facts["asked"].as_f64().map(|asked| (id.clone(), asked)))
             .collect();
         if let Some((status, value)) = areas::answer(state.areas, method, route, state.made.unwrap_or_else(now_ms), &asked) {
+            return answer(status, value);
+        }
+        let body = request.body.clone().unwrap_or(Value::Null);
+        if let Some((status, value)) = state.settings.answer(method, route, &|name| query(path, name).map(decoded), &body) {
             return answer(status, value);
         }
         match (method, segments.as_slice()) {

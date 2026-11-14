@@ -19,17 +19,9 @@ use kuvo_ui::{
 };
 
 use crate::area::Area;
+use crate::settings::{Pick, SettingsView};
 use crate::time;
 
-/// Settings' sections, in their groups, as the Mac's sidebar has them.
-pub const SETTINGS: &[(&str, &[&str])] = &[
-    ("Application", &["General", "Appearance", "Notifications", "Keyboard Shortcuts", "Phone"]),
-    ("Models & Providers", &["Accounts", "Custom Auto", "Usage"]),
-    ("Agents & Tools", &["Agents", "Permissions", "Commands", "Skills", "Integrations", "Vault", "MCP Servers", "Engine"]),
-    ("Projects", &["Git", "Worktrees", "Machines"]),
-    ("Side Panel", &["Panel", "Browser"]),
-    ("Privacy & Data", &["Privacy", "Storage", "Archived Sessions"]),
-];
 
 /// How an area's list stands.
 #[derive(Clone, Debug, PartialEq)]
@@ -61,26 +53,54 @@ pub struct AreaView {
     selected: Option<String>,
     now: Option<f64>,
     reading: Option<Task<()>>,
+    /// Settings' own view: its sidebar drawn here, its pages as the main view.
+    settings: Option<gpui::Entity<SettingsView>>,
+    _settings_picks: Option<gpui::Subscription>,
+    /// Settings' sidebar is drawn here: redrawn as Settings changes (a search, a reading, a sheet).
+    _settings_changes: Option<gpui::Subscription>,
 }
 
 impl EventEmitter<Picked> for AreaView {}
 
 impl AreaView {
-    pub fn new(area: Area, client: BoxClient, live: bool) -> AreaView {
+    pub fn new(area: Area, client: BoxClient, live: bool, cx: &mut Context<Self>) -> AreaView {
         let selected = (area == Area::Settings).then(|| "General".to_owned());
-        AreaView { area, client, live, bots: Reading::NotYet, queue: Reading::NotYet, machines: Reading::NotYet, this_box: "This Mac".into(), selected, now: None, reading: None }
+        let settings = (area == Area::Settings).then(|| cx.new(|cx| SettingsView::new(client.clone(), live, cx)));
+        // A section picked in Settings' own sidebar is picked here, as any area's row is.
+        let picks = settings.as_ref().map(|settings| {
+            cx.subscribe(settings, |this: &mut AreaView, _, pick: &Pick, cx| {
+                if pick.record {
+                    this.pick(pick.section.clone(), cx);
+                } else {
+                    this.select(Some(pick.section.clone()), cx);
+                }
+            })
+        });
+        let changes = settings.as_ref().map(|settings| cx.observe(settings, |_, _, cx| cx.notify()));
+        AreaView { area, client, live, bots: Reading::NotYet, queue: Reading::NotYet, machines: Reading::NotYet, this_box: "This Mac".into(), selected, now: None, reading: None, settings, _settings_picks: picks, _settings_changes: changes }
+    }
+
+    /// Settings' view, in the Settings area.
+    pub fn settings(&self) -> Option<&gpui::Entity<SettingsView>> {
+        self.settings.as_ref()
     }
 
     pub fn area(&self) -> Area {
         self.area
     }
 
-    pub fn set_now(&mut self, now: f64) {
+    pub fn set_now(&mut self, now: f64, cx: &mut Context<Self>) {
         self.now = Some(now);
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, _| settings.set_now(now));
+        }
     }
 
     pub fn set_this_box(&mut self, name: SharedString, cx: &mut Context<Self>) {
         if self.this_box != name {
+            if let Some(settings) = &self.settings {
+                settings.update(cx, |settings, cx| settings.set_this_box(&name, cx));
+            }
             self.this_box = name;
             cx.notify();
         }
@@ -90,7 +110,8 @@ impl AreaView {
     /// shots, at once). What was read before stays on screen meanwhile.
     pub fn shown(&mut self, cx: &mut Context<Self>) {
         let (area, client) = (self.area, self.client.clone());
-        if area == Area::Settings {
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, cx| settings.shown(cx));
             return;
         }
         if !self.live {
@@ -125,13 +146,23 @@ impl AreaView {
     /// Picks a row (or none: the area's own page), as going back or forward does.
     pub fn select(&mut self, key: Option<String>, cx: &mut Context<Self>) {
         self.selected = key;
+        self.show_section(cx);
         cx.notify();
     }
 
     fn pick(&mut self, key: String, cx: &mut Context<Self>) {
         self.selected = Some(key);
+        self.show_section(cx);
         cx.emit(Picked);
         cx.notify();
+    }
+
+    /// Settings shows the section picked (its first, General, for none).
+    fn show_section(&mut self, cx: &mut Context<Self>) {
+        let section = self.selected.clone().unwrap_or_else(|| "General".into());
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, cx| settings.set_section(&section, cx));
+        }
     }
 
     /// The page's title: what's picked, named as its row is.
@@ -193,11 +224,14 @@ fn ready<T>(reading: &Reading<T>) -> Option<&T> {
 
 impl Render for AreaView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(settings) = self.settings.clone() {
+            return div().id("area-settings").size_full().child(settings.update(cx, |settings, cx| settings.sidebar(cx)));
+        }
         let rows = match self.area {
             Area::Bots => self.bots_rows(cx),
             Area::Queue => self.queue_rows(cx),
             Area::Computers => self.computer_rows(cx),
-            Area::Settings => self.settings_rows(cx),
+            Area::Settings => Vec::new(),
             Area::Sessions => Vec::new(),
         };
         div()
@@ -244,7 +278,7 @@ impl AreaView {
             } else {
                 None
             };
-            let (hover, selected_bg) = (c.hover, c.selected);
+            let (hover, selected_bg) = (c.hover, c.selected_card);
             let selector = format!("bot-{}", bot.id);
             rows.push(
                 div()
@@ -258,7 +292,7 @@ impl AreaView {
                     .mb(space::S0_5)
                     .rounded(radius::NAV)
                     .cursor_pointer()
-                    .when(selected, |r| r.bg(selected_bg))
+                    .map(|r| kuvo_ui::row::selected_card(r, selected, cx))
                     .hover(move |s| s.bg(if selected { selected_bg } else { hover }))
                     .on_click(self.row_click(key, cx))
                     // Still, as the user asked: the Mac's animated faces aren't brought over yet.
@@ -269,8 +303,8 @@ impl AreaView {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(div().truncate().text_ui(TypeSize::Small).text_color(c.text).when(selected, |t| t.medium()).child(bot.name.clone()))
-                            .child(div().truncate().text_ui(TypeSize::Caption).text_color(if asking > 0 { c.accent } else { c.text_muted }).child(words)),
+                            .child(div().truncate().text_ui(TypeSize::Body).text_color(c.text).child(bot.name.clone()))
+                            .child(div().truncate().text_ui(TypeSize::Small).text_color(if asking > 0 { c.accent } else { c.text_muted }).child(words)),
                     )
                     .children(trailing.map(|trailing| div().flex_none().child(trailing)))
                     .into_any_element(),
@@ -284,7 +318,7 @@ impl AreaView {
                 let when = group.last.as_ref().map(|last| time::ago(last.time, now)).unwrap_or_default();
                 let selector = format!("group-{}", group.id);
                 let row = NavRow::new(SharedString::from(selector.clone()), group.name.clone())
-                    .leading(if group.unread { status_dot(c.accent).into_any_element() } else { Icon::new(kuvo_ui::IconName::Message).color(c.text_muted).into_any_element() })
+                    .leading(if group.unread { status_dot(c.accent).into_any_element() } else { Icon::new(kuvo_ui::IconName::Message).color(c.icon).into_any_element() })
                     .trailing(div().text_ui(TypeSize::Caption).text_color(c.text_faint).child(when))
                     .selected(self.is_selected(&key))
                     .on_click(self.row_click(key, cx));
@@ -307,7 +341,7 @@ impl AreaView {
         let mut rows = Vec::new();
         let in_progress = counts.map(|counts| counts.in_progress);
         let mut progress = NavRow::new("queue-progress", "In Progress")
-            .leading(if in_progress.unwrap_or(0) > 0 { spinner("queue-spin", IconSize::Nav, c.text_muted).into_any_element() } else { Icon::new(kuvo_ui::IconName::Clock).color(c.text_muted).into_any_element() })
+            .leading(if in_progress.unwrap_or(0) > 0 { spinner("queue-spin", IconSize::Nav, c.text_muted).into_any_element() } else { Icon::new(kuvo_ui::IconName::Clock).color(c.icon).into_any_element() })
             .selected(self.is_selected("progress"))
             .on_click(self.row_click("progress".into(), cx));
         if let Some(n) = count(in_progress) {
@@ -354,19 +388,6 @@ impl AreaView {
         }
         rows
     }
-
-    fn settings_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut rows = Vec::new();
-        for (group, sections) in SETTINGS {
-            rows.push(SectionHeader::new(SharedString::from(format!("settings-{group}")), *group).into_any_element());
-            for section in *sections {
-                let selector = format!("setting-{section}");
-                let row = NavRow::new(SharedString::from(selector.clone()), *section).selected(self.is_selected(section)).on_click(self.row_click((*section).to_owned(), cx));
-                rows.push(div().debug_selector(move || selector).pb(space::S0_5).child(row).into_any_element());
-            }
-        }
-        rows
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -381,7 +402,7 @@ fn computer_row(
     cx: &App,
 ) -> AnyElement {
     let c = &cx.theme().colors;
-    let (hover, selected_bg) = (c.hover, c.selected);
+    let (hover, selected_bg) = (c.hover, c.selected_card);
     let selector = format!("computer-{id}");
     div()
         .id(SharedString::from(selector.clone()))
@@ -394,7 +415,7 @@ fn computer_row(
         .mb(space::S0_5)
         .rounded(radius::NAV)
         .cursor_pointer()
-        .when(selected, |r| r.bg(selected_bg))
+        .map(|r| kuvo_ui::row::selected_card(r, selected, cx))
         .hover(move |s| s.bg(if selected { selected_bg } else { hover }))
         .on_click(on_click)
         .child(
@@ -409,7 +430,7 @@ fn computer_row(
                 .bg(c.sunken)
                 .border_1()
                 .border_color(c.border)
-                .child(Icon::new(if mac { kuvo_ui::IconName::Computer } else { kuvo_ui::IconName::Terminal }).color(c.text_muted))
+                .child(Icon::new(if mac { kuvo_ui::IconName::Computer } else { kuvo_ui::IconName::Terminal }).color(c.icon))
                 .child(div().absolute().bottom(px(-2.)).right(px(-2.)).size(px(9.)).rounded(radius::PILL).border_2().border_color(c.surface).bg(dot)),
         )
         .child(
@@ -418,8 +439,8 @@ fn computer_row(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(div().truncate().text_ui(TypeSize::Small).text_color(c.text).when(selected, |t| t.medium()).child(name))
-                .child(div().truncate().text_ui(TypeSize::Caption).text_color(c.text_muted).child(detail)),
+                .child(div().truncate().text_ui(TypeSize::Body).text_color(c.text).child(name))
+                .child(div().truncate().text_ui(TypeSize::Small).text_color(c.text_muted).child(detail)),
         )
         .into_any_element()
 }
@@ -526,7 +547,7 @@ pub fn placeholder(area: Area, title: SharedString, cx: &App) -> AnyElement {
                 .size(px(48.))
                 .rounded(radius::PILL)
                 .bg(c.sunken)
-                .child(Icon::new(area.icon()).size(IconSize::Card).color(c.text_muted)),
+                .child(Icon::new(area.icon()).size(IconSize::Card).color(c.icon)),
         )
         .child(div().text_ui(TypeSize::Title).medium().text_color(c.text).child(title))
         .child(
@@ -542,7 +563,7 @@ pub fn placeholder(area: Area, title: SharedString, cx: &App) -> AnyElement {
 
 /// A new view for each area past Sessions.
 pub fn views(client: &BoxClient, live: bool, cx: &mut App) -> Vec<(Area, gpui::Entity<AreaView>)> {
-    [Area::Bots, Area::Queue, Area::Computers, Area::Settings].into_iter().map(|area| (area, cx.new(|_| AreaView::new(area, client.clone(), live)))).collect()
+    [Area::Bots, Area::Queue, Area::Computers, Area::Settings].into_iter().map(|area| (area, cx.new(|cx| AreaView::new(area, client.clone(), live, cx)))).collect()
 }
 
 #[cfg(test)]

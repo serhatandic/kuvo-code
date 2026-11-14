@@ -47,6 +47,14 @@ cargo run -p kuvo                                       # this Mac's own box (Ku
   its windows), then Help and Settings. In a window under 820 px the area's sidebar folds away and
   its button brings it out. The other areas' pages aren't in the app yet: a row picked there shows
   a page saying so.
+- **Settings** (⌃5, `notes/screens-settings.md`): "Search settings…" over its sections; General
+  (the theme), Accounts (every coding agent and provider the box lists, signed in or not, and
+  signing in each way the box offers: in the browser, a device code, a code pasted back, a key,
+  credentials on the computer; installing an agent; signing out and Disconnect), Usage (each
+  account's limits, as the rings), Models (this computer's default models), Permissions (approval,
+  the sandbox, folders also allowed), Notifications (the usage notices) and Browser (#693). The
+  Mac's other sections show a page saying where they are. Each page reads the box as it opens, and
+  each change goes through the box's routes.
 - **The title bar**: the computer switcher (this Mac's box; switching isn't in the app yet), back
   and forward (⌘[ and ⌘]), New Session (⌘N), then the conversation's title and project and the
   side panel's button.
@@ -113,7 +121,9 @@ a message and a typed keyword, "/"'s list, a model that can't run, a new session
 view, a run streaming in and paging back. The rail and its areas' are `kuvo/tests/areas.rs` (switching areas by the rail and ⌃1 to ⌃5,
 folding the sidebar by its button and in a narrow window, "Needs you", back and forward, the
 rings), against the stand-in's sample bots, queue, machines and accounts, and as a box from before
-#711. The side panel's are `kuvo/tests/panel.rs`, against the
+#711. Settings' are `kuvo/tests/settings.rs` (each section, the search, each way of signing in, failing,
+cancelling, installing, signing out, Disconnect), against the stand-in's made-up accounts and
+settings (no key is real). The side panel's are `kuvo/tests/panel.rs`, against the
 stand-in's made-up repositories (no git runs). The follows' threads are left off: what they'd hand the
 screens is read from the stand-in at once and handed over the same way.
 
@@ -187,7 +197,12 @@ hands on only the latest of what it sees, so a view that reads late gets the sta
 Also: a conversation's model and the models offered, a model's efforts, picking one, starting a
 session and stopping one (`kuvo_box::models`); a folder's git as the box runs it, its changed files
 grouped and followed, a file's diff, staging, committing, branches, Merge into… and pull requests
-(`kuvo_box::git`); a folder as a Files panel lists it, and a file's bytes (`kuvo_box::folders`).
+(`kuvo_box::git`); a folder as a Files panel lists it, and a file's bytes (`kuvo_box::folders`);
+accounts and signing in (`kuvo_box::accounts`: `…/api/integration` on the engine and the agents'
+bridge, `kuvo/sign-in/accounts`, `…/methods`, `…/status`, the engine's and bridge's connect routes,
+install, `kuvo/accounts/ended` and `…/forget`; never `api/credential`, which carries secrets); and
+this computer's settings (`kuvo_box::settings`: `kuvo/config`, `kuvo/approval`, `kuvo/sandbox`,
+`kuvo/sandbox/allowed`, `kuvo/browser/settings`, the usage settings' notices).
 
 Not done yet:
 - Following a machine as it streams. The plan is in `notes/kuvo-box-machines.md`; the app shows
