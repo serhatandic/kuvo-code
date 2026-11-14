@@ -273,8 +273,11 @@ impl RenderOnce for Button {
         let icon_color = look.text;
         let disabled = self.disabled;
 
+        // Found by its id in tests (`debug_bounds`).
+        let selector = self.id.to_string();
         let mut button = div()
             .id(self.id)
+            .debug_selector(move || selector)
             .flex()
             .flex_none()
             .items_center()

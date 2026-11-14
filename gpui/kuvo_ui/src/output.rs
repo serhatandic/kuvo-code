@@ -5,6 +5,7 @@
 //! The view that draws them owns whether each is shown whole, as it owns a thinking block's being
 //! open: these hold no state.
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
@@ -208,6 +209,51 @@ pub fn parse_patch(patch: &str) -> Vec<DiffLine> {
     lines
 }
 
+/// How many unchanged lines show each side of a change when the rest fold away.
+pub const AROUND: usize = 3;
+
+/// One row of a diff whose unchanged stretches fold: a line (by its index), or a fold standing for
+/// `count` unchanged lines from `start`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    Line(usize),
+    Fold { start: usize, count: usize },
+}
+
+/// A diff's rows with each long unchanged stretch folded, [`AROUND`] lines kept each side of a
+/// change (none at the file's ends), unless its fold is in `opened` (by its `start`). A stretch of
+/// no more than [`AROUND`] more lines than it keeps stays whole: folding a few hides nothing.
+pub fn fold_unchanged(lines: &[DiffLine], opened: &HashSet<usize>) -> Vec<Shown> {
+    let unchanged = |line: &DiffLine| line.kind == LineKind::Context;
+    let mut rows = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        if !unchanged(&lines[at]) {
+            rows.push(Shown::Line(at));
+            at += 1;
+            continue;
+        }
+        let mut end = at + 1;
+        while end < lines.len() && unchanged(&lines[end]) {
+            end += 1;
+        }
+        let keep_start = if at == 0 || lines[at - 1].kind == LineKind::Hunk { 0 } else { AROUND };
+        let keep_end = if end == lines.len() || lines[end].kind == LineKind::Hunk { 0 } else { AROUND };
+        let (start, stop) = (at + keep_start.min(end - at), end.saturating_sub(keep_end).max(at));
+        if stop > start && stop - start > AROUND && !opened.contains(&start) {
+            rows.extend((at..start).map(Shown::Line));
+            rows.push(Shown::Fold { start, count: stop - start });
+            rows.extend((stop..end).map(Shown::Line));
+        } else {
+            rows.extend((at..end).map(Shown::Line));
+        }
+        at = end;
+    }
+    rows
+}
+
+type Expand = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
 /// A file's changes, as a diff: an optional title with what was added and removed, then its
 /// lines, numbered, each added or removed one on its wash.
 #[derive(IntoElement)]
@@ -218,11 +264,20 @@ pub struct DiffView {
     counts: Option<(usize, usize)>,
     whole: bool,
     on_toggle: Option<Toggle>,
+    /// Its unchanged stretches folded (but those opened), each fold opening on a click.
+    folding: Option<(Rc<HashSet<usize>>, Expand)>,
 }
 
 impl DiffView {
     pub fn new(id: impl Into<ElementId>, lines: Rc<Vec<DiffLine>>) -> Self {
-        Self { id: id.into(), lines, title: None, counts: None, whole: false, on_toggle: None }
+        Self { id: id.into(), lines, title: None, counts: None, whole: false, on_toggle: None, folding: None }
+    }
+
+    /// Shown whole but for its long unchanged stretches, each folded to a row that opens it (a
+    /// whole file's diff, as a Changes panel shows one): `opened`, the folds opened by their start.
+    pub fn folding(mut self, opened: Rc<HashSet<usize>>, expand: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
+        self.folding = Some((opened, Rc::new(expand)));
+        self
     }
 
     /// The file's name over its lines (several files, or one that was added or deleted).
@@ -251,13 +306,49 @@ impl DiffView {
 impl RenderOnce for DiffView {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = cx.theme().colors.clone();
-        let (shown, button) = fold(self.lines.len(), self.whole);
-        let unshown = self.lines.len().saturating_sub(MOST);
+        // Folded by its unchanged stretches, or to its first lines.
+        let (shown, button, unshown): (Vec<Shown>, Option<String>, usize) = match &self.folding {
+            Some((opened, _)) => {
+                let rows = fold_unchanged(&self.lines, opened);
+                let unshown = rows.len().saturating_sub(MOST);
+                (rows.into_iter().take(MOST).collect(), None, unshown)
+            }
+            None => {
+                let (shown, button) = fold(self.lines.len(), self.whole);
+                ((0..shown).map(Shown::Line).collect(), button, if self.whole { self.lines.len().saturating_sub(MOST) } else { 0 })
+            }
+        };
         // The gutter's width: the widest number shown.
-        let widest = self.lines[..shown].iter().filter_map(|line| line.new.max(line.old)).max().unwrap_or(1).to_string().len();
+        let widest = self.lines.iter().filter_map(|line| line.new.max(line.old)).max().unwrap_or(1).to_string().len();
         let gutter = px(8. * widest as f32 + 8.);
         let number = |n: Option<u32>| div().w(gutter).flex_none().text_right().pr(space::S1).text_color(c.syntax.line_number).child(n.map(|n| n.to_string()).unwrap_or_default());
-        let rows = self.lines[..shown].iter().map(|line| {
+        let expand = self.folding.as_ref().map(|(_, expand)| expand.clone());
+        let id = self.id.clone();
+        let rows = shown.iter().map(|row| {
+            let line = match *row {
+                Shown::Line(ix) => &self.lines[ix],
+                Shown::Fold { start, count } => {
+                    let expand = expand.clone();
+                    let selector = format!("{id}-unchanged-{start}");
+                    let pressed = c.pressed;
+                    return div()
+                        .id((id.clone(), SharedString::from(format!("unchanged-{start}"))))
+                        .debug_selector(move || selector)
+                        .flex()
+                        .items_center()
+                        .w_full()
+                        .h(px(22.))
+                        .pl(gutter + gutter + px(16.))
+                        .bg(c.hover)
+                        .text_ui(TypeSize::Caption)
+                        .text_color(c.text_muted)
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(pressed))
+                        .when_some(expand, |d, expand| d.on_click(move |_, window, cx| expand(start, window, cx)))
+                        .child(if count == 1 { "1 unchanged line".to_owned() } else { format!("{count} unchanged lines") })
+                        .into_any_element();
+                }
+            };
             let (wash, sign, sign_color) = match line.kind {
                 LineKind::Added => (Some(c.diff_added_wash), "+", c.diff_added),
                 LineKind::Removed => (Some(c.diff_removed_wash), "-", c.diff_removed),
@@ -291,7 +382,7 @@ impl RenderOnce for DiffView {
                     div().flex().flex_none().gap(space::S1).child(div().text_color(c.diff_added).child(format!("+{added}"))).child(div().text_color(c.diff_removed).child(format!("−{removed}")))
                 }))
         });
-        let more = (self.whole && unshown > 0).then(|| div().px(space::S3).text_color(c.text_faint).child(format!("… and {unshown} more lines")));
+        let more = (unshown > 0).then(|| div().px(space::S3).text_color(c.text_faint).child(format!("… and {unshown} more lines")));
         let selector = self.id.to_string();
         well(self.id.clone(), cx)
             .debug_selector(move || selector)
@@ -326,6 +417,42 @@ mod tests {
         assert_eq!((lines[4].old, lines[4].new), (Some(12), Some(13)));
         assert_eq!((lines[6].old, lines[7].new), (Some(40), Some(41)));
         assert_eq!(lines[2].text, "    await post();");
+    }
+
+    fn lines(kinds: &str) -> Vec<DiffLine> {
+        kinds
+            .chars()
+            .map(|kind| DiffLine {
+                kind: match kind {
+                    '+' => LineKind::Added,
+                    '-' => LineKind::Removed,
+                    '@' => LineKind::Hunk,
+                    _ => LineKind::Context,
+                },
+                text: String::new(),
+                old: None,
+                new: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_whole_files_unchanged_stretches_fold_around_its_changes() {
+        // Ten unchanged, a change, ten unchanged, a change, two unchanged.
+        let diff = lines("..........+..........-..");
+        let rows = fold_unchanged(&diff, &HashSet::new());
+        use Shown::*;
+        assert_eq!(rows[0], Fold { start: 0, count: 7 }, "the file's start keeps only what's next to the change");
+        assert_eq!(&rows[1..5], &[Line(7), Line(8), Line(9), Line(10)]);
+        // Between the changes: three kept each side, four folded.
+        assert_eq!(&rows[5..12], &[Line(11), Line(12), Line(13), Fold { start: 14, count: 4 }, Line(18), Line(19), Line(20)]);
+        // A short stretch at the end stays whole.
+        assert_eq!(&rows[12..], &[Line(21), Line(22), Line(23)]);
+        // Opened, a fold shows its lines.
+        let opened = fold_unchanged(&diff, &HashSet::from([14]));
+        assert!(opened.contains(&Line(15)) && !opened.iter().any(|row| matches!(row, Fold { start: 14, .. })));
+        // Few unchanged lines between changes fold nothing.
+        assert!(fold_unchanged(&lines("+.......-"), &HashSet::new()).iter().all(|row| matches!(row, Line(_))));
     }
 
     #[test]
