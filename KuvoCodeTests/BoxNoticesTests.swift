@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import KuvoLink
 import OpenCodeKit
@@ -64,4 +65,68 @@ import Testing
         #expect(told.notices.map(\.id) == ["ntc_ok"])
         #expect(told.telling == true)
     }
+    @Test func usageIsDeliveredFromFirstReadOnceAcrossBoxesAndRelaunch() async throws {
+        let name = "BoxNoticesTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let data = Data(#"{"notices":[{"id":"ntc_transport","notice":{"category":"usage","title":"Almost Out","body":"Under 10% usage remaining for this window.","data":{"notice":"usage_stable","row":"claude#hash"}}}]}"#.utf8)
+        let answer = try JSONDecoder().decode(BoxNotices.Told.self, from: data)
+        let notices = BoxNotices()
+        notices.usageDelivery = .init(defaults: defaults)
+        var shown: [String] = []
+        notices.showUsage = { _, id in shown.append(id); return true }
+        let first = notices.take(answer, from: "one")
+        let second = notices.take(answer, from: "two")
+        await first.value
+        await second.value
+        #expect(shown == ["usage_stable"])
+        let restarted = BoxNotices()
+        restarted.usageDelivery = .init(defaults: defaults)
+        restarted.showUsage = { _, id in shown.append(id); return true }
+        await restarted.take(answer, from: "one").value
+        #expect(shown == ["usage_stable"])
+    }
+
+    @Test func turningNotificationsBackOnDoesNotShowSilentlyConsumedUsage() async throws {
+        let name = "BoxNoticesTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let data = Data(#"{"notices":[{"id":"ntc_off","notice":{"category":"usage","title":"Cutting It Close","subtitle":"Claude Weekly","data":{"notice":"usage_while_off"}}}]}"#.utf8)
+        let answer = try JSONDecoder().decode(BoxNotices.Told.self, from: data)
+        let notices = BoxNotices()
+        notices.usageDelivery = .init(defaults: defaults)
+        notices.usageEnabled = { false }
+        var count = 0
+        notices.showUsage = { _, _ in count += 1; return true }
+        await notices.take(answer, from: "one").value
+        notices.usageEnabled = { true }
+        await notices.take(answer, from: "one").value
+        #expect(count == 0)
+    }
+
+    @Test func shownUsageIsAcknowledgedByIdWhileSilentDeliveryStaysUnacknowledged() async throws {
+        let name = "BoxNoticesTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        func answer(_ id: String) throws -> BoxNotices.Told {
+            let json = #"{"notices":[{"id":"entry","notice":{"category":"usage","thread":"usage:one-row","data":{"notice":"ID"}}}]}"#.replacingOccurrences(of: "ID", with: id)
+            return try JSONDecoder().decode(BoxNotices.Told.self, from: Data(json.utf8))
+        }
+        let notices = BoxNotices()
+        notices.usageDelivery = .init(defaults: defaults)
+        var posts = 0, acknowledgements: [String] = []
+        notices.showUsage = { _, _ in posts += 1; return true }
+        notices.usageShown = { acknowledgements.append($0) }
+        await notices.take(try answer("usage_shown"), from: "one").value
+        await notices.take(try answer("usage_shown"), from: "two").value
+        #expect(posts == 1)
+        #expect(acknowledgements == ["usage_shown", "usage_shown"])
+        notices.usageVisible = { false }
+        await notices.take(try answer("usage_silent"), from: "one").value
+        notices.usageVisible = { true }
+        await notices.take(try answer("usage_silent"), from: "two").value
+        #expect(posts == 2)
+        #expect(acknowledgements == ["usage_shown", "usage_shown"])
+    }
+
 }

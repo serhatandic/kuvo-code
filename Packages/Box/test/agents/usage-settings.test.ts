@@ -152,7 +152,7 @@ describe("on one box", () => {
     const home = mkdtempSync(join(base, "mac-"))
     const mac = make("mac-key", "MacBook", home)
     // Nothing set yet: each part is the panel's own default.
-    expect(await mac.read()).toEqual({ settings: {}, versions: {}, imported: false })
+    expect(await mac.read()).toMatchObject({ settings: {}, versions: {}, imported: false })
 
     const told: unknown[] = []
     const stop = subscribe((event) => event.type === "kuvo.usage.settings" && told.push(event.data))

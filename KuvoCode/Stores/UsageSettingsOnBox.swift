@@ -178,6 +178,9 @@ final class UsageSettingsOnBox {
 
     /// The box's, shown: but a part changed here and still on its way, which comes back with its answer.
     private func apply(_ answer: BoxUsageSettings) {
+        if let availability = try? JSONEncoder().encode(answer.notificationAvailability) {
+            UsageAlertAvailability.shared.apply(availability)
+        }
         versions = answer.versions
         // What this Mac sent of a part the box now holds otherwise is no longer its own last: a
         // change turned away against it later isn't this Mac's own (another computer's came since).

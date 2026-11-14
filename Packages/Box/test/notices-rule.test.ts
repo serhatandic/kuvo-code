@@ -195,3 +195,11 @@ test("a sentence: a bold line as a heading, a short reply, an emoji at the cut",
   expect(Array.from(cut).length).toBeLessThanOrEqual(160)
   expect(cut.endsWith("🎉…")).toBe(true)
 })
+
+test("an agent's same sentence is refused after thirty minutes despite intervening usage/news writes", () => {
+  const now = Date.now()
+  const caller = { session: "ses_repeat", data: yours, name: "Test" }
+  expect(notifyUserTool(caller, { text: "Please answer the pending question." }, now, yes).isError).toBe(false)
+  keepTold({ category: "finished", body: "Other news." }, { now: now + 30 * 60_000 })
+  expect(notifyUserTool(caller, { text: "Please answer the pending question." }, now + 30 * 60_000 + 1, yes).isError).toBe(true)
+})

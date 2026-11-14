@@ -6,6 +6,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
+- Your computers now decide usage alerts where they read the account, even with Kuvo Code closed. Your devices avoid repeat alerts using the same notification settings across your own computers, and your iPhone stays quiet when your Mac already showed an alert while its phone delivery was waiting. Devin alerts are unavailable because Devin has no sign-in in Kuvo Code’s background service; Usage settings now says so.
+
 - When a conversation's model can't run (its account needs a sign-in or a key, its coding agent isn't installed, or the model is gone), what Send says comes from the computer the conversation is on, in the same words on your Mac and your iPhone. It names the account and the model, but no longer the computer or a Settings page.
 - Discard Changes in the Changes tab leaves a new file alone if it was committed in the meantime, and says so; discarding a deletion you staged while keeping the file, or a move whose old name has a new file since, now puts what's there in the Trash before the committed file comes back.
 - What goes with your message for the agent (your comments on the changes, where your files are, who the agents you name with & are) is written by the computer the conversation is on, the same way from your Mac and your iPhone; conversations from before show as they did.

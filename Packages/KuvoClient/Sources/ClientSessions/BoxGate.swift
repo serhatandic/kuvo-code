@@ -39,6 +39,7 @@ public enum BoxGate {
         "sessions.models",
         "sessions.start.empty",
         "typed",
+        "usage.notices",
     ]
 
     /// What `features` lack of `required`, in its order: none when the box is up to date. Nil
