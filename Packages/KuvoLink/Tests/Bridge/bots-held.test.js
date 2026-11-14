@@ -417,3 +417,42 @@ test("a held change its computer can't do now (its engine starting) waits on, ra
   }
   assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout");
 });
+
+test("asked again after it said the bot isn't there: done once the bot has arrived, not the old answer again", async () => {
+  write(path.join(bots, "kit.json"), kit);
+  const id = `bte_${crypto.randomBytes(16).toString("base64url")}`;
+  const edit = { botEdit: { id, bot: "bot_scout00001", change: { name: "Scout II" }, ages: { name: 0 }, at: Date.now() } };
+  const answer = async () => {
+    for (;;) {
+      const [mail] = mailTo(lab);
+      if (mail) return mail.botEdited;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  };
+  receive(lab, edit);
+  assert.equal((await answer()).status, 404, "not here yet");
+  // It arrives (a move from lab), and the same edit comes again.
+  const folder = path.join(bots, "bot_scout00001");
+  write(path.join(folder, "session"), "ses_scout");
+  write(path.join(folder, "bot.json"), { kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: { color: "sky", shape: "round", face: "calm" }, created: "2026-10-01T09:00:00Z" });
+  receive(lab, edit);
+  assert.equal((await answer()).status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).name, "Scout II");
+});
+
+test("a new edit to a bot its computer said isn't there starts its tries over", async () => {
+  await route("PATCH", `kuvo/bots/${wren}`, { name: "Wren II" });
+  agentsTold({ labBots: [] });
+  for (let round = 0; round < 2; round++) {
+    const [toLab] = mailTo(lab);
+    receive(lab, { botEdited: { id: toLab.botEdit.id, bot: wren, status: 404, message: "That bot isn’t there any more." } });
+    link.sendHeld(host, undefined, Date.now() + 61_000);
+  }
+  mailTo(lab);
+  const again = await route("PATCH", `kuvo/bots/${wren}?on=lab`, { name: "Wren III" });
+  assert.equal(again.status, 202);
+  const [newer] = mailTo(lab);
+  receive(lab, { botEdited: { id: newer.botEdit.id, bot: wren, status: 404, message: "That bot isn’t there any more." } });
+  assert.equal((await listed()).held.length, 1, "still held: its first 404");
+  assert.deepEqual((await listed()).refused, []);
+});

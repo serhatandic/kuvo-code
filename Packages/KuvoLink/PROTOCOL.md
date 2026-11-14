@@ -3967,7 +3967,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     updated), again each minute while it isn't answered and at once when it's back ("Peers",
     `run/peer-reach.json`). That computer takes it only from one of its peers that's one of your own
     computers to it (`403` otherwise, as above), and does it as `PATCH` or `DELETE` there would, once for each `id`
-    (remembered seven days; one it couldn't do now, `409` or `5xx`, is done when it comes again).
+    (remembered seven days; one it couldn't do now, `409` or `5xx`, or a change for a bot not there
+    yet, `404`, is done when it comes again).
     Of a change, it takes only the fields given after that field last changed (by a client, the
     bot's set_job, or another held edit), each given at its own clock's now less its age: the bot's
     folder keeps when (`edited.json`, a month, by the clock of the computer it was on then, and read
@@ -3979,7 +3980,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     or `404` for a delete), it's let go, and a `message` with a `2xx` is refused as what wasn't
     taken; `409` or `5xx`, it goes again later; `404` for a change, it goes to another of your own computers
     that lists the bot now (the sender left out, as a new `id`), or, with none, is asked again a
-    minute later; the third `404` for that bot, wherever it went, refuses it; any
+    minute later; the third `404` for that bot, wherever it went, refuses it (a new edit to it
+    starts the count over); any
     other, it's let go and refused, in words naming that computer.
 - `POST kuvo/bots/<id>/arrived`: a bot whose folder and conversation a client just brought to this
   box from another computer (Move to Computer: the client holds it where it was, copies its folder

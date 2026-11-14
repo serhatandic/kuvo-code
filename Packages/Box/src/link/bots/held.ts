@@ -245,6 +245,7 @@ export function holdEdit(bot: string, given: { change: unknown } | { delete: tru
         return;
       }
       sent.delete(bot);
+      notThere.delete(bot);
       dropRefusal(bot, link);
       answer = { status: 202, value: { held: viewOf(held, link) } };
     });
@@ -474,7 +475,8 @@ export async function takeBotEdit(sender: MailSender, given: unknown, reply: (pa
       done = { status: 503, value: { message: `Something went wrong on ${ownName()}.` } };
     }
     const message = isObject(done.value) && typeof done.value.message === "string" ? done.value.message : undefined;
-    if (done.status !== 409 && done.status < 500) keepTaken(key, { until: now + TAKEN_MEMORY, status: done.status, ...(message ? { message } : {}) }, now);
+    // (Not one it couldn't do now, nor a change for a bot not here yet: done when it comes again.)
+    if (done.status !== 409 && done.status < 500 && !(done.status === 404 && given.delete !== true)) keepTaken(key, { until: now + TAKEN_MEMORY, status: done.status, ...(message ? { message } : {}) }, now);
     answer(done.status, message);
   } finally {
     taking.delete(key);

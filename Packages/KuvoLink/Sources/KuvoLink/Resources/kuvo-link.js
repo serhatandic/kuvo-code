@@ -25598,6 +25598,7 @@ function holdEdit(bot, given, on, { removed = false, now = Date.now() } = {}) {
         return;
       }
       sent3.delete(bot);
+      notThere.delete(bot);
       dropRefusal(bot, link);
       answer = { status: 202, value: { held: viewOf(held, link) } };
     });
@@ -25792,7 +25793,7 @@ async function takeBotEdit(sender, given, reply, steps, now = Date.now()) {
       done = { status: 503, value: { message: `Something went wrong on ${ownName()}.` } };
     }
     const message = isObject(done.value) && typeof done.value.message === "string" ? done.value.message : undefined;
-    if (done.status !== 409 && done.status < 500)
+    if (done.status !== 409 && done.status < 500 && !(done.status === 404 && given.delete !== true))
       keepTaken(key, { until: now + TAKEN_MEMORY, status: done.status, ...message ? { message } : {} }, now);
     answer(done.status, message);
   } finally {
@@ -42004,7 +42005,7 @@ import fs137 from "node:fs";
 import path143 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f82830ca0184";
+var BRIDGE_VERSION = "597980a6dcfc";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
