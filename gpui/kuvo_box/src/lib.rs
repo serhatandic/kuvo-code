@@ -19,6 +19,7 @@ pub mod info;
 pub mod lines;
 pub mod local;
 pub mod messages;
+pub mod models;
 pub mod parts;
 pub mod paths;
 pub mod place;

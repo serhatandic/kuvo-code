@@ -1,0 +1,88 @@
+//! Renders Kuvo's screens offscreen against the stand-in box, in light and dark, to
+//! `gpui/shots/screens-<screen>-{light,dark}.png`. No window opens, nothing real is reached.
+//!
+//! `cargo run -p kuvo --features shots --bin shots [-- <screen>...]`
+
+use std::{path::PathBuf, sync::Arc};
+
+use gpui::{AppContext as _, Focusable as _, HeadlessAppContext, px, size};
+use kuvo::stand_in::{Replies, StandIn};
+use kuvo::{Workspace, bind_keys};
+use kuvo_box::BoxClient;
+use kuvo_ui::{Appearance, Assets, Theme};
+
+/// The moment the stand-in's sessions are seen at, so the times read the same in every shot.
+const NOW: f64 = 1_794_650_000_000.0;
+
+struct Screen {
+    slug: &'static str,
+    width: f32,
+    height: f32,
+    /// The session open (none: the landing view).
+    session: Option<&'static str>,
+    /// What's typed in the composer.
+    typed: Option<&'static str>,
+    empty: bool,
+}
+
+const SCREENS: &[Screen] = &[
+    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false },
+    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false },
+    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: Some("Yes, use Redis. Keep the window at one minute."), empty: false },
+    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false },
+    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false },
+    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true },
+];
+
+fn main() -> anyhow::Result<()> {
+    let only: Vec<String> = std::env::args().skip(1).collect();
+    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../shots");
+    std::fs::create_dir_all(&out)?;
+    let text_system = gpui_platform::current_platform(true).text_system();
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(Assets), || gpui_platform::current_headless_renderer());
+    cx.update(|cx| {
+        Theme::init(Appearance::Light, cx);
+        bind_keys(cx);
+    });
+    for screen in SCREENS {
+        if !only.is_empty() && !only.iter().any(|slug| slug == screen.slug) {
+            continue;
+        }
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            cx.update(|cx| Theme::set_appearance(appearance, cx));
+            let stand_in = if screen.empty { StandIn::empty(Replies::Never) } else { StandIn::at(Replies::Never, NOW) };
+            let client = BoxClient::new(stand_in);
+            let window = cx.open_window(size(px(screen.width), px(screen.height)), |window, cx| cx.new(|cx| Workspace::new(client, false, window, cx)))?;
+            let any = window.into();
+            cx.update_window(any, |root, window, cx| {
+                let workspace = root.downcast::<Workspace>().expect("the workspace");
+                workspace.update(cx, |workspace, cx| {
+                    workspace.set_now(NOW);
+                    workspace.read_at_once(cx);
+                    if let Some(session) = screen.session {
+                        workspace.open_read_at_once(session, window, cx);
+                    }
+                    let composer = match workspace.conversation() {
+                        Some(view) => view.read(cx).composer().clone(),
+                        None => workspace.landing().clone(),
+                    };
+                    let field = composer.read(cx).field().clone();
+                    if let Some(typed) = screen.typed {
+                        field.update(cx, |field, cx| field.set_text(typed, cx));
+                    }
+                    window.focus(&field.focus_handle(cx), cx);
+                });
+            })?;
+            cx.run_until_parked();
+            cx.update_window(any, |_, window, _| window.refresh())?;
+            cx.run_until_parked();
+            let image = cx.capture_screenshot(any)?;
+            let name = format!("screens-{}-{}.png", screen.slug, if appearance.is_dark() { "dark" } else { "light" });
+            image.save(out.join(&name))?;
+            println!("{name}: {}x{}", image.width(), image.height());
+            cx.update_window(any, |_, window, _| window.remove_window())?;
+            cx.run_until_parked();
+        }
+    }
+    Ok(())
+}

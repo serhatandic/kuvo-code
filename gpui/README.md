@@ -1,17 +1,21 @@
-# Kuvo's GPUI client: building blocks
+# Kuvo's GPUI client
 
-Phase 0 of the desktop client Kuvo will ship on GPUI (Mac first, then Linux and Windows): the
-building blocks every screen is made from, and a gallery that shows each one in light and dark.
-The box holds the logic; these blocks only draw. Phase 1 adds `kuvo_box`, the client of a box
-the screens will read from.
+The desktop client Kuvo will ship on GPUI (Mac first, then Linux and Windows). Phase 0 made the
+building blocks every screen is made from, with a gallery showing each in light and dark; phase 1,
+`kuvo_box`, the client of a box; phase 2, the app, `kuvo`, with its first screens. The box holds
+the logic; the app reads its facts, changes them through its routes, and draws.
 
+- `kuvo/`: the app (binary `kuvo`, named Kuvo): the sidebar, a conversation, the composer and the
+  landing view ("The app", below), and `shots`, its screens rendered offscreen.
 - `kuvo_box/`: a client of a Kuvo box, with no GPUI ("Talking to a box", below).
 - `kuvo_ui/`: the blocks, one module each: `theme`, `icon`, `button`, `text_field`,
   `chat_list`, `markdown`, `code_block`, `menu`, `row`, `small`, plus the dotted `backdrop`.
 - `gallery/`: the gallery app (`kuvo_gallery`) and the `shots` binary.
-- `notes/<block>.md`: for each block, what Zed does (and which of its files were read), and
-  what we take as behaviour. Zed's application code is GPL-3.0 and is never copied.
-- `shots/<block>-{light,dark}.png`: each gallery page, rendered offscreen.
+- `notes/<block>.md` and `notes/screens-<screen>.md`: for each block and screen, what Zed does
+  (and which of its files were read), and what we take as behaviour. Zed's application code is
+  GPL-3.0 and is never copied.
+- `shots/<block>-{light,dark}.png`: each gallery page; `shots/screens-*.png`: the app's screens
+  against the stand-in box. Both rendered offscreen.
 - `LICENSES-DEPS.md`: every dependency and its licence.
 
 ## Setting up
@@ -27,6 +31,37 @@ export PATH=$CARGO_HOME/bin:$PATH
 `rust-toolchain.toml` pins the toolchain (1.98.1, the one GPUI's pinned revision is built with);
 rustup fetches it on first use. Xcode is needed. GPUI compiles its Metal shaders when the app
 starts (`runtime_shaders`), so the separate Metal toolchain isn't needed.
+
+## The app
+
+```sh
+cd gpui
+cargo run -p kuvo -- --stand-in   # against a made-up box: nothing real is reached
+cargo run -p kuvo                 # this Mac's own box (Kuvo Code running here)
+```
+
+- **The sidebar** lists the box's sessions as its list says them: pinned, each project with its
+  sessions nested under it, chats; a spinner on one at work, a dot on one waiting on you, a count
+  on its project. ⌘N (or a project's "+") opens the landing view.
+- **A conversation** follows the box live: your messages by their parts, the agent's words as
+  Markdown with code, thinking and tool steps as quiet rows, how long each turn worked. Scrolling
+  back reads earlier pages.
+- **The composer** sends through `kuvo_box`'s typed send: "/" and "!" go to the box first, which
+  says what they mean; "/" lists what the box offers. Model and effort chips are menus of what the
+  box offers. Stop (or Esc) with nothing written while it works.
+- **The landing view**: the composer in the middle with a project chip above it; Send starts the
+  session on the box there and opens it.
+- ⌘⇧L switches light and dark.
+
+`kuvo::stand_in` is the made-up box: a Mac's box with sessions in a few projects and chats, one at
+work, one waiting on you, one long enough to page through. It answers in this process, as a box
+answers the routes the app uses; with `--stand-in`, a message sent gets a reply streamed back.
+
+Shots (`gpui/shots/screens-*-{light,dark}.png`), from the stand-in at a fixed time:
+
+```sh
+cargo run -p kuvo --features shots --bin shots [-- conversation landing asking slash narrow empty]
+```
 
 ## Running the gallery
 
@@ -55,7 +90,13 @@ screen-recording permission is needed. Output goes to `gpui/shots/`.
 cargo test
 ```
 
-Scenario tests drive the blocks through a window with real keystrokes, clicks and scrolling:
+The app's scenarios (`kuvo/tests/screens.rs`) run its screens in a window against the stand-in
+box, with real clicks and keystrokes: the sidebar opening a session and folding a project, sending
+a message and a typed keyword, "/"'s list, a model that can't run, a new session from the landing
+view, a run streaming in and paging back. The follows' threads are left off: what they'd hand the
+screens is read from the stand-in at once and handed over the same way.
+
+The blocks' scenario tests drive them through a window with real keystrokes, clicks and scrolling:
 the text field (`kuvo_ui/tests/text_field.rs`), the chat list (`tests/chat_list.rs`) and menus
 (`tests/menu.rs`), plus unit tests for markdown parsing, highlighting, icons and the theme's
 contrast.
@@ -120,10 +161,18 @@ request once, so its lists are read again every half minute and an open conversa
 seconds, over one shared connection (`/tmp/kuvo-ssh-<uid>`, as the Mac app shares it). A follow
 hands on only the latest of what it sees, so a view that reads late gets the state now.
 
-Not done yet, for phase 2:
-- Following a machine as it streams. The plan is in `notes/kuvo-box-machines.md`.
+Also: a conversation's model and the models offered, a model's efforts, picking one, starting a
+session and stopping one (`kuvo_box::models`).
+
+Not done yet:
+- Following a machine as it streams. The plan is in `notes/kuvo-box-machines.md`; the app shows
+  this Mac's box only.
 - One event stream shared by every conversation followed on a box.
-- Which messages ran a command, so they show as typed (KuvoClient's `CommandMessages`).
+- Which messages ran a command, so they show as typed. The box keeps no parts on a command's
+  message (its `send` route gives a command `metadata: {}`, and the engine's command route takes
+  none), and the Mac app's `CommandMessages` guesses by time in the client. So the app shows such a
+  message as the engine wrote it, and guesses nothing; it shows as typed once the box keeps
+  `{words, keyword}` on it, which is the box's to add.
 - A machine's box attached in place on this Mac (`x-kuvo-from: mac`).
 
 To see it list sessions without touching a real box:
