@@ -3221,6 +3221,9 @@
             "literal": "models.offered"
            },
            {
+            "literal": "models.offered.sides"
+           },
+           {
             "literal": "moves"
            },
            {
@@ -3705,6 +3708,9 @@
            },
            {
             "literal": "models.offered"
+           },
+           {
+            "literal": "models.offered.sides"
            },
            {
             "literal": "moves"
@@ -9249,6 +9255,22 @@
          "providerID": "string",
          "id": "string",
          "name": "string",
+         "side": {
+          "oneOf": [
+           {
+            "literal": "engine"
+           },
+           {
+            "literal": "agents"
+           }
+          ]
+         },
+         "efforts": {
+          "list": "string"
+         },
+         "aliases": {
+          "list": "string"
+         },
          "retiring?": "bool",
          "hidden?": "bool"
         }

@@ -113,26 +113,41 @@ fn a_keyword_is_drawn_as_the_box_reads_it() {
     }
 }
 
-/// A client sends a text that isn't "/" or "!" as a message without asking: the box would only
-/// say to send it (unless the model can't run, or the side thread's tag is on, which the client
-/// knows itself).
+/// A client answers a text that isn't "/" or "!" itself, without asking, as the box would: kept
+/// with a model that can't run, a follow-up in the side thread with its tag on, else sent.
 #[test]
-fn a_text_the_client_sends_without_asking_is_one_the_box_would_send() {
+fn a_text_the_client_answers_without_asking_is_answered_as_the_box_would() {
     let vectors = vectors("typed.json");
-    let mut checked = 0;
+    let mut checked = (0, 0, 0);
     for case in vectors["decide"].as_array().unwrap() {
         let text = case["text"].as_str().unwrap();
         if typed::asks_box(text) {
             continue;
         }
         let facts = &case["facts"];
-        if facts.get("refusal").is_some_and(|refusal| !refusal.is_null()) || facts.get("side") == Some(&Value::Bool(true)) {
-            continue;
+        let side = facts.get("side") == Some(&Value::Bool(true));
+        let refusal = facts.get("refusal").and_then(Value::as_str);
+        let decision = &case["decision"];
+        match typed::plain_answer(text, side, refusal) {
+            None => {
+                assert_eq!(decision["send"]["text"].as_str(), Some(text), "{text:?}");
+                checked.0 += 1;
+            }
+            Some(answer) if answer.side_thread == Some(true) => {
+                assert_eq!(decision, &serde_json::json!({ "sideThread": true }), "{text:?}");
+                checked.1 += 1;
+            }
+            Some(answer) => {
+                let restore = answer.restore.expect("put back");
+                assert_eq!(decision, &serde_json::json!({ "restore": { "text": restore.text }, "error": answer.error }), "{text:?}");
+                checked.2 += 1;
+            }
         }
-        assert_eq!(case["decision"]["send"]["text"].as_str(), Some(text), "{text:?}");
-        checked += 1;
     }
-    assert!(checked > 0);
+    assert!(checked.0 > 0 && checked.1 > 0 && checked.2 > 0, "{checked:?}");
+    // The box checks the model first (typed/decide.ts): with both, the refusal.
+    let both = typed::plain_answer("what now?", true, Some("Sign in to Anthropic again.")).unwrap();
+    assert_eq!((both.side_thread, both.error.as_deref()), (None, Some("Sign in to Anthropic again.")));
     // And every text that starts "/" or "!" is the box's to read.
     for case in vectors["decide"].as_array().unwrap() {
         let text = case["text"].as_str().unwrap();

@@ -14,7 +14,7 @@ use crate::sessions::{self, Line};
 use crate::ssh::SshBox;
 use crate::transport::{Closer, Request, Response, Stream, Transport};
 use crate::parts::{self, Comment, Delivery, File, Notes, Parts, Sending};
-use crate::typed::{self, Answer, Ask, ModelRef, Offers, Restore};
+use crate::typed::{self, Answer, Ask, ModelRef, Offers};
 use crate::{ids, place};
 
 /// One box's routes. Cheap to clone: clones share the box's transport and its gate.
@@ -264,13 +264,9 @@ impl BoxClient {
     pub fn send_draft(&self, session: &str, draft: &Draft, quote: Option<&dyn Fn(&str) -> String>) -> Result<Sent> {
         let quoted = |words: &str| quote.map_or_else(|| words.to_owned(), |quote| quote(words));
         if !typed::asks_box(&draft.text) {
-            // As the box would say: with the side thread's tag on, it's a follow-up there (the
-            // client's to ask); with a model that can't run, it's kept, saying why.
-            if draft.side {
-                return Ok(Sent::Typed { answer: Box::new(Answer { side_thread: Some(true), ..Answer::default() }), message: None });
-            }
-            if let Some(refusal) = &draft.refusal {
-                let answer = Answer { restore: Some(Restore { text: draft.text.clone(), beside: None }), error: Some(refusal.clone()), ..Answer::default() };
+            // As the box would say, in its order: with a model that can't run, it's kept, saying
+            // why; else with the side thread's tag on, it's a follow-up there (the client's to ask).
+            if let Some(answer) = typed::plain_answer(&draft.text, draft.side, draft.refusal.as_deref()) {
                 return Ok(Sent::Typed { answer: Box::new(answer), message: None });
             }
             let sending = Sending {

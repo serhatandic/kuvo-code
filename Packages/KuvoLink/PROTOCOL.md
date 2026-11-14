@@ -1396,13 +1396,14 @@ box decides it from what its engine and coding agents list, so every client show
   until it says which your account has), or one missing from a list its account doesn't say is
   whole; and a model of a provider the engine doesn't know at all. A client draws such a one by
   what the box offers ("The models offered"), with no refusal of its own: its chip names it while
-  the box says it runs or can't say yet (`runs` nil), and says "Choose a Model" once the box says it
-  doesn't.
+  the box says it runs or can't say yet (it's left out), and says "Choose a Model" once the box says
+  it doesn't.
 - What the engine and the bridge list is read once for every session asked about, and used again
   for ten seconds, or until the box hears either say accounts, models, settings or Custom Auto's
   lists changed (`integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
   `global.disposed`, `kuvo.auto.updated`), or hears them again after it couldn't; what one of them
   couldn't wholly say (its default, Custom Auto's lists) isn't kept.
+- A session left out is asked about again in a while, as a side of "The models offered" not said is.
 - A client asks again as what it's drawn from changes: the session opens, its model changes, or its
   box's accounts, models, default model or Custom Auto lists do (as it reads them again on
   `integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
@@ -1428,7 +1429,7 @@ the same, and a new conversation, a new bot and a lead's session started from an
 start on a model by the same rule.
 
 - `GET kuvo/models/offered[?provider=<id>&model=<id>&variant=<effort>]` → `{"models":
-  [{providerID, id, name, retiring?, hidden?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
+  [{providerID, id, name, side, efforts, aliases, retiring?, hidden?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
   "starting"?: {providerID, id, variant?} | null}`. `405` for anything but `GET`; `503` with
   neither the engine nor the coding agents' bridge running.
 - `models`: every model that runs there now (`runs` in "A session's model"): the engine's, its
@@ -1437,7 +1438,13 @@ start on a model by the same rule.
   agents', as the bridge lists them; then your Custom Auto lists with models in them (`providerID:
   "auto"`). `retiring`: its provider is retiring it; `hidden`: its agent keeps it out of its picker
   (Codex's hidden ones). A picker leaves either out, though a conversation on one carries on, and a
-  new one named runs. Clients draw them in this order.
+  new one named runs. Clients draw them in this order. `side`: where a conversation on it runs,
+  `engine` or `agents` (the coding agents' bridge, Custom Auto's lists too): a conversation is put
+  on one of its own side's in place (`api/session/<id>/model` there), and goes to another side's by
+  `kuvo/sessions/<id>/agents`. `efforts`: its efforts (variants) as its side lists them, none for
+  one that has none. `aliases`: other ids a conversation may name it by (Claude Code's `default`,
+  the model it stands for now). A box says these with `models.offered.sides`, which the update gate
+  requires.
 - `known`: whether the engine's models, and the coding agents' with Custom Auto's lists, could be
   said. One that couldn't (not answering, an engine that hasn't loaded yet, or the bridge not
   running: starting, or started again) has none in `models`, rather than none at all: a client
@@ -2282,11 +2289,12 @@ A client never keeps an older box's way of doing something (#679): it brings a b
 before it uses it, and meanwhile says so. A box is older than a client needs when its `kuvo/info`
 `features` lack any name the client uses with no way around it (or it has no `kuvo/info`): today
 `agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
-`messages.send`, `models.offered`, `sessions.list`, `sessions.models`, `sessions.start.empty` and
-`typed` (KuvoClient's `BoxGate.required`; a box with `messages.send` has what came before it too,
-`sessions.move`, `projects.folders` and `sign-in.methods` among them, and names its chats folder in
-`kuvo/info`). A client adds a name there as it drops its fallback for a box without it, or its words
-that such a box needs a newer Kuvo Code.
+`messages.send`, `models.offered`, `models.offered.sides`, `sessions.list`, `sessions.models`,
+`sessions.start.empty` and `typed` (KuvoClient's `BoxGate.required`, and the same list in every
+client, gpui's `kuvo_box` too, so every client holds the same boxes; a box with `messages.send` has
+what came before it too, `sessions.move`, `projects.folders` and `sign-in.methods` among them, and
+names its chats folder in `kuvo/info`). A client adds a name there as it drops its fallback for a
+box without it, or its words that such a box needs a newer Kuvo Code.
 
 - **Held**: a client sends a held box nothing but `kuvo/info`, `kuvo/update` and `kuvo/box/update`,
   its Mac's app's own registration (`kuvo/box/app`, "This Mac's app") and the keys it holds for
@@ -5490,6 +5498,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
 | `messages.send` | `POST kuvo/sessions/<id>/send` and `…/queue/add` with fields: a message sent as what was written and what goes with it, the box writing what the agent reads and keeping its parts; `POST kuvo/messages/parts` for messages from before ("A message's parts", #668) |
 | `models.offered` | `GET kuvo/models/offered`: which models a session can use here, and the one a new session starts on, by the box's rule ("The models offered", #341) |
+| `models.offered.sides` | `kuvo/models/offered` says each model's `side`, `efforts` and `aliases` ("The models offered") |
 | `moves` | `kuvo/moves`, `…/places`, `…/events`: Move to Computer, done by the boxes (bridge 0.9.108) |
 | `moves.agents` | a bot or chat whose conversations are on the coding agents' bridge moves too, with each agent's own conversation and memory (`api/kuvo/carry/…` on the bridge; "kuvo/moves") |
 | `moves.check` | between boxes, `check` before a move holds anything: whether the box it goes to can run it; a move's `note` says what it does differently there ("kuvo/moves") |

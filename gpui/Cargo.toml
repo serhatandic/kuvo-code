@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["kuvo_ui", "kuvo_box", "gallery"]
+members = ["kuvo_ui", "kuvo_box", "gallery", "kuvo"]
 
 [workspace.package]
 edition = "2024"

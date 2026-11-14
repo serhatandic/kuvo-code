@@ -20,7 +20,7 @@ while stack:
 rows = sorted(
     (packages[i]["name"], packages[i]["version"], packages[i].get("license") or "see its licence file")
     for i in seen
-    if packages[i]["name"] not in ("kuvo_ui", "kuvo_gallery")
+    if packages[i]["name"] not in ("kuvo", "kuvo_ui", "kuvo_box", "kuvo_gallery")
 )
 print("| Crate | Version | Licence |")
 print("|---|---|---|")

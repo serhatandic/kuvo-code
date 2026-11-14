@@ -85,6 +85,7 @@ export const FEATURES = [
   "mcp.catalog",
   "messages.send",
   "models.offered",
+  "models.offered.sides",
   "moves",
   "moves.agents",
   "moves.check",
