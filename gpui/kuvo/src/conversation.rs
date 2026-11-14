@@ -6,17 +6,18 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    SharedString, Styled, Task, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use kuvo_box::asks::Asks;
+use kuvo_box::queue::{Item, Queue};
 use kuvo_box::follow::{ConversationUpdate, Follow, Followed, Timing};
 use kuvo_box::BoxClient;
 use kuvo_ui::{
-    ActiveTheme, Button, ButtonSize, IconSize, StyledType, TypeSize,
+    ActiveTheme, Button, ButtonSize, Icon, IconName, IconSize, StyledType, TypeSize,
     chat_list::{ChatListState, chat_list},
     small::spinner,
-    theme::space,
+    theme::{radius, space},
 };
 
 use crate::ask_card::AskCard;
@@ -59,6 +60,13 @@ pub struct ConversationView {
     _follow_task: Option<Task<()>>,
     _asks_follow: Option<Follow<Followed<Asks>>>,
     _asks_task: Option<Task<()>>,
+    /// What waits its turn, as the box orders it, over the composer.
+    queue: Queue,
+    queue_failed: Option<String>,
+    client: BoxClient,
+    live: bool,
+    _queue_follow: Option<Follow<Followed<Queue>>>,
+    tasks: Vec<Task<()>>,
 }
 
 impl Focusable for ConversationView {
@@ -91,6 +99,12 @@ impl ConversationView {
             _follow_task: None,
             _asks_follow: None,
             _asks_task: None,
+            queue: Queue::default(),
+            queue_failed: None,
+            client: client.clone(),
+            live,
+            _queue_follow: None,
+            tasks: Vec::new(),
         };
         if live {
             let follow = Rc::new(client.follow_conversation(&session, Timing::default()));
@@ -107,6 +121,18 @@ impl ConversationView {
             let asks = client.follow_asks(&session, Timing::default());
             let updates = asks.updates().clone();
             view._asks_follow = Some(asks);
+            // What waits its turn, now and as it changes.
+            let queue = client.follow_queue(&session, Timing::default());
+            let queued = queue.updates().clone();
+            view._queue_follow = Some(queue);
+            view.tasks.push(cx.spawn(async move |this, cx| {
+                while let Ok(update) = queued.recv().await {
+                    let Followed::Now(queue) = update else { continue };
+                    if this.update(cx, |this, cx| this.take_queue(queue, cx)).is_err() {
+                        break;
+                    }
+                }
+            }));
             view._asks_task = Some(cx.spawn(async move |this, cx| {
                 while let Ok(update) = updates.recv().await {
                     let Followed::Now(asks) = update else { continue };
@@ -142,6 +168,49 @@ impl ConversationView {
 
     pub fn problem(&self) -> Option<&Problem> {
         self.problem.as_ref()
+    }
+
+    /// What waits its turn, as the box says it.
+    pub fn take_queue(&mut self, queue: Queue, cx: &mut Context<Self>) {
+        self.queue = queue;
+        cx.notify();
+    }
+
+    pub fn queued(&self) -> &[Item] {
+        self.queue.items.as_deref().unwrap_or_default()
+    }
+
+    /// Takes `item` out of the queue; `edit`: its words and files back in the composer, to change
+    /// and send again.
+    pub fn unqueue(&mut self, item: String, edit: bool, cx: &mut Context<Self>) {
+        let (client, session) = (self.client.clone(), self.session.clone());
+        let task = cx.background_executor().spawn(async move { client.remove_queued(&session, &item).map(|removed| (item, removed)) });
+        self.tasks.retain(|task| !task.is_ready());
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok((item, removed)) => {
+                        this.queue_failed = None;
+                        if let Some(items) = this.queue.items.as_mut() {
+                            items.retain(|each| each.id != item);
+                        }
+                        if let (true, Some(removed)) = (edit, removed) {
+                            this.composer.update(cx, |composer, cx| composer.restore(&removed.words, &removed.files, cx));
+                        }
+                    }
+                    Err(error) => this.queue_failed = Some(format!("It couldn’t be taken out of the queue: {error}")),
+                }
+                // (Read again at once where nothing follows it: tests and shots.)
+                if !this.live
+                    && let Ok(queue) = this.client.queue(&this.session)
+                {
+                    this.queue = queue;
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     pub fn asks(&self) -> &Entity<AskCard> {
@@ -333,6 +402,81 @@ impl ConversationView {
     }
 }
 
+impl ConversationView {
+    /// What waits its turn, over the composer: each message as you wrote it (who it's from, when
+    /// it isn't yours), with Edit (yours) and Remove under the pointer.
+    fn queue_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let items = self.queued();
+        if items.is_empty() {
+            return None;
+        }
+        let c = cx.theme().colors.clone();
+        let count = items.len();
+        let said = if self.queue.paused { format!("{count} waiting · paused") } else if count == 1 { "1 waiting".to_owned() } else { format!("{count} waiting") };
+        let rows = items.iter().enumerate().map(|(ix, item)| {
+            let group = SharedString::from(format!("queued-{ix}"));
+            let (edit_id, remove_id) = (item.id.clone(), item.id.clone());
+            let selector = format!("queued-{}", item.id);
+            let lead: AnyElement = match &item.from {
+                Some(from) => div().flex_none().text_ui(TypeSize::Caption).medium().text_color(c.text_muted).child(from.clone()).into_any_element(),
+                None => Icon::new(IconName::Clock).size(IconSize::Nav).color(if ix == 0 { c.accent } else { c.text_faint }).into_any_element(),
+            };
+            div()
+                .id(SharedString::from(format!("queued-{}", item.id)))
+                .debug_selector(move || selector)
+                .group(group.clone())
+                .flex()
+                .items_center()
+                .gap(space::S2)
+                .h(px(30.))
+                .px(space::S2)
+                .rounded(radius::NAV)
+                .hover(|s| s.bg(c.hover))
+                .child(lead)
+                .children(item.keyword.clone().map(|keyword| div().flex_none().text_ui(TypeSize::Caption).text_color(c.accent).child(keyword)))
+                .child(div().flex_1().min_w_0().truncate().text_ui(TypeSize::Small).text_color(c.text).child(item.words.lines().next().unwrap_or("").to_owned()))
+                .children((!item.files.is_empty()).then(|| {
+                    let files = if item.files.len() == 1 { item.files[0].clone() } else { format!("{} files", item.files.len()) };
+                    div().flex().flex_none().items_center().gap(space::S1).text_ui(TypeSize::Caption).text_color(c.text_muted).child(Icon::new(IconName::Paperclip).size(IconSize::Nav).color(c.text_faint)).child(files)
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .gap(space::S0_5)
+                        .opacity(0.)
+                        .group_hover(group, |s| s.opacity(1.))
+                        .when(item.is_yours(), |d| {
+                            let selector = format!("edit-{}", item.id);
+                            d.child(div().debug_selector(move || selector).child(Button::icon_only(SharedString::from(format!("edit-{}", item.id)), IconName::Pencil, "Edit").size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.unqueue(edit_id.clone(), true, cx)))))
+                        })
+                        .child({
+                            let selector = format!("remove-{}", item.id);
+                            div().debug_selector(move || selector).child(Button::icon_only(SharedString::from(format!("remove-{}", item.id)), IconName::Trash, "Remove").size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.unqueue(remove_id.clone(), false, cx))))
+                        }),
+                )
+        });
+        Some(
+            div()
+                .debug_selector(|| "queue".into())
+                .w_full()
+                .max_w(px(COLUMN))
+                .mb(space::S2)
+                .flex()
+                .flex_col()
+                .p(space::S1)
+                .rounded(radius::CARD - px(4.))
+                .bg(c.sunken)
+                .border_1()
+                .border_color(c.border)
+                .child(div().px(space::S2).pt(space::S1).pb(space::S0_5).text_ui(TypeSize::Caption).text_color(c.text_faint).child(said))
+                .child(div().id("queue-rows").max_h(px(30. * 4.)).overflow_y_scroll().children(rows))
+                .children(self.queue_failed.clone().map(|why| div().px(space::S2).pb(space::S1).text_ui(TypeSize::Caption).text_color(c.warning).child(why)))
+                .into_any_element(),
+        )
+    }
+}
+
 /// `session`'s conversation as its box has it now, read at once (no follow): for shots and tests,
 /// handed to [`ConversationView::take`] as a follow would hand it.
 #[cfg(feature = "stand-in")]
@@ -394,6 +538,7 @@ impl Render for ConversationView {
                     .children(banner.map(|(why, color)| {
                         div().w_full().max_w(px(COLUMN)).pb(space::S2).text_ui(TypeSize::Caption).text_color(color).child(why)
                     }))
+                    .when(!gone, |d| d.children(self.queue_view(cx)))
                     // What it waits on you for takes the composer's place, as on the Mac and the phone.
                     .when(!gone, |d| {
                         let asking = self.asks.read(cx).is_asking();

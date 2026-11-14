@@ -826,3 +826,53 @@ fn files_attached_go_with_the_message_and_show_on_it(cx: &mut TestAppContext) {
     assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_recipes/send").len(), 2);
     std::fs::remove_dir_all(&folder).ok();
 }
+
+#[gpui::test]
+fn at_and_ampersand_offer_what_the_box_suggests_and_an_agent_picked_is_named(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_recipes", cx);
+
+    // "@": the files the box finds for what's typed; Return puts the one picked in.
+    cx.simulate_input("Check @sche");
+    let offers = composer.read_with(cx, |composer, cx| composer.shown_offers(cx));
+    assert_eq!((offers.0.iter().map(|offer| offer.name.as_str()).collect::<Vec<_>>(), offers.1), (vec!["schema.ts"], true));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(typed(&composer, cx).0, "Check @web/src/signup/schema.ts ");
+
+    // "&": bots and sessions; the one picked is named when it's sent.
+    cx.simulate_input("with &mi");
+    assert_eq!(composer.read_with(cx, |composer, cx| composer.shown_offers(cx).0.first().map(|offer| offer.name.clone())), Some("Mira".into()));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(typed(&composer, cx).0, "Check @web/src/signup/schema.ts with &Mira ");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let sent = stand_in.seen_at("POST", "kuvo/sessions/ses_recipes/send").last().and_then(|seen| seen.body.clone()).expect("sent");
+    assert_eq!(sent["named"], json!(["ses_mira"]));
+    assert_eq!(sent["words"], json!("Check @web/src/signup/schema.ts with &Mira "));
+}
+
+#[gpui::test]
+fn the_queue_shows_what_waits_and_a_message_taken_back_comes_to_the_composer(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_signup", cx);
+    assert!(bounds(cx, "queue").is_some());
+    assert!(bounds(cx, "queued-msg_q1").is_some() && bounds(cx, "queued-msg_q2").is_some());
+
+    // Edit: taken out of the queue, its words back in the composer to change.
+    let edit = bounds(cx, "edit-msg_q1").expect("yours can be edited");
+    assert!(bounds(cx, "edit-msg_q2").is_none(), "another agent's letter can't");
+    cx.simulate_click(edit.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("DELETE", "kuvo/sessions/ses_signup/queue/msg_q1").len(), 1);
+    assert_eq!(typed(&composer, cx).0, "Then do the same for the password field: keep it, and say what's wrong with it");
+    assert!(bounds(cx, "queued-msg_q1").is_none());
+
+    // Remove: gone, and the queue with it once nothing waits.
+    let remove = bounds(cx, "remove-msg_q2").expect("Remove");
+    cx.simulate_click(remove.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("DELETE", "kuvo/sessions/ses_signup/queue/msg_q2").len(), 1);
+    assert!(bounds(cx, "queue").is_none());
+}

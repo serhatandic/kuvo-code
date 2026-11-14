@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use kuvo_box::models::{ModelState, Offered, OfferedModel, Side, StartIn, effort_title};
 use kuvo_box::typed::{self, Answer, ModelRef, Offers};
+use kuvo_box::mentions::{For, Mention};
 use kuvo_box::parts::File;
 use kuvo_box::{BoxClient, Draft, Sent, Where};
 use kuvo_ui::{
@@ -90,6 +91,8 @@ pub struct Note {
 pub struct Offer {
     pub name: String,
     pub summary: String,
+    /// What it is, for a mention: a file, a folder, a bot or a session.
+    pub icon: Option<IconName>,
 }
 
 pub struct Composer {
@@ -129,6 +132,14 @@ pub struct Composer {
     noted: String,
     /// Files and pictures that go with what's written, in the order they were added.
     attached: Vec<PathBuf>,
+    /// What "@" or "&" suggests for the mention being typed (the box's, `sessions.mentions`), and
+    /// which mention that was; which read of them is the latest.
+    mentions: Vec<Mention>,
+    mentions_for: Option<(For, String)>,
+    mention_reads: u64,
+    /// The agents and sessions picked from "&"'s list, by what went in the message: the send names
+    /// those still in it.
+    named: Vec<(String, String)>,
     tasks: Vec<Task<()>>,
     _field: Subscription,
 }
@@ -159,6 +170,7 @@ impl Composer {
             }
             TextFieldEvent::Changed => {
                 this.slash_at = 0;
+                this.read_mentions(cx);
                 if this.note.is_some() && this.text(cx) != this.noted {
                     this.note = None;
                 }
@@ -188,6 +200,10 @@ impl Composer {
             note: None,
             noted: String::new(),
             attached: Vec::new(),
+            mentions: Vec::new(),
+            mentions_for: None,
+            mention_reads: 0,
+            named: Vec::new(),
             tasks: Vec::new(),
             _field: subscription,
         };
@@ -498,6 +514,9 @@ impl Composer {
         let mut draft = Draft::new(BoxClient::new_id(), text.clone());
         let files = std::mem::take(&mut self.attached);
         draft.files = files.iter().map(|path| File::at(path)).collect();
+        // The agents picked from "&"'s list that are still named in it.
+        draft.named = self.named.iter().filter(|(text, _)| mentioned(&draft.text, text)).map(|(_, session)| session.clone()).collect();
+        draft.named.dedup();
         draft.refusal = self.models.state.as_ref().and_then(|state| state.refusal(ACCOUNTS));
         if self.needs_model() {
             self.attached = files;
@@ -608,6 +627,15 @@ impl Composer {
         });
     }
 
+    /// A message taken back from the queue to edit: its words ahead of anything written since, and
+    /// its files (those on this Mac's box; one sent inline can't come back as a file).
+    pub fn restore(&mut self, words: &str, files: &[File], cx: &mut Context<Self>) {
+        let paths: Vec<PathBuf> = files.iter().filter_map(|file| file.uri.strip_prefix("file://")).map(|path| PathBuf::from(percent_decoded(path))).collect();
+        self.attach(paths, cx);
+        self.put_back(words, None, cx);
+        cx.notify();
+    }
+
     /// What goes with what's written: files and pictures, in order.
     pub fn attached(&self) -> &[PathBuf] {
         &self.attached
@@ -693,8 +721,8 @@ impl Composer {
         }
         let Some(offers) = &self.offers else { return Vec::new() };
         let typed = typed.to_lowercase();
-        let keywords = offers.keywords.iter().map(|keyword| Offer { name: keyword.name.clone(), summary: keyword.summary.clone() });
-        let commands = offers.commands.iter().map(|command| Offer { name: command.name.clone(), summary: command.description.clone().unwrap_or_default() });
+        let keywords = offers.keywords.iter().map(|keyword| Offer { name: keyword.name.clone(), summary: keyword.summary.clone(), icon: None });
+        let commands = offers.commands.iter().map(|command| Offer { name: command.name.clone(), summary: command.description.clone().unwrap_or_default(), icon: None });
         // Names starting with what's typed first, then those containing it, each by name, as
         // KuvoClient's `SlashCommands.matches` orders them.
         let mut matched: Vec<(bool, Offer)> = keywords
@@ -708,8 +736,74 @@ impl Composer {
         matched.into_iter().map(|(_, offer)| offer).collect()
     }
 
+    /// The mention being typed, if one is, and what the box suggests for it: read as it changes.
+    fn read_mentions(&mut self, cx: &mut Context<Self>) {
+        let Target::Session { id, .. } = &self.target else { return };
+        let text = self.text(cx);
+        let typed = mention_query(&text).map(|(wanted, _, query)| (wanted, query.to_owned()));
+        if typed == self.mentions_for {
+            return;
+        }
+        self.mentions_for = typed.clone();
+        self.mention_reads += 1;
+        let read = self.mention_reads;
+        let Some((wanted, query)) = typed else {
+            self.mentions.clear();
+            return;
+        };
+        let (client, id) = (self.client.clone(), id.clone());
+        if self.live {
+            self.spawn(cx, move || client.mentions(&id, wanted, &query), move |this, found, cx| {
+                if this.mention_reads == read {
+                    this.mentions = found.unwrap_or_default();
+                    cx.notify();
+                }
+            });
+        } else {
+            // (Tests and shots: at once, as the box would answer.)
+            self.mentions = client.mentions(&id, wanted, &query).unwrap_or_default();
+        }
+    }
+
+    /// What the list over the field offers now: what "@" or "&" suggests while a mention's being
+    /// typed, else "/"'s. Each as it shows: its name, and what's beside it.
+    pub fn shown_offers(&self, cx: &App) -> (Vec<Offer>, bool) {
+        let text = self.text(cx);
+        if mention_query(&text).is_some() && self.slash_dismissed.as_deref() != Some(text.as_str()) {
+            let offers = self.mentions.iter().map(|mention| Offer {
+                    name: mention.title.clone(),
+                    summary: mention.detail.clone().unwrap_or_default(),
+                    icon: Some(match mention.kind.as_str() {
+                        "folder" => IconName::Folder,
+                        "bot" => IconName::Bot,
+                        "session" => IconName::Message,
+                        _ => IconName::File,
+                    }),
+                }).collect();
+            return (offers, true);
+        }
+        let offers = self.slash_offers(cx).into_iter().map(|offer| Offer { name: format!("/{}", offer.name), summary: offer.summary, icon: None }).collect();
+        (offers, false)
+    }
+
+    /// Puts mention `at` in place of the one being typed, and a space after it; an agent picked is
+    /// named when it's sent.
+    fn mention_pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.text(cx);
+        let Some((_, start, _)) = mention_query(&text) else { return };
+        let Some(mention) = self.mentions.get(at.min(self.mentions.len().saturating_sub(1))).cloned() else { return };
+        if let Some(session) = &mention.session {
+            self.named.retain(|(text, _)| text != &mention.text);
+            self.named.push((mention.text.clone(), session.clone()));
+        }
+        let joined = format!("{}{} ", &text[..start], mention.text);
+        self.field.update(cx, |field, cx| field.set_text(joined, cx));
+        window.focus(&self.field.focus_handle(cx), cx);
+        cx.notify();
+    }
+
     fn slash_step(&mut self, by: isize, cx: &mut Context<Self>) {
-        let count = self.slash_offers(cx).len() as isize;
+        let count = self.shown_offers(cx).0.len() as isize;
         if count > 0 {
             self.slash_at = (self.slash_at as isize + by).rem_euclid(count) as usize;
             self.slash_scroll.scroll_to_item(self.slash_at);
@@ -719,6 +813,9 @@ impl Composer {
 
     /// Puts offer `at` in the field, ready for what follows it.
     fn slash_pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shown_offers(cx).1 {
+            return self.mention_pick(at, window, cx);
+        }
         let offers = self.slash_offers(cx);
         let Some(offer) = offers.get(at.min(offers.len().saturating_sub(1))) else { return };
         let text = format!("/{} ", offer.name);
@@ -744,7 +841,8 @@ impl Composer {
                 .when(selected, |d| d.bg(c.selected))
                 .hover(|s| s.bg(c.hover))
                 .on_click(cx.listener(move |this, _, window, cx| this.slash_pick(ix, window, cx)))
-                .child(div().flex_none().text_ui(TypeSize::Small).medium().text_color(c.text).child(format!("/{}", offer.name)))
+                .children(offer.icon.map(|icon| Icon::new(icon).size(IconSize::Nav).color(c.text_muted)))
+                .child(div().flex_none().text_ui(TypeSize::Small).medium().text_color(c.text).child(offer.name.clone()))
                 .child(div().min_w_0().truncate().text_ui(TypeSize::Small).text_color(c.text_muted).child(offer.summary.clone()))
         });
         div()
@@ -860,6 +958,52 @@ fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, bef
     (offered, said_all, state)
 }
 
+/// The mention being typed at the end of `text`: "@" a file (a word with no spaces), or "&" an
+/// agent or session (names have spaces, so it runs on to the line's end), each starting a word.
+/// Which, where its mark is, and what's typed after it. As the Mac's `Mentions.query` and
+/// `AgentReferences.query` read it.
+pub fn mention_query(text: &str) -> Option<(For, usize, &str)> {
+    let starts_word = |at: usize| at == 0 || text[..at].chars().next_back().is_some_and(char::is_whitespace);
+    let file = text.rfind('@').filter(|at| starts_word(*at)).filter(|at| !text[at + 1..].contains(char::is_whitespace));
+    let agent = text.rfind('&').filter(|at| starts_word(*at)).filter(|at| {
+        let rest = &text[at + 1..];
+        !rest.starts_with(char::is_whitespace) && !rest.contains('\n')
+    });
+    match (file, agent) {
+        (Some(file), Some(agent)) if agent > file => Some((For::Agents, agent, &text[agent + 1..])),
+        (Some(file), _) => Some((For::Files, file, &text[file + 1..])),
+        (None, Some(agent)) => Some((For::Agents, agent, &text[agent + 1..])),
+        (None, None) => None,
+    }
+}
+
+/// Whether `name` (as "&" put it in) is still in `text`, as a word of its own.
+fn mentioned(text: &str, name: &str) -> bool {
+    text.match_indices(name).any(|(at, _)| {
+        let after = text[at + name.len()..].chars().next();
+        after.is_none_or(|c| !c.is_alphanumeric())
+    })
+}
+
+/// A `file://` path's escapes decoded.
+fn percent_decoded(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%'
+            && let Some(byte) = path.get(at + 1..at + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            out.push(byte);
+            at += 3;
+            continue;
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Whether a file is a picture, shown as one while it waits to go.
 fn is_picture(path: &Path) -> bool {
     let extension = path.extension().map(|extension| extension.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -943,7 +1087,7 @@ impl Render for Composer {
         let c = &theme.colors;
         let text = self.text(cx);
         let empty = text.trim().is_empty() && self.attached.is_empty();
-        let offers = self.slash_offers(cx);
+        let (offers, _) = self.shown_offers(cx);
         self.slash_at = self.slash_at.min(offers.len().saturating_sub(1));
         // The keyword it starts with, as the box will read it (and as the sent message shows it).
         let keyword = typed::keyword(&text).map(|(keyword, _)| Chip::new("typed-keyword", format!("/{keyword}")).icon(IconName::Sparkle).tone(ChipTone::Accent));
@@ -1011,5 +1155,28 @@ impl Render for Composer {
             .flex_col()
             .child(div().debug_selector(|| "composer-card".into()).child(card))
             .children(note)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mention_being_typed_is_read_from_the_end() {
+        assert_eq!(mention_query("look at @sche").map(|(w, at, q)| (w, at, q.to_owned())), Some((For::Files, 8, "sche".into())));
+        assert!(mention_query("look at @schema.ts now").is_none(), "a file's word ended");
+        assert!(mention_query("me@example").is_none(), "not a word's start");
+        // An agent's name runs over spaces, to the line's end.
+        assert_eq!(mention_query("ask &Rate lim").map(|(w, _, q)| (w, q.to_owned())), Some((For::Agents, "Rate lim".into())));
+        assert!(mention_query("& then").is_none());
+        assert_eq!(mention_query("@a.ts and &Mi").map(|(w, _, _)| w), Some(For::Agents), "the later one");
+    }
+
+    #[test]
+    fn an_agent_picked_is_named_while_its_name_stays() {
+        assert!(mentioned("ask &Mira about it", "&Mira"));
+        assert!(!mentioned("ask &Miranda", "&Mira"));
+        assert!(!mentioned("ask her", "&Mira"));
     }
 }

@@ -75,6 +75,8 @@ struct State {
     models_fail: bool,
     /// What each conversation waits on you for, as the box words it (`kuvo/sessions/<id>/asks`).
     asks: HashMap<String, Vec<Value>>,
+    /// Each conversation's queue, in the order the box shows it (`kuvo/sessions/<id>/queue`).
+    queues: HashMap<String, Vec<Value>>,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -203,6 +205,7 @@ impl StandIn {
         state.messages.insert("ses_lighthouse".into(), long_history(now));
         state.messages.insert("ses_recipes".into(), recipes(now));
         state.asks.insert("ses_cms".into(), vec![cms_question()]);
+        state.queues.insert("ses_signup".into(), signup_queue());
     }
 }
 
@@ -218,6 +221,22 @@ pub fn redis_permission() -> Value {
             { "answer": "instead", "title": "Tell It What to Do Instead…", "named": null, "placeholder": "Tell it what to do instead…" }
         ]
     })
+}
+
+/// What waits behind the sign-up fix's run: one of yours, and a letter from a bot.
+fn signup_queue() -> Vec<Value> {
+    vec![
+        json!({ "id": "msg_q1", "words": "Then do the same for the password field: keep it, and say what's wrong with it", "files": [], "keyword": null, "from": null, "on": "engine", "delivery": "queue", "held": false }),
+        json!({ "id": "msg_q2", "words": "The design review is at 3: the error copy should match the new tone guide.", "files": ["tone-guide.pdf"], "keyword": null, "from": "Mira", "on": "box", "delivery": "queue", "held": false }),
+    ]
+}
+
+/// The files "@" finds in a session's folder.
+const FILES: &[&str] = &["web/src/signup/Form.tsx", "web/src/signup/Form.test.tsx", "web/src/signup/schema.ts", "web/src/settings/Profile.tsx", "web/src/api/client.ts", "web/package.json", "README.md"];
+
+/// The agents and sessions "&" names: bots, then sessions with titles.
+fn named() -> Vec<(&'static str, &'static str, &'static str, Option<&'static str>)> {
+    vec![("Mira", "bot", "ses_mira", Some("Design reviews")), ("Scout", "bot", "ses_scout", Some("Watches CI")), ("Rate limits per API key", "session", "ses_limits", Some("API")), ("Move the blog to the new CMS", "session", "ses_cms", Some("Website"))]
 }
 
 /// The agent's question in the CMS move.
@@ -585,6 +604,38 @@ impl StandIn {
                 answer(200, json!({}))
             }
             ("GET", ["kuvo", "sessions", session, "typed"]) if state.sessions.contains_key(*session) => answer(200, offers()),
+            ("GET", ["kuvo", "sessions", session, "mentions"]) if state.sessions.contains_key(*session) => {
+                let wanted = query(path, "q").map(decoded).unwrap_or_default().to_lowercase();
+                let mentions: Vec<Value> = match query(path, "for") {
+                    Some("files") => FILES
+                        .iter()
+                        .filter(|file| file.to_lowercase().contains(&wanted))
+                        .take(8)
+                        .map(|file| {
+                            let (folder, name) = file.rsplit_once('/').unwrap_or(("", file));
+                            json!({ "text": format!("@{file}"), "title": name, "detail": if folder.is_empty() { Value::Null } else { json!(folder) }, "kind": "file", "session": null })
+                        })
+                        .collect(),
+                    Some("agents") => named()
+                        .into_iter()
+                        .filter(|(name, _, id, _)| *id != *session && name.to_lowercase().contains(&wanted))
+                        .map(|(name, kind, id, detail)| json!({ "text": format!("&{name}"), "title": name, "detail": detail, "kind": kind, "session": id }))
+                        .collect(),
+                    _ => return answer(400, json!({ "message": "Say which: for=files or for=agents." })),
+                };
+                answer(200, json!({ "mentions": mentions }))
+            }
+            ("GET", ["kuvo", "sessions", session, "queue"]) if state.sessions.contains_key(*session) => {
+                answer(200, json!({ "paused": false, "held": [], "items": state.queues.get(*session).cloned().unwrap_or_default() }))
+            }
+            ("DELETE", ["kuvo", "sessions", session, "queue", item]) => {
+                let Some(queue) = state.queues.get_mut(*session) else { return answer(404, json!({})) };
+                let Some(at) = queue.iter().position(|each| each["id"] == json!(item)) else { return answer(404, json!({})) };
+                let removed = queue.remove(at);
+                let files: Vec<Value> = removed["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|name| json!({ "uri": format!("file://{HOME}/Downloads/{name}"), "name": name })).collect();
+                let words = removed["words"].clone();
+                answer(200, json!({ "paused": false, "held": [], "removed": { "id": item, "text": words, "words": words, "files": files, "delivery": removed["delivery"] } }))
+            }
             ("GET", ["kuvo", "sessions", session, "asks"]) if state.sessions.contains_key(*session) => answer(200, json!({ "asks": state.asks.get(*session).cloned().unwrap_or_default() })),
             ("POST", ["kuvo", "sessions", session, "asks", ask]) => {
                 let Some(asks) = state.asks.get_mut(*session) else { return answer(404, json!({})) };

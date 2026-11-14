@@ -191,9 +191,11 @@ impl Workspace {
                 Err(error) => kuvo_box::ConversationUpdate::Failed(error),
             };
             let asks = client.asks(session).unwrap_or_default();
+            let queue = client.queue(session).unwrap_or_default();
             view.update(cx, |view, cx| {
                 view.take(update, cx);
                 view.take_asks(asks, cx);
+                view.take_queue(queue, cx);
                 view.composer().clone().update(cx, |composer, cx| composer.read_at_once(cx));
             });
         }
