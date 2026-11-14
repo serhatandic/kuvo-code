@@ -155,7 +155,9 @@ pub struct Answer {
     // What goes back.
     pub restore: Option<Restore>,
     pub error: Option<String>,
-    /// Where it's refused for the conversation's model: what to offer doing about it.
+    /// Where it's refused for the conversation's model: what to offer doing about it (none for
+    /// one this client can't read: the rest of the answer stands).
+    #[serde(default, deserialize_with = "crate::models::lenient")]
     pub action: Option<crate::models::Action>,
 }
 
@@ -207,4 +209,16 @@ pub struct OfferedCommand {
 pub struct Offers {
     pub keywords: Vec<OfferedKeyword>,
     pub commands: Vec<OfferedCommand>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An action a newer box words otherwise is none: the rest of its answer stands.
+    #[test]
+    fn an_action_this_client_cant_read_leaves_the_answer() {
+        let answer: Answer = serde_json::from_value(serde_json::json!({ "restore": { "text": "fix it" }, "error": "Choose a model to send it.", "action": { "do": "choose" } })).unwrap();
+        assert_eq!((answer.error.as_deref(), answer.action), (Some("Choose a model to send it."), None));
+    }
 }

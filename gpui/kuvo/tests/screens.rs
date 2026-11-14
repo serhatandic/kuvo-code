@@ -1226,3 +1226,26 @@ fn whats_offered_is_read_in_the_conversations_folder(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(folders(&stand_in), vec![Some("/Users/sam/Projects/website".to_owned()), None], "a chat: the box's own lists");
 }
+
+/// A model gone: Send waits for one for a message, but a "!" command or a goal's pause goes to
+/// the box, which says whether it needs the model (they don't).
+#[gpui::test]
+fn with_a_model_to_choose_a_command_still_goes_to_the_box(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let gone: ModelState = serde_json::from_value(json!({ "model": { "providerID": "openai", "id": "gpt-4" }, "runs": false, "missing": "gone", "refusal": "gpt-4 is no longer available: choose another model.", "choose": true, "action": { "do": "choose", "label": "Choose a Model", "help": "Choose another model" } })).unwrap();
+    composer.update(cx, |composer, cx| composer.take_models(Models { state: Some(gone), ..Models::default() }, cx));
+
+    cx.simulate_input("Use Redis");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/send").is_empty());
+    assert_eq!(composer.read_with(cx, |composer, _| composer.note().map(|note| note.text.to_string())).as_deref(), Some("gpt-4 is no longer available: choose another model."), "in its box's words");
+
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("!ls");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/typed").len(), 1, "asked of the box");
+}

@@ -232,6 +232,19 @@ impl Workspace {
                 // Sessions started here are in the list now: what their box said of them goes.
                 let listing = &self.listing;
                 self.started.retain(|session, _| listing.facts(session).is_none());
+                // A composer opened before the list knew its conversation's folder (or since it
+                // moved): what's offered is read there now.
+                let moved: Vec<_> = self
+                    .composers
+                    .iter()
+                    .filter_map(|(session, (composer, _))| {
+                        let folder = self.listing.facts(session)?.directory.clone();
+                        (composer.read(cx).folder() != Some(folder.as_str())).then(|| (composer.clone(), folder))
+                    })
+                    .collect();
+                for (composer, folder) in moved {
+                    composer.update(cx, |composer, cx| composer.set_folder(Some(folder), cx));
+                }
             }
             ListUpdate::Waiting(why) => self.lists = Lists::Waiting(why),
             ListUpdate::Held { .. } => {

@@ -79,7 +79,7 @@ pub struct ModelState {
 }
 
 /// An action as the box says it; one this client can't read is none, never the whole answer lost.
-fn lenient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<Action>, D::Error> {
+pub(crate) fn lenient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<Action>, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).ok())
 }

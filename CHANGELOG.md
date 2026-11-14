@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- When a conversation's model can't run (its account needs a sign-in or a key, its coding agent isn't installed, or the model is gone), what Send says and the sign-in card's help come from the computer the conversation is on, in the same words on your Mac and your iPhone. They name the account but no longer the computer or a Settings page.
+- When a conversation's model can't run (its account needs a sign-in or a key, its coding agent isn't installed, or the model is gone), what Send says comes from the computer the conversation is on, in the same words on your Mac and your iPhone. It names the account and the model, but no longer the computer or a Settings page.
 - What goes with your message for the agent (your comments on the changes, where your files are, who the agents you name with & are) is written by the computer the conversation is on, the same way from your Mac and your iPhone; conversations from before show as they did.
 - New sessions in every project open as conversations. The project’s terminal-command setting and terminal tabs in the main window have been removed; existing projects keep their names, folders and Run commands. Terminals remain available in the side panel.
 - Antigravity's limits and conversation spend are read by your computers with the sign-ins you made in Kuvo Code, including on Linux, with the app closed. The Antigravity app's own login and history are no longer read.

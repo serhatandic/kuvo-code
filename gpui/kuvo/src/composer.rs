@@ -260,6 +260,11 @@ impl Composer {
 
     /// The conversation's folder, as its box lists it: what's offered is read there, its project's
     /// own models too (`models.offered.folder`).
+    /// The conversation's folder, where what's offered is read (none known yet).
+    pub fn folder(&self) -> Option<&str> {
+        self.folder.as_deref()
+    }
+
     /// Whether it was read again for it (a folder it didn't have, in the app).
     pub fn set_folder(&mut self, folder: Option<String>, cx: &mut Context<Self>) -> bool {
         if self.folder == folder {
@@ -549,7 +554,9 @@ impl Composer {
         draft.named = self.named.iter().filter(|(text, _)| mentioned(&draft.text, text)).map(|(_, session)| session.clone()).collect();
         draft.named.dedup();
         draft.refusal = self.models.state.as_ref().and_then(|state| state.refusal.clone());
-        if self.needs_model() {
+        // ("/" and "!" texts go to the box, which says whether they need the model: "!" commands and
+        // a goal's pause don't.)
+        if self.needs_model() && !(matches!(self.target, Target::Session { .. }) && typed::asks_box(&text)) {
             self.attached = files;
             // As its box words it, for a conversation; a new one's box says only that none runs.
             let words = self.models.state.as_ref().and_then(|state| state.refusal.clone()).unwrap_or_else(|| "Choose a model to send it.".to_owned());
