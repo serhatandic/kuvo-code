@@ -4030,7 +4030,10 @@ var FEATURES = [
   "git",
   "git.backups",
   "git.branches",
+  "git.branches.worktree",
   "git.changes.count",
+  "git.changes.path",
+  "git.files",
   "git.merge",
   "git.pull-request",
   "git.pull-request.draft",
@@ -37255,12 +37258,60 @@ async function uncommittedIn(root, scope) {
   const status = scope === "branch" ? await text4(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
   return status === null || status.length > 0;
 }
-async function changesIn(directory, scope, base) {
+function gitLook(gitDir) {
+  const stamp = (file) => {
+    try {
+      return String(fs124.statSync(file).mtimeMs);
+    } catch {
+      return "";
+    }
+  };
+  return ["index", "HEAD", path128.join("logs", "HEAD")].map((file) => stamp(path128.join(gitDir, file))).join("/");
+}
+function changeClock(look) {
+  let changed = Date.now();
+  let looked = look();
+  return {
+    look: () => {
+      const now = look();
+      if (now !== looked)
+        changed = Date.now();
+      looked = now;
+      return now;
+    },
+    told: () => {
+      changed = Date.now();
+    },
+    changed: () => changed
+  };
+}
+var filesReads = new Map;
+function sharedFiles(directory, since) {
+  const known = filesReads.get(directory);
+  if (known && known.started >= since && (known.ended === undefined || Date.now() - known.ended < 1000))
+    return known.read;
+  const entry = { read: filesIn2(directory), started: Date.now() };
+  entry.read.finally(() => {
+    entry.ended = Date.now();
+    setTimeout(() => {
+      if (filesReads.get(directory) === entry)
+        filesReads.delete(directory);
+    }, 1000).unref?.();
+  }).catch(() => {});
+  filesReads.set(directory, entry);
+  return entry.read;
+}
+var FILES_EVERY = 1e4;
+var FILES_WATCHED_EVERY = 30000;
+var ONE_FILE_MOST = 4 * 1024 * 1024;
+async function changesIn(directory, scope, base, only) {
   const found = await scoped(directory, scope, base);
   if (!found)
     return { repository: false };
   const { root, against, limit, compared } = found;
   const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "-c", "diff.submodule=short", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  if (only)
+    return oneFileIn(root, against, scope, compared, args, only);
   const patch = await text4(root, [...args, ...compared, "--", limit]);
   if (patch === null)
     return null;
@@ -37280,6 +37331,176 @@ async function changesIn(directory, scope, base) {
     }
   }
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
+}
+async function oneFileIn(root, against, scope, compared, args, only) {
+  const paths = [only.path, ...only.oldPath ? [only.oldPath] : []];
+  const known = await git2(root, ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", only.path]);
+  const done = (patch, big = Buffer.byteLength(patch) > ONE_FILE_MOST) => big ? { repository: true, root, against, patch: "", untracked: [], hashes: {}, uncommitted: true, big: true } : { repository: true, root, against, patch, untracked: [], hashes: {}, uncommitted: true };
+  if (!known.ok && scope !== "staged" && !only.path.endsWith("/")) {
+    const file = path128.join(root, only.path);
+    try {
+      const stat = fs124.statSync(file);
+      if (!stat.isFile())
+        return done("");
+      if (stat.size > ONE_FILE_MOST)
+        return done("", true);
+    } catch {
+      return done("");
+    }
+    const ran = await git2(root, [...args, "--no-index", "--", "/dev/null", only.path]);
+    return done(ran.out.toString("utf8"));
+  }
+  const old = `${against}:${only.oldPath ?? only.path}`;
+  const sides = scope === "staged" ? [old, `:${only.path}`] : scope === "unstaged" ? [`:${only.oldPath ?? only.path}`, "disk"] : [old, "disk"];
+  const sizes = [];
+  for (const side of sides) {
+    if (side === "disk")
+      sizes.push(fs124.statSync(path128.join(root, only.path), { throwIfNoEntry: false })?.size ?? 0);
+    else {
+      const size = (await text4(root, ["cat-file", "-s", side]))?.trim();
+      if (size)
+        sizes.push(Number(size));
+    }
+  }
+  if (sizes.some((size) => size > ONE_FILE_MOST))
+    return done("", true);
+  const ran = await git2(root, ["--literal-pathspecs", ...args, ...compared, "--", ...paths]);
+  return ran.ok ? done(ran.out.toString("utf8")) : null;
+}
+function stampOf(root, name, indexed, since) {
+  const stat = fs124.lstatSync(path128.join(root, name), { bigint: true, throwIfNoEntry: false });
+  const fresh = since !== undefined && stat && stat.mtimeNs >= since ? ":since" : "";
+  return `${indexed ?? "-"}:${stat ? `${stat.size}-${stat.mtimeNs}` : "gone"}${fresh}`;
+}
+async function indexEntryOf(root, name) {
+  const said = await text4(root, ["--literal-pathspecs", "-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames", "--", name]) ?? "";
+  for (const record of said.split("\x00")) {
+    if (record[0] !== "1" && record[0] !== "2")
+      continue;
+    const fields = record.split(" ");
+    if (fields.slice(8).join(" ") !== name)
+      continue;
+    const object = fields[7] ?? "";
+    return object && !/^0+$/.test(object) ? object : undefined;
+  }
+  return;
+}
+async function staleDiscard(root, file, stamp) {
+  const name = file.path.replace(/\/$/, "");
+  if (file.status === "added" && (await text4(root, ["--literal-pathspecs", "ls-tree", "--name-only", "HEAD", "--", name]))?.trim() && (await git2(root, ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", name])).ok) {
+    return `${name} is in the last commit now, so it isn’t a new file any more. Look at it again before you discard it.`;
+  }
+  const now = stampOf(root, name, await indexEntryOf(root, name)) + (file.oldPath ? `|${stampOf(root, file.oldPath, undefined)}` : "");
+  if (stamp !== undefined && now !== stamp) {
+    return `${name} changed since it was listed. Look at it again before you discard it.`;
+  }
+  return null;
+}
+var GROUPS = ["conflicted", "staged", "unstaged", "untracked"];
+var changeOf = (letter) => letter === "A" || letter === "C" ? "added" : letter === "D" ? "deleted" : letter === "R" ? "renamed" : "modified";
+async function linesBy(root, compared, limit) {
+  const counted = new Map;
+  const ran = await git2(root, ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", ...compared, "--", limit]);
+  if (!ran.ok)
+    return counted;
+  const fields = ran.out.toString("utf8").split("\x00");
+  for (let at = 0;at < fields.length; at++) {
+    const field = fields[at];
+    if (!field)
+      continue;
+    const [added = "", deleted = "", ...rest] = field.split("\t");
+    let name = rest.join("\t");
+    if (!name) {
+      at += 2;
+      name = fields[at] ?? "";
+    }
+    if (added !== "-" && deleted !== "-")
+      counted.set(name, { additions: Number(added) || 0, deletions: Number(deleted) || 0 });
+  }
+  return counted;
+}
+async function filesIn2(directory) {
+  const found = await scoped(directory, "uncommitted");
+  if (!found)
+    return { repository: false };
+  const { root, against, limit } = found;
+  const since = BigInt(Date.now()) * 1000000n;
+  const status = await git2(root, ["-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--find-renames", "--", limit]);
+  if (!status.ok)
+    return null;
+  const [staged, unstaged] = await Promise.all([linesBy(root, ["--cached", against], limit), linesBy(root, [], limit)]);
+  const files = [];
+  let more = 0;
+  let untracked = 0;
+  const indexed = new Map;
+  const add = (group, path, status, oldPath) => {
+    const scope = group === "staged" ? "staged" : group === "conflicted" ? "uncommitted" : "unstaged";
+    const lines = group === "staged" ? staged.get(path) : group === "unstaged" ? unstaged.get(path) : undefined;
+    const discard = group === "conflicted" ? undefined : status === "added" ? "trash" : scope === "unstaged" ? "unstaged" : "head";
+    const stamp = discard ? stampOf(root, path.replace(/\/$/, ""), indexed.get(path), since) + (oldPath ? `|${stampOf(root, oldPath, undefined, since)}` : "") : undefined;
+    files.push({ path, ...oldPath ? { oldPath } : {}, group, status, scope, ...lines ?? {}, ...discard ? { discard, stamp } : {}, ...path.endsWith("/") ? { repository: true } : {} });
+  };
+  const records = status.out.toString("utf8").split("\x00");
+  for (let at = 0;at < records.length; at++) {
+    const record = records[at];
+    const kind = record[0];
+    if (kind === "?") {
+      if (untracked++ < NEW_FILES_MOST)
+        add("untracked", record.slice(2), "added");
+      else
+        more++;
+    }
+    if (kind !== "1" && kind !== "2" && kind !== "u")
+      continue;
+    const fields = record.split(" ");
+    const [x = ".", y = "."] = fields[1] ?? "";
+    const name = fields.slice(kind === "1" ? 8 : kind === "2" ? 9 : 10).join(" ");
+    const object = fields[7] ?? "";
+    if (kind !== "u" && object && !/^0+$/.test(object))
+      indexed.set(name, object);
+    if (kind === "u") {
+      add("conflicted", name, "modified");
+      continue;
+    }
+    const oldPath = kind === "2" ? records[++at] : undefined;
+    if (x !== ".")
+      add("staged", name, changeOf(x), x === "R" ? oldPath : undefined);
+    if (y !== ".")
+      add("unstaged", name, y === "A" ? "added" : changeOf(y));
+  }
+  files.sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" }));
+  const commits = await hasStaged(root) ? "staged" : "all";
+  const inFolder = (name) => limit === "." || name === limit || name.startsWith(limit + "/");
+  const stagedNames = (await text4(root, ["-c", "core.quotepath=off", "diff", "--cached", "--name-only", "-z", "--no-renames", "--no-ext-diff", against]) ?? "").split("\x00").filter(Boolean);
+  const stagedElsewhere = stagedNames.filter((name) => !inFolder(name)).length;
+  const underway = await underwayIn(root);
+  return {
+    repository: true,
+    root,
+    branch: await branchOf(root),
+    files,
+    uncommitted: files.length > 0 || more > 0,
+    commits,
+    stagedElsewhere,
+    ...more ? { more } : {},
+    ...underway ? { underway } : {}
+  };
+}
+var NEW_FILES_MOST = 1000;
+async function underwayIn(root) {
+  const gitDir = (await text4(root, ["rev-parse", "--absolute-git-dir"]))?.trim();
+  if (!gitDir)
+    return;
+  const has = (name) => fs124.existsSync(path128.join(gitDir, name));
+  if (has("rebase-merge") || has("rebase-apply"))
+    return "rebasing";
+  if (has("MERGE_HEAD"))
+    return "merging";
+  if (has("CHERRY_PICK_HEAD"))
+    return "cherry-picking";
+  if (has("REVERT_HEAD"))
+    return "reverting";
+  return;
 }
 async function countIn(directory, scope, base) {
   const found = await scoped(directory, scope, base);
@@ -37359,6 +37580,11 @@ function inTheWay(root, name) {
   }
   return null;
 }
+async function sameAsCommitted(root, name) {
+  const committed = (await text4(root, ["--literal-pathspecs", "ls-tree", "HEAD", "--", name]))?.split("\t")[0]?.split(" ")[2];
+  const onDisk = (await text4(root, ["hash-object", "--no-filters", "--", name]))?.trim();
+  return !!committed && committed === onDisk;
+}
 async function perform(action, root, file, scope) {
   const paths = [file.path, ...file.oldPath ? [file.oldPath] : []];
   const on = async (args) => (await git2(root, ["--literal-pathspecs", ...args], true)).ok;
@@ -37410,11 +37636,22 @@ async function perform(action, root, file, scope) {
   if (file.status === "added")
     return await untrack(file.path) ?? gone(file.path);
   if (file.status === "renamed" && file.oldPath) {
+    const written = path128.join(root, file.oldPath);
+    if (kind(written) && !kind(written)?.isDirectory() && !await sameAsCommitted(root, file.oldPath)) {
+      const moved = away(written);
+      if (moved)
+        return moved;
+    }
     const failed = await untrack(file.path) ?? await clear([file.oldPath]) ?? await run(scope === "unstaged" ? ["restore", "--worktree", "--", file.oldPath] : ["restore", "--source=HEAD", "--staged", "--worktree", "--", file.oldPath]);
     return failed ?? gone(file.path);
   }
   if (file.status === "modified" && (await text4(root, ["--literal-pathspecs", "ls-files", "-s", "--", file.path]))?.startsWith("160000") && (await text4(path128.join(root, file.path), ["status", "--porcelain"]))?.trim()) {
     return `${file.path} is a submodule: its changes are in its own repository, so discard them there.`;
+  }
+  if (file.status === "deleted" && scope !== "unstaged" && kind(path128.join(root, file.path))?.isFile() && !await sameAsCommitted(root, file.path)) {
+    const moved = away(path128.join(root, file.path));
+    if (moved)
+      return moved;
   }
   const failed = await clear(scope === "unstaged" ? paths : [file.path]);
   if (failed)
@@ -37471,8 +37708,11 @@ async function branchesIn(directory) {
     return null;
   const branch = (ref) => ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
   const head = (await text4(at, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
-  return { repository: true, root, current: branch(head), branches: listed.split(`
-`).map(branch).filter((name) => !!name) };
+  const branches = listed.split(`
+`).map(branch).filter((name) => !!name);
+  const tree = root ? await mergedFrom(root) : null;
+  const worktree = tree && fs124.existsSync(tree.project) ? { into: tree.base ?? await branchOf(tree.project) } : undefined;
+  return { repository: true, root, current: branch(head), branches, ...worktree ? { worktree } : {} };
 }
 async function switchBranch(directory, branch, create) {
   const found = await repositoryOf3(directory);
@@ -37714,7 +37954,7 @@ function authorOf(body) {
   return Object.fromEntries(AUTHOR.flatMap((key) => typeof given[key] === "string" ? [[key, given[key]]] : []));
 }
 async function* changesRoute(context) {
-  const { request, route, json } = context;
+  const { request, route, json, signal } = context;
   const method = request.method.toUpperCase();
   if (route === "kuvo/git/show") {
     if (method !== "GET")
@@ -37734,6 +37974,55 @@ async function* changesRoute(context) {
       return yield* json(404, { message: "git has no such file." });
     return yield* [{ head: { status: 200, headers: { "content-type": "application/octet-stream", "content-length": String(shown.out.length) } } }, { body: shown.out }];
   }
+  if (route === "kuvo/git/files" || route === "kuvo/git/files/events") {
+    if (method !== "GET")
+      return yield* json(405, {});
+    const directory = folderAt(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"));
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/files") {
+      const found = await filesIn2(directory);
+      return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
+    }
+    const gitDir = (await text4(directory, ["rev-parse", "--absolute-git-dir"]))?.trim();
+    const clock = changeClock(() => gitDir ? gitLook(gitDir) : "");
+    const look = clock.look;
+    const watched = process.platform === "darwin" && !!gitDir;
+    let next = 0;
+    let waiting;
+    const listen = (told) => {
+      if (!watched)
+        return () => {};
+      const soon = () => {
+        clock.told();
+        if (waiting)
+          return;
+        waiting = setTimeout(() => {
+          waiting = undefined;
+          told();
+        }, Math.max(0, next - Date.now()));
+      };
+      const watch = watchFolders([directory], (...given) => {
+        const name = typeof given[1] === "string" ? given[1] : "";
+        if (name === ".git" || name.startsWith(".git/") || name.includes("/.git/"))
+          return;
+        soon();
+      });
+      return () => {
+        if (waiting)
+          clearTimeout(waiting);
+        watch.close();
+      };
+    };
+    const read = async () => {
+      const started = Date.now();
+      const read = await sharedFiles(directory, clock.changed()) ?? undefined;
+      next = Date.now() + Math.max(1000, 2 * (Date.now() - started));
+      return read;
+    };
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followedLive(read, listen, signal ?? undefined, { look, every: watched ? FILES_WATCHED_EVERY : FILES_EVERY });
+  }
   if (method !== "POST")
     return yield* json(405, {});
   const body = parsed(request.body) ?? {};
@@ -37744,7 +38033,11 @@ async function* changesRoute(context) {
     const directory = folderAt(body.directory);
     if (!directory)
       return yield* json(404, { message: "That folder isn’t there." });
-    const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
+    const only = body.path === undefined ? undefined : inRepository(body.path);
+    const was = body.oldPath === undefined || body.oldPath === null ? undefined : inRepository(body.oldPath);
+    if (only === null || was === null)
+      return yield* json(400, { message: "Name a file in the repository." });
+    const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined, only ? { path: String(body.path), ...was ? { oldPath: was } : {} } : undefined);
     return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
   }
   if (route === "kuvo/git/changes/count") {
@@ -37761,6 +38054,11 @@ async function* changesRoute(context) {
     const status = body.status ?? "modified";
     if (!root || !name || old === null || !STATUSES.includes(status))
       return yield* json(400, { message: "Name a repository and a file in it." });
+    if (route === "kuvo/git/discard") {
+      const stale = await staleDiscard(root, { path: name, ...old ? { oldPath: old } : {}, status }, typeof body.stamp === "string" ? body.stamp : undefined);
+      if (stale)
+        return yield* json(409, { message: stale });
+    }
     const failed = await perform(route.slice("kuvo/git/".length), root, { path: name, oldPath: old, status }, scope);
     return yield* failed ? json(422, { message: failed }) : json(200, {});
   }
@@ -41263,7 +41561,7 @@ import fs136 from "node:fs";
 import path141 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "38f364e377c3";
+var BRIDGE_VERSION = "5b51a03e5245";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45938,6 +46236,7 @@ async function withDates(tree, dated) {
   }
   return { ...tree, modified };
 }
+var VERSION_CONTROL = new Set([".git", ".hg", ".svn"]);
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
@@ -45959,8 +46258,9 @@ function listFolders(requestPath) {
       return false;
     }
   })();
-  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs144.existsSync(path150.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => byName(a.name, b.name));
-  const files = query.get("files") === "1" ? entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map((entry) => entry.name).sort(byName) : undefined;
+  const panel = query.get("files") === "1";
+  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && !(panel && VERSION_CONTROL.has(entry.name)) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs144.existsSync(path150.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => byName(a.name, b.name));
+  const files = panel ? entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !VERSION_CONTROL.has(entry.name) && !isFolder(entry)).map((entry) => entry.name).sort(byName) : undefined;
   return { status: 200, value: { path: at, home, parent: at === path150.dirname(at) ? null : path150.dirname(at), folders, ...files ? { files } : {} } };
 }
 function makeFolder(body) {

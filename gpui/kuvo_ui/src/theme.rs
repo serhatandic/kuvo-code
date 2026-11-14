@@ -183,6 +183,11 @@ pub struct Colors {
     pub success: Hsla,
     pub warning: Hsla,
     pub danger: Hsla,
+    /// A destructive button (Discard, Delete): its fill, under the pointer and pressed, each dark
+    /// enough for white words on it (4.5:1).
+    pub danger_fill: Hsla,
+    pub danger_hover: Hsla,
+    pub danger_pressed: Hsla,
 
     /// Behind a diff's added and removed lines, and their signs and counts.
     pub diff_added_wash: Hsla,
@@ -259,6 +264,9 @@ impl Colors {
             success: hex(0x2E9E5B),
             warning: hex(0xC7820E),
             danger: hex(0xD93B3B),
+            danger_fill: hex(0xD93B3B),
+            danger_hover: hex(0xC43030),
+            danger_pressed: hex(0xAD2828),
 
             diff_added_wash: hexa(0x2E9E5B1A),
             diff_removed_wash: hexa(0xD93B3B17),
@@ -319,6 +327,9 @@ impl Colors {
             success: hex(0x4CC27A),
             warning: hex(0xE0A43A),
             danger: hex(0xF06363),
+            danger_fill: hex(0xC43030),
+            danger_hover: hex(0xCC3636),
+            danger_pressed: hex(0xA82727),
 
             diff_added_wash: hexa(0x4CC27A1F),
             diff_removed_wash: hexa(0xF0636324),
@@ -500,6 +511,10 @@ mod tests {
                 assert!(contrast(colors.text_faint, surface) >= 2.4);
             }
             assert!(contrast(colors.text_on_primary, colors.primary) >= 7.0);
+            // A destructive button's words, at rest, under the pointer and pressed.
+            for fill in [colors.danger_fill, colors.danger_hover, colors.danger_pressed] {
+                assert!(contrast(colors.text_on_accent, fill) >= 4.5, "{fill:?}");
+            }
             // Code stays readable on its well: comments 3:1, line numbers 2:1 at least.
             assert!(contrast(colors.syntax.comment, colors.sunken) >= 3.0);
             assert!(contrast(colors.syntax.line_number, colors.sunken) >= 2.0);

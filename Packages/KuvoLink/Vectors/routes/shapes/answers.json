@@ -3155,7 +3155,16 @@
             "literal": "git.branches"
            },
            {
+            "literal": "git.branches.worktree"
+           },
+           {
             "literal": "git.changes.count"
+           },
+           {
+            "literal": "git.changes.path"
+           },
+           {
+            "literal": "git.files"
            },
            {
             "literal": "git.merge"
@@ -3662,7 +3671,16 @@
             "literal": "git.branches"
            },
            {
+            "literal": "git.branches.worktree"
+           },
+           {
             "literal": "git.changes.count"
+           },
+           {
+            "literal": "git.changes.path"
+           },
+           {
+            "literal": "git.files"
            },
            {
             "literal": "git.merge"
@@ -6050,7 +6068,10 @@
         "hashes": {
          "map": "string"
         },
-        "uncommitted": "bool"
+        "uncommitted": "bool",
+        "big?": {
+         "literal": true
+        }
        }
       }
      ]
@@ -6088,6 +6109,283 @@
    }
   },
   {
+   "route": "GET kuvo/git/files",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "branch": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "files": {
+         "list": {
+          "object": {
+           "path": "string",
+           "oldPath?": "string",
+           "group": {
+            "oneOf": [
+             {
+              "literal": "conflicted"
+             },
+             {
+              "literal": "staged"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "untracked"
+             }
+            ]
+           },
+           "status": {
+            "oneOf": [
+             {
+              "literal": "added"
+             },
+             {
+              "literal": "deleted"
+             },
+             {
+              "literal": "modified"
+             },
+             {
+              "literal": "renamed"
+             }
+            ]
+           },
+           "scope": {
+            "oneOf": [
+             {
+              "literal": "uncommitted"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "staged"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "discard?": {
+            "oneOf": [
+             {
+              "literal": "trash"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "head"
+             }
+            ]
+           },
+           "stamp?": "string",
+           "repository?": {
+            "literal": true
+           }
+          }
+         }
+        },
+        "uncommitted": "bool",
+        "commits": {
+         "oneOf": [
+          {
+           "literal": "staged"
+          },
+          {
+           "literal": "all"
+          }
+         ]
+        },
+        "stagedElsewhere": "number",
+        "more?": "number",
+        "underway?": {
+         "oneOf": [
+          {
+           "literal": "merging"
+          },
+          {
+           "literal": "rebasing"
+          },
+          {
+           "literal": "cherry-picking"
+          },
+          {
+           "literal": "reverting"
+          }
+         ]
+        }
+       }
+      }
+     ]
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/git/files/events",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "branch": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "files": {
+         "list": {
+          "object": {
+           "path": "string",
+           "oldPath?": "string",
+           "group": {
+            "oneOf": [
+             {
+              "literal": "conflicted"
+             },
+             {
+              "literal": "staged"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "untracked"
+             }
+            ]
+           },
+           "status": {
+            "oneOf": [
+             {
+              "literal": "added"
+             },
+             {
+              "literal": "deleted"
+             },
+             {
+              "literal": "modified"
+             },
+             {
+              "literal": "renamed"
+             }
+            ]
+           },
+           "scope": {
+            "oneOf": [
+             {
+              "literal": "uncommitted"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "staged"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "discard?": {
+            "oneOf": [
+             {
+              "literal": "trash"
+             },
+             {
+              "literal": "unstaged"
+             },
+             {
+              "literal": "head"
+             }
+            ]
+           },
+           "stamp?": "string",
+           "repository?": {
+            "literal": true
+           }
+          }
+         }
+        },
+        "uncommitted": "bool",
+        "commits": {
+         "oneOf": [
+          {
+           "literal": "staged"
+          },
+          {
+           "literal": "all"
+          }
+         ]
+        },
+        "stagedElsewhere": "number",
+        "more?": "number",
+        "underway?": {
+         "oneOf": [
+          {
+           "literal": "merging"
+          },
+          {
+           "literal": "rebasing"
+          },
+          {
+           "literal": "cherry-picking"
+          },
+          {
+           "literal": "reverting"
+          }
+         ]
+        }
+       }
+      }
+     ]
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "POST kuvo/git/branches",
    "answers": {
     "200": {
@@ -6118,6 +6416,16 @@
         },
         "branches": {
          "list": "string"
+        },
+        "worktree?": {
+         "object": {
+          "into": {
+           "oneOf": [
+            "string",
+            "null"
+           ]
+          }
+         }
         }
        }
       }
@@ -6219,6 +6527,11 @@
    "answers": {
     "200": {
      "object": {}
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },
