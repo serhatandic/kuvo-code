@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { kinds, type AgentKind } from "./accounts"
 import type { AccountLimits, LimitedAccount, LimitExtra, LimitWindow, Limits, LimitsService } from "./limits"
-import { takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
+import { takeNotices, takeStates, currentNotice, type UsageNotice, type NoticeState } from "./usage/notices"
 import { limitRows, type LimitRow, type LimitsBox } from "./limits-rows"
 
 /** What one box tells another of its limits (`{"limits": …}` between links). */
@@ -26,6 +26,8 @@ export interface LimitsMail {
   ask?: true
   /** Read these of yours now, if they may be (rows' ids: a refresh asked where they aren't). */
   refresh?: string[]
+  /** Setup boundary for notice facts/state only; ordinary limit readings remain shareable. */
+  noticeSetup?: string
 }
 
 /** What carries mail to a peer (the bridge's mail to its link, `PeerPost`). */
@@ -41,6 +43,8 @@ export interface LimitsTransport {
 export interface LimitsDirectory {
   /** Whether the link has said since this started. */
   readonly told: boolean
+  readonly setup?: string
+  readonly inNoSetup?: boolean
   peerBoxes(): { key: string; name: string }[]
   /** This box, as the link names it. */
   own(): { key: string; name: string } | undefined
@@ -51,6 +55,7 @@ export interface LimitsDirectory {
 }
 
 interface Kept {
+  noticeSetup?: string
   name: string
   /** When its last mail came, by this box's clock. */
   heard: number
@@ -121,10 +126,11 @@ export class LimitsPeers {
   /** One current account holder forwards decided notices to phones, even if a peer read it. */
   forwarder(service: string, identity: string): string | undefined {
     const own = this.directory.own()?.key
-    if (!own || !this.directory.told || !this.directory.isPeer) return own
+    if (!own || !this.directory.told) return undefined
+    if (!this.directory.setup || !this.directory.isPeer) return own
     const candidates = [own]
     for (const [key, kept] of this.peers) {
-      if (!this.directory.isPeer(key) || this.now() - kept.heard > PEER_AWAY) continue
+      if (!this.noticePeer(key, kept) || this.now() - kept.heard > PEER_AWAY) continue
       if (kept.accounts.some(a => a.service === service && a.identity === identity)) candidates.push(key)
     }
     return candidates.sort()[0]
@@ -134,14 +140,14 @@ export class LimitsPeers {
 
   /** Per-window decisions, including turn-only accounts whose maker was never checked here. */
   noticeStates(service: LimitsService, identity: string): Record<string, NoticeState>[] {
-    if (!this.directory.told || !this.directory.isPeer) return []
-    return [...this.peers].flatMap(([key, kept]) => this.directory.isPeer!(key) ? kept.accounts.filter(a => a.service === service && a.identity === identity).map(a => a.noticeState ?? {}) : [])
+    if (!this.directory.told || !this.directory.setup || !this.directory.isPeer) return []
+    return [...this.peers].flatMap(([key, kept]) => this.noticePeer(key, kept) ? kept.accounts.filter(a => a.service === service && a.identity === identity).map(a => a.noticeState ?? {}) : [])
   }
 
   /** Only direct peers' decided notices: vouched-for computers never send or receive these. */
   notices(): UsageNotice[] {
-    if (!this.directory.told || !this.directory.isPeer) return []
-    return [...this.peers].flatMap(([key, kept]) => this.directory.isPeer!(key) ? kept.accounts.flatMap(a => a.notices ?? []) : [])
+    if (!this.directory.told || !this.directory.setup || !this.directory.isPeer) return []
+    return [...this.peers].flatMap(([key, kept]) => this.noticePeer(key, kept) ? kept.accounts.flatMap(a => a.notices ?? []).filter(n => currentNotice(n, this.now())) : [])
   }
 
   /** Every computer's accounts, this box's first, then each peer's by name. */
@@ -150,7 +156,7 @@ export class LimitsPeers {
     const self = this.directory.own()
     const boxes: LimitsBox[] = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }]
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))
-    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(this.directory.isPeer?.(key) === false ? { vouched: true } : {}), accounts: kept.accounts })
+    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(this.directory.isPeer?.(key) === false ? { vouched: true } : {}), accounts: this.noticePeer(key, kept) ? kept.accounts.map(a => ({ ...a, ...(a.notices ? { notices: a.notices.filter(n => currentNotice(n, now)) } : {}) })) : withoutNotices(kept.accounts) })
     return limitRows(boxes)
   }
 
@@ -171,7 +177,7 @@ export class LimitsPeers {
       const last = this.told.get(key)
       const due = !last || now - last.at >= TELL_AGAIN || (last.json !== json && (urgent || now - last.at >= HEARD_EVERY))
       if (!due) continue
-      this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts), ...(!last ? { ask: true as const } : {}) }, false)
+      this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts), ...this.noticeEnvelope(key), ...(!last ? { ask: true as const } : {}) }, false)
       this.told.set(key, { json, at: now })
     }
   }
@@ -187,14 +193,14 @@ export class LimitsPeers {
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW ? now - given.at : 0
     const accounts = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount(account, off, now)
-      if (taken && !this.directory.isPeer?.(from)) { delete taken.notices; delete taken.noticeState }
+      if (taken && (!this.noticeOurs(from) || given.noticeSetup !== this.directory.setup)) { delete taken.notices; delete taken.noticeState }
       return taken ? [taken] : []
     })
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     const seen = new Set(before?.accounts.flatMap(a => a.notices?.map(n => n.id) ?? []) ?? [])
     const notices = accounts.flatMap(a => a.notices ?? []).filter(n => !seen.has(n.id))
-    this.peers.set(from, { name, heard: now, accounts })
+    this.peers.set(from, { name, heard: now, accounts, ...(this.noticeOurs(from) && given.noticeSetup === this.directory.setup ? { noticeSetup: given.noticeSetup } : {}) })
     if (notices.length) this.limits.deliverNotices(notices)
     this.save()
     this.limits.peersChanged()
@@ -225,7 +231,7 @@ export class LimitsPeers {
     }
     const now = this.now()
     const mine = this.shared()
-    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, this.ours(key) ? mine : forVouched(mine)), refresh }, false)
+    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, this.ours(key) ? mine : forVouched(mine)), ...this.noticeEnvelope(key), refresh }, false)
   }
 
   /** An account of this box's, as rows name it. */
@@ -240,17 +246,30 @@ export class LimitsPeers {
     if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY) return
     this.answered.set(key, now)
     const accounts = this.forPeer(key, this.ours(key) ? this.shared() : forVouched(this.shared()))
-    this.transport.send(key, { kind: "limits", at: now, accounts }, false)
+    this.transport.send(key, { kind: "limits", at: now, accounts, ...this.noticeEnvelope(key) }, false)
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
   }
 
   private forPeer(key: string, accounts: AccountLimits[]): AccountLimits[] {
-    return this.directory.isPeer?.(key) ? accounts : accounts.map(({ notices, noticeState, ...account }) => account)
+    return this.noticeOurs(key) ? accounts : withoutNotices(accounts)
   }
 
   /** Whether a box is one of your own computers (not one a peer of yours only vouches for). */
   private ours(key: string) {
     return this.directory.isPeer?.(key) === true
+  }
+
+  /** Same boundary as usage/settings-peers: only own computers within one known setup. */
+  private noticeOurs(key: string) {
+    return !!this.directory.told && !!this.directory.setup && this.directory.isPeer?.(key) === true
+  }
+
+  private noticePeer(key: string, kept: Kept) {
+    return this.noticeOurs(key) && kept.noticeSetup === this.directory.setup
+  }
+
+  private noticeEnvelope(key: string): Pick<LimitsMail, "noticeSetup"> {
+    return this.noticeOurs(key) ? { noticeSetup: this.directory.setup } : {}
   }
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
@@ -277,6 +296,15 @@ export class LimitsPeers {
     }
     for (const key of [...this.told.keys()]) if (!here.has(key)) this.told.delete(key)
     for (const key of [...this.answered.keys()]) if (!here.has(key)) this.answered.delete(key)
+    for (const [key, kept] of this.peers) {
+      if (this.noticePeer(key, kept)) continue
+      if (kept.noticeSetup || kept.accounts.some(a => a.notices?.length || Object.keys(a.noticeState ?? {}).length)) {
+        kept.accounts = withoutNotices(kept.accounts)
+        delete kept.noticeSetup
+        gone = true
+      }
+    }
+    this.limits.settleNoticeForwarders()
     if (gone) {
       this.save()
       this.limits.peersChanged()
@@ -290,7 +318,7 @@ export class LimitsPeers {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as { peers?: Record<string, Kept> }
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts)) continue
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) })
+        this.peers.set(key, { ...(typeof kept.noticeSetup === "string" ? { noticeSetup: kept.noticeSetup } : {}), name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) })
       }
     } catch {}
   }
@@ -312,11 +340,15 @@ export class LimitsPeers {
  */
 function forVouched(accounts: AccountLimits[]): AccountLimits[] {
   return accounts.map((account) => {
-    const { agentsReset: _, balance: ___, ...told } = account
+    const { agentsReset: _, balance: ___, notices: ____, noticeState: _____, ...told } = account
     const extras = (account.extras ?? []).filter((extra) => extra.kind === "resets" || extra.kind === "unreadable").map(({ agents: __, ...extra }) => extra)
     delete told.extras
     return extras.length ? { ...told, extras } : told
   })
+}
+
+function withoutNotices(accounts: AccountLimits[]): AccountLimits[] {
+  return accounts.map(({ notices, noticeState, ...account }) => account)
 }
 
 const text = (value: unknown, most = 200) => (typeof value === "string" && value ? value.slice(0, most) : undefined)
@@ -407,7 +439,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ...(typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {}),
     ...(text(account.plan, 100) ? { plan: text(account.plan, 100) } : {}),
     windows,
-    notices: takeNotices(account.notices),
+    notices: takeNotices(account.notices).map(notice => ({ ...notice, at: moved(notice.at) ?? notice.at })),
     noticeState: Object.fromEntries(Object.entries(takeStates(account.noticeState)).map(([id, state]) => [id, { ...state, ...(state.read !== undefined ? { read: moved(state.read) } : {}) }])),
     ...(balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...(typeof balance.limit === "number" ? { limit: balance.limit } : {}), unit: balance.unit } } : {}),
     ...(extras.length ? { extras } : {}),

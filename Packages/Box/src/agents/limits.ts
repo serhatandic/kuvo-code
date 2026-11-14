@@ -20,7 +20,7 @@ import { emit } from "./events"
 import type { LimitsPeers } from "./limits-peers"
 import { resetRoutes, type LimitResets } from "./limits-resets"
 import { limitRows, type LimitRow } from "./limits-rows"
-import { initialState, meter, metricID, newNotice, transitions, takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
+import { initialState, meter, metricID, newNotice, currentNotice, DEFAULT_VISIBLE_METRICS, noticeAccountName, transitions, takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
 import type { UsageSettings } from "./usage/settings"
 
 /** The services whose limits a box states, by the name clients know them by (their marks and colors). */
@@ -361,24 +361,34 @@ export class Limits {
 
   notices(): UsageNotice[] {
     const all = [...this.list(false).flatMap(a => a.notices ?? []), ...(this.peers?.notices() ?? [])]
-    return [...new Map(all.filter(n => this.now() - n.at < 24 * 60 * MINUTE).map(n => [n.id, n])).values()].sort((a, b) => a.at - b.at)
+    return [...new Map(all.filter(n => currentNotice(n, this.now())).map(n => [n.id, n])).values()].sort((a, b) => a.at - b.at)
   }
 
   /** Only a current direct account holder forwards a fact; peers never decide it again. */
   pushableNotices(): UsageNotice[] {
-    const own = this.list(false)
-    return this.notices().filter(n => {
-      if (n.forwarder) return this.peers?.ownsPush(n.forwarder) ?? n.forwarder === this.ownKey()
-      const identity = n.row.startsWith(`${n.service}#`) ? n.row.slice(n.service.length + 1) : undefined
-      if (!identity) return own.some(a => a.notices?.some(each => each.id === n.id))
-      return own.some(a => a.service === n.service && a.identity === identity) && (!this.peers || this.peers.ownsPush(this.peers.forwarder(n.service, identity) ?? ""))
-    })
+    return this.notices().filter(n => !!n.forwarder && (this.peers?.ownsPush(n.forwarder) ?? n.forwarder === this.ownKey()))
+  }
+
+  /** A decision made before the link named this box waits; pin it once, then never re-elect. */
+  settleNoticeForwarders() {
+    const own = this.peers?.ownKey() || this.ownKey()
+    if (!own) return
+    let changed = false
+    for (const entry of this.entries.values()) for (const notice of entry.notices ?? []) {
+      if (notice.forwarder || !currentNotice(notice, this.now())) continue
+      const identity = notice.row.startsWith(`${notice.service}#`) ? notice.row.slice(notice.service.length + 1) : undefined
+      const forwarder = identity && this.peers ? this.peers.forwarder(notice.service, identity) : own
+      if (!forwarder) continue
+      notice.forwarder = forwarder
+      changed = true
+    }
+    if (changed) this.save()
   }
 
   deliverNotices(notices: UsageNotice[]) {
     const pushes = new Set(this.pushableNotices().map(n => n.id))
     for (const push of [false, true]) {
-      const facts = notices.filter(n => pushes.has(n.id) === push)
+      const facts = notices.filter(n => currentNotice(n, this.now()) && pushes.has(n.id) === push)
       if (facts.length) emit("kuvo.usage.notices", { notices: facts, push })
     }
   }
@@ -464,7 +474,7 @@ export class Limits {
         ...(entry.identity ? { identity: entry.identity } : {}),
         ...(entry.plan ? { plan: entry.plan } : {}),
         windows: entry.windows,
-        ...(entry.notices?.length ? { notices: entry.notices } : {}),
+        ...(entry.notices?.length ? { notices: entry.notices.filter(n => currentNotice(n, this.now())) } : {}),
         ...(entry.noticeState ? { noticeState: entry.noticeState } : {}),
         ...(entry.balance ? { balance: entry.balance } : {}),
         ...(extrasOf(entry, account.limits) ? { extras: extrasOf(entry, account.limits, this.resets?.agentsMay(account.provider)) } : {}),
@@ -826,6 +836,7 @@ export class Limits {
 
   private decide(account: LimitedAccount, entry: Entry, ids: string[]) {
     const settings = this.settings?.values()
+    const visible = (window: LimitWindow) => settings?.layout ? settings.layout.placed.includes(metricID(account.service, window)) : DEFAULT_VISIBLE_METRICS.has(metricID(account.service, window))
     const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false }
     const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service)
     const dormant = (state: NoticeState): NoticeState => ({ ...state, previous: "untracked", fired: [], under: false, primed: false })
@@ -843,7 +854,7 @@ export class Limits {
     const row = entry.identity ? `${account.service}#${entry.identity}` : `${this.ownKey()}/${account.provider}`
     const created: UsageNotice[] = []
     for (const window of entry.windows.filter(w => ids.includes(w.id))) {
-      if (settings?.layout && !settings.layout.placed.includes(metricID(account.service, window))) {
+      if (!visible(window)) {
         if (entry.noticeState[window.id]) entry.noticeState[window.id] = dormant(entry.noticeState[window.id]!)
         continue
       }
@@ -853,17 +864,20 @@ export class Limits {
       entry.noticeState[window.id] = { ...result.state, read: window.read }
       for (const milestone of result.fire) {
         const notice = newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]!)
-        const forwarder = entry.identity ? this.peers?.forwarder(account.service, entry.identity) ?? this.ownKey() : this.ownKey()
+        notice.accountName = noticeAccountName(account.service, account.agent?.kind, account.label)
+        const forwarder = entry.identity && this.peers ? this.peers.forwarder(account.service, entry.identity) : this.ownKey()
         if (forwarder) notice.forwarder = forwarder
         created.push(notice)
       }
     }
-    const present = new Set(entry.windows.filter(w => !settings?.layout || settings.layout.placed.includes(metricID(account.service, w))).map(w => w.id))
+    const present = new Set(entry.windows.filter(visible).map(w => w.id))
     for (const id of Object.keys(entry.noticeState)) if (!present.has(id)) entry.noticeState[id] = dormant(entry.noticeState[id]!)
-    entry.notices = [...(entry.notices ?? []), ...created].filter(n => this.now() - n.at < 24 * 60 * MINUTE).slice(-100)
-    // Persist the decisions before telling anyone. Delivery failure is retried by each client's ID journal.
-    this.save()
-    if (created.length) this.deliverNotices(created)
+    if (created.length) {
+      entry.notices = [...(entry.notices ?? []), ...created].filter(n => currentNotice(n, this.now())).slice(-100)
+      // New facts must be durable before delivery. Ordinary turn samples retain changed()'s 30s save limit.
+      this.save()
+      this.deliverNotices(created)
+    }
   }
 
   /** Accounts removed since: their records go. */

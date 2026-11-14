@@ -9,6 +9,7 @@ interface LimitWindow {
   resetsAt?: number
   minutes?: number
   model?: string
+  name?: string
   amount?: { used: number; limit: number; unit: "requests" | "usd" | "credits" }
 }
 
@@ -30,6 +31,8 @@ export interface UsageNotice {
   id: string
   row: string
   service: string
+  accountName?: string
+  windowName?: string
   window: string
   milestone: Milestone
   at: number
@@ -38,6 +41,44 @@ export interface UsageNotice {
   forwarder?: string
   resetsAt?: number
 }
+/** A replay is useful only while the warning is current, never after its window reset. */
+export const NOTICE_CATCHUP_MS = 10 * 60_000
+export function currentNotice(notice: UsageNotice, now: number): boolean {
+  return notice.at <= now && now - notice.at < NOTICE_CATCHUP_MS && (notice.resetsAt === undefined || notice.resetsAt > now)
+}
+
+/** Bounded meters enabled by Swift DefaultLayout; unknown/optional meters stay off until placed. */
+export const DEFAULT_VISIBLE_METRICS = new Set([
+  "antigravity.geminiPro", "antigravity.geminiWeekly", "antigravity.argonWeekly", "antigravity.claude", "antigravity.claudeWeekly",
+  "claude.session", "claude.weekly", "claude.fable", "claude.extra",
+  "codex.session", "codex.weekly", "codex.spark", "codex.sparkWeekly",
+  "cursor.usage", "cursor.auto", "cursor.api", "cursor.grokBot", "cursor.onDemand",
+  "copilot.premium", "copilot.chat", "copilot.completions", "grok.weekly",
+  "ollama.session", "ollama.weekly", "ollama.monthly", "opencode.session", "opencode.weekly", "opencode.monthly",
+  "openrouter.credits", "openrouter.keyLimit", "zai.session", "zai.weekly", "zai.webSearches",
+])
+
+export function noticeAccountName(service: string, agent?: string, label?: string): string {
+  const agents: Record<string, string> = { claude: "Claude", codex: "Codex", grok: "Grok", cursor: "Cursor", antigravity: "Antigravity" }
+  const services: Record<string, string> = { codex: "ChatGPT", grok: "SuperGrok", copilot: "Copilot", openrouter: "OpenRouter", zai: "Z.ai", ollama: "Ollama", opencode: "OpenCode Go" }
+  const capitalized = (word: string) => word.charAt(0).toUpperCase() + word.slice(1)
+  const base = agent ? agents[agent] ?? capitalized(agent) : services[service] ?? capitalized(service)
+  return label?.trim() ? `${base} · ${label.trim()}` : base
+}
+
+/** Same priority/cadence naming as KuvoClient LimitsWindow.title. */
+export function noticeWindowName(window: LimitWindow): string {
+  if (window.name) return window.name
+  if (window.model) return window.model
+  const minutes = window.minutes
+  if (minutes === 300) return "Session"
+  if (minutes === 10080) return "Weekly"
+  if (minutes !== undefined && minutes >= 40000 && minutes <= 45000) return "Monthly"
+  if (minutes !== undefined && minutes >= 1440) return `${Math.floor(minutes / 1440)}-day`
+  if (minutes !== undefined && minutes >= 60) return `${Math.floor(minutes / 60)}-hour`
+  return "Limit"
+}
+
 export const milestones: Milestone[] = ["underTenPercent", "healthyToClose", "closeToRunningOut"]
 export const initialState = (): NoticeState => ({ fired: [], previous: "untracked", under: false, primed: false })
 const severity = (bucket: Bucket) => ["untracked", "healthy", "close", "runningOut"].indexOf(bucket)
@@ -108,13 +149,13 @@ export function newNotice(row: string, service: string, window: LimitWindow, mil
   state.counts[milestone] = (state.counts[milestone] ?? 0) + 1
   const identity = JSON.stringify([row, window.id, state.anchor ?? 0, milestone, state.counts[milestone]])
   const id = "usage_" + createHash("sha256").update(identity).digest("hex")
-  return { id, row, service, window: window.id, milestone, at, remaining: (100 - window.used * 100) / 100, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }
+  return { id, row, service, windowName: noticeWindowName(window), window: window.id, milestone, at, remaining: (100 - window.used * 100) / 100, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }
 }
 
 /** Peer facts validated without deciding them again; IDs and decision timestamps survive every hop. */
 export function takeNotices(given: unknown): UsageNotice[] {
   if (!Array.isArray(given)) return []
-  return given.slice(-100).filter((n): n is UsageNotice => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)) && (n.forwarder === undefined || (typeof n.forwarder === "string" && n.forwarder.length <= 200)))
+  return given.slice(-100).filter((n): n is UsageNotice => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service !== "devin" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)) && (n.forwarder === undefined || (typeof n.forwarder === "string" && n.forwarder.length <= 200)) && [n.accountName, n.windowName].every(name => name === undefined || (typeof name === "string" && name.length <= 200)))
 }
 
 export function takeStates(given: unknown): Record<string, NoticeState> {
