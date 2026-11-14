@@ -37979,7 +37979,7 @@ async function oneFileIn(root, against, scope, compared, args, only) {
   const sizes = [];
   for (const side of sides) {
     if (side === "disk")
-      sizes.push(fs125.statSync(path131.join(root, only.path), { throwIfNoEntry: false })?.size ?? 0);
+      sizes.push(onDisk(() => fs125.statSync(path131.join(root, only.path)))?.size ?? 0);
     else {
       const size = (await text4(root, ["cat-file", "-s", side]))?.trim();
       if (size)
@@ -37991,8 +37991,18 @@ async function oneFileIn(root, against, scope, compared, args, only) {
   const ran = await git2(root, ["--literal-pathspecs", ...args, ...compared, "--", ...paths]);
   return ran.ok ? done(ran.out.toString("utf8")) : null;
 }
+function onDisk(look) {
+  try {
+    return look();
+  } catch (error) {
+    const code = error.code;
+    if (code === "ENOENT" || code === "ENOTDIR")
+      return;
+    throw error;
+  }
+}
 function stampOf(root, name, indexed, since) {
-  const stat = fs125.lstatSync(path131.join(root, name), { bigint: true, throwIfNoEntry: false });
+  const stat = onDisk(() => fs125.lstatSync(path131.join(root, name), { bigint: true }));
   const fresh = since !== undefined && stat && stat.mtimeNs >= since ? ":since" : "";
   return `${indexed ?? "-"}:${stat ? `${stat.size}-${stat.mtimeNs}` : "gone"}${fresh}`;
 }
@@ -42204,7 +42214,7 @@ import fs137 from "node:fs";
 import path144 from "node:path";
 
 // box/src/link/version.ts
-var BRIDGE_VERSION = "89937274436a";
+var BRIDGE_VERSION = "f442492cd45b";
 
 // box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
