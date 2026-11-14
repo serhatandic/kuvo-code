@@ -11,7 +11,7 @@
 // each, and keeps which page is in use, so the agent and the app follow each other. It stops
 // Chromium after a while with nobody connected.
 //
-// scripts/build-browser.sh builds this into swift/KuvoCode/Resources/kuvo-browser.js, the file every box
+// scripts/build-browser.sh builds this into KuvoCode/Resources/kuvo-browser.js, the file every box
 // runs: with the scripts it runs in pages (page.ts), the agent's tools (tools.ts) and what agents are
 // told of them (instructions.ts) filled in below, and the keeper's version (KEEPER).
 

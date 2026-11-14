@@ -1,3 +1,4 @@
-# `bun test box/...` from here: the same protection as from box (test/preload.ts).
+# `bun test box/test/...` from here: the same protection as from box (test/preload.ts). (Not
+# `bun test box`, which would take the bridge's tests too: they run on Node, scripts/test-box.sh.)
 [test]
 preload = ["./box/test/preload.ts"]
