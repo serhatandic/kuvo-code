@@ -2579,6 +2579,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kuvo_box"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "base64",
+ "getrandom 0.3.4",
+ "libc",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "kuvo_gallery"
 version = "0.1.0"
 dependencies = [

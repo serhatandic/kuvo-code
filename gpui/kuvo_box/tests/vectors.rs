@@ -1,0 +1,239 @@
+//! The shared cases every client is held to (Packages/KuvoLink/Vectors), as KuvoClient's tests
+//! hold the Swift apps: what a sidebar shows from a box's session facts, which keyword a typed text
+//! starts with, which texts go to the box at all, and that a box of this version passes the gate.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use kuvo_box::gate::{self, Gate};
+use kuvo_box::sessions::{self, Facts, Line, Listing, Project};
+use kuvo_box::typed;
+use serde_json::Value;
+
+fn vectors(name: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/Vectors").join(name);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    serde_json::from_str(&text).expect("the vectors are JSON")
+}
+
+fn facts_and_projects(case: &Value) -> (HashMap<String, Facts>, HashMap<String, Project>) {
+    let sessions: HashMap<String, Facts> = serde_json::from_value(case["expect"]["sessions"].clone()).expect("every fact the box answers is read");
+    let projects: HashMap<String, Project> = serde_json::from_value(case["expect"]["projects"].clone()).expect("every project the box answers is read");
+    (sessions, projects)
+}
+
+#[test]
+fn every_case_of_the_box_answer_is_read_whole() {
+    let vectors = vectors("session-lists.json");
+    let cases = vectors["cases"].as_array().expect("cases");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let (sessions, _) = facts_and_projects(case);
+        // Read back as the box wrote it: nothing it says is lost.
+        let again = serde_json::to_value(&sessions).unwrap();
+        assert_eq!(numbers_as_floats(again), numbers_as_floats(case["expect"]["sessions"].clone()), "{}", case["name"]);
+    }
+}
+
+/// (Times are numbers: 590 and 590.0 are the same.)
+fn numbers_as_floats(value: Value) -> Value {
+    match value {
+        Value::Number(number) => serde_json::json!(number.as_f64().unwrap()),
+        Value::Array(items) => Value::Array(items.into_iter().map(numbers_as_floats).collect()),
+        Value::Object(fields) => Value::Object(fields.into_iter().map(|(name, value)| (name, numbers_as_floats(value))).collect()),
+        other => other,
+    }
+}
+
+#[test]
+fn the_sidebar_follows_from_the_box_facts_alone() {
+    let vectors = vectors("session-lists.json");
+    let mut checked = 0;
+    for case in vectors["cases"].as_array().unwrap() {
+        let Some(expected) = case["expect"].get("sidebar").filter(|sidebar| !sidebar.is_null()) else { continue };
+        let (sessions, projects) = facts_and_projects(case);
+        let sidebar = sessions::sidebar(&sessions, &projects);
+        let ids = |value: &Value| -> Vec<String> { serde_json::from_value(value.clone()).unwrap() };
+        assert_eq!(sidebar.pinned, ids(&expected["pinned"]), "pinned: {}", case["name"]);
+        assert_eq!(sidebar.chats, ids(&expected["chats"]), "chats: {}", case["name"]);
+        let drawn: Vec<(String, Vec<String>)> = sidebar.projects.iter().map(|group| (group.directory.clone(), group.sessions.clone())).collect();
+        let wanted: Vec<(String, Vec<String>)> = expected["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|group| (group["directory"].as_str().unwrap().to_owned(), ids(&group["sessions"])))
+            .collect();
+        assert_eq!(drawn, wanted, "projects: {}", case["name"]);
+        checked += 1;
+    }
+    assert!(checked > 0, "a case with a sidebar");
+}
+
+#[test]
+fn a_list_taken_line_by_line_ends_as_the_box_says() {
+    let vectors = vectors("session-lists.json");
+    let case = &vectors["cases"][0];
+    let (sessions, projects) = facts_and_projects(case);
+    let whole: Line = serde_json::from_value(serde_json::json!({ "at": "1", "full": true, "sessions": case["expect"]["sessions"], "projects": case["expect"]["projects"] })).unwrap();
+    let mut listing = Listing::new();
+    assert!(listing.take(whole));
+    assert_eq!(listing.sidebar(), sessions::sidebar(&sessions, &projects));
+
+    // One session changed and one deleted: the rest stay as they were.
+    let (changed, gone) = {
+        let mut ids: Vec<&String> = sessions.keys().collect();
+        ids.sort();
+        (ids[0].clone(), ids[1].clone())
+    };
+    let mut facts = sessions[&changed].clone();
+    facts.title = Some("Renamed".into());
+    facts.updated += 1.0;
+    let line: Line = serde_json::from_value(serde_json::json!({ "at": "2", "sessions": { changed.clone(): facts }, "gone": [gone.clone()], "projects": case["expect"]["projects"] })).unwrap();
+    assert!(listing.take(line));
+    assert_eq!(listing.at(), Some("2"));
+    assert_eq!(listing.sessions().len(), sessions.len() - 1);
+    assert_eq!(listing.sessions()[&changed].title.as_deref(), Some("Renamed"));
+    // What it said of the one let go stays at hand for a row still shown as it goes.
+    assert_eq!(listing.facts(&gone), Some(&sessions[&gone]));
+    assert!(!listing.sessions().contains_key(&gone));
+
+    // The same again changes nothing.
+    let same: Line = serde_json::from_value(serde_json::json!({ "at": "3", "sessions": {}, "projects": case["expect"]["projects"] })).unwrap();
+    assert!(!listing.take(same));
+    assert_eq!(listing.at(), Some("3"));
+}
+
+#[test]
+fn a_keyword_is_drawn_as_the_box_reads_it() {
+    let vectors = vectors("typed.json");
+    for case in vectors["keywords"].as_array().unwrap() {
+        let text = case["text"].as_str().unwrap();
+        let parsed = typed::keyword(text).map(|(keyword, rest)| serde_json::json!({ "keyword": keyword, "rest": rest })).unwrap_or(Value::Null);
+        assert_eq!(parsed, case["parsed"], "{text:?}");
+    }
+}
+
+/// A client sends a text that isn't "/" or "!" as a message without asking: the box would only
+/// say to send it (unless the model can't run, or the side thread's tag is on, which the client
+/// knows itself).
+#[test]
+fn a_text_the_client_sends_without_asking_is_one_the_box_would_send() {
+    let vectors = vectors("typed.json");
+    let mut checked = 0;
+    for case in vectors["decide"].as_array().unwrap() {
+        let text = case["text"].as_str().unwrap();
+        if typed::asks_box(text) {
+            continue;
+        }
+        let facts = &case["facts"];
+        if facts.get("refusal").is_some_and(|refusal| !refusal.is_null()) || facts.get("side") == Some(&Value::Bool(true)) {
+            continue;
+        }
+        assert_eq!(case["decision"]["send"]["text"].as_str(), Some(text), "{text:?}");
+        checked += 1;
+    }
+    assert!(checked > 0);
+    // And every text that starts "/" or "!" is the box's to read.
+    for case in vectors["decide"].as_array().unwrap() {
+        let text = case["text"].as_str().unwrap();
+        let first = text.trim_start().chars().next();
+        assert_eq!(typed::asks_box(text), matches!(first, Some('/' | '!')), "{text:?}");
+    }
+}
+
+#[test]
+fn a_box_of_this_version_passes_the_gate() {
+    let vectors = vectors("routes/features.json");
+    let expect = &vectors["scenarios"][0]["steps"][0]["expect"];
+    for kind in ["mac", "machine"] {
+        // A Mac's names what it includes at least; a machine's, its whole list.
+        let said = &expect[kind]["json"]["features"];
+        let names: Vec<String> = serde_json::from_value(said.get("<includes>").unwrap_or(said).clone()).unwrap();
+        assert_eq!(gate::missing(&names), Vec::<String>::new(), "{kind}");
+        assert_eq!(Gate::for_features(Some(&names)), Gate::Open);
+    }
+}
+
+#[test]
+fn a_held_box_is_asked_only_what_keeps_work_going() {
+    for allowed in [
+        "kuvo/info",
+        "kuvo/update",
+        "kuvo/box/update",
+        "kuvo/box/app",
+        "kuvo/agent-tools",
+        "api/session/ses_1/message?limit=5",
+        "kuvo/agents/api/event",
+        "kuvo/asks",
+        "kuvo/sandbox/asks/a1",
+        "kuvo/vault/asks",
+        "kuvo/work/asks/w1",
+        "kuvo/sessions/ses_1/decisions",
+    ] {
+        assert!(gate::is_allowed(allowed), "{allowed}");
+    }
+    for held in ["kuvo/sessions/list", "kuvo/sessions/ses_1/typed", "kuvo/asksx", "kuvo/work-queue", "kuvo/sessions/ses_1/decisions/x"] {
+        assert!(!gate::is_allowed(held), "{held}");
+    }
+}
+
+/// The gate holds the same boxes as the Swift apps': the names in KuvoClient's `BoxGate.required`.
+#[test]
+fn the_gate_needs_what_the_swift_clients_need() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoClient/Sources/ClientSessions/BoxGate.swift");
+    let swift = std::fs::read_to_string(path).unwrap();
+    let list = swift.split("public static let required: [String] = [").nth(1).and_then(|rest| rest.split(']').next()).expect("BoxGate.required");
+    let names: Vec<&str> = list.split(',').map(|name| name.trim().trim_matches('"')).filter(|name| !name.is_empty()).collect();
+    assert_eq!(names, gate::REQUIRED);
+}
+
+/// A message's parts as every client reads them, kept with a message or read by its box from one
+/// from before; and the fields a client sends, as the box takes them (Vectors/message-parts.json).
+#[test]
+fn a_messages_parts_are_read_as_the_box_wrote_them() {
+    let vectors = vectors("message-parts.json");
+    let cases: Vec<&Value> = vectors["compose"].as_array().unwrap().iter().chain(vectors["read"].as_array().unwrap()).collect();
+    assert!(cases.len() >= 30);
+    for case in cases {
+        let metadata = serde_json::json!({ "kuvo": { "parts": case["parts"], "other": 1 } });
+        let read = kuvo_box::Parts::kept(Some(&metadata)).unwrap_or_else(|| panic!("{}", case["about"]));
+        // Read and written again, the same parts.
+        assert_eq!(numbers_as_floats(serde_json::to_value(&read).unwrap()), numbers_as_floats(case["parts"].clone()), "{}", case["about"]);
+        // And as the box answers `kuvo/messages/parts`.
+        let told: kuvo_box::Parts = serde_json::from_value(case["parts"].clone()).unwrap();
+        assert_eq!(told, read, "{}", case["about"]);
+    }
+    // One with none kept is from before.
+    assert_eq!(kuvo_box::Parts::kept(Some(&serde_json::json!({ "kuvo": { "wake": true } }))), None);
+}
+
+#[test]
+fn a_client_sends_the_fields_the_box_takes() {
+    use kuvo_box::parts::{Comment, Notes, Sending, Side};
+    let vectors = vectors("message-parts.json");
+    for case in vectors["compose"].as_array().unwrap() {
+        let fields = &case["fields"];
+        let strings = |value: &Value| -> Vec<String> { serde_json::from_value(value.clone()).unwrap_or_default() };
+        let sending = Sending {
+            words: fields["words"].as_str().unwrap().to_owned(),
+            keyword: fields["keyword"].as_str().map(str::to_owned),
+            widget: fields["widget"].as_str().map(str::to_owned),
+            comments: fields["comments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|each| Comment {
+                    file: each["file"].as_str().unwrap().to_owned(),
+                    line: each["line"].as_i64().unwrap(),
+                    side: if each["side"] == "old" { Side::Old } else { Side::New },
+                    snippet: each["snippet"].as_str().unwrap().to_owned(),
+                    text: each["text"].as_str().unwrap().to_owned(),
+                })
+                .collect(),
+            named: strings(&fields["named"]),
+            notes: Notes { included: strings(&fields["notes"]["included"]), paths: strings(&fields["notes"]["paths"]), unsent: strings(&fields["notes"]["unsent"]) },
+            ..Sending::default()
+        };
+        assert_eq!(numbers_as_floats(serde_json::to_value(&sending).unwrap()), numbers_as_floats(fields.clone()), "{}", case["about"]);
+    }
+}
