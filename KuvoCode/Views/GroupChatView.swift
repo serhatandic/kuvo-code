@@ -77,7 +77,7 @@ struct GroupChatView: View {
         .onChange(of: findRequest) { find.open() }
         .onChange(of: focusRequest) { composerFocus += 1 }
         // What a bot's widget writes back goes to the group, as yours.
-        .environment(\.answerAgent) { text in groups.send(text, to: group.id) }
+        .environment(\.answerAgent) { text, widget in groups.send(WidgetAnswer.message(text, from: widget), to: group.id) }
         .overlay {
             if messages.isEmpty && speaker == nil {
                 GroupIntro(group: group, members: members)

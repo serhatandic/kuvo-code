@@ -41,6 +41,7 @@ import { backupsRoute } from "../areas/backups";
 import { approvalRoute, SESSION_APPROVAL_ROUTE, SESSION_DECISIONS_ROUTE } from "../areas/approval";
 import { autopilotRoute, SESSION_AUTOPILOT_ROUTE } from "../areas/autopilot";
 import { TYPED_ROUTE, typedRoute } from "../areas/typed";
+import { PARTS_ROUTE, partsRoute, SEND_ROUTE, sendRoute } from "../areas/messages";
 import { sandboxRoute } from "../areas/sandbox";
 import { providerModelsRoute } from "../areas/providers";
 import { SIGN_IN_ACCOUNTS_ROUTE, SIGN_IN_METHODS_ROUTE, SIGN_IN_STATUS_ROUTE, signInRoute } from "../areas/sign-in";
@@ -127,6 +128,10 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
   // What a typed message means, and what "/" offers (PROTOCOL.md, "What a typed message means").
   { when: route => route.match(TYPED_ROUTE), answer: typedRoute },
+  // A message as fields, the box writing what the agent reads; the parts of messages from before
+  // (PROTOCOL.md, "A message's parts").
+  { when: route => route.match(SEND_ROUTE), answer: sendRoute },
+  { when: route => route === PARTS_ROUTE, answer: partsRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   // A session at a glance: its row's and card's (PROTOCOL.md, "A session at a glance").
   { when: route => route.match(GLANCE_ROUTE), answer: glanceRoute },

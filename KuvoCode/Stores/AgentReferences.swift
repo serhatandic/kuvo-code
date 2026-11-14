@@ -1,3 +1,4 @@
+import ClientSessions
 import ClientText
 import Foundation
 import OpenCodeKit
@@ -120,87 +121,71 @@ nonisolated enum AgentReferences {
         return agents
     }
 
-    // MARK: The block
-
-    /// What the agent is told of them: who they are, and that it decides whether what's asked needs
-    /// their conversation, a word with them, or neither (a name that only comes up).
-    private static let heading = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:"
-    /// (What earlier messages said, still read as the block.)
-    private static let earlierHeading = "Agents the user named with & in this message. Read one's conversation with read_conversation, or write to it with send_message, by its address:"
-    private static let block = MessageBlock(start: "<named-agents>", end: "</named-agents>", headings: [heading, earlierHeading])
-
-    /// `text` with the block that says who each agent it names with "&" is, as the agent in a
-    /// conversation `here` (nil: on this Mac) reads it; not naming the conversation `excluding`.
-    @MainActor static func text(_ text: String, excluding session: String?, here machine: String?) -> String {
-        Self.text(text, excludingAll: Set([session].compactMap { $0 }), here: machine)
-    }
-
-    /// The same, leaving out each of `sessions` (a group chat's own bots, already there).
-    /// `agents`: everyone (nil: as AgentMail lists them now). Every box names a phone's message's
-    /// agents the same way (`nameAgents` in kuvo-link.js); both read the cases in
-    /// `Vectors/routes/names/agent-naming.json`.
-    @MainActor static func text(_ text: String, excludingAll sessions: Set<String>, here machine: String?, agents: [AgentMail.Agent]? = nil) -> String {
-        let text = block.escaping(text)
-        guard let note = note(naming: named(in: [text], excluding: sessions, agents: agents), here: machine) else { return text }
-        return (text.isEmpty ? "" : text + "\n\n") + note
-    }
-
-    /// The block for `agents`, nil for none: each with "&" and its name, its address, and what it is.
-    @MainActor static func note(naming agents: [AgentMail.Agent], here machine: String?) -> String? {
-        guard !agents.isEmpty else { return nil }
-        let lines = agents.map { agent in
-            "- \(trigger)\(agent.name) (\(agent.session)): \(AgentMail.what(agent, here: machine))" + (agent.about.map { $0.isEmpty ? "" : ": \($0)" } ?? "")
-        }
-        return ([block.start, heading] + lines + [block.end]).joined(separator: "\n")
-    }
-
-    /// A message's text without the block that ends it, and the agents it names.
-    static func split(_ text: String) -> (text: String, references: [Reference]) {
-        guard let (before, lines) = block.split(text) else { return (text, []) }
-        // "- &Name (ses_…): what it is", read up to the first " (ses_", as a name can hold most else.
-        let references = lines.dropFirst().compactMap { line -> Reference? in
-            guard line.hasPrefix("- \(trigger)"), let open = line.range(of: " (ses_") else { return nil }
-            let after = line[line.index(open.lowerBound, offsetBy: 2)...]
-            guard let close = after.firstIndex(of: ")") else { return nil }
-            let name = line[line.index(line.startIndex, offsetBy: 3)..<open.lowerBound]
-            return name.isEmpty ? nil : Reference(name: String(name), session: String(after[..<close]))
-        }
-        return (before.trimmingCharacters(in: .whitespacesAndNewlines), references)
+    /// The agents picked from the list for names in `text`, by their address: of two with one name,
+    /// these are the ones its box names (`MessageParts.Sending.named`).
+    @MainActor static func picked(in text: String) -> [String] {
+        guard text.contains(trigger) else { return [] }
+        let folded = key(text)
+        return picked.compactMap { name, session in folded.contains(String(trigger) + name) ? session : nil }.sorted()
     }
 }
 
-/// A message you sent, as the app wrote it for the agent: your words, then the blocks it adds
-/// (the keyword it was sent with, the widget it came from, the agents you named with "&", your
-/// comments on the changes, the note of attached files, and last that it came from your phone),
-/// taken apart again for wherever it shows: its bubble, a draft, the export, a title.
-nonisolated enum SentMessage {
-    static func split(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String], references: [AgentReferences.Reference]) {
-        let (text, comments, paths, references, _, _) = parts(message)
-        return (text, comments, paths, references)
+/// A message, as its box keeps its parts (KuvoClient's `MessageParts`, PROTOCOL.md "A message's
+/// parts"): your words and what went with them (the keyword it was sent with, the widget it came
+/// from, the agents you named with "&", your comments on the changes, the files it named, that it
+/// came from your phone), or another agent's message, for wherever it shows: its bubble, a draft,
+/// the export, a title. A command shows as you typed it.
+enum SentMessage {
+    @MainActor static func parts(_ user: Message.User) -> MessageParts {
+        if let command = CommandMessages.shared[user.id] { return MessageParts(words: command) }
+        return MessageParts.of(id: user.id, text: user.text, metadata: user.metadata)
     }
 
-    /// The title of the widget a message was sent from (`WidgetAnswer`).
-    static func widget(of message: String) -> String? {
-        parts(message).widget
+    static func parts(_ item: Transcript.Pending) -> MessageParts {
+        MessageParts.of(id: item.id, text: item.text, metadata: item.metadata)
     }
 
-    /// The keyword it was sent with, as typed ("/loop every hour"), which its bubble draws in front
-    /// of its words (`SentWithKeyword`); nil for one sent without.
-    static func keyword(of message: String) -> String? {
-        parts(message).keyword
+    /// The parts of those of `messages` from before, which keep none, read by `box` (their
+    /// conversation's): before they show, so none shows the blocks written for the agent. One its
+    /// box can't read shows as it was written.
+    /// A message's parts before a draft or a send is made of it: kept with it, read already, or read
+    /// now by `box` (a few seconds at most); nil when they can't be read, and then its text is never
+    /// sent as words (it goes again as it was, or stays where it is, saying so).
+    @MainActor static func ensure(id: String, text: String, metadata: JSONValue?, from box: BoxClient?) async -> MessageParts? {
+        if let command = CommandMessages.shared[id] { return MessageParts(words: command) }
+        if let parts = MessageParts.kept(in: metadata) ?? MessageParts.known(id, text: text) { return parts }
+        guard let box else { return nil }
+        _ = await AgentMail.within(3) { await MessageParts.read([(id, text)]) { body in try await box.send("POST", MessageParts.partsRoute, body: body) } }
+        return MessageParts.known(id, text: text)
     }
 
-    private static func parts(_ message: String) -> (text: String, comments: [ReviewComment], paths: [String], references: [AgentReferences.Reference], widget: String?, keyword: String?) {
-        let (withComments, paths) = Attachments.split(FromPhone.split(message).text)
-        let (withReferences, comments) = ReviewComments.split(withComments)
-        let (withWidget, references) = AgentReferences.split(withReferences)
-        let (withKeyword, widget) = WidgetAnswer.split(withWidget)
-        let (text, keyword) = SentWithKeyword.split(withKeyword)
-        return (text, comments, paths, references, widget, keyword)
+    /// A message's parts, if they're known now (kept, read, or a command): nil for one not read yet.
+    @MainActor static func knownParts(id: String, text: String, metadata: JSONValue?) -> MessageParts? {
+        if let command = CommandMessages.shared[id] { return MessageParts(words: command) }
+        return MessageParts.kept(in: metadata) ?? MessageParts.known(id, text: text)
     }
 
-    /// The message as written: its words, without the blocks.
-    static func words(of message: String) -> String {
-        split(message).text
+    /// `messages` with the parts their box read written into each, as a saved copy keeps them: a
+    /// conversation shown from its copy (its computer away) draws them as it did.
+    static func keepingRead(_ messages: [Message]) -> [Message] {
+        messages.map { message in
+            guard case .user(var user) = message, MessageParts.kept(in: user.metadata) == nil, let parts = MessageParts.known(user.id, text: user.text) else { return message }
+            user.metadata = MessageParts.keeping(parts, in: user.metadata)
+            return .user(user)
+        }
     }
+
+    /// `waiting`: those in the engine's queue too. At most a few seconds: a box slow to answer leaves
+    /// the rest to show as written meanwhile, to be read again later.
+    @MainActor static func read(_ messages: [Message], waiting: [InboxItem] = [], from box: BoxClient?) async {
+        let unread = MessageParts.unread(in: messages) { CommandMessages.shared[$0] != nil } + MessageParts.unread(waiting: waiting)
+        guard !unread.isEmpty, let box else { return }
+        _ = await AgentMail.within(3) { await MessageParts.read(unread) { body in try await box.send("POST", MessageParts.partsRoute, body: body) } }
+    }
+}
+
+extension MessageParts {
+    /// Its comments on the changes, as the composer keeps them.
+    var reviewComments: [ReviewComment] { comments.map(ReviewComment.init) }
+    var references: [AgentReferences.Reference] { agents.map { AgentReferences.Reference(name: $0.name, session: $0.session) } }
 }

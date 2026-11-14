@@ -1,4 +1,5 @@
 import ClientChanges
+import ClientSessions
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -44,7 +45,7 @@ struct ChangesReviewTests {
         #expect(now.number == 4)
         // And the agent is told where it is now.
         let followed = ReviewComment.following([comment], from: ["app.js": before], to: ["app.js": lines])
-        #expect(ReviewComments.text("Have a look", adding: followed).contains("[app.js:4]"))
+        #expect(followed.map(\.sent.location) == ["app.js:4"])
     }
 
     /// A comment on a line that reads like others ("}") moves with its own line, never onto

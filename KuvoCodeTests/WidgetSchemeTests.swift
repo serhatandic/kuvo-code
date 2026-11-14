@@ -87,7 +87,7 @@ import WebKit
         private struct Reply: View, Equatable {
             let call: Message.ToolCall
             static func == (lhs: Reply, rhs: Reply) -> Bool { lhs.call.id == rhs.call.id }
-            var body: some View { WidgetCard(call: call, send: { _ in }) }
+            var body: some View { WidgetCard(call: call, send: { _, _ in }) }
         }
     }
 

@@ -83,6 +83,7 @@ export const FEATURES = [
   "limits",
   "limits.resets",
   "mcp.catalog",
+  "messages.send",
   "models.offered",
   "moves",
   "moves.agents",

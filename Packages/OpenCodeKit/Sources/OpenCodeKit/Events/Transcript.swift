@@ -219,9 +219,12 @@ public struct Transcript: Sendable, Equatable {
         local.contains(where: \.isFileURL) || (!local.isEmpty && item.files.isEmpty && item.inlineFiles.isEmpty)
     }
 
-    /// Shows a message right away, before the server echoes it back.
-    public mutating func addLocal(id: String, text: String, delivery: InboxItem.Delivery, files: [URL] = []) {
-        pending.append(Pending(id: id, text: text, delivery: delivery, isLocal: true, files: files))
+    /// Shows a message right away, before the server echoes it back: `metadata`, what it will keep
+    /// (its parts, which its box writes it from).
+    public mutating func addLocal(id: String, text: String, delivery: InboxItem.Delivery, files: [URL] = [], metadata: JSONValue? = nil) {
+        var item = Pending(id: id, text: text, delivery: delivery, isLocal: true, files: files)
+        item.metadata = metadata
+        pending.append(item)
     }
 
     /// Makes an undo final: the conversation from `to` on goes, from where it is, as the engine

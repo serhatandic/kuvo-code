@@ -48,6 +48,8 @@ export interface Waiting {
   from?: string;
   text: string;
   files?: string[];
+  /** The keyword it was sent with, as typed (its parts'), shown in front of its words. */
+  keyword?: string;
   at: number;
 }
 
@@ -129,7 +131,7 @@ const WAITING_ID = /^msg_[A-Za-z0-9]{1,80}$/;
 export const keptWaiting = (value: unknown): Waiting[] => (Array.isArray(value) ? value : []).flatMap(item => {
   if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string") return [];
   const files = Array.isArray(item.files) ? item.files.filter((name): name is string => typeof name === "string") : [];
-  return [{ id: item.id, ...(typeof item.from === "string" ? { from: item.from } : {}), text: item.text, ...(files.length ? { files } : {}), at: typeof item.at === "number" ? item.at : 0 }];
+  return [{ id: item.id, ...(typeof item.from === "string" ? { from: item.from } : {}), text: item.text, ...(files.length ? { files } : {}), ...(typeof item.keyword === "string" ? { keyword: item.keyword } : {}), at: typeof item.at === "number" ? item.at : 0 }];
 });
 
 const keptState = (value: unknown): QueueState => {
@@ -201,7 +203,9 @@ export function keepWaiting(files: QueueFiles, session: string, message: Outgoin
     writePrivate(waitingFile(files, message.id), JSON.stringify(keptText === undefined ? message : { ...message, text: keptText }));
     kept = true;
     const names = fileNames(message.files);
-    const waiting: Waiting = { id: message.id, ...(from ? { from } : {}), text: words ?? message.text, ...(names.length ? { files: names } : {}), at: Date.now() };
+    const parts = isObject(message.metadata) && isObject(message.metadata.kuvo) && isObject(message.metadata.kuvo.parts) ? message.metadata.kuvo.parts : null;
+    const keyword = typeof parts?.keyword === "string" ? parts.keyword : undefined;
+    const waiting: Waiting = { id: message.id, ...(from ? { from } : {}), text: words ?? message.text, ...(names.length ? { files: names } : {}), ...(keyword ? { keyword } : {}), at: Date.now() };
     return place({ ...state, waiting: (state.waiting ?? []).filter(each => each.id !== message.id) }, waiting);
   }, changed);
   return kept;

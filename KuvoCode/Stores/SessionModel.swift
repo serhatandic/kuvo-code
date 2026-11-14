@@ -351,10 +351,11 @@ final class SessionModel {
             switch message {
             // Not what the box told the agent.
             case .user(let user) where BoxNote.of(user) != nil: continue
-            // A goal comes back as one (`SentWithKeyword.draft`).
+            // A goal comes back as one (`SentWithKeyword.draft`); another agent's isn't yours.
             case .user(let user):
-                let sent = CommandMessages.shared.text(of: user)
-                text = SentWithKeyword.draft(SentMessage.words(of: sent), keyword: SentMessage.keyword(of: sent))
+                let parts = SentMessage.parts(user)
+                if parts.mail != nil { continue }
+                text = SentWithKeyword.draft(parts.words, keyword: parts.keyword)
             // Commands you ran come back as you typed them.
             case .shell(let shell): text = "!" + shell.command
             default: continue
@@ -606,7 +607,10 @@ final class SessionModel {
         onBox.filter { item in !transcript.pending.contains { $0.id == item.id } }.map { item in
             let yours = yoursOnBox[item.id]
             let files = item.files ?? []
-            return Transcript.Pending(id: item.id, text: yours?.text ?? (item.text.isEmpty ? files.joined(separator: ", ") : item.text), delivery: .queue, isLocal: false, files: yours?.files ?? [])
+            let text = yours?.text ?? (item.text.isEmpty ? files.joined(separator: ", ") : item.text)
+            var pending = Transcript.Pending(id: item.id, text: text, delivery: .queue, isLocal: false, files: yours?.files ?? [])
+            pending.metadata = MessageParts.keeping(MessageParts(words: text, keyword: item.keyword))
+            return pending
         }
     }
 
@@ -646,7 +650,7 @@ final class SessionModel {
     private func keepCopy() {
         guard !isSubagent, !transcript.messages.isEmpty else { return }
         // The latest, as opening it reads them: earlier ones are read again as you scroll up.
-        SessionCopies.save(.init(session: session, messages: Array(transcript.messages.suffix(Self.pageSize))))
+        SessionCopies.save(.init(session: session, messages: SentMessage.keepingRead(Array(transcript.messages.suffix(Self.pageSize)))))
     }
 
     /// How many messages one read takes: the latest on opening, then as many earlier ones each
@@ -694,6 +698,7 @@ final class SessionModel {
                 earlierCursor = nil
                 return
             }
+            await SentMessage.read(older, from: box())
             editTranscript { $0.messages = older + $0.messages }
             earlierCursor = Self.cursor(before: page)
             prepareCode(in: older)
@@ -701,6 +706,28 @@ final class SessionModel {
         earlierRead = read
         await read.value
     }
+
+    /// The parts of messages that arrived without them (one sent the way before, from another
+    /// computer's Kuvo Code from before), read by its box, each once: shown again once they're in.
+    private func readArrivedParts() {
+        let recent = Array(transcript.messages.suffix(6))
+        let unread = MessageParts.unread(in: recent) { CommandMessages.shared[$0] != nil }.filter { !partsAsked.contains($0.id) }
+        guard !unread.isEmpty, !partsReading, let box = box() else { return }
+        partsReading = true
+        Task {
+            defer { partsReading = false }
+            guard await MessageParts.read(unread, ask: { body in try await box.send("POST", MessageParts.partsRoute, body: body) }) else { return }
+            // (Asked once each, once read: one that failed is asked again with the next event.)
+            partsAsked.formUnion(unread.map(\.id))
+            // Its rows drawn again, with what was read.
+            partsRead += 1
+        }
+    }
+
+    /// How many reads of parts came in after their messages showed: rows drawn again each time.
+    private(set) var partsRead = 0
+    @ObservationIgnored private var partsAsked: Set<String> = []
+    @ObservationIgnored private var partsReading = false
 
     /// The code in replies read, colored ahead of time, so it shows colored as it's scrolled to
     /// rather than plain for a moment first.
@@ -752,6 +779,7 @@ final class SessionModel {
             // the second, rather than in neither.
             let waiting = (try? await inbox) ?? []
             let page = try await api.messages(session: id, limit: Self.pageSize)
+            await SentMessage.read(page.data, waiting: waiting, from: box())
             // Nothing, where its copy has a conversation: an engine just started (a new version
             // setting itself up) can answer that for a moment. The copy stays; read again soon.
             if page.data.isEmpty, isCopy, !transcript.messages.isEmpty, emptyReads < 4 {
@@ -867,6 +895,7 @@ final class SessionModel {
         }
         if !runningCommands.isEmpty { noteCommandMessages() }
         if transcript.isStale { scheduleReload() }
+        if Transcript.changes(with: event.type) { readArrivedParts() }
         switch event.type {
         case "session.tool.success", "session.execution.succeeded", "session.execution.failed", "session.revert.committed":
             refreshChanges()
@@ -1001,25 +1030,24 @@ final class SessionModel {
 
     /// `withComments`: your review comments go with it; a message the app writes for you leaves
     /// them for yours.
-    /// `typed`: the keyword it's sent with, as typed ("/plan"), which its bubble shows.
-    func send(_ text: String, files: [URL] = [], for model: Model?, queue: Bool = false, withComments: Bool = true, typed: String? = nil) {
+    /// `typed`: the keyword it's sent with, as typed ("/plan"), which its bubble shows. `widget`: the
+    /// title of the widget it answers. Its box writes what the agent reads from these (PROTOCOL.md,
+    /// "A message's parts"): the keyword, who the agents named with "&" are, the comments.
+    func send(_ text: String, files: [URL] = [], for model: Model?, queue: Bool = false, withComments: Bool = true, typed: String? = nil, widget: String? = nil) {
         let written = text
         let comments = withComments ? reviewComments : []
-        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The keyword it came with, the agents named with "&" said who they are, then the comments.
-        let named = AgentReferences.text(typed.map { SentWithKeyword.message(words, typed: $0) } ?? words, excluding: session.id, here: RemoteFolder.machine(of: session.location.directory))
-        let text = ReviewComments.text(named, adding: comments)
-        guard !text.isEmpty || !files.isEmpty else { return }
+        let message = MessageParts.Sending(words: text, keyword: typed, widget: widget, comments: comments.map(\.sent), named: AgentReferences.picked(in: text))
+        guard !message.parts.words.isEmpty || typed != nil || widget != nil || !comments.isEmpty || !files.isEmpty else { return }
         if withComments { reviewComments = [] }
         commitUndo()
-        let delivery = post(text, files: files, for: model, queue: queue, written: written, comments: comments)
+        let delivery = post(message, files: files, for: model, queue: queue, written: written, comments: comments)
         var props = Analytics.model(provider: model?.providerID ?? session.model?.providerID, model: model?.id ?? session.model?.id)
         props["mode"] = Analytics.mode(agent)
         props["queued"] = delivery == .queue
         props["files"] = !files.isEmpty
         props["comments"] = !comments.isEmpty
         Analytics.shared.track("message_sent", props)
-        Analytics.shared.noteMessage(in: session.id, chars: text.count)
+        Analytics.shared.noteMessage(in: session.id, chars: message.parts.words.count)
         Analytics.shared.messageSent(path: place)
     }
 
@@ -1035,9 +1063,15 @@ final class SessionModel {
             failure = "The message couldn't come back: its computer can't be reached."
             return
         }
-        let (text, paths) = Attachments.split(item.text)
+        let known = SentMessage.knownParts(id: item.id, text: item.text, metadata: item.metadata)
+        let parts = known ?? MessageParts(words: item.text)
         if paused { isQueuePaused = true }
-        post(text, files: Attachments.restored(item.files + Attachments.writeCarried(item.inlineFiles), noting: paths), for: model, queue: true, holds: paused, before: paused ? before : nil, written: text, comments: [])
+        var message = MessageParts.Sending(words: parts.words, keyword: parts.keyword, widget: parts.widget, comments: parts.comments, named: parts.agents.map(\.session))
+        // Another agent's letter goes back as the agent read it, still theirs; so does one whose
+        // parts couldn't be read, never as words of yours.
+        if known == nil || parts.mail != nil { message = .again(text: item.text, words: parts.words) }
+        post(message, files: Attachments.restored(item.files + Attachments.writeCarried(item.inlineFiles), noting: parts.paths), for: model, queue: true, holds: paused, before: paused ? before : nil,
+             written: parts.words, comments: parts.reviewComments)
     }
 
     /// The goal's ✕ once it's over: cleared once Undo's moment passes, unless another goal took
@@ -1057,11 +1091,12 @@ final class SessionModel {
     /// What `submit` sends now is kept on disk elsewhere until it's gone (`submit`'s `keptElsewhere`).
     private var sendsKeptElsewhere = false
 
-    /// Sends `text` as it is, with `files` attached: what's shown waiting at once, and what goes
-    /// back to the composer if it can't go. Says how it was sent. `holds`: queued, whatever the
-    /// agent is doing, to wait for Resume; `before`, Undo's, where it was (`requeue`).
+    /// Sends `message` (as fields, which its box writes the agent's text from), with `files`
+    /// attached: what's shown waiting at once, and what goes back to the composer if it can't go.
+    /// Says how it was sent. `holds`: queued, whatever the agent is doing, to wait for Resume;
+    /// `before`, Undo's, where it was (`requeue`).
     @discardableResult
-    private func post(_ text: String, files: [URL], for model: Model?, queue: Bool, holds: Bool = false, before: String? = nil, written: String, comments: [ReviewComment]) -> InboxItem.Delivery {
+    private func post(_ message: MessageParts.Sending, files: [URL], for model: Model?, queue: Bool, holds: Bool = false, before: String? = nil, written: String, comments: [ReviewComment]) -> InboxItem.Delivery {
         // Kept with this session from now on, so they go with it.
         let files = Attachments.claim(files, for: self.id)
         let id = Identifier.message()
@@ -1076,10 +1111,10 @@ final class SessionModel {
             let first = outgoing.values.compactMap(\.heldAt).min() ?? 0
             outgoing[id]?.heldAt = first - 1
         }
-        editTranscript { $0.addLocal(id: id, text: text, delivery: delivery, files: files) }
+        editTranscript { $0.addLocal(id: id, text: message.parts.words, delivery: delivery, files: files, metadata: MessageParts.keeping(message.parts)) }
         // Kept on disk until the engine has it, it's back in the composer, or it's taken away: a
         // quit meanwhile (its tools starting, a slow engine) puts it back in the composer.
-        let (quotes, words) = Quoting.draft(of: WidgetAnswer.split(written).text)
+        let (quotes, words) = Quoting.draft(of: written)
         var kept = Drafts.Draft(text: words, files: files, quotes: quotes)
         kept.comments = comments
         let onItsWay = sendsKeptElsewhere ? nil : Drafts.shared.onItsWay(kept, to: self.id)
@@ -1095,7 +1130,11 @@ final class SessionModel {
                 let machine = RemoteFolder.machine(of: session.location.directory)
                 let folder = Attachments.folder(for: self.id)
                 let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model, in: folder) }.value
-                let message = Attachments.text(text, for: prepared)
+                var sending = message
+                sending.id = id
+                sending.files = prepared.files.isEmpty ? nil : prepared.files
+                let notes = Attachments.notes(for: prepared)
+                sending.notes = notes.isEmpty ? nil : notes
                 await waitForTools()
                 // Removed meanwhile: it doesn't go.
                 guard outgoing[id]?.state == .sending else { return }
@@ -1107,18 +1146,15 @@ final class SessionModel {
                 // arriving then (the engine would run all it holds the moment it had one more), and
                 // decides that itself: a Stop from another client may not have reached here yet.
                 if asked == .queue, box() != nil {
-                    try await holdOnBox(id, text: message, files: prepared.files, written: (text, files), before: placesBack[id])
+                    sending.delivery = .queue
+                    sending.before = placesBack[id]
+                    try await holdOnBox(id, sending: sending, written: (written, files))
                     restoredFailed = ""
                     return
                 }
                 update(id) { $0.request = asked }
-                if let machine, !prepared.files.isEmpty {
-                    try await MachineBox.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked,
-                                                withAgents: OutsideAgents.isAgentSession(session), folder: RemoteFolder.parse(session.location.directory)?.path,
-                                                on: SSHConnection(destination: machine))
-                } else {
-                    try await api.prompt(session: self.id, id: id, text: message, files: prepared.files, delivery: asked)
-                }
+                sending.delivery = asked
+                try await sendThroughBox(sending)
                 restoredFailed = ""
                 await requestDone(id)
             } catch {
@@ -1129,7 +1165,7 @@ final class SessionModel {
                 editTranscript { $0.removeLocal(id: id) }
                 // It didn't go: back in the composer as it was, ahead of anything written since
                 // (after one sent before it that didn't go either, in the order they were sent).
-                let (quotes, text) = Quoting.draft(of: WidgetAnswer.split(written).text)
+                let (quotes, text) = Quoting.draft(of: written)
                 restoreFailed(text: text, files: files, quotes: quotes, comments: comments)
                 fail(error)
             }
@@ -1727,13 +1763,8 @@ final class SessionModel {
                 let folder = Attachments.folder(for: id)
                 let prepared = await Task.detached { machine != nil ? Attachments.prepareForMachine(files) : Attachments.prepare(files, for: model, in: folder) }.value
                 try Moves.checkNotMoving(id)
-                if let machine, !prepared.files.isEmpty {
-                    try await MachineBox.command(session: id, name: name, text: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery,
-                                                 withAgents: OutsideAgents.isAgentSession(session), folder: RemoteFolder.parse(session.location.directory)?.path,
-                                                 on: SSHConnection(destination: machine))
-                } else {
-                    try await api.runCommand(session: id, name: name, arguments: Attachments.text(arguments, for: prepared), files: prepared.files, delivery: delivery)
-                }
+                // Its box writes its files' note after what follows its name.
+                try await sendThroughBox(MessageParts.Sending(words: arguments, files: prepared.files, delivery: delivery, notes: Attachments.notes(for: prepared), command: name))
             } catch {
                 runningCommands.removeAll { $0.id == running.id }
                 notRun(written, files: files, because: error)
@@ -1843,6 +1874,8 @@ final class SessionModel {
             var from: String?
             var text: String
             var files: [String]?
+            /// The keyword it was sent with, as typed, which its row shows in front of its words.
+            var keyword: String?
         }
 
         /// One taken away from what waits on the box, whole, to add back as it was (`kept`), where
@@ -1855,6 +1888,8 @@ final class SessionModel {
             var from: String?
             var words: String?
             var before: String?
+            /// What it keeps with it (its parts, a wake-up's mark), put back with it.
+            var metadata: JSONValue?
             /// Added back as it was (`queue/add`).
             var kept: Bool?
         }
@@ -1902,13 +1937,12 @@ final class SessionModel {
     /// for Resume while the queue is paused, shown in the queue as the box lists it, `written` kept
     /// for Edit; otherwise the box sends it to the engine, as asked. `before`: Undo's, put back ahead
     /// of what came after it.
-    private func holdOnBox(_ message: String, text: String, files: [OpenCodeAPI.PromptFile], written: (text: String, files: [URL]), before: String? = nil) async throws {
-        struct Add: Encodable { var id: String; var text: String; var files: [OpenCodeAPI.PromptFile]?; var delivery: InboxItem.Delivery; var words: String; var before: String? }
+    private func holdOnBox(_ message: String, sending: MessageParts.Sending, written: (text: String, files: [URL])) async throws {
         yoursOnBox[message] = written
         let state: BoxQueue
         do {
-            // Shown as you wrote it, without its files' notes for the agent.
-            state = try await changeQueue("queue/add", body: Add(id: message, text: text, files: files.isEmpty ? nil : files, delivery: .queue, words: written.text, before: before))
+            // Shown as you wrote it; its box writes what the agent reads.
+            state = try await changeQueue("queue/add", body: sending)
         } catch {
             yoursOnBox[message] = nil
             throw error
@@ -1922,6 +1956,17 @@ final class SessionModel {
             update(message) { $0.request = .queue }
             await requestDone(message)
         }
+    }
+
+    /// Said when a message from before can't be taken back or edited: its computer couldn't read it.
+    static let unread = "That message couldn’t be read: its computer didn’t answer. Try again in a moment."
+
+    /// `message` (or a command) to its conversation through its box, which writes what the agent
+    /// reads from its fields (`kuvo/sessions/<id>/send`); what it refuses, as it said it.
+    private func sendThroughBox(_ message: MessageParts.Sending) async throws {
+        guard let box = box() else { throw BoxRefusal(status: 503, message: "This conversation’s computer can’t be reached now. Try again in a moment.") }
+        let (status, body) = try await box.send("POST", MessageParts.sendRoute(id), body: JSONEncoder().encode(message))
+        guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: body) }
     }
 
     /// One waiting on the box taken away (Remove): Undo puts it back as it was (`putBackOnBox`).
@@ -1958,7 +2003,7 @@ final class SessionModel {
     private func editOnBox(_ item: Transcript.Pending) {
         let written = yoursOnBox[item.id]
         removeFromBox(item)
-        restoreDraft(written?.text ?? item.text, files: written?.files ?? [])
+        restoreDraft(written.map { MessageParts(words: $0.text) } ?? SentMessage.parts(item), files: written?.files ?? [])
     }
 
     /// While the queue is paused on a machine's box: what arrives there meanwhile shows as it comes
@@ -2079,6 +2124,12 @@ final class SessionModel {
         if outgoing[item.id] == nil { outgoing[item.id] = Outgoing(state: .waiting, isOurs: false) }
         move(item.id, to: .takingBack)
         Task {
+            // What comes back to the composer, known before it's taken back.
+            guard await SentMessage.ensure(id: item.id, text: item.text, metadata: item.metadata, from: box()) != nil else {
+                if outgoing[item.id]?.state == .takingBack { move(item.id, to: .waiting) }
+                failure = Self.unread
+                return
+            }
             do {
                 try await api.cancelInbox(session: id, item: item.id)
             } catch {
@@ -2106,7 +2157,7 @@ final class SessionModel {
                 }
             }
             guard outgoing[item.id]?.state == .cancelled else { return }
-            restoreDraft(item.text, files: item.files + Attachments.writeCarried(item.inlineFiles))
+            restoreDraft(SentMessage.parts(item), files: item.files + Attachments.writeCarried(item.inlineFiles))
         }
     }
 
@@ -2114,11 +2165,10 @@ final class SessionModel {
     /// attached files (each once, and only those on this Mac), its comments on the changes and
     /// what it replied to; a goal as one (`SentWithKeyword.draft`), into an empty composer: beside
     /// your words, "/goal" in front would make them the goal too. Returns the text it put.
-    @discardableResult private func restoreDraft(_ message: String, files picked: [URL] = []) -> String {
-        let (quoted, comments, paths, _) = SentMessage.split(message)
-        let (quotes, words) = Quoting.draft(of: quoted)
-        let text = draftText.isEmpty ? SentWithKeyword.draft(words, keyword: SentMessage.keyword(of: message)) : words
-        restore(text: text, files: Attachments.restored(picked, noting: paths), quotes: quotes, comments: comments)
+    @discardableResult private func restoreDraft(_ message: MessageParts, files picked: [URL] = []) -> String {
+        let (quotes, words) = Quoting.draft(of: message.words)
+        let text = draftText.isEmpty ? SentWithKeyword.draft(words, keyword: message.keyword) : words
+        restore(text: text, files: Attachments.restored(picked, noting: message.paths), quotes: quotes, comments: message.reviewComments)
         if text != words { restoredGoal = text }
         return text
     }
@@ -2223,6 +2273,11 @@ final class SessionModel {
                     try await api.wait(session: id)
                 }
                 let copy = await stored(message)
+                // What goes back to the composer, known before anything's undone.
+                guard let parts = await SentMessage.ensure(id: copy.id, text: copy.text, metadata: copy.metadata, from: box()) else {
+                    failure = Self.unread
+                    return
+                }
                 session.revert = try await api.stageRevert(session: id, messageID: copy.id)
                 // Undone further back before Redo: Redo takes them all back, so it puts back the
                 // composer as it was before the first undo (with each undo's text gone, rather
@@ -2237,7 +2292,7 @@ final class SessionModel {
                     before.text = String(now.text.dropFirst(min(now.text.count, undone.put.count + 2)))
                 }
                 // The text this undo put ahead of what was there.
-                let put = restoreDraft(CommandMessages.shared.text(of: copy), files: Self.files(of: message, stored: copy))
+                let put = restoreDraft(parts, files: Self.files(of: message, stored: copy))
                 let after = composerState
                 undone = (before, after, put)
             } catch {
@@ -2274,8 +2329,13 @@ final class SessionModel {
                 let id = Identifier.message()
                 sentID = id
                 outgoing[id] = Outgoing(state: .sending, request: .steer, isOurs: true, startsRun: true)
-                editTranscript { $0.addLocal(id: id, text: user.text, delivery: .steer) }
-                try await api.prompt(session: self.id, id: id, text: user.text, files: files)
+                let parts = SentMessage.parts(user)
+                editTranscript { $0.addLocal(id: id, text: parts.words, delivery: .steer, metadata: MessageParts.keeping(parts)) }
+                // As the agent read it, through its box, which keeps its parts with it.
+                struct Again: Encodable { var id: String; var text: String; var files: [OpenCodeAPI.PromptFile]?; var delivery: InboxItem.Delivery }
+                guard let box = box() else { throw BoxRefusal(status: 503, message: "This conversation’s computer can’t be reached now. Try again in a moment.") }
+                let (status, body) = try await box.send("POST", MessageParts.sendRoute(self.id), body: JSONEncoder().encode(Again(id: id, text: user.text, files: files.isEmpty ? nil : files, delivery: .steer)))
+                guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: body) }
                 await requestDone(id)
             } catch {
                 // Its turn was taken back, and it didn't go again: back in the composer, as a
@@ -2286,7 +2346,8 @@ final class SessionModel {
                         $0.request = nil
                     }
                     editTranscript { $0.removeLocal(id: id) }
-                    restoreDraft(user.text, files: Self.files(of: user))
+                    // (One whose parts couldn't be read stays where it was, rather than its text as words.)
+                    if let parts = SentMessage.knownParts(id: user.id, text: user.text, metadata: user.metadata) { restoreDraft(parts, files: Self.files(of: user)) }
                 }
                 fail(error)
             }

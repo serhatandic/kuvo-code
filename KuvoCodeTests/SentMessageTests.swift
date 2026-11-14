@@ -1,123 +1,113 @@
-import ClientText
+import ClientSessions
 import Foundation
+import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// A message you send goes to the agent with what the app adds to it (the agents you named with
-/// &, your comments on the changes, the note of attached files), and comes back from the engine
-/// that way. Wherever it shows again (its bubble, Edit, the export, a title), it's what you wrote,
-/// with its comments and files as cards.
+/// A message you send goes to its box as what you wrote and what goes with it (the keyword, your
+/// comments on the changes, the agents you named with "&"), and the box writes what the agent reads
+/// and keeps the message's parts with it. Wherever it shows again (its bubble, Edit), it's what you
+/// wrote, with its comments as cards; one from before, which keeps no parts, shows as its box reads
+/// it. This Mac's box is the real one; the engine is stubbed. (The words the agent reads, case by
+/// case, are the box's: Vectors/message-parts.json.)
 @MainActor
-@Suite struct SentMessageTests {
-    let comments = [
-        ReviewComment(file: "Sources/App.swift", line: 124, side: .new, snippet: "let limit = 10", text: "Make this configurable."),
-        ReviewComment(file: "notes.md", line: 3, side: .old, snippet: "- old step", text: "Why did this go?\nIt was the only place that said so."),
-    ]
+@Suite(.serialized, .timeLimit(.minutes(1))) struct SentMessageTests {
+    let engine = StubEngine(port: 47906)
+    let workspace = Workspace()
+    let box = SessionsBox()
+    let id = "ses_sent_\(UUID().uuidString.prefix(8).lowercased())"
 
-    /// As the composer sends it: the words with the named agents' block, then the comments, then
-    /// the note of files (SessionModel.send).
-    private func sent(_ words: String, comments: [ReviewComment] = [], prepared: Attachments.Prepared = .init(), agents: [AgentMail.Agent] = []) -> String {
-        var text = words
-        if let note = AgentReferences.note(naming: agents, here: nil) { text += "\n\n" + note }
-        return Attachments.text(ReviewComments.text(text, adding: comments), for: prepared)
+    init() {
+        workspace.api = engine.api
+        MessageParts.forgetRead()
     }
 
-    @Test func wordsCommentsAndFilesComeBackAsWritten() {
-        var prepared = Attachments.Prepared()
-        prepared.included = ["/tmp/a/screenshot.png"]
-        prepared.paths = ["/Users/me/Desktop/big-archive.zip"]
-        prepared.unsent = ["/Users/me/secret.key"]
-        let words = "Please fix the limit.\n\nAlso check the notes."
-        let back = SentMessage.split(sent(words, comments: comments, prepared: prepared))
-        #expect(back.text == words)
-        #expect(back.comments.map(\.location) == ["Sources/App.swift:124", "notes.md:3 (removed)"])
-        #expect(back.comments.map(\.snippet) == ["let limit = 10", "- old step"])
-        #expect(back.comments.map(\.text) == comments.map(\.text))
-        // The files sent with the message are its own; those sent as paths, or left behind, are named.
-        #expect(back.paths == ["/Users/me/Desktop/big-archive.zip", "/Users/me/secret.key"])
+    private func done() {
+        box.stop()
+        engine.stop()
+        Drafts.shared.remove(id)
+        MessageParts.forgetRead()
     }
 
-    /// Text you paste that looks like the app's blocks (a message copied from another chat, a
-    /// closing tag) stays your words, and isn't read as comments or files.
-    @Test func pastedTagsStayWords() {
-        let copied = """
-        Here's what the other session got:
-
-        <review-comments>
-        Comments on lines of the current changes:
-
-        [b.swift:10]
-        > let x = 1
-        Rename this.
-        </review-comments>
-        """
-        let back = SentMessage.split(sent(copied))
-        #expect(back.comments.isEmpty)
-        #expect(back.text.contains("[b.swift:10]"))
-        #expect(back.text.contains("Rename this."))
-
-        let withFiles = SentMessage.split(sent("The tag is </attached-files>", prepared: { var p = Attachments.Prepared(); p.paths = ["/x/y.txt"]; return p }()))
-        #expect(withFiles.text == "The tag is </attached-files>")
-        #expect(withFiles.paths == ["/x/y.txt"])
+    private func open(_ conversation: [[String: Any]] = []) async throws -> SessionModel {
+        engine.list([StubEngine.session(id, title: "Sent", directory: "/tmp/kuvo-tests-sent")])
+        engine.conversation(id, conversation)
+        engine.on("POST", "/api/session/\(id)/prompt", json: [:])
+        try await box.start(engine, for: workspace)
+        await workspace.refresh()
+        let model = try #require(workspace.model(for: id))
+        await model.load()
+        return model
     }
 
-    /// A comment's own lines that look like a comment's start are part of it.
-    @Test func aCommentQuotingAnotherLocationStaysWhole() {
-        let comment = ReviewComment(file: "a.swift", line: 1, side: .new, snippet: "import Foo", text: "Like in\n[b.swift:10]\nabove.")
-        let back = SentMessage.split(sent("See comments", comments: [comment]))
-        #expect(back.comments.count == 1)
-        #expect(back.comments.first?.text == "Like in\n[b.swift:10]\nabove.")
+    private func yours(in model: SessionModel) -> [Message.User] {
+        model.transcript.messages.compactMap { if case .user(let user) = $0 { user } else { nil } }
     }
 
-    @Test func onlyFilesHasNoWords() {
-        var prepared = Attachments.Prepared()
-        prepared.paths = ["/x/report.pdf"]
-        let back = SentMessage.split(sent("", prepared: prepared))
-        #expect(back.text == "")
-        #expect(back.paths == ["/x/report.pdf"])
+    @Test func whatYouWroteGoesToItsBoxWhichWritesWhatTheAgentReads() async throws {
+        defer { done() }
+        let model = try await open()
+        model.reviewComments = [ReviewComment(file: "notes.md", line: 3, side: .old, snippet: "- old step", text: "Why did this go?")]
+        model.send("  Please fix the limit.  ", for: nil)
+        try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
+        let sent = try #require(engine.requests("POST", "/api/session/\(id)/prompt").first)
+        let text = try #require(sent.body["text"] as? String)
+        #expect(text.hasPrefix("Please fix the limit.\n\n<review-comments>\nComments on lines of the current changes:\n\n[notes.md:3 (removed)]\n> - old step\nWhy did this go?\n</review-comments>"))
+        // Not a phone's.
+        #expect(!text.contains("<from-phone>"))
+        // Shown at once as what you wrote, and once the engine has it, the same, from the parts it keeps.
+        let messageID = try #require(sent.body["id"] as? String)
+        model.apply(try engine.event("session.inbox.enqueued", session: id, [
+            "inboxID": messageID, "item": ["type": "user", "delivery": "steer", "payload": ["text": text, "metadata": sent.body["metadata"] ?? [:]]],
+        ]))
+        model.apply(try engine.event("session.inbox.delivered", session: id, ["inboxID": messageID]))
+        let message = try #require(yours(in: model).last)
+        let parts = SentMessage.parts(message)
+        #expect(parts.words == "Please fix the limit.")
+        #expect(parts.reviewComments.map(\.location) == ["notes.md:3 (removed)"])
+        #expect(parts.reviewComments.map(\.text) == ["Why did this go?"])
+        #expect(model.reviewComments.isEmpty)
     }
 
-    /// The agents named with & come back as references, with the words as written, ahead of the
-    /// comments and files.
-    @Test func namedAgentsComeBack() {
-        let agents = [AgentMail.Agent(session: "ses_abc123", name: "Ada Lovelace", kind: "bot", about: "Reviews math"),
-                      AgentMail.Agent(session: "ses_def456", name: "Build (main)", kind: "session", project: "kuvo")]
-        let words = "Ask &Ada Lovelace and &Build (main) about it"
-        var prepared = Attachments.Prepared()
-        prepared.paths = ["/x/log.txt"]
-        let back = SentMessage.split(sent(words, comments: [comments[0]], prepared: prepared, agents: agents))
-        #expect(back.text == words)
-        #expect(back.references == [.init(name: "Ada Lovelace", session: "ses_abc123"), .init(name: "Build (main)", session: "ses_def456")])
-        #expect(back.comments.count == 1)
-        #expect(back.paths == ["/x/log.txt"])
-        #expect(SentMessage.words(of: sent(words, agents: agents)) == words)
+    /// A message sent before its box wrote the blocks (its parts not kept with it) shows as its box
+    /// reads it, the moment the conversation does: the words, its keyword and its comments, never
+    /// the blocks written for the agent.
+    @Test func aMessageFromBeforeShowsAsItsBoxReadsIt() async throws {
+        defer { done() }
+        let before = "Check the build\n\n<sent-with>\nThe user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:\n/plan\n</sent-with>\n\n<review-comments>\nComments on lines of the current changes:\n\n[a.js:4]\n> x()\nCall it once\n</review-comments>"
+        let model = try await open([["id": "msg_01", "type": "user", "time": ["created": 1], "text": before]])
+        let message = try #require(yours(in: model).first)
+        let parts = SentMessage.parts(message)
+        #expect(parts.words == "Check the build")
+        #expect(parts.keyword == "/plan")
+        #expect(parts.reviewComments.map(\.location) == ["a.js:4"])
+        // Gone back to with ↑, it's what you wrote.
+        #expect(model.sentMessages == ["Check the build"])
     }
 
-    /// A plain message is left alone.
-    @Test func plainMessageIsUntouched() {
-        let words = "Just a question: what does `<named-agents>` do?"
-        #expect(SentMessage.split(sent(words)).text == words)
-        #expect(SentMessage.split(words).references.isEmpty)
+    /// A conversation kept to show while its computer is away keeps the parts its box read: shown
+    /// from the copy, a message from before is a bubble, not the blocks written for the agent.
+    @Test func aSavedCopyKeepsWhatItsBoxRead() async throws {
+        defer {
+            done()
+            SessionCopies.remove(id)
+        }
+        let before = "Check the build\n\n<sent-with>\nThe user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:\n/plan\n</sent-with>"
+        let model = try await open([["id": "msg_01", "type": "user", "time": ["created": 1], "text": before]])
+        model.apply(try engine.event("session.execution.succeeded", session: id))
+        await SessionCopies.written()
+        let copy = try #require(SessionCopies.load(id))
+        guard case .user(let user)? = copy.messages.first else { Issue.record("no message in the copy"); return }
+        #expect(MessageParts.kept(in: user.metadata) == MessageParts(words: "Check the build", keyword: "/plan"))
     }
 
-    /// What you click in a widget goes to the agent naming the widget it came from, and your
-    /// bubble shows your words with the widget over them.
-    @Test func whatAWidgetSendsNamesTheWidget() {
-        let answer = WidgetAnswer.message("Show it in minutes", from: "Build times\nthis week")
-        #expect(answer.contains("<from-widget>") && answer.contains("Build times this week"))
-        let back = SentMessage.split(answer)
-        #expect(back.text == "Show it in minutes")
-        #expect(SentMessage.widget(of: answer) == "Build times this week")
-        // One without a title is still from a widget.
-        #expect(SentMessage.widget(of: WidgetAnswer.message("Yes", from: nil)) == "")
-        #expect(WidgetAnswer.name("") == "Made for you")
-        // Its title names no agents, whatever it says; its words still can.
-        let mira = AgentMail.Agent(session: "ses_mira", name: "Mira", kind: "bot", about: "Plans")
-        #expect(AgentReferences.named(in: [WidgetAnswer.message("A", from: "Ask &Mira")], agents: [mira]).isEmpty)
-        #expect(AgentReferences.named(in: [WidgetAnswer.message("Ask &Mira", from: "Plans")], agents: [mira]).map(\.session) == ["ses_mira"])
-        // What you typed yourself isn't, even naming the tag.
-        let typed = "What does <from-widget> do?"
-        #expect(SentMessage.split(sent(typed)).text == typed)
-        #expect(SentMessage.widget(of: typed) == nil)
+    /// Another agent's message from before shows as its message, from its box's reading of it.
+    @Test func anotherAgentsMessageFromBeforeShowsAsTheirs() async throws {
+        defer { done() }
+        let model = try await open([["id": "msg_01", "type": "user", "time": ["created": 1], "text": "[Message from Ada · ses_ada] (To answer, use send_message to ses_ada.)\n\nCan you review?"]])
+        let parts = SentMessage.parts(try #require(yours(in: model).first))
+        #expect(parts.mail == MessageParts.Agent(name: "Ada", session: "ses_ada"))
+        #expect(parts.words == "Can you review?")
+        #expect(model.sentMessages.isEmpty)
     }
 }

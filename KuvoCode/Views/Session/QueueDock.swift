@@ -236,7 +236,7 @@ struct QueueRow: View {
     static func styledSummary(of item: Transcript.Pending, folders: [String]) -> AttributedString {
         let (keyword, line) = line(of: item)
         var styled = AttributedString(line)
-        let references = SentMessage.split(item.text).references
+        let references = SentMessage.parts(item).references
         MessageMentions.apply(to: &styled, agents: MessageMentions.agents(references), folders: folders, links: false)
         return keyword.map { MessageMentions.keyword($0, before: styled) } ?? styled
     }
@@ -251,8 +251,8 @@ struct QueueRow: View {
     private static func line(of item: Transcript.Pending) -> (keyword: String?, line: String) {
         // What the box told the agent: what happened, in a line.
         if let note = BoxNote.of(text: item.text, metadata: item.metadata) { return (nil, note.line) }
-        let keyword = SentMessage.keyword(of: item.text)
-        let (text, comments, paths) = UserBubble.split(item.text)
+        let parts = SentMessage.parts(item)
+        let (keyword, text, comments, paths) = (parts.keyword, parts.words, parts.comments, parts.paths)
         if let line = text.split(separator: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
             return (keyword, String(line))
         }
