@@ -4206,9 +4206,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   no row of it: Codex's, say; Claude's card has none, so the accounts take its place, `covers`);
   rows still alike add their other boxes' names. Otherwise (a computer the client reaches whose own
   rows the first box doesn't have from it as it hears it now, not `away`: just added, or the relay
-  down), the client merges each box's `accounts` itself, by the rules for `rows` above, and
-  refreshes each (every box the update gate lets through has `rows`; this merge, a client's own,
-  is yet to move to the box).
+  down; or a held box's older bridge, which answers without `rows`, as this Mac's own does just
+  after an update from a release before them), the client merges each box's `accounts` itself, by
+  the rules for `rows` above, and refreshes each (this merge, a client's own, is yet to move to the
+  box).
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run

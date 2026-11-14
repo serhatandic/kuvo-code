@@ -47,10 +47,12 @@ import Testing
     private let sonnet = ModelRef(id: "sonnet", providerID: "anthropic")
     private let luna = ModelRef(id: "luna", providerID: "openai")
 
-    /// Before it has a box to ask (just after launch), nothing is worked out here: no model is
-    /// offered, none turned down, and a new conversation starts on the one you picked, as it is,
-    /// though this Mac's lists say its account is signed out. Its box decides once it's asked
-    /// (`itsBoxDecidesWhatsOfferedAndWhatANewOneStartsOn`).
+    /// A catalog that has no box to ask works nothing out itself (the app gives each catalog its
+    /// box as it's made; this pins that the old client rule is gone): no model is offered, none
+    /// turned down, and a new conversation starts on the one you picked, as it is, though this
+    /// Mac's lists say its account is signed out. Its box decides once it's asked
+    /// (`itsBoxDecidesWhatsOfferedAndWhatANewOneStartsOn`, whose first look is the app's real
+    /// "box not answered yet").
     @Test func beforeItsBoxSaysNothingIsWorkedOutHere() async throws {
         defer { StubWeb.stop() }
         try await engine(accounts: [Self.account("anthropic", signedIn: false), Self.account("openai", signedIn: true)],

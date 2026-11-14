@@ -997,7 +997,7 @@ final class AppModel {
     func readChatsHere() async throws {
         guard attached != nil, workspace.attachedChats == nil else { return }
         let here = box(SSHConnection.thisMac)
-        if let held = BoxGates.held(here.box) { throw held }
+        if let held = BoxGates.refusalIfHeld(here.box) { throw held }
         struct Info: Decodable { var chats: String }
         let info = try await here.value(Info.self, "GET", "kuvo/info")
         // (Let go of meanwhile: nothing of it is kept.)

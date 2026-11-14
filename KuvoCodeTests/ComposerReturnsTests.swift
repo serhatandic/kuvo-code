@@ -134,7 +134,7 @@ import Testing
     /// with no key, as its box says, `kuvo/sessions/models`): said at once, naming what to add, and
     /// nothing sent (the engine takes such a message and drops it without a word); your message
     /// stays to send once you've added it or picked another model.
-    @Test func aModelYouSignedOutOfSaysSoAndKeepsYourMessage() async throws {
+    @Test func aModelWhoseAccountNeedsAKeySaysSoAndKeepsYourMessage() async throws {
         defer { done() }
         try await withBox()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json([:]) }

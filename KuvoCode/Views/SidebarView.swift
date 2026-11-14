@@ -605,7 +605,7 @@ struct SidebarView: View {
             struct Info: Decodable { var chats: String }
             do {
                 let box = app.box(machine)
-                if let held = BoxGates.held(box.box) { throw held }
+                if let held = BoxGates.refusalIfHeld(box.box) { throw held }
                 let chats = try await box.value(Info.self, "GET", "kuvo/info").chats
                 newSession(RemoteFolder.folder(chats, on: machine))
             } catch {

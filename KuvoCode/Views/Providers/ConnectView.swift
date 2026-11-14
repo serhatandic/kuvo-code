@@ -553,8 +553,13 @@ struct ConnectView: View {
                 // Starting for too long: as when it can't be reached.
                 offeredFailure = unreachable
                 return
+            } catch let refusal as BoxRefusal {
+                // Its box's own words (held for an update, or turned away).
+                offeredFailure = refusal.localizedDescription
+                return
             } catch {
-                offeredFailure = error.localizedDescription
+                // Not reached (an SSH failure's own text isn't for here).
+                offeredFailure = unreachable
                 return
             }
         }

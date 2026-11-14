@@ -100,7 +100,7 @@ final class BoxGates {
     /// The same refusal for anything `box` would be asked while it's held, where what's read first
     /// is a route it still answers (a new chat, whose chats folder `kuvo/info` names); nil when it
     /// isn't held.
-    nonisolated static func held(_ box: String) -> BoxRefusal? {
+    nonisolated static func refusalIfHeld(_ box: String) -> BoxRefusal? {
         guard let words = mirror.withLock({ $0[box] }) else { return nil }
         return BoxRefusal(status: 503, message: words, reason: reason)
     }
