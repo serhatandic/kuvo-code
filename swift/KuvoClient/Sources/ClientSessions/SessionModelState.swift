@@ -7,7 +7,7 @@ import OpenCodeKit
 /// what that means for a composer, decided and worded by the box (`refusal`, `choose`, `action`), so
 /// every client shows the same and none decides or words it; a client draws it: the model button's
 /// name (or "Choose a Model"), Send (`ComposerSend`), what a message refused says, and a sign-in
-/// card's button and help. Held to Packages/KuvoLink/Vectors/model-readiness.json.
+/// card's button and help. Held to protocol/vectors/model-readiness.json.
 public struct SessionModelState: Decodable, Equatable, Sendable {
     /// What a model that can't run needs.
     public enum Missing: Equatable, Sendable {

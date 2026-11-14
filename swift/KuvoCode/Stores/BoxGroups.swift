@@ -23,7 +23,7 @@ private struct EventData<Value: Decodable>: Decodable {
 }
 
 /// Your group chats, wherever they live. Each computer's coding agents' bridge runs its own
-/// (`Packages/Box/src/agents/groups`): this Mac's as a machine's, so they talk, meet and hand out work with
+/// (`box/src/agents/groups`): this Mac's as a machine's, so they talk, meet and hand out work with
 /// no window open, and a machine's with this Mac off. The window shows them from what each
 /// computer says of them as they go (its bridge's event feed), and sends there what you do in
 /// them. What it last saw of each is kept here, so they show while their computer is away or

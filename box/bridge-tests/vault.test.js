@@ -3,7 +3,7 @@
 // after a restart until a client unlocks it, and used by agents only as their grants say, without
 // ever seeing a value. (This Mac's vault, in its Keychain: vault-host.test.js.)
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/vault.test.js`.
+// Run with `node --test box/bridge-tests/vault.test.js`.
 import { testsFolder } from "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

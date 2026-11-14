@@ -4,7 +4,7 @@
 // never taken for one with nothing to tell. The real box code; only the engine and the bridge are
 // stand-ins, and the watcher's clock is the test's.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/work-catch-up.test.js`.
+// Run with `node --test box/bridge-tests/work-catch-up.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +17,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-catch-up-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const tidepool = path.join(home, "work", "tidepool");
 fs.mkdirSync(tidepool, { recursive: true });

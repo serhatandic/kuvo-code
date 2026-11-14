@@ -1,7 +1,7 @@
 // A machine's group chats through its bridge (PROTOCOL.md, `kuvo/groups`): passed on to the coding
 // agents' bridge there, which runs them and answers in the shapes a client takes, with every rule
 // of what can be (Agents' groups-link tests hold those). Run with
-// `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,7 +15,7 @@ import { runningAs } from "./running-as.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-groups-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 async function ask(handle, method, p, { body, lines } = {}) {
   const abort = new AbortController();

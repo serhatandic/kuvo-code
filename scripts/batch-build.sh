@@ -147,7 +147,7 @@ one() {
     if [ "$platform" = mac ]; then
         lane=mac-build
         what="kuvo-ai $(short "$mac_commit")"
-        set -- -project "$src/kuvo-ai/KuvoCode.xcodeproj" -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
+        set -- -project "$src/kuvo-ai/swift/KuvoCode.xcodeproj" -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
             APP_BUNDLE_ID=run.kuvo.code.tests CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
     else
         lane=phone-build

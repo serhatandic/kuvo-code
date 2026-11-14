@@ -1,5 +1,5 @@
 {
-  "about": "What a permission's Always button says, the same on the Mac and the phone (ClientText's AlwaysWords.plain) and in the box's notices for phones (alwaysTitle in Packages/Box/src/link/notices/news.ts). Each: the ask (action, save, resources), the home folder of its computer, and the button's words.",
+  "about": "What a permission's Always button says, the same on the Mac and the phone (ClientText's AlwaysWords.plain) and in the box's notices for phones (alwaysTitle in box/src/link/notices/news.ts). Each: the ask (action, save, resources), the home folder of its computer, and the button's words.",
   "cases": [
     {
       "action": "edit",

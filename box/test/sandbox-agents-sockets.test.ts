@@ -1,5 +1,5 @@
 import "./safety"
-import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
+import { ownPath } from "../bridge-tests/test-safety.js"
 import { expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"

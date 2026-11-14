@@ -1,6 +1,6 @@
 // A machine's coding agents through its bridge (PROTOCOL.md, `kuvo/agents/api/…`): passed to the
 // agents' bridge beside its engine, as a Mac passes them to its own. Run with
-// `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -14,7 +14,7 @@ import { runningAs } from "./running-as.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-agents-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 async function ask(handle, method, p, { headers = {}, body } = {}) {
   const parts = [];

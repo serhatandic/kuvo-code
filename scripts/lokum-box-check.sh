@@ -1,8 +1,8 @@
 #!/bin/bash
 # Usage: scripts/lokum-box-check.sh <checkout> <name> [bun test args…]
 # Runs the box tests under the newest engine Bun, in an isolated scratch folder, and exits as they did.
-# It sends the repo's own layout, so the tests that read files beside Packages/Box find them:
-# KuvoLink's vectors and bot-words.json, KuvoClient's BoxVectorsTests.swift (groups.test.ts checks
+# It sends the repo's own layout, so the tests that read files beside box find them:
+# the protocol's vectors, KuvoLink's bot-words.json, KuvoClient's BoxVectorsTests.swift (groups.test.ts checks
 # box-vectors.json against it), scripts/route-shapes.sh and build-browser.sh with what they run and
 # build-browser.sh's file (route-shapes.test.ts, browser-built.test.ts), and
 # the bridge's tests' folder: test-safety.js, which every box test imports first, and the stand-ins
@@ -65,7 +65,7 @@ export TMPDIR=$T/tmp XDG_CACHE_HOME=$T/cache
 export BUN_INSTALL_CACHE_DIR=$T/cache/bun npm_config_cache=$T/cache/npm UV_CACHE_DIR=$T/cache/uv
 export BUN_RUNTIME_TRANSPILER_CACHE_PATH=$T/cache/transpiler
 export PATH=/usr/local/bin:/usr/bin:/bin
-cd "$T/repo/Packages/Box"
+cd "$T/repo/box"
 if [ "$full" = 1 ]; then
     BUN_BE_BUN=1 "$engine" install --frozen-lockfile
     BUN_BE_BUN=1 "$engine" test --timeout 120000 "$@"
@@ -78,10 +78,10 @@ REMOTE
 printf -v command 'bash -c %q -- %q %q' "$remote" "$NAME" "${FULL:+1}"
 for file in "$@"; do printf -v quoted ' %q' "$file"; command+=$quoted; done
 COPYFILE_DISABLE=1 tar --no-xattrs -czf - \
-    Packages/Box/package.json Packages/Box/bun.lock Packages/Box/bunfig.toml Packages/Box/tsconfig.json \
-    Packages/Box/src Packages/Box/test Packages/Box/eval \
-    Packages/KuvoLink/Vectors Packages/KuvoLink/Sources/KuvoLink/Resources/bot-words.json \
-    Packages/KuvoLink/Tests/Bridge Packages/KuvoClient/Tests/ClientSessionsTests/BoxVectorsTests.swift \
+    box/package.json box/bun.lock box/bunfig.toml box/tsconfig.json \
+    box/src box/test box/eval \
+    protocol/vectors swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json \
+    box/bridge-tests swift/KuvoClient/Tests/ClientSessionsTests/BoxVectorsTests.swift \
     scripts/route-shapes.sh scripts/route-shapes.ts scripts/real-app-guard.sh \
-    scripts/build-browser.sh scripts/build-browser.ts KuvoCode/Resources/kuvo-browser.js |
+    scripts/build-browser.sh scripts/build-browser.ts swift/KuvoCode/Resources/kuvo-browser.js |
     ssh -o BatchMode=yes "$HOST" "$command"

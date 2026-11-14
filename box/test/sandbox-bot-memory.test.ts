@@ -1,5 +1,5 @@
 import "./safety"
-import { REAL_PATH } from "../../KuvoLink/Tests/Bridge/test-safety.js"
+import { REAL_PATH } from "../bridge-tests/test-safety.js"
 import { expect, setDefaultTimeout, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

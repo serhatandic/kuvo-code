@@ -4,7 +4,7 @@
 // subagent's, and an engine run of a coding agent's (Auto's) all name the conversation. The real
 // tool and box script; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/start-session.test.js`.
+// Run with `node --test box/bridge-tests/start-session.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -23,9 +23,9 @@ removeAtEnd(root);
 const home = path.join(root, "app", "box");
 const work = path.join(root, "work");
 fs.mkdirSync(work, { recursive: true });
-const tool = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const tool = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
-fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url), path.join(home, "bin", "kuvo-link.js"));
+fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url), path.join(home, "bin", "kuvo-link.js"));
 
 // The engine: a conversation, a subagent it started, an engine run it works through, and what
 // each new session was marked with.

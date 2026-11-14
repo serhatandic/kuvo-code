@@ -1,5 +1,5 @@
 // Noise: IK for sessions, K for mail, with X25519, AES-GCM and SHA-256 (PROTOCOL.md, "Sessions"
-// and "Mail"), held to Vectors/noise.json as the Swift side is.
+// and "Mail"), held to protocol/vectors/noise.json as the Swift side is.
 
 import crypto from "node:crypto";
 import { dh, EMPTY, newKey, publicOf } from "./keys";

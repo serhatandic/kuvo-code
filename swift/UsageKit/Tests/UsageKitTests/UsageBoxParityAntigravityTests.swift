@@ -45,7 +45,7 @@ final class UsageBoxParityAntigravityTests: XCTestCase {
     private func fixture() throws -> Fixture {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage/antigravity-blobs.json")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("box/test/fixtures/usage/antigravity-blobs.json")
         return try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
     }
     func testProtobufDecoderMatchesTheBox() throws {
@@ -117,7 +117,7 @@ final class UsageBoxParityAntigravityTests: XCTestCase {
     func testEmptyAndMissingStoresMatchTheBox() async throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage/antigravity-empty-cases.json")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("box/test/fixtures/usage/antigravity-empty-cases.json")
         let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]])
         for each in cases {
             let directory = try makeAntigravityDatabaseDirectory(for: self)

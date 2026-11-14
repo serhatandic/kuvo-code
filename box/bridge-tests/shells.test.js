@@ -2,7 +2,7 @@
 // the engine runs, and one a coding agent runs, through their bridge. The engine and the bridge are
 // stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/shells.test.js`.
+// Run with `node --test box/bridge-tests/shells.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -16,7 +16,7 @@ import { runningAs } from "./running-as.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-shells-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A server that runs commands, `running` by id: what it was asked to remove.
 async function runner(running, removes = true) {

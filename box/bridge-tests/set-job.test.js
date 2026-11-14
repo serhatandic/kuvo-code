@@ -3,7 +3,7 @@
 // `kuvo-link.js box route`): the real tool and the real box script, on a box folder of the test's
 // own. Only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/set-job.test.js`.
+// Run with `node --test box/bridge-tests/set-job.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -21,8 +21,8 @@ const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
-const tool = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
-write(path.join(home, "bin", "kuvo-link.js"), fs.readFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url)));
+const tool = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+write(path.join(home, "bin", "kuvo-link.js"), fs.readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url)));
 
 // The engine: the bot's conversation, a subagent it started, and what each was told.
 const told = [];

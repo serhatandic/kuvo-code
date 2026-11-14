@@ -1,6 +1,6 @@
 // What keeps a test run away from the real Kuvo Code: loaded before anything else in every bridge
 // test (its first import; test-safety.test.js holds each file to that) and in the box's tests
-// (Packages/Box/test/preload.ts).
+// (box/test/preload.ts).
 //
 // A shell an agent runs in carries Kuvo Code's own variables, KUVO_WAKES and KUVO_BOTS among them,
 // which name the real folders, and the box reads them as it loads. A test that believed them wrote

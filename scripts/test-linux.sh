@@ -2,7 +2,7 @@
 # Runs the bridge's tests on a Linux machine you reach with SSH, as CONTRIBUTING.md asks of a box
 # change, without installing anything there:
 #
-#   scripts/test-linux.sh [--engine] <ssh-host> <test file>…   (files in Packages/KuvoLink/Tests/Bridge)
+#   scripts/test-linux.sh [--engine] <ssh-host> <test file>…   (files in box/bridge-tests)
 #
 # Start it with `scripts/heavy.sh box …`, as the other test runs. This checkout's code, as it is
 # now (uncommitted changes too), goes to a folder of its own in the machine's ~/.kuvo-code-test,
@@ -43,9 +43,9 @@ host=$1
 shift
 root=$(cd "$(dirname "$0")/.." && pwd)
 for file in "$@"; do
-    [ -f "$root/Packages/KuvoLink/Tests/Bridge/$file" ] || { echo "No $file in Packages/KuvoLink/Tests/Bridge" >&2; exit 64; }
+    [ -f "$root/box/bridge-tests/$file" ] || { echo "No $file in box/bridge-tests" >&2; exit 64; }
 done
-engine=$(sed -n 's/.*public static let version = "\(.*\)".*/\1/p' "$root/Packages/OpenCodeKit/Sources/OpenCodeKit/OpenCodeKit.swift")
+engine=$(sed -n 's/.*public static let version = "\(.*\)".*/\1/p' "$root/swift/OpenCodeKit/Sources/OpenCodeKit/OpenCodeKit.swift")
 [ -n "$engine" ] || { echo "No engine version in OpenCodeKit.swift" >&2; exit 1; }
 
 case $(ssh "$host" uname -sm) in
@@ -83,7 +83,7 @@ unzip -q -j "$tools/$uv" "uv-$UV_VERSION.data/scripts/uv" "uv-$UV_VERSION.data/s
 printf '#!/bin/sh\nexec node "$(dirname "$0")/../pnpm/bin/pnpm.mjs" "$@"\n' > "$send/tools/bin/pnpm"
 chmod +x "$send/tools/bin/pnpm" "$send/tools/bin/uv" "$send/tools/bin/uvx"
 (cd "$root" && COPYFILE_DISABLE=1 tar --no-xattrs --exclude node_modules --exclude .build -czf "$send/code.tgz" \
-    Packages/KuvoLink Packages/Box Packages/OpenCodeKit/Sources KuvoCode/Resources)
+    swift/KuvoLink protocol box swift/OpenCodeKit/Sources swift/KuvoCode/Resources)
 COPYFILE_DISABLE=1 tar --no-xattrs -czf "$send/tools.tgz" -C "$send" tools
 
 run=.kuvo-code-test/linux-$(date +%Y%m%d-%H%M%S)-$$
@@ -110,7 +110,7 @@ export KUVO_TEST_BUN=${KUVO_TEST_BUN:-$own} OPENCODE_TEST_BINARY=${OPENCODE_TEST
 # (The tests' own folders are in ~/.kuvo-code-test, beside this one.)
 seen() { ls -a "$HOME" "$HOME/.kuvo-code-test" /tmp 2>/dev/null; }
 seen > "$T/before"
-cd "$T/code/Packages/KuvoLink/Tests/Bridge" || exit 1
+cd "$T/code/box/bridge-tests" || exit 1
 if [ "$runner" = engine ]; then
     # (Bun's runner wants paths that start with ./, and gives each test 5 seconds unless told more.)
     BUN_BE_BUN=1 "$KUVO_TEST_BUN" test --timeout 120000 $(for file in "$@"; do printf './%s ' "$file"; done)

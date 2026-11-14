@@ -1,6 +1,6 @@
 // A message's envelope and its parts (PROTOCOL.md, "A message's parts"): the box writes what the agent
 // reads from a client's fields, in the words Kuvo Code wrote before, byte for byte, and reads the
-// parts back, from the text of one from before too (Packages/KuvoLink/Vectors/message-parts.json,
+// parts back, from the text of one from before too (protocol/vectors/message-parts.json,
 // which KuvoClient's MessagePartsTests reads as a client does). Then `kuvo/sessions/<id>/send`,
 // `queue/add` and `kuvo/messages/parts`, with the engine and the agents bridge as stand-ins (their
 // HTTP APIs) and the box's code real.
@@ -11,7 +11,7 @@ import { readFileSync, rmSync } from "node:fs"
 import { composeMessage, composeWithParts, partsOf } from "../src/link/messages/parts"
 import type { AnswerPiece, RouteContext } from "../src/link/server/context"
 
-const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/message-parts.json", import.meta.url), "utf8"))
+const vectors = JSON.parse(readFileSync(new URL("../../protocol/vectors/message-parts.json", import.meta.url), "utf8"))
 
 describe("the envelope, as Kuvo Code wrote it before", () => {
   test.each(vectors.compose.map((each: any) => [each.about, each]))("%s", (_, each: any) => {

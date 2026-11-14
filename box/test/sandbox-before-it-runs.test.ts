@@ -1,5 +1,5 @@
 import "./safety"
-import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
+import { ownPath } from "../bridge-tests/test-safety.js"
 import { expect, setDefaultTimeout, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"

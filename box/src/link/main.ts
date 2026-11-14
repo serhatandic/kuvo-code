@@ -1,4 +1,4 @@
-// (The command line: what each command does is in the modules beside it, Packages/Box/README.md.)
+// (The command line: what each command does is in the modules beside it, box/README.md.)
 // Kuvo Code's link on a machine: lets the phones you've paired reach this machine's engine
 // through the relay, so its sessions and bots work from the phone with the Mac closed. The
 // engine's own runtime runs it, so the machine needs nothing else:
@@ -12,8 +12,8 @@
 //
 // It keeps its state in ~/.kuvo-code/run/link.json (mode 600), reads the engine's port and
 // password from run/engine.json, and connects out to the relay; it never listens. The protocol
-// is in PROTOCOL.md beside this file's source (kuvo-ai's Packages/KuvoLink), with the same in
-// Swift for the Mac and the phone.
+// is kuvo-ai's protocol/PROTOCOL.md, with the same in Swift (swift/KuvoLink) for the Mac and
+// the phone.
 
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";

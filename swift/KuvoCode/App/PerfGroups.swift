@@ -6,7 +6,7 @@ import OpenCodeKit
 import os
 
 /// KUVO_DEMO_GROUP_REPLAY: a group chat's discussion measured the same way every time. Three bots
-/// (Ada leads, Ben, Cy) on a stand-in model that Tests/Perf/kuvo_perf.py serves at
+/// (Ada leads, Ben, Cy) on a stand-in model that swift/Tests/Perf/kuvo_perf.py serves at
 /// KUVO_PERF_PROVIDER (a recorded discussion, at the pace it was written), in one of 40 chats on
 /// this Mac. `setup` makes the bots and chats and quits; anything else then sends the discussion's
 /// question and measures until it's over: the main thread's waits, its CPU and the app's, this

@@ -5,6 +5,8 @@
 
 import fs from "node:fs";
 
+// (Its words name where the sources were once, Packages/Box: every bridge, older ones on boxes
+// too, looks for them as they are, so they stay. scripts/build-agents.sh.)
 const BUILT = /\/\/ Built from Packages\/Box\/src\/agents ([0-9a-f]{16,64})\s*(?:\n|$)/g;
 
 /** The build a bundle's text names (its last such line), or null for one that names none (a

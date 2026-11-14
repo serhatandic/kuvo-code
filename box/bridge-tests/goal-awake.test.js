@@ -3,7 +3,7 @@
 // own process), and it sleeps again once nothing of it runs, the goal still on. A machine doesn't
 // sleep: nothing runs there. The real box code, as a Mac's box; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/goal-awake.test.js`.
+// Run with `node --test box/bridge-tests/goal-awake.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -18,7 +18,7 @@ const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-goal-aw
 process.env.KUVO_HOME = home;
 process.env.KUVO_BOX = "mac";
 process.env.KUVO_ENGINE_CONFIG = path.join(home, "engine");
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

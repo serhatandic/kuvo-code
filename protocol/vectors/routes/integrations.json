@@ -1,5 +1,5 @@
 {
-  "about": "kuvo/integrations (PROTOCOL.md, \"Integrations\"): Settings › Integrations, each box its own, added with the keys you bring and removed with everything that goes with them. A machine's catalog is the one its Mac leaves there (Vectors/routes/box/integrations.json).",
+  "about": "kuvo/integrations (PROTOCOL.md, \"Integrations\"): Settings › Integrations, each box its own, added with the keys you bring and removed with everything that goes with them. A machine's catalog is the one its Mac leaves there (protocol/vectors/routes/box/integrations.json).",
   "scenarios": [
     {
       "name": "the catalog, by kind, with what's added and whose keys are kept",

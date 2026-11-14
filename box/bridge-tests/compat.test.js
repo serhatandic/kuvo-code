@@ -3,7 +3,7 @@
 // list names has its markers, and each marker names an item on the list, so a version's paths go
 // together when it goes (scripts/compat.sh lists them).
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/compat.test.js`.
+// Run with `node --test box/bridge-tests/compat.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -12,8 +12,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import "./at-end.js";
 
-const repo = fileURLToPath(new URL("../../../../", import.meta.url));
-const protocol = fs.readFileSync(path.join(repo, "Packages/KuvoLink/PROTOCOL.md"), "utf8");
+const repo = fileURLToPath(new URL("../../", import.meta.url));
+const protocol = fs.readFileSync(path.join(repo, "protocol/PROTOCOL.md"), "utf8");
 const from = protocol.indexOf("\n## For released Macs");
 const to = protocol.indexOf("\n## ", from + 1);
 const section = protocol.slice(from, to === -1 ? undefined : to);
@@ -21,8 +21,8 @@ const listed = [...section.matchAll(/<!-- compat: (0\.7|beta\.1) ([a-z0-9-]+) --
 
 // The code of every side, as written: not what's built from it (a bundle leaves comments out),
 // nor the tests.
-const ROOTS = ["Packages/Box/src", "KuvoCode", "Packages/OpenCodeKit/Sources", "Packages/KuvoClient/Sources", "Packages/KuvoLink/Sources", "scripts"];
-const BUILT = new Set(["KuvoCode/Resources/kuvo-agents.js", "KuvoCode/Resources/kuvo-browser.js", "scripts/compat.sh"]);
+const ROOTS = ["box/src", "swift/KuvoCode", "swift/OpenCodeKit/Sources", "swift/KuvoClient/Sources", "swift/KuvoLink/Sources", "scripts"];
+const BUILT = new Set(["swift/KuvoCode/Resources/kuvo-agents.js", "swift/KuvoCode/Resources/kuvo-browser.js", "scripts/compat.sh"]);
 const CODE = /\.(swift|ts|js|mjs|sh|py)$/;
 function* files(folder) {
   let entries = [];

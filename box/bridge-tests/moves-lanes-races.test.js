@@ -4,7 +4,7 @@
 // good leaves the original as it was. This Mac's box, here, with the real agents bridge; the engine a
 // stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-lanes-races.test.js`.
+// Run with `node --test box/bridge-tests/moves-lanes-races.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -27,7 +27,7 @@ const test = (name, run) => nodeTest(name, { timeout: 60_000 }, t => {
 
 const bun = testBun();
 assert.ok(bun, NO_BUN);
-const bridgeScript = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const bridgeScript = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-lanes-races-")));
 removeAtEnd(support);
 const home = path.join(support, "mac"), bots = path.join(support, "bots"), agents = path.join(support, "agents"), claude = path.join(support, "claude");
@@ -148,7 +148,7 @@ atEnd(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), { port: engine.address().port, password: "pw" });
 
 Object.assign(process.env, { KUVO_HOME: home, KUVO_BOTS: bots, KUVO_WAKES: path.join(support, "wakes"), KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: path.join(support, "opencode"), KUVO_KEYS: path.join(support, "keys") });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const labKey = link.publicOf(link.newKey()).toString("base64url");
 const lab = { key: labKey, address: link.addressOf(crypto.randomBytes(32)).toString("base64url"), kind: "machine", name: "lab", id: "lab", sign: link.signingKeyOf(link.newSigningSeed()) };
 link.writeLink({ macPeers: [lab] });

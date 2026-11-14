@@ -5,7 +5,7 @@
   "description": "What runs on each of your computers beside the engine: its link (kuvo-link.js), the coding agents' bridge (kuvo-agents.js: Claude Code, Codex, Cursor, Grok and Antigravity), and the shapes they share.",
   "scripts": {
     "check": "tsc --noEmit && tsc --noEmit -p test && tsc --noEmit -p test/agents",
-    "build": "../../scripts/build-box.sh && ../../scripts/build-agents.sh",
+    "build": "../scripts/build-box.sh && ../scripts/build-agents.sh",
     "test": "bun test"
   },
   "devDependencies": {

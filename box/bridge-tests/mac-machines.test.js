@@ -4,7 +4,7 @@
 // the relay and what answers for the app are stand-ins, and that answers as the keeper does with the
 // app closed.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-machines.test.js`.
+// Run with `node --test box/bridge-tests/mac-machines.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -71,7 +71,7 @@ const environment = {
   KUVO_HOST_PASSWORD: "host-password",
 };
 Object.assign(process.env, environment);
-const script = new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
+const script = new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
 const link = await import(script);
 
 const relay = await relayStandIn(link);

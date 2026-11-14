@@ -3,7 +3,7 @@
 // the engine's rules the box writes for each. The real box script on a folder of the test's own,
 // each request by a process of its own as a machine's tools ask it; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/approval.test.js`.
+// Run with `node --test box/bridge-tests/approval.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -17,7 +17,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-approval-")));
 removeAtEnd(home);
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

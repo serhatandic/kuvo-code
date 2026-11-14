@@ -14,7 +14,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-archive-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: ses_perm1 waits on a permission, ses_form1's subagent on a question, ses_busy1 on
 // nothing, all of them at work. What's stopped is noted.

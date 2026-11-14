@@ -7,7 +7,7 @@ import { dirname, join } from "node:path"
 import { ownNamespace } from "../src/link/fence/landlock"
 import { fencePolicy } from "../src/link/fence/policy"
 import { canFence, realFence } from "./agents/support/fence"
-import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
+import { ownPath } from "../bridge-tests/test-safety.js"
 
 // On Linux, Landlock can't refuse a command a socket, and your session's services listen on them in
 // `/run/user/<uid>`: systemd's, which runs whatever it's asked outside the sandbox

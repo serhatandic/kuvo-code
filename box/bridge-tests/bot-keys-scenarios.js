@@ -12,11 +12,11 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { atEnd } from "./at-end.js";
 
-export const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+export const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 /** Where a box (its folder `KUVO_HOME`) keeps its conversations' SSH agents (vault/ssh.ts): on a Mac
  * with a home too long for a socket's path, outside it, so a test clears it itself (a box it stops
  * with SIGTERM can't); in a home short enough for the socket, as the box keeps them there. The same
- * choice `SSH_AGENTS` makes in Packages/Box/src/link/home.ts: this Mac's box (`macBox`, KUVO_BOX=mac),
+ * choice `SSH_AGENTS` makes in box/src/link/home.ts: this Mac's box (`macBox`, KUVO_BOX=mac),
  * or over 68 bytes to the agents' folder. (GitHub's macOS runners' home is `/Users/runner`: 63-64
  * bytes there, so the box keeps its agents in the home; looking in `/private/tmp` on every Mac waited
  * 60 s for an agent never there, #410.) */

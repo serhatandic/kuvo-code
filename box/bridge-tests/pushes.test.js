@@ -5,7 +5,7 @@
 // machine not one the phone takes pushes from, Apple refused it) is kept, by phone, so a phone that
 // hears nothing can be told from one that was sent nothing.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/pushes.test.js`.
+// Run with `node --test box/bridge-tests/pushes.test.js`.
 import "./test-safety.js";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
@@ -23,7 +23,7 @@ const home = path.join(root, ".kuvo-code");
 removeAtEnd(root);
 // This test's own sendToPhones and its kept answers read this folder too.
 process.env.KUVO_HOME = home;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // Each change on the relay (a device on it or gone) wakes whoever waits for one.
 let poke = () => {};

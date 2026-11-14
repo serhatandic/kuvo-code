@@ -1,10 +1,10 @@
-// The route scenarios both boxes answer alike (`Vectors/routes/*.json`), run against the bridge's
+// The route scenarios both boxes answer alike (`protocol/vectors/routes/*.json`), run against the bridge's
 // real handler (`engineHandler` in kuvo-link.js) as one box: a machine's (contract.test.js), on a
-// box folder of its own with the files a Mac leaves on a machine (`Vectors/routes/box`, written
+// box folder of its own with the files a Mac leaves on a machine (`protocol/vectors/routes/box`, written
 // from the Mac's code by `scripts/route-vectors.sh`); or this Mac's (contract-mac.test.js), with
 // the app's own folders beside its box's (KUVO_BOTS, KUVO_WAKES), for the areas that have moved
 // onto it. The real kuvo-wake either way. Only the engine is a stand-in, here and in the Mac's
-// runner alike (KuvoCodeTests/RouteContractTests.swift, which runs the same scenarios against the
+// runner alike (swift/KuvoCodeTests/RouteContractTests.swift, which runs the same scenarios against the
 // Mac's PhoneLink). How a scenario is written: CONTRIBUTING.md, "Route scenarios".
 //
 // The caller sets the box's folders in the environment first (the bridge reads them as it loads),
@@ -22,7 +22,7 @@ import { NO_BUN, testBun } from "./bun-for-tests.js";
 import { atEnd } from "./at-end.js";
 import { keepsIdle } from "./keeps-idle.js";
 
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 // The box's folder, and the app's folders for its bots and sessions' wake-ups beside it on a Mac
 // (in its own folder on a machine).
 const home = process.env.KUVO_HOME;
@@ -35,17 +35,17 @@ let root = "";
 
 // The machine's name, as its Mac knows it: never a host that resolves.
 const MACHINE = "lab.invalid";
-const vectors = new URL("../../Vectors/routes/", import.meta.url);
+const vectors = new URL("../../protocol/vectors/routes/", import.meta.url);
 const read = (url, name) => fs.readFileSync(new URL(name, url), "utf8");
 // What a client puts beside every box's bridge: the integrations, the popular MCP servers, and
 // what the box makes bots with and tells them (Kuvo Code's own words, as they ship).
 const boxFiles = { "integrations.json": read(vectors, "box/integrations.json"), "mcp-catalog.json": read(vectors, "box/mcp-catalog.json"),
-  "bot-words.json": fs.readFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8") };
+  "bot-words.json": fs.readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8") };
 // What's this Mac's own that its app gives its box to make bots with (its kit, in the bots' folder).
 const macKit = () => read(vectors, "box/mac-bot-kit.json");
 
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
-const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
+const swift = fs.readFileSync(new URL("../../swift/OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
 const opening = 'public static let script = #"""\n';
 const from = swift.indexOf(opening) + opening.length;
 const kuvoWake = swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").map(line => line.replace(/^ {4}/, "")).join("\n") + "\n";
@@ -134,7 +134,7 @@ atEnd(() => { agentsProcess?.kill(); browserProcess?.kill(); realBridge?.process
 // The coding agents' bridge as the app ships it (`kuvo-agents.js`), run by Bun (bun-for-tests.js), with its group chats in this box's folders: for what it alone decides (a group chat's
 // shapes and rules). One a scenario, as the box's folders are.
 let realBridge;
-const bundled = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const bundled = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 async function startRealBridge() {
   const password = crypto.randomBytes(12).toString("hex");
   const bun = testBun();
@@ -393,7 +393,7 @@ async function ask(handle, method, requestPath, body) {
   return { status: parts[0].head.status, type: parts[0].head.headers?.["content-type"] ?? "", text, json };
 }
 
-// ---- What each route answers (Vectors/routes/shapes/answers.json): every answer, whole ----
+// ---- What each route answers (protocol/vectors/routes/shapes/answers.json): every answer, whole ----
 
 const shapes = JSON.parse(read(vectors, "shapes/answers.json"));
 const show = value => (value === undefined ? "missing" : JSON.stringify(value)?.slice(0, 200));
@@ -461,8 +461,8 @@ function offShape(method, requestPath, answer) {
   // A refusal says why in the one way all do, or in its route's own where it has one. A HEAD's
   // answer has no body.
   if (answer.status >= 400) return isJSON ? unshaped(known?.answers[answer.status] ?? shapes.error, answer.json, "the refusal") : null;
-  if (verb === "HEAD" && answer.text === "") return known ? null : `HEAD ${route} has no shape in Packages/Box/src/shared/routes`;
-  if (!known) return `${verb} ${route} has no shape in Packages/Box/src/shared/routes`;
+  if (verb === "HEAD" && answer.text === "") return known ? null : `HEAD ${route} has no shape in box/src/shared/routes`;
+  if (!known) return `${verb} ${route} has no shape in box/src/shared/routes`;
   const shape = known.answers[answer.status];
   if (shape === undefined) return `${known.route} has no shape for ${answer.status}`;
   if (shape === "bytes") return null;
@@ -567,14 +567,14 @@ export function contract({ box: as, root: folder, files }) {
   if (box !== "machine") return;
 
   // Both runners hold answers to shapes alike.
-  test("both runners hold an answer to its shape alike (Vectors/routes/shapes/cases.json)", () => {
+  test("both runners hold an answer to its shape alike (protocol/vectors/routes/shapes/cases.json)", () => {
     const { cases } = JSON.parse(read(vectors, "shapes/cases.json"));
     assert.ok(cases.length > 20);
     for (const each of cases) assert.equal(unshaped(each.shape, "value" in each ? each.value : undefined) === null, each.matches, JSON.stringify(each));
   });
 
   // And judge an answer by its route alike: which route it is, its status, a refusal, a HEAD.
-  test("both runners judge an answer by its route alike (Vectors/routes/shapes/routes.json)", () => {
+  test("both runners judge an answer by its route alike (protocol/vectors/routes/shapes/routes.json)", () => {
     const { cases } = JSON.parse(read(vectors, "shapes/routes.json"));
     assert.ok(cases.length > 15);
     for (const each of cases) {
@@ -587,7 +587,7 @@ export function contract({ box: as, root: folder, files }) {
   });
 
   // The Mac's runner holds its matching to the same cases.
-  test("both runners match an answer and fill in a scenario alike (Vectors/routes/match/cases.json)", () => {
+  test("both runners match an answer and fill in a scenario alike (protocol/vectors/routes/match/cases.json)", () => {
     const { cases, filled: fills } = JSON.parse(read(vectors, "match/cases.json"));
     assert.ok(cases.length > 40 && fills.length > 5);
     for (const each of cases) {

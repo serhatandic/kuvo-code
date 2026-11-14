@@ -10,7 +10,7 @@
 // what's on other computers is cards and link.json fields as their boxes write them. `here` runs as
 // the app runs it, a process of its own, in a home folder of the test's own.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/setup-judge.test.js`.
+// Run with `node --test box/bridge-tests/setup-judge.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -22,8 +22,8 @@ import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { removeAtEnd } from "./at-end.js";
 
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
-const vector = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../Vectors/setup/probe.json", import.meta.url)), "utf8"));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const vector = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../protocol/vectors/setup/probe.json", import.meta.url)), "utf8"));
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-setup-judge-")));
 removeAtEnd(support);
 const home = path.join(support, "box");
@@ -327,6 +327,6 @@ test("a box its Mac removed is no box, whatever's left of it: its keeper still e
 });
 
 test("what in the app's own box folder says a box ran there is the vector's, which the app's tests hold the app's list to", () => {
-  const vector = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../Vectors/routes/setup/own-box-ran.json", import.meta.url)), "utf8"));
+  const vector = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../protocol/vectors/routes/setup/own-box-ran.json", import.meta.url)), "utf8"));
   assert.deepEqual(link.OWN_BOX_RAN, vector.files);
 });

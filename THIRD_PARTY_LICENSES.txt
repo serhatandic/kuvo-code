@@ -13,7 +13,7 @@ time it's used; its license is the last one below.
 
 OpenUsage fork
 https://github.com/robinebers/openusage
-Packages/UsageKit is a fork of OpenUsage, not the official OpenUsage. The OpenUsage name and logo are trademarks of Robin Ebers and aren't used. Its provider icons are also among ClientDesign's marks (Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets).
+swift/UsageKit is a fork of OpenUsage, not the official OpenUsage. The OpenUsage name and logo are trademarks of Robin Ebers and aren't used. Its provider icons are also among ClientDesign's marks (swift/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets).
 
 MIT License
 
@@ -40,7 +40,7 @@ SOFTWARE.
 
 Textual 0.5.0
 https://github.com/gonzalezreal/textual
-Packages/Textual is a copy of Textual with Kuvo Code's changes (see its README).
+swift/Textual is a copy of Textual with Kuvo Code's changes (see its README).
 
 MIT License
 
@@ -67,7 +67,7 @@ SOFTWARE.
 
 Prism 1.29.0
 https://prismjs.com
-KuvoCode/Resources/prism-bundle.js, with its language definitions, as bundled by Textual's Scripts/bundle-prism.sh.
+swift/KuvoCode/Resources/prism-bundle.js, with its language definitions, as bundled by Textual's Scripts/bundle-prism.sh.
 
 MIT License
 
@@ -94,7 +94,7 @@ THE SOFTWARE.
 
 Mermaid 12.3.0
 https://github.com/mermaid-js/mermaid
-KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar.
+swift/KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar.
 
 The MIT License (MIT)
 
@@ -121,7 +121,7 @@ SOFTWARE.
 
 browser-use 0.4.2
 https://github.com/browser-use/browser-use
-Packages/Box/src/browser/buildDomTree.js, unchanged.
+box/src/browser/buildDomTree.js, unchanged.
 
 MIT License
 
@@ -148,7 +148,7 @@ SOFTWARE.
 
 models.dev (logos, 2026-11-01)
 https://models.dev
-Providers' logos in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each logo is its owner's trademark, shown only to name its provider.
+Providers' logos in swift/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each logo is its owner's trademark, shown only to name its provider.
 
 MIT License
 
@@ -175,7 +175,7 @@ SOFTWARE.
 
 Simple Icons 16.35.0
 https://simpleicons.org
-Services' marks in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each mark is its owner's trademark, shown only to name its service.
+Services' marks in swift/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each mark is its owner's trademark, shown only to name its service.
 
 # CC0 1.0 Universal
 

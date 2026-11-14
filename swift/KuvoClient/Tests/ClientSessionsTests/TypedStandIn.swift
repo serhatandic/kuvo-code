@@ -4,8 +4,8 @@ import OpenCodeKit
 
 /// `kuvo/sessions/<id>/typed` as a pretend computer answers it, for tests only, never in what
 /// ships: a client asks its box (`Typed`). It decides as the box does
-/// (Packages/Box/src/link/typed/decide.ts, areas/typed.ts) and is held to the box's own cases,
-/// `Vectors/typed.json`'s `decide` (TypedVectorsTests). The phone's tests and its demo computer
+/// (box/src/link/typed/decide.ts, areas/typed.ts) and is held to the box's own cases,
+/// `protocol/vectors/typed.json`'s `decide` (TypedVectorsTests). The phone's tests and its demo computer
 /// (in a debug build) keep a copy of it held to the same cases.
 enum TypedStandIn {
     /// What the pretend computer knows of the conversation and the composer as the text is sent.

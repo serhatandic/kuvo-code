@@ -4,7 +4,7 @@
 // one a client opens (`POST kuvo/sessions/<id>/folders`); a change to them (`PUT kuvo/projects`)
 // writes no session at rest. The real box script, as a client asks it; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/start-folders.test.js`.
+// Run with `node --test box/bridge-tests/start-folders.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -18,7 +18,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-folders-")));
 removeAtEnd(home);
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

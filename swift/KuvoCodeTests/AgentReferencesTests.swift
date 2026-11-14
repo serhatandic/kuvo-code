@@ -5,7 +5,7 @@ import Testing
 /// "&" in a composer names another conversation (a bot or a session): the list opens as you type
 /// a name, the best matches first, picking one writes its name, and the names in a message are
 /// found as written, whole, for your bubble to color. (Who they are, the agent is told by its box:
-/// Vectors/message-parts.json.)
+/// protocol/vectors/message-parts.json.)
 @MainActor
 @Suite struct AgentReferencesTests {
     private func agent(_ name: String, _ session: String, kind: String = "session", project: String? = nil) -> AgentMail.Agent {

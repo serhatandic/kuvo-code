@@ -9,7 +9,7 @@ enum SourceRoot {
     static func url() throws -> URL {
         let root = try #require(ProcessInfo.processInfo.environment["KUVO_SOURCE_ROOT"].flatMap { $0.isEmpty ? nil : URL(filePath: $0, directoryHint: .isDirectory) },
                                 "No source root: run the app's tests with scripts/test-app.sh, which gives it (KUVO_SOURCE_ROOT)")
-        try #require(FileManager.default.fileExists(atPath: root.appending(path: "KuvoCode.xcodeproj").path),
+        try #require(FileManager.default.fileExists(atPath: root.appending(path: "swift/KuvoCode.xcodeproj").path),
                      "KUVO_SOURCE_ROOT isn't a checkout of the app: \(root.path)")
         return root
     }

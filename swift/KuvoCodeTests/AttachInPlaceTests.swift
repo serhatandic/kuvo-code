@@ -1246,7 +1246,7 @@ import Testing
     }
 
     /// The files the app counts as its own box having run, when the box can't be asked, are the box's
-    /// own (`Vectors/routes/setup/own-box-ran.json`, which the bridge's tests hold the box's list to):
+    /// own (`protocol/vectors/routes/setup/own-box-ran.json`, which the bridge's tests hold the box's list to):
     /// one the box stopped counting would make the app keep a box the box would attach.
     @Test func whatCountsAsItsOwnBoxIsTheBoxs() throws {
         let folder = try #require(RouteScenarios.folder, "The routes folder isn't in the test bundle.")

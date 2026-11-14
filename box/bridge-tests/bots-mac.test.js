@@ -3,7 +3,7 @@
 // with the kit the app gives it, and keeps them told what they are, at their next run, the way a
 // machine does with the Mac closed. Only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-mac.test.js`.
+// Run with `node --test box/bridge-tests/bots-mac.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -25,7 +25,7 @@ Object.assign(process.env, {
   // The engine's settings folder, where this Mac's settings are (Settings › Permissions among them).
   KUVO_ENGINE_CONFIG: path.join(support, "engine"),
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const bots = process.env.KUVO_BOTS;
 const home = process.env.KUVO_HOME;
@@ -181,13 +181,13 @@ test("this Mac's bots are its own: listed without a machine, made here with this
 });
 
 test("a bot on this Mac is told, in Kuvo Code's own words, that it runs on this Mac, by its clock, with tabs of its own in your browser", () => {
-  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), wordsFile);
+  fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), wordsFile);
   const told = link.botInstructions(link.readKit(), "Scout", path.join(bots, "bot_scout00001"), undefined, undefined);
   assert.match(told, /^You are Scout, one of the user's bots in Kuvo Code\. .* You run on this Mac\.\n\nYour job is what the user gives you/);
   assert.match(told, /a time like 2026-10-16T09:00 on this Mac's clock,/);
   assert.match(told, /tabs of your own in the user's browser on this Mac, signed in where they are/);
   // Its wake-ups come back as Kuvo Code sends them (Wakes.swift).
-  const marker = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8").match(/static let marker = "([^"]*)"/)[1];
+  const marker = fs.readFileSync(new URL("../../swift/OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8").match(/static let marker = "([^"]*)"/)[1];
   assert.ok(told.includes(`a new message starting with "${marker.trim()}"`));
   assert.doesNotMatch(told, /⟦|Linux machine|time zone,/, "nothing left to fill in, nothing of a machine's");
 });
@@ -395,7 +395,7 @@ test("a template's or a shared bot's job as the first message says its job once,
   assert.equal(link.firstMessageOf("Keeps CI green. Fast", "Keeps CI green. Fast.\n\nWatch main.").split("Keeps CI green").length, 2);
   assert.equal(link.firstMessageOf("", ""), "");
   // Each of New Bot's templates, as Kuvo Code words them.
-  const shipped = JSON.parse(fs.readFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"));
+  const shipped = JSON.parse(fs.readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"));
   assert.ok(shipped.templates.length > 1);
   for (const template of shipped.templates) {
     const message = link.firstMessageOf(template.job, template.instructions);

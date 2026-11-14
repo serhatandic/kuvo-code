@@ -6,7 +6,7 @@ import Foundation
 /// otherwise the newest change, by a count each change moves on from the one before it (`updated`),
 /// whatever any clock says, and at the same count the words that sort last, so every copy picks the
 /// same.
-/// The same rules as the bridge's `mergePersonalities`, held to `Vectors/personalities.json`.
+/// The same rules as the bridge's `mergePersonalities`, held to `protocol/vectors/personalities.json`.
 public enum PersonalityLibraries {
     /// One you made, as a copy keeps it.
     public struct Kept: Codable, Hashable, Sendable {

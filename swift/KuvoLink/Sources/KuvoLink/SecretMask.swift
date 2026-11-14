@@ -3,7 +3,7 @@ import Foundation
 /// What a notification shows of an agent's words: what looks like a secret (a key, a token, a
 /// password) as dots, everything else as written, so a notification on a lock screen or a phone
 /// never shows one and still says what happened. A box's notices for your phones (`kuvo-link.js`,
-/// `masked`) mask by the same rules, held to `Vectors/masking.json`.
+/// `masked`) mask by the same rules, held to `protocol/vectors/masking.json`.
 public enum SecretMask {
     /// `text` with what looks like a secret's value as dots: after a name like token, key, secret,
     /// password or Authorization (Bearer), and long runs of letters and digits like a key's.

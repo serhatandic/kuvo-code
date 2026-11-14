@@ -5,7 +5,7 @@
 // conversation it works for; never a group chat seat's or a coding agent's turn. A conversation is
 // read again only once its session changed.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/search.test.js`.
+// Run with `node --test box/bridge-tests/search.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +17,7 @@ import { removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-search-"));
 process.env.KUVO_HOME = home;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 removeAtEnd(home);
 
 const folder = "/home/me/pomodoro";

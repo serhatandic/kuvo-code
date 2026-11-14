@@ -1,8 +1,8 @@
 #!/bin/sh
-# Writes what's kept from Packages/Box/src/shared, so it's held by hand in one place only
-# (scripts/route-shapes.ts says how): Packages/KuvoLink/Vectors/routes/shapes/answers.json, every
+# Writes what's kept from box/src/shared, so it's held by hand in one place only
+# (scripts/route-shapes.ts says how): protocol/vectors/routes/shapes/answers.json, every
 # route's answers, as the contract suite holds both boxes to them (contract-runner.js and
-# KuvoCodeTests/RouteContractTests.swift read it); and Packages/KuvoLink/Vectors/routes/features.json,
+# swift/KuvoCodeTests/RouteContractTests.swift read it); and protocol/vectors/routes/features.json,
 # the scenario that holds each box's `kuvo/info` to its features. Run it after changing a shape or a
 # feature, and commit the result. `--check` says whether the files are what the sources write, as
 # CI checks. Either refuses a list of features out of order or with a name twice.

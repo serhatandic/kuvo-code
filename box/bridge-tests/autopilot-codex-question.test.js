@@ -15,8 +15,8 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 const bun = testBun();
-const agentsJS = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const agentsJS = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 
 // Its turn: each prompt says which question to ask. Answered, it says what it heard, and ends.
 const FAKE = String.raw`
@@ -66,7 +66,7 @@ test("on Autopilot, a Codex asleep for hours on its question goes on at once: ma
   removeAtEnd(home);
   for (const folder of ["tmp", "work", "agents", "run", "bin", "codex-home", "fake"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   process.env.KUVO_HOME = home;
-  const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+  const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
   fs.writeFileSync(path.join(home, "fake", "app-server.js"), FAKE);
   fs.writeFileSync(path.join(home, "fake", "codex"), `#!/bin/sh\nexport BUN_BE_BUN=1\n[ "$1" = "--version" ] && { echo "codex-cli 0.166.0"; exit 0; }\nexec "${bun}" "${path.join(home, "fake", "app-server.js")}"\n`, { mode: 0o755 });
@@ -93,7 +93,7 @@ test("on Autopilot, a Codex asleep for hours on its question goes on at once: ma
     return { status: response.status, json: text ? JSON.parse(text) : null };
   };
   fs.writeFileSync(path.join(home, "run", "bridge.json"), JSON.stringify({ port, password: "pw", pid: child.pid }));
-  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
+  fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
 
   const route = (method, pathname, body) => new Promise((resolve, reject) => {
     const process_ = spawn(process.execPath, [script, "box", "route"], { env: { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: `${home}/tmp` }, stdio: ["pipe", "pipe", "inherit"] });

@@ -3,11 +3,11 @@ import Testing
 @testable import KuvoCode
 
 /// The tests' stand-in for a box's session list (`ListingBox`) says what the box says, on the same
-/// vectors the box's own test holds it to (Packages/KuvoLink/Vectors/session-lists.json), so a test
+/// vectors the box's own test holds it to (protocol/vectors/session-lists.json), so a test
 /// drawing the sidebar from it draws what a box would give.
 struct ListingBoxTests {
     @Test func theStandInSaysWhatTheBoxSays() throws {
-        let file = try SourceRoot.url().appending(path: "Packages/KuvoLink/Vectors/session-lists.json")
+        let file = try SourceRoot.url().appending(path: "protocol/vectors/session-lists.json")
         let read = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         let cases = try #require(read["cases"] as? [[String: Any]])
         #expect(!cases.isEmpty)

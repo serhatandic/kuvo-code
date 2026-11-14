@@ -5,7 +5,7 @@
 // tools ask it (`kuvo-link.js box route`). The real box script on a folder of the test's own; only
 // the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-work.test.js`.
+// Run with `node --test box/bridge-tests/bots-work.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -21,7 +21,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-work-")));
 removeAtEnd(home);
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

@@ -6,7 +6,7 @@
 // The real box script, its routes each asked by a process of their own as a machine's tools ask
 // them; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/autopilot.test.js`.
+// Run with `node --test box/bridge-tests/autopilot.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -21,8 +21,8 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-autopilot-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const project = path.join(home, "work", "cafe");
 fs.mkdirSync(project, { recursive: true });
 

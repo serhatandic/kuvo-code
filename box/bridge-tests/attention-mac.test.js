@@ -6,7 +6,7 @@
 // comes from the engine's events, in the Mac's words, sealed for each phone. The engine and the
 // relay connection are stand-ins, and the clock is the test's own.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/attention-mac.test.js`.
+// Run with `node --test box/bridge-tests/attention-mac.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -27,7 +27,7 @@ Object.assign(process.env, {
   KUVO_ENGINE_CONFIG: path.join(support, "opencode"),
   KUVO_KEYS: path.join(support, "keys"),
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The date as far as the tests go.
 const TODAY = 1_800_000_000_000;

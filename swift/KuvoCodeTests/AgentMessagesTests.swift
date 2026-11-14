@@ -3,7 +3,7 @@ import Testing
 @testable import KuvoCode
 
 /// Sharing a bot as a .kuvobot file, and parts of a group chat's work that wait on each other. (How
-/// a message from another agent reads is its box's to say: Vectors/message-parts.json.)
+/// a message from another agent reads is its box's to say: protocol/vectors/message-parts.json.)
 @MainActor
 @Suite(.serialized) struct AgentMessagesTests {
     init() { TestEnvironment.prepare() }

@@ -9,7 +9,7 @@
 // It runs in one process, on a given clock: this box is the real link, and the other boxes are
 // scripted. The engines are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/reach-elsewhere-rules.test.js`.
+// Run with `node --test box/bridge-tests/reach-elsewhere-rules.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -23,7 +23,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-reach-rules-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const DAY = 86_400_000, MINUTE = 60_000;
 const run = path.join(home, "run");

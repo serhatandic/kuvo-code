@@ -1,5 +1,5 @@
 // Google's Chrome for Testing and Rocky Linux's packages, as stand-ins a test serves itself: the
-// box's browser setup (Packages/Box/src/link/browser) downloads from them in a test's folder
+// box's browser setup (box/src/link/browser) downloads from them in a test's folder
 // (`KUVO_BROWSER_SOURCE`, `KUVO_BROWSER_PINS`), never from the real ones. With what a test needs to
 // make them: zips, RPMs (their files as cpio, in xz), and pins naming them by their checksums.
 import crypto from "node:crypto";

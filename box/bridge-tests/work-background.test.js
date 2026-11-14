@@ -3,7 +3,7 @@
 // real box code; only the engine is a stand-in, as a real one answers (its commands listed a folder at
 // a time, a job's end waking its agent with a `synthetic` message), and the watcher's clock is the test's.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/work-background.test.js`.
+// Run with `node --test box/bridge-tests/work-background.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +17,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-background-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const tidepool = path.join(home, "work", "tidepool");
 const otherFolder = path.join(home, "work", "other");

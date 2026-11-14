@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a phone may ask an engine for, and passing it on: the Mac's side of what a machine's
-/// bridge does in `kuvo-link.js` (the two lists are checked against `Vectors/link.json`).
+/// bridge does in `kuvo-link.js` (the two lists are checked against `protocol/vectors/link.json`).
 public enum EngineRoutes {
     /// A paired phone is yours: the engine's whole API, as the app has it (sessions, files,
     /// terminals, commands, accounts and keys, settings, MCP servers). Only a path that isn't what

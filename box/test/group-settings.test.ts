@@ -39,7 +39,7 @@ beforeAll(async () => {
   // Kuvo Code's words for bots, as a release puts them beside the bridge; one personality you made;
   // Settings › Permissions with something held back; Ask First picked last on this computer.
   mkdirSync(dirname(words), { recursive: true })
-  copyFileSync(new URL("../../KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url).pathname, words)
+  copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url).pathname, words)
   put(library, JSON.stringify({ kuvo: 1, personalities: [{ id: "custom.grumpy", name: "Grumpy", description: "Complains, then helps.", symbol: "cloud", updated: 1 }], removed: [] }))
   put(configFile, JSON.stringify({ permissions: [ASK_EDITS, NEVER_PUSH] }))
   ;(await import("../src/link/work/approval")).rememberApproval("askFirst")
@@ -73,7 +73,7 @@ afterAll(() => {
 })
 
 test("a computer's box gives its group chats what they go by, with no Mac: personalities, who sets what, Ask First, what's held back", async () => {
-  const words = JSON.parse(readFileSync(new URL("../../KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"))
+  const words = JSON.parse(readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"))
   await round()
   const settings = store.settings()!
   expect(settings).toBeDefined()

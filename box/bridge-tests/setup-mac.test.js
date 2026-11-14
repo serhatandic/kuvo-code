@@ -7,7 +7,7 @@
 // machines and the other Mac are keys whose mail is opened as the relay carries it, and what they
 // told this Mac of their Work Queues is kept as it would be. Only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/setup-mac.test.js`.
+// Run with `node --test box/bridge-tests/setup-mac.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -30,7 +30,7 @@ Object.assign(process.env, {
   KUVO_BOTS: path.join(support, "bots"),
   KUVO_WAKES: path.join(support, "wakes"),
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const run = path.join(home, "run");
 const queues = path.join(run, "work-queue");
 const numbers = path.join(queues, "numbers.json");
@@ -321,7 +321,7 @@ test("this Mac's static key made anew: setting a machine up again lets the old k
   write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
   labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
   link.noteSetupNow(Date.now(), { soon: 0 });
-  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+  const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   const machine = path.join(support, "machine");
   fs.mkdirSync(path.join(machine, "run"), { recursive: true });
   const env = { PATH: process.env.PATH, HOME: support, KUVO_HOME: machine, TMPDIR: support };

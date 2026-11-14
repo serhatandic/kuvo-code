@@ -3,14 +3,14 @@ import XCTest
 
 /// The box reads Cursor's plan and usage events as this package does (Kuvo Code's #631 piece D1,
 /// PROTOCOL.md "Plan limits" and "Usage history"): both sides are held to the same synthetic
-/// fixtures and expected answers in `Packages/Box/test/fixtures/usage` (the box's
+/// fixtures and expected answers in `box/test/fixtures/usage` (the box's
 /// `usage-cursor.test.ts` reads them too), so neither can drift while both exist. And while the host
 /// covers Cursor, its card reads nothing of Cursor and shows the host's.
 @MainActor
 final class UsageBoxParityCursorTests: XCTestCase {
     private static let fixtures = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage")
+        .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("box/test/fixtures/usage")
 
     private func fixture(_ name: String) throws -> Data {
         try Data(contentsOf: Self.fixtures.appendingPathComponent(name))

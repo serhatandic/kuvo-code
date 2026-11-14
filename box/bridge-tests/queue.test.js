@@ -4,7 +4,7 @@
 // for the next step ahead of the queue; Resume and Send Now go on. The real box code, on a clock the
 // test moves; only the engine is a stand-in, keeping each session's inbox as the engine does.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/queue.test.js`.
+// Run with `node --test box/bridge-tests/queue.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +17,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-queue-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.

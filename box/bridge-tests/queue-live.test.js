@@ -4,7 +4,7 @@
 // engine on a free model, in folders of the test's own; skipped unless OPENCODE_TEST_BINARY names
 // the engine (KUVO_TEST_FREE_MODEL picks the model, `big-pickle` if not).
 //
-// Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/queue-live.test.js`.
+// Run with `OPENCODE_TEST_BINARY=<opencode> node --test box/bridge-tests/queue-live.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -34,7 +34,7 @@ test("Stop holds on the real engine: what arrives while stopped waits on the box
   const target = { port, password: "pw", pid: engine.pid };
   process.env.KUVO_HOME = `${root}/box`;
   fs.writeFileSync(`${root}/box/run/engine.json`, JSON.stringify(target));
-  const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+  const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
   const auth = { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64"), "content-type": "application/json" };
   const api = async (method, route, body) => {

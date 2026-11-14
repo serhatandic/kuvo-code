@@ -3,7 +3,7 @@ import OpenCodeKit
 
 /// A group chat: you and some of your bots, talking something through. Each bot takes part from
 /// a seat of its own, a session where it lives with its job and memory, hidden from the lists.
-/// The computer the chat lives on runs it (its coding agents' bridge, `Packages/Box/src/agents/groups`): it
+/// The computer the chat lives on runs it (its coding agents' bridge, `box/src/agents/groups`): it
 /// passes the floor around one bot at a time, so no two ever talk at once. This is the chat as that
 /// computer says it, for the window to show (`BoxGroups`).
 struct BotGroup: Codable, Identifiable, Hashable {
@@ -192,7 +192,7 @@ struct GroupTask: Codable, Hashable, Identifiable {
 
 /// A part of a chat's work, as it reaches the bot's own conversation: which chat it's from and
 /// what the part is, then what was decided and how to report back (for the bot, not shown). The
-/// chat's computer writes it (`compose` in `Packages/Box/src/agents/groups/rules.ts`); the bot's conversation
+/// chat's computer writes it (`compose` in `box/src/agents/groups/rules.ts`); the bot's conversation
 /// shows it as a card.
 enum GroupWork {
     private static let opening = "[Work from "

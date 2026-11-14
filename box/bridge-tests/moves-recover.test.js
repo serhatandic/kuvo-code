@@ -5,7 +5,7 @@
 // scripted other computer whose mail goes to the script instead of the relay (`sendMovesWith`); its
 // engine and its group chats' bridge are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-recover.test.js`.
+// Run with `node --test box/bridge-tests/moves-recover.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -32,7 +32,7 @@ Object.assign(process.env, {
   KUVO_HOME: home, KUVO_BOTS: bots, KUVO_WAKES: wakes, KUVO_BOX: "mac",
   KUVO_ENGINE_CONFIG: path.join(support, "opencode"), KUVO_KEYS: path.join(support, "keys"),
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 removeAtEnd(support);
 
 function reading(request) {

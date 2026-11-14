@@ -6,4 +6,4 @@ CHANGELOG.md merge=union
 # a union there can leave a file that reads but is wrong, so a conflict there is settled by
 # running scripts/route-shapes.sh again. A union that leaves a list out of order, or a name
 # twice, fails the box's tests (test/features.test.ts) and `route-shapes.sh --check`.
-Packages/Box/src/shared/features.ts merge=union
+box/src/shared/features.ts merge=union

@@ -33,12 +33,12 @@
 /* Begin PBXFileReference section */
 		4B0A00000000000000000013 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
 		4B0A00000000000000000001 /* $(APP_NAME).app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "$(APP_NAME).app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		4B0A00000000000000000030 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
-		4B0A00000000000000000032 /* NOTICE */ = {isa = PBXFileReference; lastKnownFileType = text; path = NOTICE; sourceTree = "<group>"; };
-		4B0A00000000000000000034 /* THIRD_PARTY_LICENSES.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = THIRD_PARTY_LICENSES.txt; sourceTree = "<group>"; };
-		4B0A000000000000000000B0 /* buildDomTree.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = buildDomTree.js; path = Packages/Box/src/browser/buildDomTree.js; sourceTree = "<group>"; };
+		4B0A00000000000000000030 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = LICENSE; path = ../LICENSE; sourceTree = "<group>"; };
+		4B0A00000000000000000032 /* NOTICE */ = {isa = PBXFileReference; lastKnownFileType = text; name = NOTICE; path = ../NOTICE; sourceTree = "<group>"; };
+		4B0A00000000000000000034 /* THIRD_PARTY_LICENSES.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = THIRD_PARTY_LICENSES.txt; path = ../THIRD_PARTY_LICENSES.txt; sourceTree = "<group>"; };
+		4B0A000000000000000000B0 /* buildDomTree.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = buildDomTree.js; path = ../box/src/browser/buildDomTree.js; sourceTree = "<group>"; };
 		4B0A00000000000000000071 /* KuvoCodeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KuvoCodeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		4B0A0000000000000000007C /* routes */ = {isa = PBXFileReference; lastKnownFileType = folder; name = routes; path = Packages/KuvoLink/Vectors/routes; sourceTree = "<group>"; };
+		4B0A0000000000000000007C /* routes */ = {isa = PBXFileReference; lastKnownFileType = folder; name = routes; path = ../protocol/vectors/routes; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -214,12 +214,12 @@
 			mainGroup = 4B0A00000000000000000004;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				4B0A00000000000000000012 /* XCLocalSwiftPackageReference "Packages/OpenCodeKit" */,
-				4B0A0000000000000000001A /* XCLocalSwiftPackageReference "Packages/UsageKit" */,
-				4B0A00000000000000000052 /* XCLocalSwiftPackageReference "Packages/KuvoLink" */,
-				4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Packages/Textual" */,
-				4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "Packages/KuvoVoice" */,
-				4B0A00000000000000000080 /* XCLocalSwiftPackageReference "Packages/KuvoClient" */,
+				4B0A00000000000000000012 /* XCLocalSwiftPackageReference "OpenCodeKit" */,
+				4B0A0000000000000000001A /* XCLocalSwiftPackageReference "UsageKit" */,
+				4B0A00000000000000000052 /* XCLocalSwiftPackageReference "KuvoLink" */,
+				4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Textual" */,
+				4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "KuvoVoice" */,
+				4B0A00000000000000000080 /* XCLocalSwiftPackageReference "KuvoClient" */,
 				4B0A00000000000000000062 /* XCRemoteSwiftPackageReference "swiftui-math" */,
 				4B0A0000000000000000001D /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				4B0A00000000000000000040 /* XCRemoteSwiftPackageReference "Sparkle" */,
@@ -580,29 +580,29 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		4B0A00000000000000000012 /* XCLocalSwiftPackageReference "Packages/OpenCodeKit" */ = {
+		4B0A00000000000000000012 /* XCLocalSwiftPackageReference "OpenCodeKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/OpenCodeKit;
+			relativePath = OpenCodeKit;
 		};
-		4B0A0000000000000000001A /* XCLocalSwiftPackageReference "Packages/UsageKit" */ = {
+		4B0A0000000000000000001A /* XCLocalSwiftPackageReference "UsageKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/UsageKit;
+			relativePath = UsageKit;
 		};
-		4B0A00000000000000000052 /* XCLocalSwiftPackageReference "Packages/KuvoLink" */ = {
+		4B0A00000000000000000052 /* XCLocalSwiftPackageReference "KuvoLink" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/KuvoLink;
+			relativePath = KuvoLink;
 		};
-		4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Packages/Textual" */ = {
+		4B0A00000000000000000017 /* XCLocalSwiftPackageReference "Textual" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/Textual;
+			relativePath = Textual;
 		};
-		4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "Packages/KuvoVoice" */ = {
+		4B0A000000000000000000A2 /* XCLocalSwiftPackageReference "KuvoVoice" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/KuvoVoice;
+			relativePath = KuvoVoice;
 		};
-		4B0A00000000000000000080 /* XCLocalSwiftPackageReference "Packages/KuvoClient" */ = {
+		4B0A00000000000000000080 /* XCLocalSwiftPackageReference "KuvoClient" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/KuvoClient;
+			relativePath = KuvoClient;
 		};
 /* End XCLocalSwiftPackageReference section */
 

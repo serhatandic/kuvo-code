@@ -4,11 +4,11 @@ import OpenCodeKit
 import Testing
 
 /// The ways to sign in and a sign-in's status, as both apps read the box's answers: what the box
-/// offers (`Packages/KuvoLink/Vectors/sign-in.json`) comes through whole, in its order, each way
+/// offers (`protocol/vectors/sign-in.json`) comes through whole, in its order, each way
 /// one a client can start, with its words and whether it's offered apart.
 struct SignInMethodsTests {
     private static func vectors() throws -> [String: Any] {
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/sign-in.json").standardized
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/sign-in.json").standardized
         return try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     }
 

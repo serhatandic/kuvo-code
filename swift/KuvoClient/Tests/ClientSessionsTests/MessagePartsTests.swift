@@ -5,12 +5,12 @@ import Testing
 
 /// A message's parts as both apps draw them (PROTOCOL.md, "A message's parts"): read from what the
 /// box keeps with a message, or reads of one from before, and sent as the fields the box writes the
-/// agent's text from, held to Packages/KuvoLink/Vectors/message-parts.json, which the box's
+/// agent's text from, held to protocol/vectors/message-parts.json, which the box's
 /// message-parts.test.ts holds the box to.
 @Suite(.serialized)
 struct MessagePartsTests {
     nonisolated(unsafe) static let vectors: [String: Any] = {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/message-parts.json")
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/message-parts.json")
         return (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any] ?? [:]
     }()
 

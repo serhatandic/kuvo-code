@@ -5,7 +5,7 @@
 // (`kuvo-browser.js connect`, as the Mac runs it over SSH); Chromium is a stand-in that answers
 // each request with nothing.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/browser-keeper.test.js`.
+// Run with `node --test box/bridge-tests/browser-keeper.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -19,7 +19,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 // (Short: the keeper's socket is in it.)
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kvk-")));
-const script = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 const env = { ...process.env, KUVO_HOME: home, HOME: home, KUVO_BROWSER_IDLE: "600" };
 const socketFile = path.join(home, "run", "browser.sock");
 

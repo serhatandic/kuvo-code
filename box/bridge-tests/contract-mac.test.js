@@ -3,7 +3,7 @@
 // app's folders beside it for its bots and sessions' wake-ups, and the app's kit for its bots. What
 // a scenario expects of a Mac (`mac`) is what this box answers, as the Mac's PhoneLink did.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/contract-mac.test.js`.
+// Run with `node --test box/bridge-tests/contract-mac.test.js`.
 import "./test-safety.js";
 import fs from "node:fs";
 import os from "node:os";

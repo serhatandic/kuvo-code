@@ -156,10 +156,10 @@ class Batches(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.batches = os.path.join(self.root, "batches")
         self.mac = self.repo("kuvo-ai", {
-            "KuvoCode/App.swift": "struct App {}\n",
-            "KuvoCodeTests/WindowTabsTests.swift": "@Suite struct WindowTabsTests {\n    @Test func opensATab() {}\n}\n",
-            "KuvoCodeTests/WorkQueueTests.swift": "@MainActor final class WorkQueueTests: XCTestCase {\n    func testAdds() {}\n}\n",
-            "KuvoCodeTests/Outer.swift": "@Suite struct Outer {\n    @Suite struct Inner {\n        @Test func deep() {}\n    }\n}\n\n@Test func freeTest() {}\n",
+            "swift/KuvoCode/App.swift": "struct App {}\n",
+            "swift/KuvoCodeTests/WindowTabsTests.swift": "@Suite struct WindowTabsTests {\n    @Test func opensATab() {}\n}\n",
+            "swift/KuvoCodeTests/WorkQueueTests.swift": "@MainActor final class WorkQueueTests: XCTestCase {\n    func testAdds() {}\n}\n",
+            "swift/KuvoCodeTests/Outer.swift": "@Suite struct Outer {\n    @Suite struct Inner {\n        @Test func deep() {}\n    }\n}\n\n@Test func freeTest() {}\n",
             "Gone.txt": "removed in the next commit\n",
         })
         self.phone = self.repo("kuvo-code-ios", {
@@ -244,11 +244,11 @@ class Building(Batches):
         self.assertTrue(os.path.isfile(stamp["xctestrun"]))
         self.assertIn("built", stamp)
         # Main's files, exported; the test copy's settings; what the tests don't use, gone.
-        self.assertTrue(os.path.isfile(os.path.join(folder, "src", "kuvo-ai", "KuvoCodeTests", "WindowTabsTests.swift")))
+        self.assertTrue(os.path.isfile(os.path.join(folder, "src", "kuvo-ai", "swift", "KuvoCodeTests", "WindowTabsTests.swift")))
         said = self.xcode_said()
         self.assertEqual(said.count("build-for-testing"), 1)
         for part in ["APP_BUNDLE_ID=run.kuvo.code.tests", "CODE_SIGN_IDENTITY=-", "-scheme KuvoCode",
-                     "-derivedDataPath " + os.path.join(folder, "build"), os.path.join(folder, "src", "kuvo-ai", "KuvoCode.xcodeproj")]:
+                     "-derivedDataPath " + os.path.join(folder, "build"), os.path.join(folder, "src", "kuvo-ai", "swift", "KuvoCode.xcodeproj")]:
             self.assertIn(part, said)
         self.assertFalse(os.path.exists(os.path.join(folder, "build", "Build", "Intermediates.noindex")))
         self.assertFalse(os.path.exists(os.path.join(folder, "build", "Index.noindex")))
@@ -256,7 +256,7 @@ class Building(Batches):
 
     def test_a_given_commit_is_built_instead_of_main(self):
         first = git(self.mac, "rev-parse", "main")
-        write(os.path.join(self.mac, "KuvoCode/App.swift"), "struct App { var later = 1 }\n")
+        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var later = 1 }\n")
         git(self.mac, "commit", "-qam", "Later")
         done = self.build("mac", KUVO_BATCH_MAC_REF=first)
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -275,7 +275,7 @@ class Building(Batches):
         self.assertEqual(stamp["kuvo_ai_src"], os.path.join(src, "kuvo-ai"))
         # The phone's project finds kuvo-ai's packages at ../kuvo-ai.
         self.assertTrue(os.path.isdir(os.path.join(src, "kuvo-code-ios", "KuvoCodeMobileTests")))
-        self.assertTrue(os.path.isdir(os.path.join(src, "kuvo-ai", "KuvoCode")))
+        self.assertTrue(os.path.isdir(os.path.join(src, "kuvo-ai", "swift", "KuvoCode")))
         said = self.xcode_said()
         self.assertIn("APP_BUNDLE_ID=run.kuvo.code.ios.tests", said)
         self.assertIn("-scheme KuvoCodeMobile", said)
@@ -308,7 +308,7 @@ class Building(Batches):
         good = git(self.mac, "rev-parse", "main")
         # A broken commit whose name sorts before the good one's: in the same second, its failed
         # build would look older than the batch, and runs would test that.
-        write(os.path.join(self.mac, "KuvoCode/App.swift"), "struct App { var broken }\n")
+        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var broken }\n")
         git(self.mac, "commit", "-qam", "Breaks it")
         self.assertTrue(self.amend_until(lambda commit: commit[:7] < good[:7]))
         broken = git(self.mac, "rev-parse", "main")
@@ -388,10 +388,10 @@ class CompileOnly(Batches):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("compiles for the mac", done.stdout)
         src = os.path.join(self.batches, "compile", "src", "kuvo-ai")
-        kept, changed = os.path.join(src, "KuvoCodeTests", "WindowTabsTests.swift"), os.path.join(src, "KuvoCode", "App.swift")
+        kept, changed = os.path.join(src, "swift", "KuvoCodeTests", "WindowTabsTests.swift"), os.path.join(src, "swift", "KuvoCode", "App.swift")
         old = os.stat(kept).st_mtime_ns
         os.utime(changed, ns=(1, 1))
-        write(os.path.join(self.mac, "KuvoCode/App.swift"), "struct App { var later = 1 }\n")
+        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var later = 1 }\n")
         os.remove(os.path.join(self.mac, "Gone.txt"))
         git(self.mac, "commit", "-qam", "Later")
         done = self.build("--compile-only", "mac")
@@ -480,7 +480,7 @@ class FromBatch(Batches):
         done = self.run_tests("KuvoCodeTests/HeldMenuGuardTests")
         self.assertEqual(done.returncode, 0, done.stderr)
         said = self.xcode_said()
-        self.assertIn("test -project KuvoCode.xcodeproj", said)
+        self.assertIn("test -project swift/KuvoCode.xcodeproj", said)
         self.assertIn("source root: " + str(SCRIPTS.parent) + "\n", said)
 
     def test_a_batch_whose_stamp_names_no_sources_gives_the_tests_its_exported_ones(self):
@@ -613,7 +613,7 @@ class FromBatch(Batches):
     def test_a_run_started_while_a_batch_is_built_waits_for_it_and_tests_that_one(self):
         self.assertEqual(self.build("mac").returncode, 0)
         older = self.built("mac")[0]
-        write(os.path.join(self.mac, "KuvoCode/App.swift"), "struct App { var later = 1 }\n")
+        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var later = 1 }\n")
         git(self.mac, "commit", "-qam", "Later")
         hold = os.path.join(self.root, "hold")
         os.mkfifo(hold)
@@ -636,7 +636,7 @@ class FromBatch(Batches):
 
     def test_when_the_newest_batch_failed_a_run_refuses_saying_which_commit_and_why(self):
         self.assertEqual(self.build("mac").returncode, 0)
-        write(os.path.join(self.mac, "KuvoCode/App.swift"), "struct App { var broken }\n")
+        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var broken }\n")
         git(self.mac, "commit", "-qam", "Breaks it")
         broken = git(self.mac, "rev-parse", "main")
         self.assertEqual(self.build("mac", FAKE_XCODE_FAIL="1").returncode, 1)
@@ -710,7 +710,7 @@ class FromBatch(Batches):
                      ["KuvoCodeTests/WindowTabsTests/opensATab()"], ["KuvoCodeTests/WorkQueueTests/testAdds"],
                      ["KuvoCodeTests/Outer/Inner"], ["KuvoCodeTests/Outer/Inner/deep()"], ["KuvoCodeTests/freeTest()"]]:
             with self.subTest(only=only):
-                done = self.batch("check", folder, "kuvo-ai", *only)
+                done = self.batch("check", folder, "kuvo-ai/swift", *only)
                 self.assertEqual(done.returncode, 0, done.stderr)
 
     def test_without_only_or_a_batch_it_says_what_it_needs(self):
@@ -727,7 +727,7 @@ class FromBatch(Batches):
         self.assertEqual(self.build("mac").returncode, 0)
         folder = os.path.join(self.batches, "mac", self.built("mac")[0])
         self.assertEqual(self.batch("behind", folder, "kuvo-ai", self.mac).stderr, "")
-        write(os.path.join(self.mac, "KuvoCode/App.swift"), "struct App { var mine = 1 }\n")
+        write(os.path.join(self.mac, "swift/KuvoCode/App.swift"), "struct App { var mine = 1 }\n")
         git(self.mac, "commit", "-qam", "Mine")
         said = self.batch("behind", folder, "kuvo-ai", self.mac).stderr
         self.assertIn("isn't in this batch", said)

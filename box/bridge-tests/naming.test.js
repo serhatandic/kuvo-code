@@ -1,8 +1,8 @@
 // "&" in a message from a phone, on every box (PROTOCOL.md, "Messages in a session", `kuvo/named`):
 // the agents it names, told at its end, as the Mac's AgentReferences words it. Both read the same
-// cases (Vectors/routes/names/agent-naming.json).
+// cases (protocol/vectors/routes/names/agent-naming.json).
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/naming.test.js`.
+// Run with `node --test box/bridge-tests/naming.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -15,14 +15,14 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-naming-"));
 process.env.KUVO_HOME = home;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 // (Once the list a message started working out is written: it would write it again in a folder
 // just removed.)
 removeAtEnd(home);
 atEnd(async () => {
   await link.ownRefreshed();
 });
-const vector = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/names/agent-naming.json", import.meta.url), "utf8"));
+const vector = JSON.parse(fs.readFileSync(new URL("../../protocol/vectors/routes/names/agent-naming.json", import.meta.url), "utf8"));
 
 for (const each of vector.cases) {
   test(each.about, () => {

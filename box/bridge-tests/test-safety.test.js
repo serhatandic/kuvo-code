@@ -29,7 +29,7 @@ const untouched = folder => {
   for (const name of ["wakes", "bots", "home"]) assert.deepEqual(fs.readdirSync(path.join(folder, name)), ["keep"], `${name}, in a decoy of the real folders`);
 };
 
-const scenarioName = JSON.parse(fs.readFileSync(path.join(here, "../../Vectors/routes/wakes.json"), "utf8")).scenarios.find(each => each.only !== "mac").name;
+const scenarioName = JSON.parse(fs.readFileSync(path.join(here, "../../protocol/vectors/routes/wakes.json"), "utf8")).scenarios.find(each => each.only !== "mac").name;
 
 // (These two start a process of their own, with Node's way of running a test or a script: not on Bun's runner.)
 test("a run of the route scenarios leaves the folders its shell names alone, and passes on its own", { skip: !!process.versions.bun }, () => {

@@ -6,7 +6,7 @@
 // set a copy up once; and a box answers a step for a move it doesn't have as dropped, never as
 // switched. This Mac's box, here; its engine a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-races.test.js`.
+// Run with `node --test box/bridge-tests/moves-races.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -37,7 +37,7 @@ Object.assign(process.env, {
   KUVO_HOME: home, KUVO_BOTS: path.join(support, "bots"), KUVO_WAKES: wakes, KUVO_BOX: "mac",
   KUVO_ENGINE_CONFIG: path.join(support, "opencode"), KUVO_KEYS: path.join(support, "keys"),
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // An engine with its conversations, as its API exports, imports and deletes them; it counts imports.
 // Its imports can be held (`hold`, a promise: a big one on a small machine), and its deletes fail

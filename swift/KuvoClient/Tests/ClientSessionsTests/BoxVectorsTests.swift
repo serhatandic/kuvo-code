@@ -7,7 +7,7 @@ import Testing
 /// What the apps still work out themselves that a box works out too: what a message quotes and
 /// says (KuvoClient's `Quoting`), and when a repeat comes back
 /// (`Wakes.Repeat.next`, as the bridge's `next` works out a meeting's). Both sides' tests check
-/// against what these say (`Packages/Box/test/agents/box-vectors.json`). `scripts/box-vectors.sh` writes that
+/// against what these say (`box/test/agents/box-vectors.json`). `scripts/box-vectors.sh` writes that
 /// file from here and records its hash below, so a change here fails this test until it's run,
 /// and the bridges' tests then say whether they still match.
 @MainActor

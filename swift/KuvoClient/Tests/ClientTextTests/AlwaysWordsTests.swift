@@ -46,7 +46,7 @@ struct AlwaysWordsTests {
             struct Case: Decodable { var action: String; var save: [String]?; var resources: [String]; var home: String?; var plain: String }
             var cases: [Case]
         }
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/always-words.json").standardized
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/always-words.json").standardized
         let vectors = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: file))
         #expect(vectors.cases.count > 10)
         for each in vectors.cases {

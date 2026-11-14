@@ -1,4 +1,4 @@
-// /compact on the real coding agents, through the real agents' bridge (KuvoCode/Resources/
+// /compact on the real coding agents, through the real agents' bridge (swift/KuvoCode/Resources/
 // kuvo-agents.js, on Bun): asked at rest, the conversation shows the summary's row and stays whole,
 // the agent still knows what it was told; asked during a turn, the turn goes through and the summary
 // follows it; stopped under way, the conversation goes on; asked with nothing to summarize, it says
@@ -27,8 +27,8 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
 
 const bun = testBun();
-const agentsJS = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
-const agentsSources = fileURLToPath(new URL("../../../Box/src/agents", import.meta.url));
+const agentsJS = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const agentsSources = fileURLToPath(new URL("../src/agents", import.meta.url));
 // (The agents' programs aren't on a test's PATH: REAL_PATH has them, and Grok's own folder of them.)
 const program = name => spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8", env: { ...process.env, PATH: `${REAL_PATH}:${path.join(process.env.KUVO_TEST_REAL_HOME ?? "", ".grok", "bin")}` } }).stdout.trim();
 const WORDS = "TANGERINE-42 and HARBOUR";

@@ -4,7 +4,7 @@
   "and the sidebar a client draws from them. `box` is what the box knows beside its sessions: its chats and bots folders, its bots' conversations,",
   "the project each folder is filed under (`worktrees` of `kuvo/projects`), its project list, those at work, since when each waits on you (by the",
   "conversation, a subagent's ask counting as its own), and the copies that aren't its own. `expect.sessions` and `expect.projects` are the box's",
-  "answer (Packages/Box/test/session-lists.test.ts checks them); `expect.sidebar` is what a client shows from them (KuvoClient's SessionListsTests):",
+  "answer (box/test/session-lists.test.ts checks them); `expect.sidebar` is what a client shows from them (KuvoClient's SessionListsTests):",
   "pinned and chats newest first; projects by their newest session shown, ties by name (Finder order: case-insensitive, numbers by value), the",
   "name its list gives else its folder's last part; sessions in a project newest first. Written by hand from the Mac's rule as it was before",
   "the box said it (Workspace.makeProjects, 2026-11-13); change both together."

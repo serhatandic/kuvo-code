@@ -37,7 +37,7 @@ function guard(root: string): { preload: string; noted: string } {
   writeFileSync(noted, "")
   // (But for listing your Keychain's folder, to wall off the system's keychains in it: macOS doesn't guard that.)
   const names = "Desktop|Documents|Downloads|Pictures|Movies|Music|Library(?!/Keychains$)"
-  const checkout = join(import.meta.dir, "..", "..", "..")
+  const checkout = join(import.meta.dir, "..", "..")
   const yours = `^${accountHome()}/(\\.ssh|\\.config/gh)(/|$)`
   writeFileSync(preload, `
 const fs = require("fs")

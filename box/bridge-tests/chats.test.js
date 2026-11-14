@@ -6,7 +6,7 @@
 // again after a while leave every session where it was in every list, for clients to go by its
 // folder. The real link's watch, in this process; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/chats.test.js`.
+// Run with `node --test box/bridge-tests/chats.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -20,7 +20,7 @@ import { keepsIdle } from "./keeps-idle.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-chats-")));
 removeAtEnd(home);
 process.env.KUVO_HOME = path.join(home, ".kuvo-code");
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A machine's chats folder, a project, and the chats folder again through a link.
 const chats = path.join(home, ".kuvo-code", "chats");

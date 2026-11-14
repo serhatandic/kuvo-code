@@ -1,7 +1,7 @@
 //! Session lists (PROTOCOL.md, "Session lists", `sessions.list`): what each session is and the
 //! project it's filed under, which the box works out, so a client draws its sidebar from facts and
 //! works nothing out. What's here is only taking the box's lines in and the drawing's order, held
-//! to `Packages/KuvoLink/Vectors/session-lists.json` as KuvoClient's `SessionLists` is.
+//! to `protocol/vectors/session-lists.json` as KuvoClient's `SessionLists` is.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};

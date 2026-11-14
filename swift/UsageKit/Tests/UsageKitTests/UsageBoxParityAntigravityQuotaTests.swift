@@ -5,7 +5,7 @@ final class UsageBoxParityAntigravityQuotaTests: XCTestCase {
     func testQuotaSummaryMatchesBoxFixtures() throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage/antigravity-plan-cases.json")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("box/test/fixtures/usage/antigravity-plan-cases.json")
         let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]])
         for each in cases {
             let name = each["name"] as? String ?? ""
@@ -30,7 +30,7 @@ final class UsageBoxParityAntigravityQuotaTests: XCTestCase {
     func testLegacyPoolsAndPlanNamesMatchBoxFixtures() throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage/antigravity-legacy-plan-cases.json")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("box/test/fixtures/usage/antigravity-legacy-plan-cases.json")
         let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         for each in try XCTUnwrap(fixture["legacy"] as? [[String: Any]]) {
             let configs = try XCTUnwrap(each["configs"] as? [[String: Any]]).map { row in

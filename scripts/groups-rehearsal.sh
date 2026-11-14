@@ -46,7 +46,7 @@ prepare)
     hdiutil detach "$mount" >/dev/null
     rm -rf "$ROOT/dmg-$v"
   done
-  xcodebuild build -project KuvoCode.xcodeproj -scheme KuvoCode -configuration Release -derivedDataPath "$ROOT/DerivedData" \
+  xcodebuild build -project swift/KuvoCode.xcodeproj -scheme KuvoCode -configuration Release -derivedDataPath "$ROOT/DerivedData" \
     -clonedSourcePackagesDirPath build/SourcePackages APP_BUNDLE_ID=run.kuvo.code >"$ROOT/build.log" 2>&1
   rm -rf "$ROOT/apps/this.app"
   cp -R "$ROOT/DerivedData/Build/Products/Release/Kuvo Code.app" "$ROOT/apps/this.app"

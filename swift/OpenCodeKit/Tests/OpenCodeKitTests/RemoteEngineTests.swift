@@ -245,13 +245,13 @@ struct RemoteEngineTests {
     }
 
     /// What's already on a computer, as the probe prints it for the box to judge (PROTOCOL.md, "Your
-    /// setup", "Already in a setup?"), run with `sh` on the files `Vectors/setup/probe.json` has, in a
+    /// setup", "Already in a setup?"), run with `sh` on the files `protocol/vectors/setup/probe.json` has, in a
     /// home of the test's own: an older box's few link.json fields, never its keys, and the card of
     /// Kuvo Code's own box in its app folder. A test's own folder isn't the real one: the app's boxes
     /// aren't looked at then.
     @Test func whatsAlreadyOnAComputerIsPrintedForItsBoxToJudge() throws {
         struct Vector: Decodable { let files: [String: String]; let lines: [String] }
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/setup/probe.json").standardized
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/setup/probe.json").standardized
         let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: file))
         let home = FileManager.default.temporaryDirectory.appending(path: "kuvo-probe-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }

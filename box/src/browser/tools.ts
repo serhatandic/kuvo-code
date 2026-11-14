@@ -4,7 +4,7 @@
 // the sandbox's and the Work Queue's come from the box itself as they're listed.
 // This Mac's panel still lists a copy of its own (BrowserTools.definitions, in the app's
 // BrowserToolServer.swift) until its agents browse in its box's browser (#693): change both, as
-// KuvoCodeTests/BrowserToolsOnBoxTests.swift holds them to each other.
+// swift/KuvoCodeTests/BrowserToolsOnBoxTests.swift holds them to each other.
 
 /** A JSON value, as a tool's input schema holds them. */
 export type Json = string | number | boolean | null | Json[] | { [key: string]: Json };

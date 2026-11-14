@@ -3,7 +3,7 @@
 // meaning. A Mac's box's list (`macFeatures`, routes/mac.ts) has the same but a machine's own
 // (`MACHINE_FEATURES`: `browser`, `engine.start` and `update`), and the Mac's own routes besides
 // (`MAC_FEATURES`). scripts/route-shapes.sh writes the scenario both boxes are held to
-// (Vectors/routes/features.json) from these.
+// (protocol/vectors/routes/features.json) from these.
 //
 // One name a line, in order (as `LC_ALL=C sort` has them), so branches that each add one merge
 // without a conflict: git merges this file by union (.gitattributes), keeping the lines both added.

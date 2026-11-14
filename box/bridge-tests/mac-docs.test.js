@@ -5,7 +5,7 @@
 // Kuvo Code. Only this Mac's app is a stand-in; the machines are documents signed with keys of
 // their own.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-docs.test.js`.
+// Run with `node --test box/bridge-tests/mac-docs.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -47,7 +47,7 @@ Object.assign(process.env, {
   KUVO_HOST_URL: `http://127.0.0.1:${appHost.address().port}`,
   KUVO_HOST_PASSWORD: "host-password",
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const macSeed = link.newSigningSeed();
 const macSign = link.signingKeyOf(macSeed);

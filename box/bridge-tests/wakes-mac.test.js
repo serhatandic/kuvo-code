@@ -37,9 +37,9 @@ const changedOnDisk = file => {
     if (path.dirname(file) === folder || (recursive && file.startsWith(folder + path.sep))) listener("rename", path.relative(folder, file));
   }
 };
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
-const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
+const swift = fs.readFileSync(new URL("../../swift/OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
 const opening = 'public static let script = #"""\n';
 const from = swift.indexOf(opening) + opening.length;
 const script = swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").map(line => line.replace(/^ {4}/, "")).join("\n");

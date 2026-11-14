@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenCodeKit
 
-// Goals as a box sends them (Packages/Box/src/agents/goals.ts), and "/goal" as you type it.
+// Goals as a box sends them (box/src/agents/goals.ts), and "/goal" as you type it.
 
 /// A goal met, and one paused, as a box's `api/kuvo/goals` lists them.
 @Test func readsGoalsAsABoxSendsThem() throws {

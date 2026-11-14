@@ -9,7 +9,7 @@ if ! "$root/scripts/heavy.sh" --holds box; then
 fi
 bun=${KUVO_TEST_BUN:-$HOME/.bun/bin/bun}
 export KUVO_TEST_BUN="$bun" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
-box="$root/Packages/Box"
+box="$root/box"
 if [ ! -d "$box/node_modules" ] || [ "$box/bun.lock" -nt "$box/node_modules" ]; then
     echo 'Installing locked box dependencies...'
     (cd "$box" && "$bun" install --frozen-lockfile) || { echo 'Dependency installation failed; suites not run.' >&2; exit 1; }
@@ -30,14 +30,14 @@ if [ "$mode" != box ]; then
     bridge_args=() bridge_files=()
     for arg in "$@"; do
         case "$arg" in
-            *.test.js) case "$arg" in */*) bridge_files+=("$arg") ;; *) bridge_files+=("Tests/Bridge/$arg") ;; esac ;;
+            *.test.js) case "$arg" in */*) bridge_files+=("${arg#box/}") ;; *) bridge_files+=("bridge-tests/$arg") ;; esac ;;
             *) bridge_args+=("$arg") ;;
         esac
     done
     if [ ${#bridge_files[@]} -eq 0 ]; then
-        (cd "$root/Packages/KuvoLink" && node --test "${bridge_args[@]}" Tests/Bridge/*.test.js) >"$logs/bridge" 2>&1
+        (cd "$box" && node --test "${bridge_args[@]}" bridge-tests/*.test.js) >"$logs/bridge" 2>&1
     else
-        (cd "$root/Packages/KuvoLink" && node --test "${bridge_args[@]}" "${bridge_files[@]}") >"$logs/bridge" 2>&1
+        (cd "$box" && node --test "${bridge_args[@]}" "${bridge_files[@]}") >"$logs/bridge" 2>&1
     fi
     status=$?; set -u; cat "$logs/bridge"
     if [ "$status" -eq 0 ]; then bridge_status=pass; else bridge_status=fail; fi

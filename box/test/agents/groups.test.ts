@@ -40,7 +40,7 @@ const vectors = {
 
 describe("what the app reads as a box does", () => {
   test("box-vectors.json is what the app's own test wrote (scripts/box-vectors.sh), not edited by hand", () => {
-    const swift = readFileSync(join(import.meta.dir, "../../../KuvoClient/Tests/ClientSessionsTests/BoxVectorsTests.swift"), "utf8")
+    const swift = readFileSync(join(import.meta.dir, "../../../swift/KuvoClient/Tests/ClientSessionsTests/BoxVectorsTests.swift"), "utf8")
     const recorded = swift.match(/static let recorded = "([0-9a-f]+)"/)?.[1]
     const hash = new Bun.CryptoHasher("sha256").update(readFileSync(join(import.meta.dir, "box-vectors.json"))).digest("hex")
     expect(hash).toBe(recorded!)

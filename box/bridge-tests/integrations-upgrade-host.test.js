@@ -1,5 +1,5 @@
 // This Mac's box bringing its integrations up to date as it starts (the scenarios on a machine are
-// in Packages/Box/test/integrations-upgrade.test.ts): a key that goes is its app's to take away,
+// in box/test/integrations-upgrade.test.ts): a key that goes is its app's to take away,
 // which takes a moment another client can change something in, and which can fail.
 import "./test-safety.js";
 import { test } from "node:test";

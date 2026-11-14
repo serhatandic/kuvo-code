@@ -69,7 +69,7 @@ describe("as UsageKit reads and prices them", () => {
   })
 
   test("the bundled snapshots are UsageKit's, byte for byte, while both price", () => {
-    const usageKit = join(import.meta.dir, "..", "..", "..", "UsageKit", "Sources", "UsageKit", "Resources")
+    const usageKit = join(import.meta.dir, "..", "..", "..", "swift", "UsageKit", "Sources", "UsageKit", "Resources")
     // (A box checked out alone, as on a Linux test machine, has no UsageKit beside it.)
     if (!existsSync(usageKit)) return
     for (const name of ["pricing_litellm_snapshot.json", "pricing_models_dev_snapshot.json", "pricing_supplement.json"]) {

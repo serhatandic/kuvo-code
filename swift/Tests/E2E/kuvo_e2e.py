@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 BUNDLE = "run.kuvo.code.e2e"
 HOME = os.path.expanduser("~")
 SUPPORT = HOME + "/Library/Application Support/" + BUNDLE
@@ -68,7 +68,7 @@ def build(force=False):
     if force or not os.path.exists(DRIVE) or os.path.getmtime(DRIVE) < os.path.getmtime(source):
         sh(["swiftc", "-O", "-o", DRIVE, source])
     log("building the e2e copy")
-    out = sh(["xcodebuild", "-project", REPO + "/KuvoCode.xcodeproj", "-scheme", "KuvoCode", "-configuration", "Debug",
+    out = sh(["xcodebuild", "-project", REPO + "/swift/KuvoCode.xcodeproj", "-scheme", "KuvoCode", "-configuration", "Debug",
               "-derivedDataPath", DERIVED, "APP_BUNDLE_ID=" + BUNDLE, "build"], check=False)
     if "BUILD SUCCEEDED" not in out:
         raise RuntimeError("build failed:\n" + "\n".join(l for l in out.splitlines() if " error:" in l)[:3000])

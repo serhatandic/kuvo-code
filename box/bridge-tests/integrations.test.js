@@ -18,7 +18,7 @@ process.env.KUVO_HOME = home;
 const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
 process.env.HOME = user;
 delete process.env.KUVO_INTEGRATIONS;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 removeAtEnd(home);
 removeAtEnd(user);
 

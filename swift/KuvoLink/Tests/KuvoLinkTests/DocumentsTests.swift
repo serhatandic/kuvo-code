@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import KuvoLink
 
-/// Signed documents (`Vectors/docs.json`, which the bridge checks against too): the ones a machine
+/// Signed documents (`protocol/vectors/docs.json`, which the bridge checks against too): the ones a machine
 /// signs verify here, the ones it must turn away are turned away here, and what this side signs and
 /// splits into parts reads back as it was.
 @Suite struct DocumentsTests {

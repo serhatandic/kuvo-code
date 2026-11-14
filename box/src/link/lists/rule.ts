@@ -2,7 +2,7 @@
 // project's session filed under its project, a chat, a bot's conversation, a seat in a group chat, a
 // run kept out of sight, or a subagent's; and the projects the lists show. The rule the Mac's sidebar
 // went by (`Workspace.makeProjects`, `chats`), here so no client works it out. Pure: what the box
-// knows comes in `ListPlace`, so the vectors (`Packages/KuvoLink/Vectors/session-lists.json`) check it.
+// knows comes in `ListPlace`, so the vectors (`protocol/vectors/session-lists.json`) check it.
 
 import path from "node:path";
 import { isObject } from "../../shared/json";

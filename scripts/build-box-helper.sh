@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds Kuvo Code Box (#333 piece 4; Packages/KuvoLink/PROTOCOL.md, "This Mac's box: its helper"),
+# Builds Kuvo Code Box (#333 piece 4; protocol/PROTOCOL.md, "This Mac's box: its helper"),
 # the small program a Mac's box runs under once it lives in ~/.kuvo-code, into a built app
 # (`Contents/Helpers/Kuvo Code Box.app`), signed. build-app.sh runs it before it signs the app, so
 # the helper is sealed in the app, notarized with it, and packed into the box's release from there.
@@ -32,8 +32,8 @@ OUT="$APP/Contents/Helpers/$NAME.app"
 if [ -n "${HELPER_EXECUTABLE:-}" ]; then
     EXECUTABLE=$HELPER_EXECUTABLE
 else
-    swift build -c release --package-path Packages/OpenCodeKit --product KuvoCodeBox --arch arm64 -q
-    EXECUTABLE="$(swift build -c release --package-path Packages/OpenCodeKit --arch arm64 --show-bin-path)/KuvoCodeBox"
+    swift build -c release --package-path swift/OpenCodeKit --product KuvoCodeBox --arch arm64 -q
+    EXECUTABLE="$(swift build -c release --package-path swift/OpenCodeKit --arch arm64 --show-bin-path)/KuvoCodeBox"
 fi
 test -x "$EXECUTABLE" || { echo "No KuvoCodeBox at $EXECUTABLE" >&2; exit 1; }
 
@@ -73,7 +73,7 @@ if [ "$SIGN_IDENTITY" = "-" ]; then
 else
     set -- --force --sign "$SIGN_IDENTITY" --options runtime --timestamp
 fi
-codesign "$@" --identifier "$HELPER_ID" --entitlements Config/KuvoCodeBox.entitlements "$NEW"
+codesign "$@" --identifier "$HELPER_ID" --entitlements swift/Config/KuvoCodeBox.entitlements "$NEW"
 codesign --verify --strict --deep "$NEW"
 
 rm -rf "$OUT"

@@ -5,7 +5,7 @@
 // plugin and runs a command as the engine does, through the shell the plugin gives it, with the
 // environment the plugin set. The sandbox itself is the system's own (macOS's, Linux's Landlock).
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox.test.js`; on a Linux machine, with
+// Run with `node --test box/bridge-tests/sandbox.test.js`; on a Linux machine, with
 // `scripts/test-linux.sh <ssh-host> sandbox.test.js`, and with `--engine` on the engine's own runner,
 // which the box runs on there (Bun's: `BUN_BE_BUN=1 <engine> test --timeout 120000 ./sandbox.test.js`,
 // as its 5 seconds a test are too few for some).
@@ -48,7 +48,7 @@ const ownRuntime = (() => {
 const ownScript = path.join(root, "kuvo-link.js");
 fs.copyFileSync(script, ownScript);
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
-const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
+const swift = fs.readFileSync(new URL("../../swift/OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
 const opening = 'public static let script = #"""\n';
 const from = swift.indexOf(opening) + opening.length;
 const wakeScript = swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").map(line => line.replace(/^ {4}/, "")).join("\n") + "\n";

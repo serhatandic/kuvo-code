@@ -1,5 +1,5 @@
 {
- "about": "How both runners hold an answer to its shape (Vectors/routes/shapes/answers.json says what a shape is), so the two never drift apart: each case is a shape, a value (left out: nothing there) and whether it fits. An object's fields are all it may have; a name ending in ? may be left out, but isn't null unless its shape says so; one whose shape takes null is sent as null, never left out.",
+ "about": "How both runners hold an answer to its shape (protocol/vectors/routes/shapes/answers.json says what a shape is), so the two never drift apart: each case is a shape, a value (left out: nothing there) and whether it fits. An object's fields are all it may have; a name ending in ? may be left out, but isn't null unless its shape says so; one whose shape takes null is sent as null, never left out.",
  "cases": [
   {
    "shape": "string",

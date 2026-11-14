@@ -4,7 +4,7 @@
 // (`kuvo-browser.js mcp`), the real box script and box, on a folder of the test's own; the engine
 // and the browser's keeper (Chromium behind it) are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/vault-fill-wait.test.js`.
+// Run with `node --test box/bridge-tests/vault-fill-wait.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -32,9 +32,9 @@ const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
-const tool = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const tool = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 const script = path.join(home, "bin", "kuvo-link.js");
-write(script, fs.readFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url)));
+write(script, fs.readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url)));
 const env = { ...process.env, KUVO_HOME: home, HOME: home, KUVO_VAULT_AGENTS: "1" };
 for (const name of ["KUVO_HOST_URL", "KUVO_HOST_PASSWORD", "KUVO_KEYS", "KUVO_KEYS_ON_HOST", "KUVO_BOX", "KUVO_SESSION"]) delete env[name];
 

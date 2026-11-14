@@ -5,11 +5,11 @@ import Testing
 
 /// What a typed message says, read by the Swift both apps draw the composer with (OpenCodeKit's
 /// `Keyword`, `LoopCommand`, `GoalCommand`, `ReviewCommand`; `SlashCommands`) as the box reads it
-/// when it's sent (`kuvo/sessions/<id>/typed`): both held to Packages/KuvoLink/Vectors/typed.json,
+/// when it's sent (`kuvo/sessions/<id>/typed`): both held to protocol/vectors/typed.json,
 /// so the keyword drawn as you type is the one the box runs.
 struct TypedVectorsTests {
     nonisolated(unsafe) static let vectors: [String: Any] = {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/typed.json")
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/typed.json")
         return (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any] ?? [:]
     }()
 

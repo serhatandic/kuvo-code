@@ -2,7 +2,7 @@
 // lines it made itself (`mine`), by the key it paired with, never by its name, which every phone
 // may share ("iPhone"). So one phone's look at an item never reads as another's.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/vault-phones.test.js`.
+// Run with `node --test box/bridge-tests/vault-phones.test.js`.
 import "./test-safety.js";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +15,7 @@ import { script } from "./bot-keys-scenarios.js";
 import { relayStandIn } from "./relay-stand-in.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // (A short folder: the vault's socket lives in it.)
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kvp-"));

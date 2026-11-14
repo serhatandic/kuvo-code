@@ -6,7 +6,7 @@
 // the test's own; only the coding agents' bridge is a stand-in. Skipped unless OPENCODE_TEST_BINARY
 // names the engine.
 //
-// Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/goal-asks-live.test.js`,
+// Run with `OPENCODE_TEST_BINARY=<opencode> node --test box/bridge-tests/goal-asks-live.test.js`,
 // with `KUVO_TEST_MODEL=<id>` for another of OpenCode's free models than the engine's default. For a
 // provider's model with a key of its own (say OpenCode Go's), also `KUVO_TEST_PROVIDER=<its id>` and
 // `KUVO_TEST_AUTH=<an engine's sign-ins>`: its `opencode.db` (the engine's data folder) or an
@@ -63,8 +63,8 @@ test("answering a bot's question takes it off its goal's list at once, and what 
   removeAtEnd(home);
   for (const folder of ["tmp", "xdg/config", "xdg/data", "xdg/state", "xdg/cache", "bin"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   process.env.KUVO_HOME = home;
-  const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
-  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+  const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
+  const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   const write = (file, text) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, text);
@@ -154,7 +154,7 @@ test("answering a bot's question takes it off its goal's list at once, and what 
   write(path.join(pixelFolder, "session"), session);
   write(path.join(home, "run", "engine.json"), JSON.stringify({ port, password: "pw", version: "0.0.0" }));
   write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "p", pid: bridgeProcess.pid }));
-  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
+  fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
 
   // The box's answer to one request, as a machine's tool asks it: a process of its own.
   const route = (method, pathname, body) => new Promise((resolve, reject) => {

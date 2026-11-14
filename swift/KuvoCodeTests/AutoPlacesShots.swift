@@ -21,10 +21,10 @@ struct AutoPlacesShots {
         let now = Date.now.timeIntervalSince1970 * 1000
         let place = "/private/tmp/eval-ds/T2"
         let rows: [[String: Any]] = [
-            ["id": "d1", "at": now - 1_800_000, "action": "Change \(place)/Packages/Box/src/link/server/serve.ts", "kind": "file", "decision": "allowed", "reason": "Part of the evaluation it was given, in the worktree its task names.", "by": "model"],
+            ["id": "d1", "at": now - 1_800_000, "action": "Change \(place)/box/src/link/server/serve.ts", "kind": "file", "decision": "allowed", "reason": "Part of the evaluation it was given, in the worktree its task names.", "by": "model"],
             ["id": "d2", "at": now - 1_800_000, "action": "Change \(place)", "kind": "file", "decision": "allowed", "reason": "Auto allowed edits in \(place) for this session.", "by": "model", "place": place]
                 .merging(revoked ? ["revoked": now - 60_000] : [:]) { $1 },
-            ["id": "d3", "at": now - 900_000, "action": "cd \(place)/Packages/KuvoLink && node --test Tests/Bridge/sandbox-asks.test.js", "kind": "command", "decision": "allowed", "reason": "Runs the project's own tests.", "by": "model"],
+            ["id": "d3", "at": now - 900_000, "action": "cd \(place)/box && node --test bridge-tests/sandbox-asks.test.js", "kind": "command", "decision": "allowed", "reason": "Runs the project's own tests.", "by": "model"],
             ["id": "d4", "at": now - 300_000, "action": "git push origin eval/ds-T2", "kind": "command", "decision": "refused", "reason": "Pushing wasn't part of what it was asked to do.", "by": "model", "why": "reviewer", "held": true],
         ]
         return try JSONDecoder().decode(ReviewDecisions.self, from: JSONSerialization.data(withJSONObject: ["decisions": rows]))

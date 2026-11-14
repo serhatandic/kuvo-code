@@ -1,7 +1,7 @@
 // A machine tells your phones what happens in its own sessions and what its agents ask for as
 // they browse, whether a Mac is connected to it or not: a Mac never tells them a machine's news,
 // so each notice comes once, from the machine. Run with
-// `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,7 +15,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-box-work-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const run = path.join(home, "run");
 fs.mkdirSync(run, { recursive: true });

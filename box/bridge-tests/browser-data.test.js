@@ -1,5 +1,5 @@
 // The browser's data on a machine (PROTOCOL.md, "The browser's data"): the real keeper
-// (KuvoCode/Resources/kuvo-browser.js) with Chrome as a stand-in, and the box's own routes asked as
+// (swift/KuvoCode/Resources/kuvo-browser.js) with Chrome as a stand-in, and the box's own routes asked as
 // a Mac asks them over SSH (`kuvo-link.js box route`). A page that loads is kept in the history,
 // with its site's icon as Chrome fetched it; removing a site's data while Chrome runs signs the
 // browser out of it, through Chrome, as `kuvo/integrations` then says.
@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { browserHost } from "./browser-host-stand-in.js";
 
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const { home, chrome, event, client, answer } = await browserHost();
 
 /** A route of the machine's box, as a Mac asks it: its status, type and body. */

@@ -3,7 +3,7 @@
 // one was refused), until it works again or you sign in again; and Disconnect, as Settings ›
 // Accounts does it, for your plans alone, never an integration's server. The engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/accounts.test.js`.
+// Run with `node --test box/bridge-tests/accounts.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -18,7 +18,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-accounts-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // An engine with your plans, an integration's server, and what each is signed in with; it keeps
 // what was removed.
@@ -215,7 +215,7 @@ test("a plan whose sign-in ran out is noted as the box watches its engine, which
   // Where the box finds its engine.
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(engine.source));
-  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+  const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   // A machine's link (`run`), then this Mac's box (`serve`), as each starts watching.
   for (const watching of [{}, { bots: true, notices: false }]) {
     await ask("POST", "kuvo/accounts/openai/forget");

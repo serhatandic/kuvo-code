@@ -1,5 +1,5 @@
 // Your other computers (PROTOCOL.md, "Peers"): who they are, their agents, and letters between
-// them, by mail through the relay. Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// them, by mail through the relay. Run with `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -15,7 +15,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-peers-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const run = path.join(home, "run");
 const k = key => key.toString("base64url");

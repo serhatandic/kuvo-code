@@ -12,7 +12,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-VERSION="${VERSION:-$(sed -n 's/.*MARKETING_VERSION = \(.*\);/\1/p' KuvoCode.xcodeproj/project.pbxproj | head -n 1)}"
+VERSION="${VERSION:-$(sed -n 's/.*MARKETING_VERSION = \(.*\);/\1/p' swift/KuvoCode.xcodeproj/project.pbxproj | head -n 1)}"
 # What Sparkle compares (CFBundleVersion): a beta's "-beta.1" as "b1", since it reads nothing
 # after a dash, and orders 0.7.0b1 before 0.7.0b2 before 0.7.0.
 BUILD=$(./scripts/build-version.sh "$VERSION")
@@ -33,7 +33,7 @@ xcode_cache scripts
 # Built unsigned-for-distribution (ad hoc) here and signed below, inside out, so
 # every nested executable gets the same identity, the hardened runtime and a
 # secure timestamp, which notarization requires.
-xcodebuild -project KuvoCode.xcodeproj -scheme KuvoCode -configuration Release \
+xcodebuild -project swift/KuvoCode.xcodeproj -scheme KuvoCode -configuration Release \
     -derivedDataPath build/DerivedData -clonedSourcePackagesDirPath build/SourcePackages \
     MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
     CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
@@ -90,7 +90,7 @@ entitlements=$(codesign -d --entitlements - --xml "$APP/Contents/Helpers/Kuvo Co
 for entitlement in personal-information.calendars device.audio-input; do
     printf '%s' "$entitlements" | grep -q "$entitlement" || { echo "Kuvo Code Box lost its $entitlement entitlement as it was signed." >&2; exit 1; }
 done
-codesign "$@" --entitlements KuvoCode/KuvoCode.entitlements "$APP"
+codesign "$@" --entitlements swift/KuvoCode/KuvoCode.entitlements "$APP"
 # The box's release in the app, for it to offer this Mac's box as it updates: only with the key a
 # box trusts (a local build has none, and carries none).
 if [ -n "${KUVO_BOX_SIGNING_KEY:-}" ]; then

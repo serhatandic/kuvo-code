@@ -6,7 +6,7 @@
 // the box the lead lives on takes each mail with the real `takeLetter`, over an engine of its own.
 // The engines are stand-ins; a mail "lost" on the way is one the test doesn't hand on.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/news-arrives.test.js`.
+// Run with `node --test box/bridge-tests/news-arrives.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -21,7 +21,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-news-arrives-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const DAY = 86_400_000, MINUTE = 60_000;
 const T = Date.now();

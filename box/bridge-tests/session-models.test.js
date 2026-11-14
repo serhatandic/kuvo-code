@@ -3,7 +3,7 @@
 // missing if not (a sign-in, a key, its agent installed, or the model gone from its provider's
 // list). The real box code; the engine and the coding agents' bridge are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/session-models.test.js`.
+// Run with `node --test box/bridge-tests/session-models.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +17,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-session-models-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A stand-in on a free port, answering `routes[url]` (or 404; `FAILS`, 500), its `data` as their
 // APIs give it; the folders it was asked about, as the engine reads them (`x-opencode-directory`),

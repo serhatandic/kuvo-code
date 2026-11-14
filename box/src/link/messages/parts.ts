@@ -4,7 +4,7 @@
 // text the agent reads, in these words, and keeps the parts with the message (`metadata.kuvo.parts`)
 // for every client to draw it by. Messages from before have none: the box reads them from their
 // text (`partsOf`), the old forms too. Both directions read the same cases
-// (Vectors/message-parts.json).
+// (protocol/vectors/message-parts.json).
 
 import { isObject } from "../../shared/json";
 import { agentIs, agentsNamed, ATTACHED_BLOCK, ATTACHED_HEADINGS, FROM_PHONE_BLOCK, messageBlock, NAMED_BLOCK, NAMING_HEADING, REVIEW_BLOCK } from "../peers/naming";

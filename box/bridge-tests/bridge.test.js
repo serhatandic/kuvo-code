@@ -1,5 +1,5 @@
 // The bridge, checked against the shared vectors and against a phone and an engine in this
-// process. Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// process. Run with `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -23,11 +23,11 @@ const user = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-user-"));
 process.env.HOME = user;
 removeAtEnd(home);
 removeAtEnd(user);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A phone's key as a phone has one (32 bytes, base64url), named for a test.
 const shaped = name => crypto.createHash("sha256").update(name).digest("base64url");
-const vectors = name => JSON.parse(fs.readFileSync(new URL(`../../Vectors/${name}`, import.meta.url), "utf8"));
+const vectors = name => JSON.parse(fs.readFileSync(new URL(`../../protocol/vectors/${name}`, import.meta.url), "utf8"));
 const hex = s => Buffer.from(s, "hex");
 
 test("Noise IK matches the vectors", () => {
@@ -689,7 +689,7 @@ test("requests go to the engine with its password, all of its API; paths that ar
   assert.ok(engine.asked.some(a => a.closed === "/api/event"));
 });
 
-test("what reaches the engine and the agents' bridge is the path as it was checked, however the phone wrote it (Vectors/link.json)", async t => {
+test("what reaches the engine and the agents' bridge is the path as it was checked, however the phone wrote it (protocol/vectors/link.json)", async t => {
   const asked = [];
   const server = http.createServer((request, response) => {
     asked.push(request.url);
@@ -1121,7 +1121,7 @@ test("setup keeps the machine's keys and its own phones, takes the Mac's documen
   const phones = list => link.signDoc(seed, "phones", ++count, { phones: list.map(key => ({ key, name: key.slice(0, 4), pairing: "" })), removed: [] });
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-setup-"));
   fs.mkdirSync(path.join(folder, "workspace"));
-  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+  const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   const setup = input => {
     const result = spawnSync(process.execPath, [script, "setup"], { input: JSON.stringify({ relay: "ws://127.0.0.1:9", name: "test", mac: MAC, macSign: link.signingKeyOf(seed), ...input }), env: { ...process.env, KUVO_HOME: folder }, encoding: "utf8" });
     return JSON.parse(result.stdout);
@@ -1375,7 +1375,7 @@ test("a permission's notice names what its Always saves, as the Mac's buttons sa
   assert.equal(await titled("external_directory", [path.join(os.homedir(), "notes/a.md")], [path.join(os.homedir(), "notes/*")]), "Always Allow ~/notes");
   assert.equal(await titled("external_directory", [], [path.join(os.homedir(), "Developer/clients/acme/website-2026/*")]), "Always Allow …/website-2026");
   // The same words as the Mac's and the phone's, case for case (ClientText's AlwaysWordsTests reads them too).
-  const vectors = JSON.parse(fs.readFileSync(new URL("../../Vectors/always-words.json", import.meta.url), "utf8"));
+  const vectors = JSON.parse(fs.readFileSync(new URL("../../protocol/vectors/always-words.json", import.meta.url), "utf8"));
   for (const each of vectors.cases) assert.equal(link.alwaysTitle(each, each.home ?? null), each.plain, JSON.stringify(each));
 });
 
@@ -1747,7 +1747,7 @@ test("the box's keeper keeps the phone link up while a phone is paired, and the 
   for (const name of ["bin/kuvo-start", "bin/.kuvo-start-keeper", "run/keeper-started", "run/box.pid"]) fs.rmSync(path.join(home, name), { force: true });
 });
 
-test("paired phones, as the Mac has them too: removals stick, only a new pairing lets one back, and nobody removes the Mac (Vectors/link.json)", () => {
+test("paired phones, as the Mac has them too: removals stick, only a new pairing lets one back, and nobody removes the Mac (protocol/vectors/link.json)", () => {
   const byKey = (a, b) => (a.key + "/" + (a.pairing ?? "")).localeCompare(b.key + "/" + (b.pairing ?? ""));
   const view = book => ({
     phones: (book.phones ?? []).map(phone => ({ key: phone.key, pairing: phone.pairing ?? "", from: phone.from })).sort(byKey),

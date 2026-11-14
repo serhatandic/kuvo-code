@@ -4,7 +4,7 @@ import WebKit
 
 /// Lets the agent use the panel's browser, the way browser-use does: it reads a page as
 /// numbered interactive elements (browser-use's buildDomTree.js, MIT, in
-/// Packages/Box/src/browser, bundled from there), then clicks, types and scrolls by number. Every step happens in the
+/// box/src/browser, bundled from there), then clicks, types and scrolls by number. Every step happens in the
 /// browser you see, and the numbers are drawn on the page while it works.
 @MainActor
 final class BrowserAgent {

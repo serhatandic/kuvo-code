@@ -2,7 +2,7 @@
 // A Mac's note that it puts its files in place on a machine counts for an hour. A connect cut off
 // before it marked the box (Disconnect, Remove, the network) leaves it behind, and sends nothing
 // more to take it back: the box takes it away itself once it no longer counts.
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-installing.test.js`.
+// Run with `node --test box/bridge-tests/mac-installing.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -14,7 +14,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-mac-installing-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 test("a Mac's note left by a connect cut off goes once it no longer counts; one under way stays", () => {
   const note = path.join(home, "run", "mac-installing");

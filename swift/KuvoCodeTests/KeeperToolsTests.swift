@@ -82,7 +82,7 @@ import Testing
 
     /// With Kuvo Code closed, a bot's wake-ups, its job and the files it shows go to this Mac's box
     /// too, which answers them as every box does (the box's own tests hold what it does with them:
-    /// Packages/KuvoLink/Tests/Bridge/own-tools.test.js); only show_in_panel needs the window.
+    /// box/bridge-tests/own-tools.test.js); only show_in_panel needs the window.
     @Test func wakeUpsAJobAndShownFilesGoThroughThisMacsBoxWithTheAppClosed() async throws {
         let asked = Asked()
         let box = try await StubListener { request, body in

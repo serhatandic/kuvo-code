@@ -7,7 +7,7 @@
 // the app has registered. The real box script and tool server, in a home of the test's own; the app's
 // tool server and its host interface are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/own-box-app.test.js`.
+// Run with `node --test box/bridge-tests/own-box-app.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -22,8 +22,8 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-own-box-app-")));
 removeAtEnd(home);
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
-const browserScript = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const browserScript = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

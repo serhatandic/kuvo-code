@@ -5,14 +5,14 @@ import { join } from "node:path"
 
 // Every client's session lists come from the box (PROTOCOL.md, "Session lists"): what each session
 // is, the project it's filed under and the projects shown, as the Mac's sidebar worked them out
-// (Packages/KuvoLink/Vectors/session-lists.json, which KuvoClient's tests hold the drawing to); kept
+// (protocol/vectors/session-lists.json, which KuvoClient's tests hold the drawing to); kept
 // as the engine's events come, and resumed from where a client was after its stream dropped.
 
 const { factsOf, listedProjects } = await import("../src/link/lists/rule")
 const { commit, keepList, keptList, listFollowers, listPlaceHeard, listRoute, noteListEvent, readList, workOut, LIST_FILE } = await import("../src/link/lists/sessions")
 const { engineHandler } = await import("../src/link/server/router")
 
-const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/session-lists.json", import.meta.url), "utf8"))
+const vectors = JSON.parse(readFileSync(new URL("../../protocol/vectors/session-lists.json", import.meta.url), "utf8"))
 
 const placeOf = (box: any) => ({
   isChatsFolder: (folder: string) => folder === box.chats,

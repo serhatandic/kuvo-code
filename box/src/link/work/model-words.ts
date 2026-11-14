@@ -1,7 +1,7 @@
 // What a session's model being ready means for a composer, and its words (PROTOCOL.md, "A session's
 // model"): whether a message on it is refused and the sentence saying why, whether the model must be
 // chosen (the chip asks for one, and Send waits), and what to offer doing about it. Decided here
-// once, so no client words or decides it; held to Packages/KuvoLink/Vectors/model-readiness.json.
+// once, so no client words or decides it; held to protocol/vectors/model-readiness.json.
 // Product words only: no computer's name (the conversation shows where it is), no settings page.
 
 import type { ModelAction, SessionModel } from "../../shared/routes/sessions";

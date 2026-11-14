@@ -4,7 +4,7 @@
 // gathered as it stopped still goes. The real box code; only the engine is a stand-in, and the
 // watcher's clock is the test's.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/bots-work-wakes.test.js`.
+// Run with `node --test box/bridge-tests/bots-work-wakes.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,7 +17,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-bots-wakes-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const tidepool = path.join(home, "work", "tidepool");
 fs.mkdirSync(tidepool, { recursive: true });

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import KuvoLink
 
-/// `Vectors/link.json`, which the JavaScript bridge checks against too.
+/// `protocol/vectors/link.json`, which the JavaScript bridge checks against too.
 @Suite struct VectorTests {
     let vectors = try! Vectors.load("link.json")
 

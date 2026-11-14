@@ -4,13 +4,13 @@ import Testing
 
 /// The update gate (#679): which boxes a client uses as they are, and which it brings up to date
 /// first. Checked against what both boxes say they answer (the route scenario
-/// `Vectors/routes/features.json`, written from the box's own lists), so a name the gate needs
+/// `protocol/vectors/routes/features.json`, written from the box's own lists), so a name the gate needs
 /// that no box answers (renamed, or never added) would hold every computer forever and fails here.
 struct BoxGateTests {
     /// What a box of this version says it answers in `kuvo/info`: a Mac's and a machine's.
     private static func boxFeatures() throws -> (mac: [String], machine: [String]) {
         let file = URL(filePath: #filePath).deletingLastPathComponent()
-            .appending(path: "../../../KuvoLink/Vectors/routes/features.json").standardized
+            .appending(path: "../../../../protocol/vectors/routes/features.json").standardized
         let scenario = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
         let step = ((scenario?["scenarios"] as? [[String: Any]])?.first?["steps"] as? [[String: Any]])?.first
         let expect = step?["expect"] as? [String: Any]

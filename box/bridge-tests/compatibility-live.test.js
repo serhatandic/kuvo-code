@@ -16,7 +16,7 @@
 // for its API that answers as it does (the account's models, and messages, refusing that field),
 // and a first message goes to a free model. Skipped unless OPENCODE_TEST_BINARY names the engine.
 //
-// Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/compatibility-live.test.js`.
+// Run with `OPENCODE_TEST_BINARY=<opencode> node --test box/bridge-tests/compatibility-live.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -35,7 +35,7 @@ for (const folder of ["home", "tmp", "work", "box/run", "xdg/data", "xdg/state",
 // A machine's box: its engine's settings are in its folder (XDG_CONFIG_HOME, `config`).
 const box = `${root}/box`;
 process.env.KUVO_HOME = box;
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const link = await import(script);
 const work = `${root}/work`;
 

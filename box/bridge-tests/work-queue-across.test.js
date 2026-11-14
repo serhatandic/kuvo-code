@@ -9,7 +9,7 @@
 // One box (a machine, here, by the real link in this process), its Mac and another machine as keys
 // whose mail is sealed and opened as the relay carries it; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/work-queue-across.test.js`.
+// Run with `node --test box/bridge-tests/work-queue-across.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -33,7 +33,7 @@ const ghQueries = () => (fs.existsSync(ghAsked) ? fs.readFileSync(ghAsked, "utf8
 const ghAsks = () => (fs.existsSync(ghAsked) ? fs.readFileSync(ghAsked, "utf8").split("\n").filter(Boolean).length : 0);
 process.env.PATH = `${path.join(home, "bin")}${path.delimiter}${process.env.PATH}`;
 process.env.KUVO_HOME = home;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const run = path.join(home, "run");
 const queues = path.join(run, "work-queue");
 const write = (file, value) => {

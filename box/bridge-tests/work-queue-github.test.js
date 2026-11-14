@@ -5,7 +5,7 @@
 // written to. The real box code, as clients and agents reach it; the engine and GitHub's `gh` are
 // stand-ins (`gh` says what it was asked, and answers what the test says GitHub would).
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/work-queue-github.test.js`.
+// Run with `node --test box/bridge-tests/work-queue-github.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -20,7 +20,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-queue-github-")));
 removeAtEnd(home);
 process.env.KUVO_HOME = home;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const queues = path.join(home, "run", "work-queue");
 const seenFile = path.join(queues, "seen.json");
 
@@ -313,7 +313,7 @@ test("what this box tells your other computers carries GitHub's word, so they sh
 
 // A request as a machine's box answers one from the Mac, over SSH: a process of its own
 // (`kuvo-link.js box route`), whose answer is read as it ends.
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 function spawnRoute(method, pathname) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script, "box", "route"], { env: { ...process.env, KUVO_HOME: home }, stdio: ["pipe", "pipe", "inherit"] });

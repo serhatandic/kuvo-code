@@ -1,7 +1,7 @@
 // A stand-in for one of the box's programs (running-as.js) ends with the test file that started it,
 // also when that file is killed (a run stopped, or timed out), so none is left running.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/running-as.test.js`.
+// Run with `node --test box/bridge-tests/running-as.test.js`.
 import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";

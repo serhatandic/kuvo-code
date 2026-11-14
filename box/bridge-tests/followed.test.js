@@ -3,7 +3,7 @@
 // starts a moment after it's asked for) is told all the same, at once, not half a minute later.
 // The watch is a stand-in that never tells anything: the system's, in its first moment.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/followed.test.js`.
+// Run with `node --test box/bridge-tests/followed.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,7 +15,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-followed-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 test("a change made as following starts, which the watch never told, is told all the same, at once", { timeout: 10_000 }, async () => {
   let value = 1;

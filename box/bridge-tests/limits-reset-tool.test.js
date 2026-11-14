@@ -6,7 +6,7 @@
 // machine's tools ask it (`kuvo-link.js box route`). The real box script on a folder of the test's
 // own; the engine and the coding agents' bridge are stand-ins, the bridge counting what it spends.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/limits-reset-tool.test.js`.
+// Run with `node --test box/bridge-tests/limits-reset-tool.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -21,7 +21,7 @@ import { runningAs } from "./running-as.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-limits-reset-tool-")));
 removeAtEnd(home);
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

@@ -1,6 +1,6 @@
 // A machine's bots and wake-ups, answered by its bridge from their folders as the Mac answers for
 // them (PROTOCOL.md, `kuvo/bots` and `kuvo/wakes`). Run with
-// `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,7 +15,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-bots-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 
 const bots = path.join(home, "bots");
@@ -640,7 +640,7 @@ test("a bot's job is set as a whole (its set_job tool, Edit Bot): shown under it
 
 // How bots kept their job in their memory before (frozen as the Mac read it), which the box takes a
 // job from once (jobOf).
-const groupVectors = JSON.parse(fs.readFileSync(new URL("../../Vectors/memory-jobs.json", import.meta.url), "utf8"));
+const groupVectors = JSON.parse(fs.readFileSync(new URL("../../protocol/vectors/memory-jobs.json", import.meta.url), "utf8"));
 
 test("a bot's job is read from its memory as the Mac reads it", () => {
   assert.ok(groupVectors.job.length > 5);
@@ -968,7 +968,7 @@ test("a machine makes bots with its own words, whatever a Mac's kit says, filled
 
 test("a bot on a machine is told, in Kuvo Code's own words, that it runs on that machine, in your time zone, with a browser there that keeps working with Kuvo Code closed", () => {
   const file = path.join(home, "bin", "bot-words.json");
-  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), file);
+  fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), file);
   try {
     write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, machine: "lab" }));
     const kitNow = link.readKit("linux");
@@ -999,7 +999,7 @@ test("a bot on a machine is told, in Kuvo Code's own words, that it runs on that
 // How a conversation's rules are made again from its approval and Settings › Permissions, as the Mac
 // made them before its box did (written by an earlier Mac's RouteContractTests, kept as they were),
 // which a box does the same way for a bot that moves to it.
-const approval = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/box/approval.json", import.meta.url), "utf8"));
+const approval = JSON.parse(fs.readFileSync(new URL("../../protocol/vectors/routes/box/approval.json", import.meta.url), "utf8"));
 // What Ask First asks about, before Settings' own rules, as the Mac has it.
 const askFirst = approval.find(each => each.name === "asks first; no settings").current.filter(rule => rule.action !== "external_directory");
 

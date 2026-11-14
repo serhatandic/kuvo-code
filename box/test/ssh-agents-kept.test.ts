@@ -3,7 +3,7 @@
 // launcher waits only a moment for the agent before the command runs without it (git over SSH then
 // finds no key). Here the injected watch never tells or registers looks: the periodic look finds it.
 import "./safety"
-import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
+import { ownPath } from "../bridge-tests/test-safety.js"
 import { afterAll, expect, spyOn, test } from "bun:test"
 import crypto from "node:crypto"
 import fs from "node:fs"

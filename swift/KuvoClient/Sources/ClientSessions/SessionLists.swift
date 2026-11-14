@@ -4,7 +4,7 @@ import Foundation
 // box says of its sessions (`kuvo/sessions/list`, PROTOCOL.md "Session lists"): what each one is
 // and the project it's filed under, worked out on the box so no client has the rule. What's here is
 // only taking the box's lines in and the drawing's order, which a client in another language does
-// the same from PROTOCOL.md and `Packages/KuvoLink/Vectors/session-lists.json`.
+// the same from PROTOCOL.md and `protocol/vectors/session-lists.json`.
 
 public enum SessionLists {
     /// The box's feature for the route: every box the app uses has it (the app brings a box up to

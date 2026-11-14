@@ -3,9 +3,9 @@ import Foundation
 import Testing
 @testable import KuvoLink
 
-/// The vectors both implementations run against, in `Vectors/`.
+/// The vectors both implementations run against, in `protocol/vectors/`.
 enum Vectors {
-    static let folder = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../Vectors").standardized
+    static let folder = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors").standardized
 
     static func load(_ name: String) throws -> [String: Any] {
         try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appending(path: name))) as! [String: Any]

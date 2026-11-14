@@ -4,7 +4,7 @@
 //! told to, and draws.
 //!
 //! Kept here, as drawing: which keyword a text starts with as it's typed ([`keyword`]), and whether
-//! a text goes to the box at all ([`asks_box`]), held to `Vectors/typed.json`.
+//! a text goes to the box at all ([`asks_box`]), held to `protocol/vectors/typed.json`.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ pub fn asks_box(text: &str) -> bool {
 /// sent as a message: in the box's order (`typed/decide.ts`), a model that can't run first (every
 /// plain text needs the model), all of it kept, saying why in the box's words (`refusal`, from
 /// `kuvo/sessions/models`); then, with the side thread's tag on, a
-/// follow-up there. None: it's sent. Held to `Vectors/typed.json`'s `decide` cases.
+/// follow-up there. None: it's sent. Held to `protocol/vectors/typed.json`'s `decide` cases.
 pub fn plain_answer(text: &str, side: bool, refusal: Option<&str>) -> Option<Answer> {
     if let Some(refusal) = refusal {
         return Some(Answer { restore: Some(Restore { text: text.to_owned(), beside: None }), error: Some(refusal.to_owned()), ..Answer::default() });

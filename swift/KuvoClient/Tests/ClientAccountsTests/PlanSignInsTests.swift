@@ -28,10 +28,10 @@ struct PlanSignInsTests {
     }
 
     /// The ways both apps' Accounts offer, and the plans a key's words point to, as the box has them
-    /// (`Packages/KuvoLink/Vectors/plan-sign-ins.json`): a provider whose plan goes through a coding
+    /// (`protocol/vectors/plan-sign-ins.json`): a provider whose plan goes through a coding
     /// agent isn't offered that plan's sign-in, and its key's words name that plan and agent.
     @Test func thePlansAreTheBoxsAndAccounts() throws {
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/plan-sign-ins.json").standardized
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/plan-sign-ins.json").standardized
         let vectors = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         let cases = try #require(vectors["cases"] as? [[String: Any]])
         #expect(!cases.isEmpty)

@@ -1,5 +1,5 @@
 {
- "about": "What each route of a box answers (scripts/route-shapes.sh writes it from Packages/Box/src/shared/routes; never edit it): its JSON by status, or \"bytes\". A shape is \"string\", \"number\", \"bool\", \"null\", \"any\", {list}, {map}, {object} (those fields and no others; a name ending in ? may be left out), {oneOf} or {literal}. A refusal (400 and over) in JSON is `error`, unless its route has a shape of its own for that status; what starts with a `passedOn` path is the engine's or the agents bridge's own.",
+ "about": "What each route of a box answers (scripts/route-shapes.sh writes it from box/src/shared/routes; never edit it): its JSON by status, or \"bytes\". A shape is \"string\", \"number\", \"bool\", \"null\", \"any\", {list}, {map}, {object} (those fields and no others; a name ending in ? may be left out), {oneOf} or {literal}. A refusal (400 and over) in JSON is `error`, unless its route has a shape of its own for that status; what starts with a `passedOn` path is the engine's or the agents bridge's own.",
  "error": {
   "object": {
    "message?": "string",

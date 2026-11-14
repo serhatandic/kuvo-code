@@ -5,7 +5,7 @@
 // checks it, puts it in place, and the browser starts: Chrome a stand-in that answers each request
 // with nothing. With no network, a tool says why, plainly.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/browser-setup.test.js`.
+// Run with `node --test box/bridge-tests/browser-setup.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -17,8 +17,8 @@ import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 import { makeRpm, makeZip, served, startSource } from "./browser-source-stand-in.js";
 
-const script = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
-const link = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const link = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const kind = os.arch() === "arm64" ? "aarch64" : "x86_64";
 
 /** A machine's folder with nothing in it but the box's script, as a box set up without a Mac has it. */

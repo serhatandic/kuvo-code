@@ -1,7 +1,7 @@
 // The route scenarios both boxes answer alike, run against a machine's box (contract-runner.js):
 // its folder of its own, with the files a Mac leaves on a machine.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/contract.test.js`.
+// Run with `node --test box/bridge-tests/contract.test.js`.
 import "./test-safety.js";
 import fs from "node:fs";
 import os from "node:os";

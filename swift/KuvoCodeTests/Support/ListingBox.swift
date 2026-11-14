@@ -6,7 +6,7 @@ import Testing
 /// This Mac's box's session list for a test (`kuvo/sessions/list`, PROTOCOL.md "Session lists"),
 /// for one whose engine is a stand-in with no events for a real box to follow: what each of the
 /// stand-in's sessions is and where it's filed, worked out as the box does
-/// (Packages/Box/src/link/lists/rule.ts, and held to the same vectors: ListingBoxTests), sent whole
+/// (box/src/link/lists/rule.ts, and held to the same vectors: ListingBoxTests), sent whole
 /// now and again each time the test says (`push`), as a box tells a change. With a real box beside
 /// it (`rest`), that box answers everything else, and says where its folders are filed (its
 /// `kuvo/projects`), as the box's own list would go by.

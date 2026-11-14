@@ -1,10 +1,10 @@
 // Which keeper of the browser runs on a machine, now that its version is a hash the box's build
-// writes (KEEPER in Packages/Box/src/browser/kuvo-browser.js): one from before, or of another build,
+// writes (KEEPER in box/src/browser/kuvo-browser.js): one from before, or of another build,
 // gives way to the file in place; the same build is left running; and a process started before its
 // file was replaced (an update) leaves the running keeper be. The live view (`kuvo-browser.js
 // connect`, as the Mac runs it over SSH) meets a stand-in keeper on the keeper's socket.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/browser-keeper-version.test.js`.
+// Run with `node --test box/bridge-tests/browser-keeper-version.test.js`.
 
 import "./test-safety.js";
 import assert from "node:assert/strict";
@@ -17,7 +17,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
-const built = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const built = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 const KEEPER = /^const KEEPER = "([0-9a-f]{12})";$/m.exec(fs.readFileSync(built, "utf8"))?.[1];
 
 /** A box's folder (short: the keeper's socket is in it), with a keeper on its socket that says

@@ -3,7 +3,7 @@
 // agent's program or package is there, and is skipped otherwise.
 
 import "../safety"
-import { REAL_PATH, withRealProgram } from "../../../KuvoLink/Tests/Bridge/test-safety.js"
+import { REAL_PATH, withRealProgram } from "../../bridge-tests/test-safety.js"
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

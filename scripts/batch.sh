@@ -13,7 +13,9 @@
 #                                                    failed or stopped, it refuses, saying why.
 #   scripts/batch.sh close <folder> <pid>            that run is over
 #   scripts/batch.sh check <folder> <repo> <name>…   whether the batch has these tests (ONLY's names,
-#                                                    like KuvoCodeTests/WindowTabsTests): says which it
+#                                                    like KuvoCodeTests/WindowTabsTests, whose target
+#                                                    is a folder of <repo>: kuvo-ai/swift for the Mac's,
+#                                                    kuvo-code-ios for the phone's): says which it
 #                                                    hasn't, and exits 1 then. It looks for each suite
 #                                                    and test by name in the batch's sources: a test
 #                                                    added to a suite the batch has, under another

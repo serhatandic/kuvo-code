@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pins the browser Kuvo Code runs on machines: on Linux in Packages/Box/src/link/browser/linux.json,
+"""Pins the browser Kuvo Code runs on machines: on Linux in box/src/link/browser/linux.json,
 on Macs in mac.json beside it. Each box sets it up itself from these (KuvoLink's PROTOCOL.md, "The
 browser on a machine"): rebuild kuvo-link.js after running this (scripts/build-box.sh).
 
@@ -38,10 +38,10 @@ import urllib.request
 import xml.etree.ElementTree as ElementTree
 import zipfile
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "Packages", "Box", "src", "link", "browser", "linux.json")
+OUT = os.path.join(os.path.dirname(__file__), "..", "box", "src", "link", "browser", "linux.json")
 # Macs that are machines run Chrome for Testing as it comes: nothing else to bring. In a file of its
 # own, as a box sets up a new build whenever its system's file changes.
-MAC_OUT = os.path.join(os.path.dirname(__file__), "..", "Packages", "Box", "src", "link", "browser", "mac.json")
+MAC_OUT = os.path.join(os.path.dirname(__file__), "..", "box", "src", "link", "browser", "mac.json")
 
 CFT = "https://storage.googleapis.com/chrome-for-testing-public"
 CHROMIUM_ZIPS = {"x86_64": "linux64/chrome-linux64.zip", "aarch64": "linux-arm64/chrome-linux-arm64.zip"}

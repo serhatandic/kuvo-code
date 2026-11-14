@@ -1,4 +1,4 @@
-// A download in the browser on a machine: its keeper (KuvoCode/Resources/kuvo-browser.js) says
+// A download in the browser on a machine: its keeper (swift/KuvoCode/Resources/kuvo-browser.js) says
 // whose it is, the conversation at work in the page it started in, so only that conversation's
 // agent hears of it. One from a page no agent is in (yours) is nobody's. Chrome is a stand-in.
 

@@ -2,7 +2,7 @@
 // host interface): the bot goes all the same, and its keys go the next time they can be reached,
 // so none is left behind in your Keychain. The app is a stand-in; the box is the real one.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/bot-keys-left.test.js`.
+// Run with `node --test box/bridge-tests/bot-keys-left.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -47,7 +47,7 @@ Object.assign(process.env, {
   KUVO_HOST_URL: `http://127.0.0.1:${host.address().port}`,
   KUVO_HOST_PASSWORD: "secret",
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 test("a bot deleted while its app isn't answering for its keys goes at once, and its keys once they can be reached", async () => {
   const folder = path.join(process.env.KUVO_BOTS, "bot_ada0000001");

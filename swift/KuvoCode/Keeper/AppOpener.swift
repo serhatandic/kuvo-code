@@ -15,7 +15,7 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 /// opened over and over through the night). Not while an update installs: Sparkle opens it then.
 ///
 /// #333 piece 3 carried this over for a Mac's box in a home of its own: there the box decides
-/// (`Packages/Box/src/link/mac/app.ts`, the same rules and words), the app's place comes with its
+/// (`box/src/link/mac/app.ts`, the same rules and words), the app's place comes with its
 /// registration (`kuvo/box/app`), and only the opening itself is the keeper's (the host interface's
 /// `app/open`; the helper's after #333 piece 4). This copy serves the box in the app's folder
 /// (`KeeperTools`) alone, and goes with it once this Mac's box has moved (#333 pieces 5–6); a

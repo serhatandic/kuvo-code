@@ -5,7 +5,7 @@
 // don't bring the link back. Real `serve` processes, one after another in the same folder; only the
 // relay and what answers for the app (the keeper's host interface, the app closed) are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-restart.test.js`.
+// Run with `node --test box/bridge-tests/mac-restart.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -62,7 +62,7 @@ const environment = {
   KUVO_HOST_PASSWORD: "host-password",
 };
 Object.assign(process.env, environment);
-const script = new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
+const script = new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
 const link = await import(script);
 
 const relay = await relayStandIn(link);

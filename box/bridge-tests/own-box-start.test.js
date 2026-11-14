@@ -5,7 +5,7 @@
 // stand-ins for the box's keeper (`bin/kuvo-start`), `launchctl` and `crontab`: never this
 // computer's own, which a test's home leaves alone without them.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/own-box-start.test.js`.
+// Run with `node --test box/bridge-tests/own-box-start.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -16,7 +16,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text, mode) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);

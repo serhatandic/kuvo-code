@@ -1,7 +1,7 @@
 // What boxes copy between them as signed documents (PROTOCOL.md, "Documents"): a Mac's peers, the
 // phones each box pairs and removes, and your personalities. Several boxes in this process, each
 // with its own state, and a relay between them that drops what goes to a box that isn't connected.
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// Run with `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -14,10 +14,10 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-documents-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const k = bytes => bytes.toString("base64url");
-const vectors = name => JSON.parse(fs.readFileSync(new URL(`../../Vectors/${name}`, import.meta.url), "utf8"));
+const vectors = name => JSON.parse(fs.readFileSync(new URL(`../../protocol/vectors/${name}`, import.meta.url), "utf8"));
 const phoneKey = name => crypto.createHash("sha256").update(name).digest("base64url");
 
 // A machine: its keys, how a Mac's peers document names it, and its state, with a library file of
@@ -123,7 +123,7 @@ function personalities(box, method, id, body) {
   return answer;
 }
 
-test("documents verify as the vectors say, and turn away the ones that don't (Vectors/docs.json)", () => {
+test("documents verify as the vectors say, and turn away the ones that don't (protocol/vectors/docs.json)", () => {
   const v = vectors("docs.json");
   for (const each of v.taken) {
     const doc = link.readDoc(each.envelope);

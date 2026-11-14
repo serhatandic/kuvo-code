@@ -6,7 +6,7 @@
 // Each request by a process of its own, as a machine's tools ask it (`kuvo-link.js box route`); the
 // real box script on a folder of the test's own; only the engine is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/work-queue.test.js`.
+// Run with `node --test box/bridge-tests/work-queue.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -25,9 +25,9 @@ removeAtEnd(home);
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
 fs.writeFileSync(path.join(home, "bin", "gh"), "#!/bin/sh\necho 'gh auth login' >&2\nexit 1\n", { mode: 0o755 });
 process.env.PATH = `${path.join(home, "bin")}${path.delimiter}${process.env.PATH}`;
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 process.env.KUVO_HOME = home;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -1277,7 +1277,7 @@ test("a client follows a queue: a line now, and one when it changes (another pro
 
 test("every agent kind gets the tools through its tool server: a machine's kuvo-browser.js lists them, tells agents of them, and passes calls on", async () => {
   write(path.join(home, "bin", "kuvo-link.js"), fs.readFileSync(script));
-  const browser = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+  const browser = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
   const mcp = spawn(process.execPath, [browser, "mcp"], { env: { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home }, stdio: ["pipe", "pipe", "ignore"] });
   atEnd(() => mcp.kill());
   const answers = new Map();

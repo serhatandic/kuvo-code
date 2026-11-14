@@ -4,7 +4,7 @@
 
 import "./safety"
 import { afterAll } from "bun:test"
-import { reachedRealAgents } from "../../KuvoLink/Tests/Bridge/test-safety.js"
+import { reachedRealAgents } from "../bridge-tests/test-safety.js"
 
 // (Once, when the last test file is done: a preload's hook is the whole run's. Bun's runner ends
 // without telling anything else.)

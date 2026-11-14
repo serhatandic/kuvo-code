@@ -1,4 +1,4 @@
-// Which paths a phone may ask for, written one way (PROTOCOL.md, "Messages in a session"), held to Vectors/link.json
+// Which paths a phone may ask for, written one way (PROTOCOL.md, "Messages in a session"), held to protocol/vectors/link.json
 
 // The sockets a phone may open: a terminal's.
 const SOCKETS = [/^api\/pty\/[^/?]+\/connect(\?|$)/];
@@ -63,7 +63,7 @@ export const socketAllowed = (path: string): boolean => SOCKETS.some(pattern => 
 // phone does through `kuvo/groups`, and what its browser downloaded (`api/kuvo/artifacts/noted`;
 // a client reads the record through `kuvo/artifacts`). Checked on the path as it's sent, which the bridge reads part
 // by part. As the Mac allows them (EngineRoutes.allowsAgents; both are checked against
-// Vectors/link.json).
+// protocol/vectors/link.json).
 export const agentsAllowed = (path: string, method = "GET"): boolean => {
   const sent = canonicalPath(path) ?? "";
   return /^api(\/|\?|$)/.test(sent) && !/^api\/kuvo\/(engine|groups|artifacts)(\/|\?|$)/.test(sent);

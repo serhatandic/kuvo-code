@@ -5,7 +5,7 @@
 // that copied another's words (a branch, a handoff, one carried on) keeps the files they show.
 // The real box code; only the engine and the coding agents' bridge are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/attachments-go.test.js`.
+// Run with `node --test box/bridge-tests/attachments-go.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -25,7 +25,7 @@ const mac = path.join(home, "Mac Attachments");
 process.env.KUVO_HOME = home;
 process.env.KUVO_MAC_ATTACHMENTS = mac;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const kept = path.join(home, "attachments");
 // A process the box takes for its coding agents' bridge's (by its name), which it looks for
 // running before it judges anything gone.

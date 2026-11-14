@@ -2,13 +2,13 @@
 // and the models it has, which Claude's SDK asks over its pipe as it starts it. Never a turn. Its
 // `default` is the model it recommends on that account (`stands`: Opus on one plan, Sonnet on
 // another). The bridge is given the SDK as the box's own tests have it (`bun install` in
-// Packages/Box, before these tests, as CI does), so nothing is downloaded, and the stand-in comes
+// box, before these tests, as CI does), so nothing is downloaded, and the stand-in comes
 // first on its PATH, so your own Claude Code is never run.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const boxModules = fileURLToPath(new URL("../../../Box/node_modules", import.meta.url));
+const boxModules = fileURLToPath(new URL("../node_modules", import.meta.url));
 
 /** The stand-in in `root`'s `.local/bin`, and the SDK in the bridge's `agents` folder: the folder to
  * put first on the bridge's PATH. */

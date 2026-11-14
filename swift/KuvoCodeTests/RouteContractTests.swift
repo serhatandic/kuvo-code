@@ -5,11 +5,11 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// The route scenarios both boxes answer alike (`Packages/KuvoLink/Vectors/routes`, copied into this
+/// The route scenarios both boxes answer alike (`protocol/vectors/routes`, copied into this
 /// bundle as `routes`), run against this Mac's box: PhoneLink's own answers, with the app's real
 /// stores wired as AppModel wires them (`wirePhoneLink`) and their files in the tests' folder. Only
 /// the engine is a stand-in: the same small engine the machine's runner stands in with
-/// (`Packages/KuvoLink/Tests/Bridge/contract.test.js`, which runs the same scenarios against a
+/// (`box/bridge-tests/contract.test.js`, which runs the same scenarios against a
 /// machine's bridge). How a scenario is written: CONTRIBUTING.md, "Route scenarios".
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct RouteContractTests {
@@ -721,7 +721,7 @@ nonisolated enum RouteMatch {
 
 // MARK: Shapes
 
-/// What each route answers (`routes/shapes/answers.json`, from Packages/Box/src/shared/routes), held
+/// What each route answers (`routes/shapes/answers.json`, from box/src/shared/routes), held
 /// as the machine's runner holds it: every answer of a route, whole, not only what a scenario names.
 nonisolated enum RouteShapes {
     nonisolated(unsafe) private static let file: [String: Any] = {
@@ -820,9 +820,9 @@ nonisolated enum RouteShapes {
         // A refusal says why in the one way all do, or in its route's own where it has one. A
         // HEAD's answer has no body.
         if status >= 400 { return isJSON ? unshaped((found?["answers"] as? [String: Any])?[String(status)] ?? file["error"] ?? NSNull(), json, at: "the refusal") : nil }
-        if verb == "HEAD", body.isEmpty { return found == nil ? "HEAD \(route) has no shape in Packages/Box/src/shared/routes" : nil }
+        if verb == "HEAD", body.isEmpty { return found == nil ? "HEAD \(route) has no shape in box/src/shared/routes" : nil }
         guard let known = found else {
-            return "\(verb) \(route) has no shape in Packages/Box/src/shared/routes"
+            return "\(verb) \(route) has no shape in box/src/shared/routes"
         }
         let name = known["route"] as? String ?? ""
         guard let shape = (known["answers"] as? [String: Any])?[String(status)] else { return "\(name) has no shape for \(status)" }

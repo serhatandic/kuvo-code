@@ -38,7 +38,7 @@ const sandboxNote = [agentsNote("darwin", false), agentsNote("darwin"), agentsNo
 
 // The longest a bot is told: one in a project, with a personality and a job, on this Mac or a
 // machine, as each box tells its bots from the words its release brings.
-const words = JSON.parse(readFileSync(new URL("../../../KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"))
+const words = JSON.parse(readFileSync(new URL("../../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"))
 const personality = words.personalityWords.replaceAll("⟦name⟧", words.personalities[0].name).replaceAll("⟦description⟧", words.personalities[0].description)
 function told(place: "mac" | "machine"): string {
   const kit = { instructions: wordsHere(words, words.here[place], "linux", "workstation", "America/Los_Angeles"), job: words.job, projectNote: words.projectNote, identityNote: words.identityNote } as BotKit

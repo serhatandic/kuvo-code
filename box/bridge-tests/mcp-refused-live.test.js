@@ -2,13 +2,13 @@
 // engine: its tools leave the conversation (it needs signing in, as Settings › Integrations then
 // says), and a call to it that's turned down partway is the tool's error, which the model reads
 // and goes on from. (The coding agents reach integrations through the bridge's relay, which stands
-// in for one that can't be reached: Packages/Box/test/agents.)
+// in for one that can't be reached: box/test/agents.)
 //
 // The real engine, in folders of the test's own: the model is a stand-in that calls the
 // integration's tool once it has it, then answers, and the integration a stand-in MCP server that
 // answers 401. Skipped unless OPENCODE_TEST_BINARY names the engine.
 //
-// Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/mcp-refused-live.test.js`.
+// Run with `OPENCODE_TEST_BINARY=<opencode> node --test box/bridge-tests/mcp-refused-live.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

@@ -4,7 +4,7 @@
 // the words, and its turn goes on to the end with nobody told; what an MCP server asks mid-tool is
 // declined, and the server hears no.
 //
-// The real bridge (KuvoCode/Resources/kuvo-agents.js, on Bun), the real box script and the real `codex`,
+// The real bridge (swift/KuvoCode/Resources/kuvo-agents.js, on Bun), the real box script and the real `codex`,
 // in folders of the test's own. It signs in with a COPY of a Codex sign-in in a CODEX_HOME of its own,
 // which is deleted afterwards: the real Codex home is never read but for that one file, and never
 // changed. A copy must not refresh: that could rotate the token and sign the original out, so a sign-in
@@ -13,7 +13,7 @@
 // Skipped unless KUVO_TEST_CODEX_AUTH (the sign-in file to copy) and KUVO_TEST_CODEX_MODEL (the model
 // of the Codex lane to use, such as gpt-6-luna) are set, Bun and Codex are there, and the lane lists
 // that model. Run with
-// `KUVO_TEST_CODEX_AUTH=~/.codex/auth.json KUVO_TEST_CODEX_MODEL=<id> node --test Packages/KuvoLink/Tests/Bridge/autopilot-codex-live.test.js`.
+// `KUVO_TEST_CODEX_AUTH=~/.codex/auth.json KUVO_TEST_CODEX_MODEL=<id> node --test box/bridge-tests/autopilot-codex-live.test.js`.
 import { allowRealAgents, REAL_PATH } from "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -30,7 +30,7 @@ const modelID = process.env.KUVO_TEST_CODEX_MODEL;
 const bun = testBun();
 // (The agents' programs aren't on a test's PATH: REAL_PATH has them.)
 const codex = process.env.KUVO_TEST_CODEX || spawnSync("sh", ["-c", "command -v codex"], { encoding: "utf8", env: { ...process.env, PATH: REAL_PATH } }).stdout.trim();
-const agentsJS = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const agentsJS = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 const skip = !authFile ? "KUVO_TEST_CODEX_AUTH isn't set" : !modelID ? "KUVO_TEST_CODEX_MODEL isn't set" : !bun ? NO_BUN : !codex ? "Codex isn't installed" : false;
 
 /** How long the sign-in's access token has left, and how long ago Codex refreshed it, in milliseconds. */
@@ -56,8 +56,8 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
   const codexHome = path.join(home, "codex-home");
   for (const folder of ["tmp", "work", "agents", "run", "bin", "codex-home"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   process.env.KUVO_HOME = home;
-  const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
-  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+  const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
+  const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   // (`describe` says where it stood, for a wait that ran out.)
   let describe = async () => "";
   const waitFor = async (wanted, what) => {
@@ -123,7 +123,7 @@ test("Autopilot in the Codex lane on a real Codex", { skip, timeout: 900_000 }, 
   const listed = ((await api("GET", "api/model")).json?.data ?? []).some(each => each.providerID === "codex-cli" && each.id === modelID);
   if (!listed) return t.skip(`Codex doesn't list ${modelID} for this sign-in`);
   fs.writeFileSync(path.join(home, "run", "bridge.json"), JSON.stringify({ port, password: "pw", pid: child.pid }));
-  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
+  fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
 
   // A client's request, as the box answers one: a process of its own.
   const route = (method, pathname, body) => new Promise((resolve, reject) => {

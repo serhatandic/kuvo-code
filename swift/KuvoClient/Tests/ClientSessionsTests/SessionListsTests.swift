@@ -4,10 +4,10 @@ import Testing
 
 /// The lists both apps draw come from what the box says of each session (`kuvo/sessions/list`):
 /// drawn from the box's facts alone, they're what the vectors say the Mac's sidebar showed
-/// (`Packages/KuvoLink/Vectors/session-lists.json`, which the box's own test holds its facts to).
+/// (`protocol/vectors/session-lists.json`, which the box's own test holds its facts to).
 struct SessionListsTests {
     private static func vectors() throws -> [[String: Any]] {
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/session-lists.json").standardized
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/session-lists.json").standardized
         let read = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         return try #require(read["cases"] as? [[String: Any]])
     }

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import KuvoLink
 
-/// `Vectors/personalities.json`, which the bridge's `mergePersonalities` checks against too.
+/// `protocol/vectors/personalities.json`, which the bridge's `mergePersonalities` checks against too.
 @Suite struct PersonalityLibrariesTests {
     /// A personality as a vector writes it: some aren't ones (no words, a preset), which a copy
     /// drops as it reads them.

@@ -1,7 +1,7 @@
 // A box's own engine settings (PROTOCOL.md, "kuvo/config" and "kuvo/config/apply"): this Mac's,
 // read and written where the app's engine has always kept them, and a change made on another
 // computer made on this one too ("Also Apply to…"). Run with
-// `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -16,7 +16,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-config-"));
 const home = path.join(root, "machine");
 process.env.KUVO_HOME = home;
 removeAtEnd(root);
-const script = new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
+const script = new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url);
 const link = await import(script);
 
 const auth = `Basic ${Buffer.from("opencode:pw").toString("base64")}`;

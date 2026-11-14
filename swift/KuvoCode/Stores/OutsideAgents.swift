@@ -182,7 +182,7 @@ final class OutsideAgents {
     /// This one's (a test's bridge keeps its own).
     @ObservationIgnored var home = OutsideAgents.home
 
-    /// The bridge's script: KUVO_AGENTS_SCRIPT's (a checkout's `Packages/Box/src/agents/main.ts`) in a debug
+    /// The bridge's script: KUVO_AGENTS_SCRIPT's (a checkout's `box/src/agents/main.ts`) in a debug
     /// build, else the app's own.
     private static var script: URL? {
         #if DEBUG

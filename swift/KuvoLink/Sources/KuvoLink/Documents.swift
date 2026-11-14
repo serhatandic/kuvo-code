@@ -5,7 +5,7 @@ import Foundation
 /// box pairs and removes, and each box's view of your personalities. Each origin signs its own with a
 /// key of its own (Ed25519) and numbers each version; any box passes a copy on, and a box keeps the
 /// newest one it can verify from each origin it takes that kind from. The same as the bridge's
-/// (`readDoc`, `signDoc`, `docMails` in kuvo-link.js), held to `Vectors/docs.json`.
+/// (`readDoc`, `signDoc`, `docMails` in kuvo-link.js), held to `protocol/vectors/docs.json`.
 public enum Documents {
     public typealias SigningKey = Curve25519.Signing.PrivateKey
 

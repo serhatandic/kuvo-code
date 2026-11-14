@@ -1,4 +1,4 @@
-// Every route's answers, as the contract suite holds both boxes to them (Vectors/routes/shapes,
+// Every route's answers, as the contract suite holds both boxes to them (protocol/vectors/routes/shapes,
 // written by scripts/route-shapes.sh). A route the scenarios ask that isn't here fails the suite,
 // and so does an answer that isn't its route's shape.
 

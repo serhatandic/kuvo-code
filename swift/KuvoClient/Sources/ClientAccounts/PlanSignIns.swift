@@ -7,7 +7,7 @@ import OpenCodeKit
 public enum PlanSignIns {
     /// The plan and the agent it's used through, by the engine's provider. (The box's
     /// `kuvo/sessions/models` has the same, held to the same cases:
-    /// Packages/KuvoLink/Vectors/plan-sign-ins.json.)
+    /// protocol/vectors/plan-sign-ins.json.)
     static let plans = ["openai": (plan: "ChatGPT", agent: "Codex"), "xai": (plan: "SuperGrok", agent: "Grok")]
 
     /// Whether the engine's sign-in `method` (an oauth method's id) for `provider` is its plan's,

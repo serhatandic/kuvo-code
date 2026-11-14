@@ -4,7 +4,7 @@
 // machines' mail is the box's own: mac-peers and two-boxes.) Only the relay and the app are
 // stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/mac-link.test.js`.
+// Run with `node --test box/bridge-tests/mac-link.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -83,7 +83,7 @@ Object.assign(process.env, {
   KUVO_HOST_URL: `http://127.0.0.1:${appHost.address().port}`,
   KUVO_HOST_PASSWORD: "host-password",
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const relay = await relayStandIn(link, { changed: poke });
 atEnd(() => relay.close());
@@ -298,7 +298,7 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
 });
 
 test("one list says what the app answers: the app answers those alone and hands its box the rest, and the box answers everything else a phone asks", () => {
-  const swift = fs.readFileSync(new URL("../../../../KuvoCode/Stores/PhoneLink.swift", import.meta.url), "utf8");
+  const swift = fs.readFileSync(new URL("../../swift/KuvoCode/Stores/PhoneLink.swift", import.meta.url), "utf8");
   // The app's own areas, as it keeps them, are the box's list.
   const appRoutes = swift.match(/static let appRoutes = \[([^\]]*)\]/)[1].match(/"[^"]+"/g).map(JSON.parse);
   assert.deepEqual([...appRoutes].sort(), [...link.MAC_APP_ROUTES].sort());

@@ -4,7 +4,7 @@ import Foundation
 /// from a phone on the list or a Mac, takes one off for good, noting the pairing it ended, so only
 /// a pairing of its own (a new pairing id) lets it back in. Nobody removes a Mac. A machine's
 /// bridge keeps the same rules (`kuvo-link.js`), with Macs' lists besides, and both are held to
-/// `Vectors/link.json`.
+/// `protocol/vectors/link.json`.
 public struct PairedPhones: Equatable, Sendable {
     public struct Phone: Codable, Hashable, Sendable, Identifiable {
         /// Its static key, base64url.

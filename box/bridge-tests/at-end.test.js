@@ -2,7 +2,7 @@
 // suite does; what it started is stopped and its folder removed; and what it left open is named
 // and fails it. Each case runs at-end-fixture.js on its own, as `node --test` runs a file.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/at-end.test.js`.
+// Run with `node --test box/bridge-tests/at-end.test.js`.
 import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";

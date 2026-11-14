@@ -12,7 +12,7 @@
 // It runs in one process: this box is the real link, and the other boxes are scripted. The engine
 // is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/start-elsewhere-rules.test.js`.
+// Run with `node --test box/bridge-tests/start-elsewhere-rules.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -26,12 +26,12 @@ import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 import { relayStandIn } from "./relay-stand-in.js";
 
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-rules-")));
 process.env.KUVO_HOME = home;
 process.env.KUVO_BOTS = path.join(home, "bots");
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const DAY = 86_400_000;
 const run = path.join(home, "run");

@@ -2,7 +2,7 @@
 // box lists what's in its own ~/.claude, named as they'd come over to its settings and marked where
 // they have them, with no Mac there. The real box; only its engine's list of commands is a stand-in.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/claude-code.test.js`.
+// Run with `node --test box/bridge-tests/claude-code.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -19,7 +19,7 @@ removeAtEnd(home);
 removeAtEnd(user);
 process.env.KUVO_HOME = home;
 process.env.HOME = user;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine's commands: its own, and one a plugin brings, besides one in your settings.
 const engine = http.createServer((request, response) => {

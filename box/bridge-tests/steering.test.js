@@ -2,7 +2,7 @@
 // foreground is read at once: the box moves what it waits on to the background, as the engine's
 // own Ctrl+B does, rather than leave your message until the command ends. Another agent's letter or
 // the box's news never does: it's read as the command ends. Run with
-// `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,7 +15,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-steering-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The box following one engine's events, on a clock the test moves.
 function box() {

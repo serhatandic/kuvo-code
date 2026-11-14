@@ -1,5 +1,5 @@
 // What a typed message means (PROTOCOL.md, "What a typed message means"): the words read as every
-// client reads them (Packages/KuvoLink/Vectors/typed.json, which KuvoClient's TypedVectorsTests
+// client reads them (protocol/vectors/typed.json, which KuvoClient's TypedVectorsTests
 // holds the apps' Swift to as well), and `kuvo/sessions/<id>/typed` deciding and doing it, with the
 // engine and the agents bridge as stand-ins (their HTTP APIs) and the box's code real.
 
@@ -10,7 +10,7 @@ import { decide, KEYWORD_UNAVAILABLE } from "../src/link/typed/decide"
 import { commandsOffered, firstWake, focusAsked, parseCommand, parseGoal, parseKeyword, parseLoop, parseReview, repeatText, reviewUnfinished, scopeAsked, shellCommand, splitCommand } from "../src/link/typed/words"
 import type { AnswerPiece, RouteContext } from "../src/link/server/context"
 
-const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/typed.json", import.meta.url), "utf8"))
+const vectors = JSON.parse(readFileSync(new URL("../../protocol/vectors/typed.json", import.meta.url), "utf8"))
 
 describe("the words, as every client reads them", () => {
   test.each(vectors.keywords.map((each: any) => [each.text, each]))("keyword: %j", (_, each: any) => {

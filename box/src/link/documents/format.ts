@@ -2,7 +2,7 @@
 // boxes are (its peers document), the phones each box pairs and removes (its phones document),
 // and your personalities (each box's view of the library). Each origin signs its own with a key of
 // its own (Ed25519: `sign` in link.json, made with this box's other keys; a Mac's comes in setup,
-// over SSH), and numbers each version. Held to Vectors/docs.json, as KuvoLink's Documents is.
+// over SSH), and numbers each version. Held to protocol/vectors/docs.json, as KuvoLink's Documents is.
 
 import crypto from "node:crypto";
 import { type Doc, DOC_KINDS, type DocKind, type SignedDoc } from "../../shared/documents";

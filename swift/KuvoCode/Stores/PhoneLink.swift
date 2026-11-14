@@ -9,7 +9,7 @@ import SystemConfiguration
 
 /// Kuvo Code for iPhone's way in: this Mac answers the phones you've paired, through the relay,
 /// passing what they ask to its engine. Everything between them is encrypted end to end
-/// (`Packages/KuvoLink`); the relay only passes bytes along.
+/// (`swift/KuvoLink`); the relay only passes bytes along.
 ///
 /// Off until the phone app is out: `defaults write run.kuvo.code phoneLink -bool true`, or
 /// KUVO_DEMO_PHONE=1, turns it on, with Settings › Phone.

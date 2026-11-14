@@ -4,11 +4,11 @@ import Testing
 /// SwiftUI's `.contextMenu` puts new items in its menu while it's open, each time the view around it
 /// is drawn again, so an open right-click menu lost its highlighted row or closed its submenu each
 /// time a session started or ended a turn (#556). Every right-click menu in the app is a held one
-/// (`.heldContextMenu`, KuvoCode/Design/HeldMenu.swift): a SwiftUI `.contextMenu` anywhere else in
+/// (`.heldContextMenu`, swift/KuvoCode/Design/HeldMenu.swift): a SwiftUI `.contextMenu` anywhere else in
 /// the app's code fails here. (SwiftUI's `Menu` buttons keep their items while open, and stay.)
 @Suite struct HeldMenuGuardTests {
     @Test func noSwiftUIContextMenuInTheApp() throws {
-        let app = try SourceRoot.url().appending(path: "KuvoCode")
+        let app = try SourceRoot.url().appending(path: "swift/KuvoCode")
         // By their paths in the app's code: the enumerator's URLs name a folder under /var by its
         // real path, /private/var, which a batch's sources are in.
         let files = try #require(FileManager.default.enumerator(atPath: app.path))

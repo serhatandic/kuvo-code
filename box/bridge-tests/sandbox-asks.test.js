@@ -6,7 +6,7 @@
 // stand-in, as in sandbox.test.js: it loads the box's real plugin and runs commands through the
 // shell it gives; the sandbox itself is the system's own.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/sandbox-asks.test.js`; on a Linux machine, with
+// Run with `node --test box/bridge-tests/sandbox-asks.test.js`; on a Linux machine, with
 // `scripts/test-linux.sh <ssh-host> sandbox-asks.test.js`, and with `--engine` on the engine's own runner,
 // which the box runs on there (Bun's: `BUN_BE_BUN=1 <engine> test --timeout 120000 ./sandbox-asks.test.js`,
 // as its 5 seconds a test are too few for some).
@@ -242,7 +242,7 @@ function machineTools() {
   // (Which runs the box's script where a machine keeps it.)
   fs.mkdirSync(path.join(home, "bin"), { recursive: true });
   fs.copyFileSync(script, path.join(home, "bin", "kuvo-link.js"));
-  const server = spawn(process.execPath, [fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url)), "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
+  const server = spawn(process.execPath, [fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url)), "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
   const answers = new Map();
   let buffer = "";
   let next = 1;

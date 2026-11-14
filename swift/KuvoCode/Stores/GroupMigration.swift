@@ -8,7 +8,7 @@ import os
 /// the app and kept them in `groups.json`, each chat's messages in `groups/<id>.json`; from now on
 /// this Mac's coding agents' bridge runs them as a machine's runs its own, and keeps each in a
 /// folder of its own in `groups` (`groups/<id>/group.json` and `messages.json`, as
-/// `Packages/Box/src/agents/groups/store.ts` reads them).
+/// `box/src/agents/groups/store.ts` reads them).
 ///
 /// It runs at launch, before the bridge starts, on this Mac's own files, and can be cut short at
 /// any point and run again: each chat's messages are written first and its record last (each

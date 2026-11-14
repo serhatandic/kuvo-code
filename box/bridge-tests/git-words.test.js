@@ -11,7 +11,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { removeAtEnd } from "./at-end.js";
 
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-git-words-")));
 removeAtEnd(root);
 

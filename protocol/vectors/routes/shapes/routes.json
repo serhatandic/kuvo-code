@@ -1,5 +1,5 @@
 {
- "about": "How both runners judge an answer by its route (Vectors/routes/shapes/answers.json), so the two never drift apart: each case is a request (`send`), what was answered (its status, content type and body) and whether it fits. A query string and a method's case never change the route; a `:name` part is one part, never empty; a HEAD is held to its GET's shape, or has no body; a refusal says why as JSON, or as its route's own shape for that status; `api/\u2026` and `kuvo/agents/\u2026` are passed on as they came.",
+ "about": "How both runners judge an answer by its route (protocol/vectors/routes/shapes/answers.json), so the two never drift apart: each case is a request (`send`), what was answered (its status, content type and body) and whether it fits. A query string and a method's case never change the route; a `:name` part is one part, never empty; a HEAD is held to its GET's shape, or has no body; a refusal says why as JSON, or as its route's own shape for that status; `api/\u2026` and `kuvo/agents/\u2026` are passed on as they came.",
  "cases": [
   {
    "send": "GET kuvo/wakes",

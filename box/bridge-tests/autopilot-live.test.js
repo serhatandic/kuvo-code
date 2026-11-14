@@ -5,7 +5,7 @@
 // The real box script and a real engine on a free model, in folders of the test's own. Skipped
 // unless OPENCODE_TEST_BINARY names the engine.
 //
-// Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/autopilot-live.test.js`,
+// Run with `OPENCODE_TEST_BINARY=<opencode> node --test box/bridge-tests/autopilot-live.test.js`,
 // with `KUVO_TEST_MODEL=<id>` for another of OpenCode's free models than the engine's default. For a
 // provider's model with a sign-in of its own, also `KUVO_TEST_PROVIDER=<its id>` and
 // `KUVO_TEST_CREDENTIAL=<a file of what POST api/credential takes>`, which only this test's own engine gets.
@@ -26,8 +26,8 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   removeAtEnd(home);
   for (const folder of ["tmp", "work", "xdg/config", "xdg/data", "xdg/state", "xdg/cache", "bin", "run"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   process.env.KUVO_HOME = home;
-  const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
-  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+  const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
+  const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
   const waitFor = async (wanted, what) => {
     const end = Date.now() + 240_000;
     for (;;) {
@@ -89,7 +89,7 @@ test("Autopilot on a real engine: a marked question goes ahead and can be change
   const model = process.env.KUVO_TEST_MODEL ? { model: { providerID: process.env.KUVO_TEST_PROVIDER ?? "opencode", id: process.env.KUVO_TEST_MODEL } } : {};
   const session = (await api("POST", "api/session", { title: "Menu page", location: { directory: workspace }, ...model })).json.data.id;
   fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ port, password: "pw", version: "0.0.0" }));
-  fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
+  fs.copyFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), path.join(home, "bin", "bot-words.json"));
 
   // A client's request, as the box answers one: a process of its own.
   const route = (method, pathname, body) => new Promise((resolve, reject) => {

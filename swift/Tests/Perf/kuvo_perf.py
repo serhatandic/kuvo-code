@@ -16,7 +16,7 @@ import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 BUNDLE = "run.kuvo.code.perf"
 HOME = os.path.expanduser("~")
 SUPPORT = HOME + "/Library/Application Support/" + BUNDLE
@@ -60,7 +60,11 @@ def build(source=REPO, app=None):
     """A debug build of `source` (this checkout, or another, like one at an older commit) as the
     perf copy; with `app`, also copied there to keep."""
     log("building", source)
-    sh(["xcodebuild", "-project", source + "/KuvoCode.xcodeproj", "-scheme", "KuvoCode", "-configuration", "Debug",
+    # (The app is in swift/; a checkout from before #709 has it at its top.)
+    xcodeproj = os.path.join(source, "swift", "KuvoCode.xcodeproj")
+    if not os.path.isdir(xcodeproj):
+        xcodeproj = os.path.join(source, "KuvoCode.xcodeproj")
+    sh(["xcodebuild", "-project", xcodeproj, "-scheme", "KuvoCode", "-configuration", "Debug",
         "-derivedDataPath", DERIVED, "-clonedSourcePackagesDirPath", os.path.join(ROOT, "SourcePackages"),
         "APP_BUNDLE_ID=" + BUNDLE, "COMPILER_INDEX_STORE_ENABLE=NO", "build"])
     if app:

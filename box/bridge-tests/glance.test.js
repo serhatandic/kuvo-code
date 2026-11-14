@@ -3,7 +3,7 @@
 // it's waited on you, as the box states them for every client. The real box code; the engine is a
 // stand-in, and so is GitHub's `gh`, which says what it was asked.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/glance.test.js`.
+// Run with `node --test box/bridge-tests/glance.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -17,7 +17,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-glance-")));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // GitHub's `gh`, standing in: what it answers each query (`answer.json`, or nothing at all with
 // `gone`), and each query it was asked, one per line.

@@ -4,7 +4,7 @@
 // agents bridge (`kuvo-agents.js`, on Bun), with Claude Code's folder of its own. Only the relay and
 // the engines are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-lanes.test.js`.
+// Run with `node --test box/bridge-tests/moves-lanes.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -20,8 +20,8 @@ import { NO_BUN, testBun } from "./bun-for-tests.js";
 import { standInClaude } from "./claude-stand-in.js";
 import { relayStandIn } from "./relay-stand-in.js";
 
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
-const bridgeScript = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const bridgeScript = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 const bun = testBun();
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-move-lanes-")));
 removeAtEnd(support);
@@ -266,7 +266,7 @@ Object.assign(process.env, {
   KUVO_ENGINE_CONFIG: path.join(support, "opencode"), KUVO_KEYS: path.join(support, "keys"),
   KUVO_HOST_URL: `http://127.0.0.1:${appHost.address().port}`, KUVO_HOST_PASSWORD: "host-password",
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 const relay = await relayStandIn(link, { changed: () => {} });
 const macKey = link.newKey();
 const macSecret = crypto.randomBytes(32);

@@ -12,12 +12,12 @@ struct SessionModelStateTests {
         try JSONDecoder().decode(SessionModelState.self, from: Data(json.utf8))
     }
 
-    /// Every case of Packages/KuvoLink/Vectors/model-readiness.json, which the box words and gpui
+    /// Every case of protocol/vectors/model-readiness.json, which the box words and gpui
     /// draws too: what the box says, read as it answers it (its facts and words together), drawn as
     /// it says: the refusal shown as it is, "Choose a Model" only where it says to choose, and the
     /// action's words on a sign-in card.
     @Test func drawsWhatTheBoxSaysForEveryCase() throws {
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/model-readiness.json").standardized
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/model-readiness.json").standardized
         let vectors = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         let cases = try #require(vectors["cases"] as? [[String: Any]])
         #expect(cases.count >= 10)

@@ -1,7 +1,7 @@
 // Group chats across your computers (PROTOCOL.md, "Peers": `seat`): the link carries the coding
 // agents' bridge's mail between computers, now or until it's there, in parts when it's big, and
 // tells the bridge who your other computers and their bots are. Run with
-// `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -15,7 +15,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-seats-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const run = path.join(home, "run");
 const k = key => key.toString("base64url");

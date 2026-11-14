@@ -61,7 +61,7 @@ if [ -n "$FROM_BATCH" ]; then
     BATCH=$(/bin/sh scripts/batch.sh open mac $$)
     BATCH_RUN=$$
     # shellcheck disable=SC2086 # (ONLY's names, one by one)
-    if ! /bin/sh scripts/batch.sh check "$BATCH" kuvo-ai $ONLY; then
+    if ! /bin/sh scripts/batch.sh check "$BATCH" kuvo-ai/swift $ONLY; then
         /bin/sh scripts/batch.sh close "$BATCH" $$
         exit 1
     fi
@@ -107,25 +107,25 @@ if [ -n "$BATCH" ]; then
     [ -n "$SOURCES" ] || SOURCES="$BATCH/src/kuvo-ai"
 fi
 cd "$SOURCES"
-# And the tests that read the sources themselves (KuvoCodeTests/Support/SourceRoot.swift) find them
+# And the tests that read the sources themselves (swift/KuvoCodeTests/Support/SourceRoot.swift) find them
 # there: passed as KUVO_SOURCE_ROOT (xcodebuild hands TEST_RUNNER_ variables on).
 TEST_RUNNER_KUVO_SOURCE_ROOT=$(pwd)
 export TEST_RUNNER_KUVO_SOURCE_ROOT
 
-# The app reaches the Keychain only through `Keychain` (KuvoCode/Stores/Keychain.swift), which is
+# The app reaches the Keychain only through `Keychain` (swift/KuvoCode/Stores/Keychain.swift), which is
 # one in memory for the tests: a test reaching the real one would wait on macOS asking whether
 # this copy, signed anew with each build, may use what an earlier build kept.
-if grep -rnE '\bSec(Item(CopyMatching|Add|Update|Delete)|Keychain[A-Za-z]*)\(' --include='*.swift' KuvoCode | grep -v '^KuvoCode/Stores/Keychain.swift:'; then
-    echo "The Keychain is reached through Keychain (KuvoCode/Stores/Keychain.swift), never directly: the tests would wait on macOS asking you." >&2
+if grep -rnE '\bSec(Item(CopyMatching|Add|Update|Delete)|Keychain[A-Za-z]*)\(' --include='*.swift' swift/KuvoCode | grep -v '^swift/KuvoCode/Stores/Keychain.swift:'; then
+    echo "The Keychain is reached through Keychain (swift/KuvoCode/Stores/Keychain.swift), never directly: the tests would wait on macOS asking you." >&2
     exit 1
 fi
 
 # Built with Xcode's compilation cache (scripts/xcode-cache.sh), the compiler sees the sources as
 # /^src/…, and so does #filePath: a test finds its files through its bundle, or the sources through
-# KUVO_SOURCE_ROOT (KuvoCodeTests/Support/SourceRoot.swift), never #filePath, which names no file on
+# KUVO_SOURCE_ROOT (swift/KuvoCodeTests/Support/SourceRoot.swift), never #filePath, which names no file on
 # this Mac. (As where an issue was recorded, `file: … = #filePath`, it's only said.)
-if grep -rn '#filePath' --include='*.swift' KuvoCode KuvoCodeTests | grep -v '= #filePath'; then
-    echo "The app and its tests find their files through their bundles (and the sources through KuvoCodeTests/Support/SourceRoot.swift), never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
+if grep -rn '#filePath' --include='*.swift' swift/KuvoCode swift/KuvoCodeTests | grep -v '= #filePath'; then
+    echo "The app and its tests find their files through their bundles (and the sources through swift/KuvoCodeTests/Support/SourceRoot.swift), never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
     exit 1
 fi
 cd - >/dev/null
@@ -155,7 +155,7 @@ else
     # already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
     . scripts/xcode-cache.sh
     xcode_cache scripts
-    set -- test -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
+    set -- test -project swift/KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
         -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
         APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
 fi

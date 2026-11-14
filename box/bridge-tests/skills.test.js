@@ -74,7 +74,7 @@ const github = http.createServer((request, response) => {
 });
 await new Promise(resolve => github.listen(0, "127.0.0.1", resolve));
 process.env.KUVO_TEST_GITHUB = `http://127.0.0.1:${github.address().port}`;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 removeAtEnd(home);
 atEnd(() => {
   github.close();
@@ -114,7 +114,7 @@ test("a skill written, read, changed and put away in the machine's trash; a new 
 });
 
 test("a skill's name from what's typed, as Settings previews it (the shared vector)", () => {
-  const vector = JSON.parse(fs.readFileSync(new URL("../../Vectors/routes/names/skill-names.json", import.meta.url), "utf8"));
+  const vector = JSON.parse(fs.readFileSync(new URL("../../protocol/vectors/routes/names/skill-names.json", import.meta.url), "utf8"));
   assert.ok(vector.cases.length > 8);
   for (const { typed, name } of vector.cases) assert.equal(link.skillName(typed), name, JSON.stringify(typed));
 });

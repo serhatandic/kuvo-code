@@ -10,7 +10,7 @@ import Testing
 /// new ones but not those it ignores, by their names as they are; outside one, every file but the
 /// usual heavy folders; and a project folder its repository ignores still lists its files. With
 /// several folders, each file after its folder's name. "@" finds them by name. (The box's own
-/// checks: Packages/KuvoLink/Tests/Bridge/changes.test.js.)
+/// checks: box/bridge-tests/changes.test.js.)
 @MainActor
 @Suite struct ProjectFilesTests {
     let box: GitTestBox

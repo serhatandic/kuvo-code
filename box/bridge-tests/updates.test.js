@@ -2,7 +2,7 @@
 // back to what it had when the new version doesn't come up. Run here, in a folder of the test's
 // own, against a release served on localhost, with a stand-in engine and keeper (the real ones
 // need Linux); the new link's self-test is the real one.
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// Run with `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -18,8 +18,8 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-updates-"));
 process.env.KUVO_HOME = home;
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-release-"));
 const engines = new Set();
 removeAtEnd(home);
@@ -397,7 +397,7 @@ test("a machine with no bridge, updated by its `update` command: confirmed, and 
   machine();
   release();
   const key = "KUVO_KEY_FIGMA_FIGMA_API_KEY";
-  const catalog = fileURLToPath(new URL("../../Vectors/routes/box/integrations.json", import.meta.url));
+  const catalog = fileURLToPath(new URL("../../protocol/vectors/routes/box/integrations.json", import.meta.url));
   write(path.join(home, "bin", "integrations.json"), fs.readFileSync(catalog));
   write(path.join(home, "box", "keys", key), "tok");
   write(path.join(home, "box", "opencode.json"), JSON.stringify({ mcp: { servers: {
@@ -751,7 +751,7 @@ test("scripts/pack-box.sh packs a built app's box release with its helper, signe
   }
 
   const out = path.join(app, "Contents", "Resources", "box-release");
-  const pack = (...args) => spawnSync("sh", [fileURLToPath(new URL("../../../../scripts/pack-box.sh", import.meta.url)), ...args], {
+  const pack = (...args) => spawnSync("sh", [fileURLToPath(new URL("../../scripts/pack-box.sh", import.meta.url)), ...args], {
     env: { ...process.env, KUVO_BOX_SIGNING_KEY: privateKey.export({ type: "pkcs8", format: "pem" }), NODE: process.execPath }, encoding: "utf8",
   });
   const wrongURL = pack(app, "0.10.0", "https://example.invalid/pack.tgz", out);

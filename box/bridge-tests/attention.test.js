@@ -2,7 +2,7 @@
 // (a Mac you're at) has each wait a little, and one answered or seen on its screen meanwhile never
 // reaches your phones; once no client is in use (its lease ran out, or it said so), what waits goes
 // at once, and with none, notices go at once. The clock is the test's own: nothing waits for real
-// time. Run with `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
+// time. Run with `node --test box/bridge-tests/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -17,7 +17,7 @@ import { removeAtEnd } from "./at-end.js";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-attention-"));
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 // A clock that moves only when the test moves it, and the timers it runs.
 function clock() {

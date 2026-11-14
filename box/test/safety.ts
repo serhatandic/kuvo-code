@@ -4,7 +4,7 @@
 // its folders out from, once, as it loads (`K` in src/link/home.ts). It takes the run's own home, and
 // never your own, which some tests name in HOME before they load the link.
 
-import "../../KuvoLink/Tests/Bridge/test-safety.js"
+import "../bridge-tests/test-safety.js"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 

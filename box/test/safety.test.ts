@@ -125,7 +125,7 @@ test("under Bun the account's own home is found from the system, whatever HOME s
   const entry = process.platform === "darwin"
     ? execFileSync("/usr/bin/id", ["-P"], { encoding: "utf8" }).trim().split(":")[8]
     : execFileSync("/usr/bin/getent", ["passwd", String(process.getuid!())], { encoding: "utf8" }).trim().split(":")[5]
-  const script = `import { accountHome, ownPath } from ${JSON.stringify(join(import.meta.dir, "../../KuvoLink/Tests/Bridge/test-safety.js"))}
+  const script = `import { accountHome, ownPath } from ${JSON.stringify(join(import.meta.dir, "../bridge-tests/test-safety.js"))}
     let refused = false
     try { ownPath(${JSON.stringify(join(entry, ".kuvo-code", "x"))}) } catch { refused = true }
     console.log(JSON.stringify({ accountHome, refused }))`
@@ -154,7 +154,7 @@ test("on the engine, what isn't Bun may have your real home and the run's own ru
   symlinkSync(process.execPath, join(scratch, "engine"))
   linkSync(process.execPath, join(scratch, "engine-linked"))
   copyFileSync(process.execPath, join(scratch, "engine-copy"))
-  const script = `import ${JSON.stringify(join(import.meta.dir, "../../KuvoLink/Tests/Bridge/test-safety.js"))}
+  const script = `import ${JSON.stringify(join(import.meta.dir, "../bridge-tests/test-safety.js"))}
     import { spawnSync } from "node:child_process"
     const env = { ...process.env, HOME: process.env.KUVO_TEST_REAL_HOME }
     const seen = {}

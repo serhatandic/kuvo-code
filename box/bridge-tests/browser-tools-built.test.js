@@ -1,13 +1,13 @@
-// What an agent on a machine is given by the browser's tools (KuvoCode/Resources/kuvo-browser.js
+// What an agent on a machine is given by the browser's tools (swift/KuvoCode/Resources/kuvo-browser.js
 // `mcp`, as the engine starts them), now that the box builds that file from its sources
-// (Packages/Box/src/browser, scripts/build-browser.sh): the same tools, schemas and instructions,
+// (box/src/browser, scripts/build-browser.sh): the same tools, schemas and instructions,
 // byte for byte, as when the app filled them in (browser-tools-before.json), with the vault closed
 // and open; and the same scripts run in pages.
 //
 // A change to the tools, their words or the page scripts on purpose replaces what's kept: run this
 // with KUVO_TEST_BROWSER_TOOLS=write, and say why in the commit.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/browser-tools-built.test.js`.
+// Run with `node --test box/bridge-tests/browser-tools-built.test.js`.
 
 import "./test-safety.js";
 import assert from "node:assert/strict";
@@ -20,7 +20,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd } from "./at-end.js";
 
-const script = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-browser.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoCode/Resources/kuvo-browser.js", import.meta.url));
 const keptFile = fileURLToPath(new URL("./browser-tools-before.json", import.meta.url));
 let kept = JSON.parse(fs.readFileSync(keptFile, "utf8"));
 

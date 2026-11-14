@@ -6,7 +6,7 @@ import Testing
 /// arguments, and the instructions that come with them. Each agent kind has a budget, the size these
 /// came to once trimmed and a little more, so they can't creep back unnoticed. The box's own words
 /// (its vault and sandbox tools, the sandbox note, what a bot is told) are held to theirs in
-/// Packages/Box/test/agents/tool-copy-budget.test.ts. Tokens are counted as a UTF-8 byte in four.
+/// box/test/agents/tool-copy-budget.test.ts. Tokens are counted as a UTF-8 byte in four.
 ///
 /// Grown past one on purpose? Trim something else first; if it can't be, raise that budget here and
 /// say why in the commit.

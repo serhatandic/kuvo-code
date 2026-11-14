@@ -173,7 +173,7 @@ import ClientText
             var addresses: [Address]
         }
         let file = URL(filePath: #filePath).deletingLastPathComponent()
-            .appending(path: "../../../KuvoLink/Vectors/file-addresses/addresses.json").standardized
+            .appending(path: "../../../../protocol/vectors/file-addresses/addresses.json").standardized
         let vectors = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: file))
         #expect(!vectors.addresses.isEmpty)
         for address in vectors.addresses {

@@ -3,7 +3,7 @@ import Foundation
 
 /// The parts of the Noise protocol framework (noiseprotocol.org, revision 34) Kuvo Link uses:
 /// the IK pattern for sessions and the one-way K pattern for mail, with X25519, AES-GCM and
-/// SHA-256. Checked against cacophony's test vectors (`Vectors/noise.json`).
+/// SHA-256. Checked against cacophony's test vectors (`protocol/vectors/noise.json`).
 public enum Noise {
     public static let keyLength = 32
     public static let tagLength = 16

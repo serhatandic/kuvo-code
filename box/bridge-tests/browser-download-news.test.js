@@ -1,4 +1,4 @@
-// What an agent on a machine hears of a download: the browser's tools (KuvoCode/Resources/
+// What an agent on a machine hears of a download: the browser's tools (swift/KuvoCode/Resources/
 // kuvo-browser.js `mcp`, as the engine starts them) tell it to the conversation it's for, with
 // one of its calls that says how the page is, and to no other conversation. The real keeper and
 // tools; Chrome is a stand-in, with one page.
@@ -27,7 +27,7 @@ answer("Page.captureScreenshot", () => ({ data: "iVBORw0KGgo=" }));
 // The tools, as the engine starts them on the machine.
 const env = { ...process.env, KUVO_HOME: home };
 delete env.KUVO_SESSION;
-const tools = spawn(process.execPath, [path.resolve(import.meta.dirname, "../../../../KuvoCode/Resources/kuvo-browser.js"), "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
+const tools = spawn(process.execPath, [path.resolve(import.meta.dirname, "../../swift/KuvoCode/Resources/kuvo-browser.js"), "mcp"], { env, stdio: ["pipe", "pipe", "ignore"] });
 atEnd(() => tools.kill());
 const replies = new Map();
 let buffer = "";

@@ -1,8 +1,8 @@
 #!/bin/sh
-# Writes Packages/KuvoLink/Vectors/routes/box: what a Mac leaves on a machine that the machine's
+# Writes protocol/vectors/routes/box: what a Mac leaves on a machine that the machine's
 # routes read (the integrations it offers, the popular MCP servers), and what's this Mac's own that
 # its app gives its own box to make bots with (its kit), from the Mac's own code (KuvoCodeTests/RouteContractTests). The machine's runner of the route scenarios
-# (Packages/KuvoLink/Tests/Bridge/contract.test.js) sets its box up with them, and the Mac's checks
+# (box/bridge-tests/contract.test.js) sets its box up with them, and the Mac's checks
 # they're still what it writes. Run it after changing one of those, then both runners.
 set -eu
 cd "$(dirname "$0")/.."
@@ -15,7 +15,7 @@ TEST_RUNNER_KUVO_WRITE_ROUTE_VECTORS="$OUT" ONLY="KuvoCodeTests/RouteContractTes
 for file in integrations.json mcp-catalog.json mac-bot-kit.json; do
     [ -s "$OUT/$file" ] || { echo "The test didn't write $file." >&2; exit 1; }
 done
-mkdir -p Packages/KuvoLink/Vectors/routes/box
-mv -f "$OUT"/*.json Packages/KuvoLink/Vectors/routes/box/  # (approval.json is the box's own now: left as it is)
+mkdir -p protocol/vectors/routes/box
+mv -f "$OUT"/*.json protocol/vectors/routes/box/  # (approval.json is the box's own now: left as it is)
 rm -rf "$OUT"
-echo "Wrote Packages/KuvoLink/Vectors/routes/box"
+echo "Wrote protocol/vectors/routes/box"

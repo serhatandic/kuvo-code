@@ -1,7 +1,7 @@
 // "&" in a message from a phone (the Mac's AgentReferences, in the same words)
 // A message names another conversation with "&Name"; a block at its end tells the agent who each
 // one is, with its address, so it can read it (read_conversation) or write to it (send_message).
-// Both sides read the same cases (Vectors/routes/names/agent-naming.json), so they can't drift.
+// Both sides read the same cases (protocol/vectors/routes/names/agent-naming.json), so they can't drift.
 
 import type { ListedAgent, ToldAgents } from "../../shared/records";
 import { peerOf } from "./directory";

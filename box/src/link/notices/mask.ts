@@ -1,4 +1,4 @@
-// What a notice shows (KuvoLink's SecretMask: the same rules, held to Vectors/masking.json).
+// What a notice shows (KuvoLink's SecretMask: the same rules, held to protocol/vectors/masking.json).
 // What looks like a secret (a key, a token, a password) as dots, everything else as written, so a
 // notice on a phone's lock screen never shows one and still says what happened.
 

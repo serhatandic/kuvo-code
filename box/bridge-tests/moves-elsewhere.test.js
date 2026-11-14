@@ -7,7 +7,7 @@
 // theirs comes in as the relay would hand it on (`peerMail`). Its looks every few seconds are
 // taken by the test, at the times it gives (`keepMoving`).
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/moves-elsewhere.test.js`.
+// Run with `node --test box/bridge-tests/moves-elsewhere.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -30,7 +30,7 @@ Object.assign(process.env, {
   KUVO_HOME: home, KUVO_BOTS: path.join(support, "bots"), KUVO_WAKES: path.join(support, "wakes"), KUVO_BOX: "mac",
   KUVO_ENGINE_CONFIG: path.join(support, "opencode"), KUVO_KEYS: path.join(support, "keys"),
 });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 removeAtEnd(support);
 
 // This Mac's box, and its other computers, lab and pi (both machines), with their keys.

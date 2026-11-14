@@ -3,7 +3,7 @@ import Testing
 import ClientText
 
 /// A message sent with a keyword, taken back into the composer. (How its keyword reads, in its
-/// bubble too, is its box's to say: `MessageParts.keyword`, held to Vectors/message-parts.json.)
+/// bubble too, is its box's to say: `MessageParts.keyword`, held to protocol/vectors/message-parts.json.)
 @Suite struct SentWithKeywordTests {
     /// Taken back (Undo, ↑, Edit, a branch): a goal comes back as one, /goal and its words, so
     /// sending it again asks for the goal again; /plan's and /loop's words come back alone, so they

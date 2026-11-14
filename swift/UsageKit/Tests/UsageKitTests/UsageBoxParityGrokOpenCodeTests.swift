@@ -3,14 +3,14 @@ import XCTest
 
 /// The box reads Grok's transcripts and the engine's hosted spend as this package does (Kuvo Code's
 /// #631 piece C, PROTOCOL.md "Usage history"): both sides are held to the same synthetic fixtures and
-/// expected answers in `Packages/Box/test/fixtures/usage` (the box's `usage-grok-hosted.test.ts`
+/// expected answers in `box/test/fixtures/usage` (the box's `usage-grok-hosted.test.ts`
 /// reads them too), so neither can drift while both exist. And while the host covers OpenCode or
 /// Grok, their cards show the host's days and read nothing here.
 @MainActor
 final class UsageBoxParityGrokOpenCodeTests: XCTestCase {
     private static let fixtures = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage")
+        .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("box/test/fixtures/usage")
 
     private func fixture(_ name: String) throws -> Data {
         try Data(contentsOf: Self.fixtures.appendingPathComponent(name))

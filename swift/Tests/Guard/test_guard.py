@@ -6,7 +6,7 @@ Each test runs in a home folder of its own (the real app's folder made there, wi
 in it), with stand-ins first on PATH for every tool that would start, quit or build something, so a
 guard that let something through still never touches this Mac's apps.
 
-    python3 -m unittest discover -s Tests/Guard
+    python3 -m unittest discover -s swift/Tests/Guard
 """
 import importlib.util
 import os
@@ -16,7 +16,7 @@ import sys
 import tempfile
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 GUARD = os.path.join(REPO, "scripts", "real-app-guard.sh")
 TOOLS = ["xcodebuild", "open", "osascript", "pkill", "pgrep", "kill", "defaults", "gh", "hdiutil", "swiftc"]
 
@@ -125,7 +125,7 @@ class TheScripts(Case):
         self.assertEqual(done.stdout.strip(), self.box.copy_engine, "2.0.32 after 2.0.10 and 2.0.9, and not the real app's")
 
     def test_the_perf_copy_reuses_its_newest_engine(self):
-        perf = self.load("Tests/Perf/kuvo_perf.py")
+        perf = self.load("swift/Tests/Perf/kuvo_perf.py")
         perf.ENGINES = os.path.join(self.box.root, "kept")
         for version in ["2.0.9", "2.0.32", "2.0.10"]:
             os.makedirs(os.path.join(perf.ENGINES, version))
@@ -147,24 +147,24 @@ class TheScripts(Case):
         for mode in ["build", "record", "bench", "groups", "clean"]:
             with self.subTest(mode=mode):
                 # Only the mode named: past the guard, each would stop at its usage, starting nothing.
-                done = self.run_script([sys.executable, "-I", "Tests/Perf/kuvo_perf.py", mode], KUVO_PERF_ENGINE=self.box.real_engine)
+                done = self.run_script([sys.executable, "-I", "swift/Tests/Perf/kuvo_perf.py", mode], KUVO_PERF_ENGINE=self.box.real_engine)
                 self.assertRefused(done, "kuvo_perf.py " + mode)
 
     def test_the_perf_copy_is_never_launched_as_the_real_app(self):
-        perf = self.load("Tests/Perf/kuvo_perf.py")
+        perf = self.load("swift/Tests/Perf/kuvo_perf.py")
         app = self.app("run.kuvo.code")
         with self.assertRaises(SystemExit):
             perf.launch(app, KUVO_DEMO_GROUP_REPLAY="setup")
         self.assertEqual(self.box.what_ran(), "")
 
     def test_the_perf_copy_is_never_launched_with_the_real_engine(self):
-        perf = self.load("Tests/Perf/kuvo_perf.py")
+        perf = self.load("swift/Tests/Perf/kuvo_perf.py")
         with self.assertRaises(SystemExit):
             perf.launch(self.app("run.kuvo.code.perf"), KUVO_OPENCODE_BINARY=self.box.real_engine)
         self.assertEqual(self.box.what_ran(), "")
 
     def test_the_e2e_copy_is_never_launched_with_the_real_engine(self):
-        e2e = self.load("Tests/E2E/kuvo_e2e.py")
+        e2e = self.load("swift/Tests/E2E/kuvo_e2e.py")
         with self.assertRaises(SystemExit):
             e2e.App(None).launch(KUVO_OPENCODE_BINARY=self.box.real_engine)
         self.assertEqual(self.box.what_ran(), "")

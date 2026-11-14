@@ -9,7 +9,7 @@ import Testing
 /// and keeps the message's parts with it. Wherever it shows again (its bubble, Edit), it's what you
 /// wrote, with its comments as cards; one from before, which keeps no parts, shows as its box reads
 /// it. This Mac's box is the real one; the engine is stubbed. (The words the agent reads, case by
-/// case, are the box's: Vectors/message-parts.json.)
+/// case, are the box's: protocol/vectors/message-parts.json.)
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct SentMessageTests {
     let engine = StubEngine(port: 47906)

@@ -9,7 +9,7 @@
 // again from the list as it is now. The engine is a stand-in that answers as the real one does;
 // `compatibility-live.test.js` does it on the real one.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/models-refresh.test.js`.
+// Run with `node --test box/bridge-tests/models-refresh.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -23,7 +23,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-models-refresh-"))
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
 fs.mkdirSync(path.join(home, "run"), { recursive: true });
-const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+const link = await import("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js");
 
 const OWN = "/w/engine";
 

@@ -1,5 +1,5 @@
 // What a route answered, held to its shape (src/shared/routes, as the contract runner holds every
-// answer: `offShape` in Packages/KuvoLink/Tests/Bridge/contract-runner.js), and a box's handler asked
+// answer: `offShape` in box/bridge-tests/contract-runner.js), and a box's handler asked
 // as a client asks it, for the box tests that run a route against a stand-in engine.
 
 import { ERROR, ROUTES } from "../src/shared/routes"

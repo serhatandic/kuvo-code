@@ -3,7 +3,7 @@
 // what Accounts' Sign In buttons and hints go by), and how a started sign-in is going, with what to say when it
 // didn't work (`kuvo/sign-in/status`), so every client offers and says the same. The engine (or
 // the coding agents' bridge, for an agent's account) does the signing in; the box only orders and
-// words what it offers. Held to Packages/KuvoLink/Vectors/sign-in.json.
+// words what it offers. Held to protocol/vectors/sign-in.json.
 
 import type { Target } from "../../shared/records";
 import { pause } from "../../shared/wait";

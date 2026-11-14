@@ -4,7 +4,7 @@
 // and nobody removes a Mac. The phones this box pairs and removes are its own phones document; a
 // Mac's come in that Mac's, and a removal in any document this box takes is noted here too
 // (PROTOCOL.md, "Documents"). The Mac's are the same rules (PairedPhones in KuvoLink), and both
-// are held to Vectors/link.json.
+// are held to protocol/vectors/link.json.
 
 import crypto from "node:crypto";
 import { isObject } from "../shared/json";

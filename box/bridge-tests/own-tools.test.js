@@ -5,7 +5,7 @@
 // ask it (`kuvo-link.js box route`). The real box script and the real kuvo-wake, on a folder of the
 // test's own; the engine and the coding agents' bridge are stand-ins.
 //
-// Run with `node --test Packages/KuvoLink/Tests/Bridge/own-tools.test.js`.
+// Run with `node --test box/bridge-tests/own-tools.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -19,7 +19,7 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-own-tools-")));
 removeAtEnd(home);
-const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+const script = fileURLToPath(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const write = (file, text) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -30,7 +30,7 @@ fs.mkdirSync(project, { recursive: true });
 write(path.join(project, "notes.md"), "# Notes\n");
 
 // The box's own kuvo-wake, as a machine has it in its `bin`.
-const swift = read(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url));
+const swift = read(new URL("../../swift/OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url));
 const opening = 'public static let script = #"""\n';
 const from = swift.indexOf(opening) + opening.length;
 write(path.join(home, "bin", "kuvo-wake"), swift.slice(from, swift.indexOf('\n    """#', from)).split("\n").map(line => line.replace(/^ {4}/, "")).join("\n") + "\n");

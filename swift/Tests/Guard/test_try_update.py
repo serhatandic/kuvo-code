@@ -4,7 +4,7 @@ serves. Each test runs the script in a folder of its own (stand-ins for the buil
 appcast), against an app and a defaults domain of its own, with a stand-in `defaults` that keeps
 them in a folder: never the real app, its domain or /Applications.
 
-    python3 -m unittest discover -s Tests/Guard -p 'test_try_update.py'
+    python3 -m unittest discover -s swift/Tests/Guard -p 'test_try_update.py'
 """
 import os
 import shutil
@@ -16,7 +16,7 @@ import tempfile
 import time
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 REAL_DOMAIN = "run.kuvo.code"
 
 DEFAULTS = """#!/bin/sh

@@ -5,10 +5,10 @@ import Testing
 /// What a notification shows of an agent's words: secrets it saw (keys, tokens, passwords) as
 /// dots, everything else as written, so a notification on a lock screen or a phone never shows a
 /// key, and still says what happened. The bridge masks a box's notices for your phones by the same
-/// rules: both are held to `Vectors/masking.json`, which `KUVO_WRITE_VECTORS=1 swift test --filter
+/// rules: both are held to `protocol/vectors/masking.json`, which `KUVO_WRITE_VECTORS=1 swift test --filter
 /// SecretMaskTests` writes from these rules.
 @Suite struct SecretMaskTests {
-    static let vectors = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../Vectors/masking.json").standardized
+    static let vectors = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../protocol/vectors/masking.json").standardized
 
     /// Each line's secret, which the notification must not show.
     static let secrets: [(String, String)] = [

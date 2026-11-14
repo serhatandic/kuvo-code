@@ -6,6 +6,6 @@ import { readFileSync } from "node:fs";
 import { LOOKS } from "../src/shared/routes/bots";
 
 test("a bot's look in an answer is one the apps draw", () => {
-  const words = JSON.parse(readFileSync(new URL("../../KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"));
+  const words = JSON.parse(readFileSync(new URL("../../swift/KuvoLink/Sources/KuvoLink/Resources/bot-words.json", import.meta.url), "utf8"));
   expect({ colors: [...LOOKS.colors], shapes: [...LOOKS.shapes], faces: [...LOOKS.faces] }).toEqual({ colors: words.looks.colors, shapes: words.looks.shapes, faces: words.looks.faces });
 });

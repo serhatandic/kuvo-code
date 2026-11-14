@@ -7,7 +7,7 @@
 // the folders its box gives it, and the engine says what it would do (its permission route, which
 // rules the read and write tools by). Skipped unless OPENCODE_TEST_BINARY names the engine.
 //
-// Run with `OPENCODE_TEST_BINARY=<opencode> node --test Packages/KuvoLink/Tests/Bridge/outside-asks-live.test.js`;
+// Run with `OPENCODE_TEST_BINARY=<opencode> node --test box/bridge-tests/outside-asks-live.test.js`;
 // on Linux, on the engine's Bun (`OPENCODE_TEST_BINARY=<opencode> BUN_BE_BUN=1 <opencode> test outside-asks-live.test.js`).
 import { testsFolder } from "./test-safety.js";
 import assert from "node:assert/strict";

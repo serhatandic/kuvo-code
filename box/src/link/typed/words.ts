@@ -3,7 +3,7 @@
 // how often, "/goal"'s words, "/review"'s what, for what and with whom, and "/name arguments" for
 // a command of the engine's. Ported from the Swift both apps drew with (OpenCodeKit's `Keyword`,
 // `LoopSchedule`, `LoopCommand`, `GoalCommand`, `ReviewCommand`; KuvoClient's `SlashCommands`), and
-// held to the same cases (Packages/KuvoLink/Vectors/typed.json), so a client that draws a keyword as
+// held to the same cases (protocol/vectors/typed.json), so a client that draws a keyword as
 // it's typed reads it as the box does when it's sent.
 //
 // Text is read as Swift reads it: whitespace is Unicode's White_Space (`Character.isWhitespace`,

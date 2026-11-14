@@ -42,7 +42,7 @@ interface Account { id: string; name: string; label?: string; methods: string[][
  * plan through Codex, a SuperGrok plan through Grok): Accounts offers the engine only their key, so
  * a sign-in with the plan (`hidden`, by its method's id) never makes the engine's models run. */
 /** (Held to the same cases as the apps' Accounts and KuvoClient's PlanSignIns:
- * Packages/KuvoLink/Vectors/plan-sign-ins.json.) */
+ * protocol/vectors/plan-sign-ins.json.) */
 const PLANS: Record<string, { name: string; agent: string; provider: string; hidden: (method: string) => boolean }> = {
   openai: { name: "ChatGPT", agent: "Codex", provider: "codex-cli", hidden: method => method.startsWith("chatgpt") },
   xai: { name: "SuperGrok", agent: "Grok", provider: "grok-cli", hidden: method => method === "device" },

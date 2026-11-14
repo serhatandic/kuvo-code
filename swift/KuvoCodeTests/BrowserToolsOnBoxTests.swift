@@ -3,7 +3,7 @@ import Testing
 @testable import KuvoCode
 
 /// An agent on this Mac and one on a machine get the same browser tools, told the same, and read
-/// pages the same way. The machines' come from the box's sources (`Packages/Box/src/browser`, built
+/// pages the same way. The machines' come from the box's sources (`box/src/browser`, built
 /// into `kuvo-browser.js` by `scripts/build-browser.sh`); this Mac's panel still has copies of its
 /// own (`BrowserTools`, `BrowserAgent`) until its agents browse in its box's browser (#693), so a
 /// change to one that isn't made to the other fails here.

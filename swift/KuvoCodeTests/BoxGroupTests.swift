@@ -11,7 +11,7 @@ import Testing
 /// where it lives. One whose bots all live on a machine moves there, and back; one whose bots live
 /// on different computers stays where it is, and a bot in a machine's chat stays with it. A move
 /// cut short is taken back. Both bridges are stubbed, holding their chats as the runner does
-/// (`Packages/Box/src/agents/groups`); RealBridgeGroupTests runs the real one.
+/// (`box/src/agents/groups`); RealBridgeGroupTests runs the real one.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct BoxGroupTests {
     let mac = StubEngine(port: 47986)

@@ -7,7 +7,7 @@ import Testing
 /// Merge into…, as the Changes panel asks the box the worktree is on (this Mac's, the real box), on
 /// real repositories: the branch's commits go into the branch it was made from, a conflict leaves
 /// the project's folder as it was and names the files, and a merge of yours under way there is left
-/// be. (The box's own checks: Packages/KuvoLink/Tests/Bridge/changes.test.js; its worktrees'
+/// be. (The box's own checks: box/bridge-tests/changes.test.js; its worktrees'
 /// branches, worktrees.test.js.)
 @MainActor
 @Suite struct GitBranchesTests {

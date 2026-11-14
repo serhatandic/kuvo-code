@@ -1,5 +1,5 @@
 {
- "about": "What each box answers, by name (scripts/route-shapes.sh writes it from Packages/Box/src/shared/features.ts and routes/mac.ts; never edit it): a machine every name in FEATURES, in order, and nothing else; a Mac all of them but a machine's own (MACHINE_FEATURES), and its own (MAC_FEATURES).",
+ "about": "What each box answers, by name (scripts/route-shapes.sh writes it from box/src/shared/features.ts and routes/mac.ts; never edit it): a machine every name in FEATURES, in order, and nothing else; a Mac all of them but a machine's own (MACHINE_FEATURES), and its own (MAC_FEATURES).",
  "scenarios": [
   {
    "name": "kuvo/info: what the box answers, by name, not by version",

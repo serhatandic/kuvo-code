@@ -3,13 +3,13 @@ import XCTest
 
 /// The box reads Claude's logs and prices models as this package does (Kuvo Code's #631: usage moves
 /// to the box, PROTOCOL.md "Usage history"). Both sides are held to the same synthetic fixtures and
-/// expected answers, in `Packages/Box/test/fixtures/usage` (the box's `usage.test.ts` reads them too),
+/// expected answers, in `box/test/fixtures/usage` (the box's `usage.test.ts` reads them too),
 /// so neither can drift while both exist; and the host's days, handed over (`HostHistory`), draw as
 /// this Mac's own scan would have.
 final class UsageBoxParityTests: XCTestCase {
     private static let fixtures = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage")
+        .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("box/test/fixtures/usage")
 
     private func fixture(_ name: String) throws -> Data {
         try Data(contentsOf: Self.fixtures.appendingPathComponent(name))
