@@ -7,7 +7,12 @@ import { join } from "node:path"
 import { Limits, LimitsProblem, limitsRoutes, type LimitedAccount } from "../../src/agents/limits"
 import { LimitsPeers, type LimitsMail } from "../../src/agents/limits-peers"
 import { UsageSettings, settingsRoutes } from "../../src/agents/usage/settings"
-import { initialState, meter, transitions, type Meter, type NoticeState, takeNotices, currentNotice, noticeWindowName, noticeAccountName } from "../../src/agents/usage/notices"
+import { initialState, meter, transitions, type Meter, type NoticeState, takeNotices, currentNotice, noticeWindowName, noticeAccountName, type notificationAvailability, type UsageNotice } from "../../src/agents/usage/notices"
+
+// What the limits and settings routes answer, as far as these tests read them (limitsRoutes, settingsRoutes).
+type Availability = ReturnType<typeof notificationAvailability>
+type LimitsAnswer = { data: { notices: UsageNotice[], notificationAvailability: Availability } }
+type SettingsAnswer = { data: { notificationAvailability: Availability } }
 
 const all = { underTenPercent: true, healthyToClose: true, closeToRunningOut: true }
 const off = { underTenPercent: false, healthyToClose: false, closeToRunningOut: false }
@@ -41,7 +46,7 @@ function fixture(file?: string) {
   limits.settings = settings
   return { limits, settings, account, pass: (ms: number) => { now += ms }, advance: (u: number, fail = false) => { now += 1000; used = u; failure = fail } }
 }
-test("evaluator healthy to close once, facts and route", async () => { const f = fixture(); await f.limits.tick(); f.advance(0.86); await f.limits.tick(); expect(f.limits.notices().map(n => n.milestone)).toEqual(["healthyToClose"]); f.advance(0.86); await f.limits.tick(); expect(f.limits.notices()).toHaveLength(1); const response = await limitsRoutes(f.limits, "GET", []); expect((await response.json()).data.notices[0].row).toMatch(/^claude#/); })
+test("evaluator healthy to close once, facts and route", async () => { const f = fixture(); await f.limits.tick(); f.advance(0.86); await f.limits.tick(); expect(f.limits.notices().map(n => n.milestone)).toEqual(["healthyToClose"]); f.advance(0.86); await f.limits.tick(); expect(f.limits.notices()).toHaveLength(1); const response = await limitsRoutes(f.limits, "GET", []); expect(((await response.json()) as LimitsAnswer).data.notices[0].row).toMatch(/^claude#/); })
 test("evaluator close to red", async () => { const f = fixture(); await f.limits.tick(); f.advance(0.86); await f.limits.tick(); f.advance(0.95); await f.limits.tick(); expect(f.limits.notices().map(n => n.milestone)).toEqual(["healthyToClose", "closeToRunningOut", "underTenPercent"]) })
 test("evaluator jitter and restart do not duplicate", async () => { const file = join(folder, "restart.json"); const f = fixture(file); await f.limits.tick(); f.advance(0.95); await f.limits.tick(); const before = f.limits.notices(); const g = fixture(file); g.advance(0.95); await g.limits.tick(); expect(g.limits.notices()).toEqual(before) })
 test("evaluator all toggles off", async () => { const f = fixture(); f.settings.change({ notifications: off }); await f.limits.tick(); f.advance(0.95); await f.limits.tick(); expect(f.limits.notices()).toEqual([]) })
@@ -323,8 +328,8 @@ test("unrelated directory heartbeats do not bypass the heard-mail throttle", asy
 
 test("unsupported notification providers and their wording come from box answers", async () => {
   const f=fixture()
-  const limits=await (await limitsRoutes(f.limits,"GET",[])).json()
-  const settings=await (await settingsRoutes(f.settings,()=>[],"GET",[],async()=>undefined)).json()
+  const limits=await (await limitsRoutes(f.limits,"GET",[])).json() as LimitsAnswer
+  const settings=await (await settingsRoutes(f.settings,()=>[],"GET",[],async()=>undefined)).json() as SettingsAnswer
   expect(limits.data.notificationAvailability).toEqual([{provider:"devin",available:false,message:"Devin alerts are unavailable because Devin is not connected to Kuvo Code’s background service."}])
   expect(settings.data.notificationAvailability).toEqual(limits.data.notificationAvailability)
 })
