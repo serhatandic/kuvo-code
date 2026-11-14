@@ -2512,6 +2512,13 @@ without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's ow
   waits for the setup, then `Kuvo.hello`; a setup that failed is `Kuvo.error` with `kind: "missing"`
   and why (an older Mac then puts the browser there itself, as it did). A tool that waited says
   why, or to try again in a minute.
+- **The keeper's version**: `kuvo-browser.js` is built from `Packages/Box/src/browser`
+  (`scripts/build-browser.sh`), which writes its keeper's version in: a hash of its source, so any
+  change to the file's source (its tools' code too) restarts the keeper once a new process starts,
+  closing its pages (sign-ins stay). Its `Kuvo.hello` says it as `build`, and its `version` is the
+  box's `bin/box-version` (`dev` before a Mac or an update has written one). A process replaces a running keeper only while its own file is
+  the one in place, and then only one of another `build`, or one from before (`keeper` a number
+  below 51, and no `build`).
 - Only in a test's folder: `KUVO_BROWSER_SOURCE` (an address serving `<host>/<path>`),
   `KUVO_BROWSER_PINS` and `KUVO_BROWSER_SYSTEM`; a test's folder without them downloads nothing.
 - An older Mac (before this) still sends its own build over SSH when the machine has none or an
@@ -8361,6 +8368,10 @@ before connects (the box notes one: `run/attached`).
   keeper stops the watchdogs such a Mac's start brings. On a machine without the keeper's script,
   a Mac starts the agents bridge and the engine as that Mac did.
   <!-- compat: 0.7 keeper -->
+- **Its browser's keeper**: such a Mac's `kuvo-browser.js` knows its keeper's version as a number
+  it compares, and replaces one whose `keeper` is lower. The box's says `keeper: 51` in its
+  `Kuvo.hello` (beside its `build`), above every such number, so those never replace it.
+  <!-- compat: 0.7 keeper-number -->
 - **Its engine**: such a Mac has Stop, which leaves `run/stopped` and the engine down until
   `POST kuvo/engine/start` (`kuvo/info` says `stopped`; Settings › Machines offers Start). It
   doesn't know a stopped engine, so it starts one over `run/stopped`; running, it isn't stopped
