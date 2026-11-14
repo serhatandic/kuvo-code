@@ -1311,11 +1311,11 @@ names them, by the same names (`bash`, in a conversation from before the engine 
 
 | Tool | Its target (on its row) | Opened, it shows |
 | --- | --- | --- |
-| `shell` (`bash`) | `input.command`, its first line | `input.command` whole, then its `content` text (what it printed), once it's `completed`; nothing printed says so |
+| `shell` (`bash`) | `input.command`, its first line | `input.command` whole, then its `content` text (what it printed): once it's `completed` (nothing printed says so), or one that failed having printed something |
 | `edit`, `multiedit`, `patch`, `apply_patch`, `write` | `input.filePath` (or `path`) | each of `metadata.files` (`{file, patch, additions, deletions, status}`) as a diff of its unified `patch`, with `+additions −deletions` on the row |
-| `grep` | `input.pattern` | its `content` text (what it found) |
-| `glob`, `list`, `ls` | `input.pattern` (or `path`) | its `content` text |
-| `websearch` | `input.query` | its `content` text |
+| `grep` | `input.pattern` | its `content` text (what it found); one that found nothing opens to nothing |
+| `glob`, `list`, `ls` | `input.pattern` (or `path`) | its `content` text, as `grep` |
+| `websearch` | `input.query` | its `content` text, as `grep` |
 | `read`, `webfetch`, `task`, `todowrite`, any other | as its name says | nothing more |
 
 Any step whose `metadata.files` holds a patch opens to it, whatever its name. A step still

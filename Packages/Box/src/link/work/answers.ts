@@ -174,6 +174,14 @@ export const askedBy = (form: Record<string, unknown>): string | null => {
 
 /** The running sessions of `folder` with a tool of the MCP server `server` under way: who a form it
  * asks is holding, since the engine files that under no session. As the Mac finds them. */
+/** Whether one of `steps` (a session's latest) runs a tool of the MCP server named `server`: its
+ * tools are named after it; Code Mode's `execute` names it in its code. */
+export function runsServer(steps: { type?: string; name?: string; state?: { status?: string; input?: { code?: unknown } } }[], server: string): boolean {
+  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
+  return steps.some(block => block.type === "tool" && block.state?.status === "running"
+    && (block.name?.startsWith(name + "_") || (block.name === "execute" && String(block.state.input?.code ?? "").includes(server))));
+}
+
 export async function sessionsWaitingOnServer(server: string, folder: string | undefined, get: (route: string) => Promise<unknown>): Promise<string[]> {
   const active = (await get("api/session/active").catch(() => null) as { data?: string[] | Record<string, unknown> } | null)?.data ?? {};
   const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
@@ -184,18 +192,20 @@ export async function sessionsWaitingOnServer(server: string, folder: string | u
     if (!candidate || (folder && candidate.location?.directory !== folder)) continue;
     const page = await get(`${at}/message?limit=8&order=desc`).catch(() => null) as { data?: { type?: string; content?: { type?: string; name?: string; state?: { status?: string; input?: { code?: unknown } } }[] }[] } | null;
     const steps = (page?.data ?? []).filter(message => message.type === "assistant").flatMap(message => message.content ?? []);
-    if (steps.some(block => block.type === "tool" && block.state?.status === "running"
-      && (block.name?.startsWith(name + "_") || (block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))) found.push(id);
+    if (runsServer(steps, server)) found.push(id);
   }
   return found;
 }
 
-/** The session and its subagents (theirs too, a few levels down), which ask in its name. */
-export async function askersOf(target: Target, session: string, signal?: AbortSignal): Promise<string[]> {
+/** The session and its subagents (theirs too, a few levels down), which ask in its name. `strict`:
+ * each listing within a time of its own (`wait`), and one that fails throws, rather than leave its
+ * subagents out. */
+export async function askersOf(target: Target, session: string, signal?: AbortSignal, strict?: { wait: () => AbortSignal }): Promise<string[]> {
   const found = [session];
   for (let at = 0; at < found.length && at < 40; at++) {
     if (at > 0 && found.length > 30) break;
-    const listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`, undefined, signal).catch(() => null);
+    const route = `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`;
+    const listed = strict ? await call(target, "GET", route, undefined, strict.wait()) : await call(target, "GET", route, undefined, signal).catch(() => null);
     for (const child of Array.isArray(listed) ? listed : []) if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id)) found.push(child.id);
   }
   return found;

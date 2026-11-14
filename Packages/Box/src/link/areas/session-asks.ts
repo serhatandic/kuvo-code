@@ -12,7 +12,7 @@ import { listAsks as listVaultAsks } from "../vault/asks";
 import { homeFolder } from "../home";
 import { targetsOf } from "../letters/tools";
 import { alwaysWords, describeForm, type EngineForm } from "../notices/news";
-import { callOf } from "../work/answers";
+import { askersOf, callOf, sessionsWaitingOnServer } from "../work/answers";
 import { listAskReviews } from "../work/reviewing";
 import { followedLive } from "../follow";
 import { sessionHere, Unreached } from "./glance";
@@ -59,38 +59,6 @@ interface Found {
   form?: { fields: Field[] };
   /** For an MCP server's form, filed under no session (`global`): the folder it's in. */
   folder?: string;
-}
-
-/** The session and its subagents (theirs too, a few levels down), which ask in its name: each
- * listing with a time of its own, and one that fails throws `Unreached` (what was said last stands,
- * rather than its subagents' asks seeming gone). */
-async function allAskersOf(target: Target, session: string, wait: () => AbortSignal): Promise<string[]> {
-  const found = [session];
-  for (let at = 0; at < found.length && at < 40; at++) {
-    if (at > 0 && found.length > 30) break;
-    let listed: unknown;
-    try {
-      listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at]!)}`, undefined, wait());
-    } catch {
-      throw new Unreached("The engine isn't answering.");
-    }
-    for (const child of Array.isArray(listed) ? listed : []) if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id)) found.push(child.id);
-  }
-  return found;
-}
-
-/** Whether one of `askers` has a step running that an MCP server named `server` asks for (its
- * tools are named after it; Code Mode's `execute` names it in its code), as the Mac's conversation
- * takes the forms its tools wait on. */
-async function waitsOnServer(target: Target, askers: string[], server: string, wait: () => AbortSignal): Promise<boolean> {
-  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
-  for (const asker of askers) {
-    const page = await call(target, "GET", `/api/session/${encodeURIComponent(asker)}/message?limit=8&order=desc`, undefined, wait()).catch(() => null);
-    const steps = (Array.isArray(page) ? page : []).filter(message => isObject(message) && message.type === "assistant").flatMap(message => (Array.isArray(message.content) ? message.content : []));
-    if (steps.some(block => isObject(block) && block.type === "tool" && isObject(block.state) && block.state.status === "running"
-      && (String(block.name ?? "").startsWith(name + "_") || (block.name === "execute" && String(isObject(block.state.input) ? block.state.input.code ?? "" : "").includes(server))))) return true;
-  }
-  return false;
 }
 
 const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
@@ -191,7 +159,8 @@ async function asksOf(target: Target, session: string, folder: string, signal?: 
   const home = homeFolder();
   const found: { at: number; ask: Found }[] = [];
   const timeOf = (id: string, given: unknown) => noted.get(id) ?? (typeof given === "number" ? given : 0);
-  const askers = await allAskersOf(target, session, wait);
+  // (A subagent listing that fails: the place isn't answering, so what was said last stands.)
+  const askers = await askersOf(target, session, undefined, { wait }).catch(() => { throw new Unreached("The engine isn't answering."); });
   for (const asker of askers) {
     const at = `/api/session/${encodeURIComponent(asker)}`;
     let permissions: unknown, forms: unknown;
@@ -223,11 +192,15 @@ async function asksOf(target: Target, session: string, folder: string, signal?: 
       found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker, form: { fields } } });
     }
   }
-  // What MCP servers ask in its folder (filed under no session), those its steps wait on.
-  const shared = folder ? await call(target, "GET", "/api/session/global/form", undefined, wait(), folder).catch(() => null) : null;
+  // What MCP servers ask in its folder (filed under no session): one is the conversation's whose
+  // step runs that server's tool, decided once for the folder as its notification decides it.
+  const shared = folder ? await call(target, "GET", "/api/session/global/form", undefined, wait(), folder).catch(() => { throw new Unreached("The engine isn't answering."); }) : null;
+  const get = (route: string) => call(target, "GET", `/${route}`, undefined, wait()).then(data => ({ data }));
   for (const form of (Array.isArray(shared) ? shared : []) as (EngineForm & { time?: { created?: unknown } })[]) {
     const server = isObject(form) && isObject(form.metadata) ? text((form.metadata as Record<string, unknown>).server) : null;
-    if (!isObject(form) || typeof form.id !== "string" || !server || !(await waitsOnServer(target, askers, server, wait))) continue;
+    if (!isObject(form) || typeof form.id !== "string" || !server) continue;
+    const owner = (await sessionsWaitingOnServer(server, folder, get))[0];
+    if (!owner || !askers.includes(owner)) continue;
     const shown: SessionAsk = { id: form.id, kind: "other", session, title: text(form.title) || server, message: describeForm(form), dismiss: true };
     found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker: "global", folder } });
   }

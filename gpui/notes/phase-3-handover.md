@@ -57,6 +57,17 @@ an ask missing a field spoils none of the rest (held to `answers.json`'s shape);
 suggestions go as the mention changes; a shared "@" listing stops only once no request waits on
 it; a bridge test for `DELETE …/queue/<item>` taking back what the engine holds.
 
+Its reviewer pass found two more, fixed with tests: Return in a question's own line put it away
+with no wait (the card, not its line, takes the keyboard as it comes; Return there answers only as
+the button would, and only once the card's been still); typing that reaches the card restarts the
+wait, as the Mac's `KeysTyped` (its own line, clicked into, doesn't count, as the Mac leaves it
+out). Also: your answer racing the box's word is tested in both orders without threads; the live
+scenario stops the run, saying so, should a follow hand nothing on for a minute (a guard against
+hanging, not a clock it leans on); the box shares one asker walk (`askersOf`, strict) and one rule
+for a server's step (`runsServer`) with notices and Autopilot, and an MCP form shared in a folder
+is the one conversation's its notification names; a Return while a mention's suggestions are on
+their way waits instead of sending; a failed answer is said only on the ask it was for.
+
 **Decided (point 4):** which tool steps open is drawing, and stays in the client (`details()`).
 PROTOCOL.md has a "Tool steps" table (names and aliases, the target, what opens), and every
 client's samples are `Packages/KuvoLink/Vectors/tool-steps.json`, which gpui's tests read. **The
@@ -112,6 +123,11 @@ All additive, each with its route shape, PROTOCOL.md section, feature name and t
 - From phase 2, still open: commands shown as typed, machines, paging's jump, the follows' wiring
   untested at app level.
 
+- The keyboard moves to and from the card as the conversation is drawn (`keep_focus`); doing it as
+  the card changes (observing it, with its window) would be tidier.
+- Adding `queue.items`, `sessions.asks` and `sessions.mentions` to the shared gate list makes the
+  Mac and the phone hold a box without them too, though they don't use those routes: a phone
+  release mustn't ship before a Mac release with them (PROTOCOL.md, "The update gate").
 - **Box costs left as they are** (cheap enough for now, worth a look later): any ask on the box has
   every followed conversation read its asks again whole; a queue follow looks at `queues.json`
   each second; `queueItems` reads one file per message waiting on the box.

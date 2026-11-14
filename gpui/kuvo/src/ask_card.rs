@@ -101,8 +101,9 @@ pub struct AskCard {
     instead: bool,
     /// An answer on its way, by its ask.
     answering: Option<String>,
-    /// Why the last answer didn't go.
+    /// Why the last answer didn't go, and which ask it was for (said only on that one).
     failed: Option<String>,
+    failed_for: Option<String>,
     /// Since when the card shown has been still: its keys answer only once it's been a moment
     /// ([`QUIET`]), so a key meant for the one before it (or for the composer it took the place of)
     /// never answers it, as the Mac's `KeysTyped` holds them.
@@ -113,12 +114,10 @@ pub struct AskCard {
 }
 
 impl Focusable for AskCard {
+    /// The card itself as it comes (its line takes the keyboard only once it's clicked, or Instead
+    /// opens it), so what you were typing elsewhere never lands in it.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        if self.instead || self.shown_question().is_some_and(|question| question.custom) {
-            self.words.focus_handle(cx)
-        } else {
-            self.focus.clone()
-        }
+        if self.instead { self.words.focus_handle(cx) } else { self.focus.clone() }
     }
 }
 
@@ -133,6 +132,8 @@ impl AskCard {
                     cx.notify();
                 }
             }
+            // (Typing in its own line, which takes the keyboard only once it's clicked or Instead
+            // opens it, isn't counted: as the Mac's `KeysTyped` leaves out the card's own line.)
             TextFieldEvent::Changed => cx.notify(),
         });
         AskCard {
@@ -146,6 +147,7 @@ impl AskCard {
             instead: false,
             answering: None,
             failed: None,
+            failed_for: None,
             quiet_since: None,
             focus: cx.focus_handle(),
             tasks: Vec::new(),
@@ -236,7 +238,10 @@ impl AskCard {
             // (Answered meanwhile elsewhere: gone all the same.)
             Ok(()) => self.drop_ask(ask, cx),
             Err(kuvo_box::Error::Refused(refusal)) if refusal.status == 404 => self.drop_ask(ask, cx),
-            Err(error) => self.failed = Some(format!("The answer didn’t go: {error}")),
+            Err(error) => {
+                self.failed = Some(format!("The answer didn’t go: {error}"));
+                self.failed_for = Some(ask.to_owned());
+            }
         }
         cx.notify();
     }
@@ -356,12 +361,16 @@ impl AskCard {
     }
 
     fn submit_words(&mut self, cx: &mut Context<Self>) {
+        // Return in its line answers as the button would, and no sooner than its keys.
+        if !self.takes_keys(cx) {
+            return;
+        }
         if self.instead {
             let words = self.words.read(cx).text().trim().to_owned();
             if !words.is_empty() {
                 self.answer(Answer::permission("instead", Some(words)), cx);
             }
-        } else if self.shown_question().is_some() {
+        } else if self.shown_question().is_some() && self.can_go(cx) {
             self.next_question(cx);
         }
     }
@@ -375,6 +384,11 @@ impl AskCard {
             return;
         }
         let answers = key == "enter" || key == "escape" || (key.len() == 1 && key.as_bytes()[0].is_ascii_digit());
+        // Any other key is typing, as the Mac's `KeysTyped` counts it: the answers wait again.
+        if !answers {
+            self.quiet_since = Some(cx.background_executor().now());
+            return;
+        }
         // A key held down, or pressed before the card has been still a moment, answers nothing.
         if answers && (event.is_held || !self.takes_keys(cx)) {
             cx.stop_propagation();
@@ -571,7 +585,7 @@ impl Render for AskCard {
             ],
             Some(Ask::Unknown) | None => Vec::new(),
         };
-        let failed = self.failed.clone().map(|why| div().text_ui(TypeSize::Caption).text_color(c.warning).child(why));
+        let failed = self.failed.clone().filter(|_| self.failed_for.as_deref() == self.place.shown()).map(|why| div().text_ui(TypeSize::Caption).text_color(c.warning).child(why));
         div()
             .id("ask-card")
             .debug_selector(|| "ask-card".into())

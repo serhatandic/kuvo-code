@@ -541,6 +541,15 @@ fn a_cards_keys_wait_until_its_been_still_a_moment_and_a_held_key_answers_nothin
     cx.run_until_parked();
     assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").is_empty());
 
+    // Typing (a "run step 2" meant for elsewhere) keeps it waiting: the 2 after "step" answers
+    // nothing, however long the card has been there.
+    quiet(cx);
+    cx.simulate_keystrokes("s t e p");
+    cx.executor().advance_clock(kuvo::ask_card::QUIET / 2);
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").is_empty());
+
     // Still a moment: 2, Always Allow, for the first; the second shows next.
     quiet(cx);
     cx.simulate_keystrokes("2");
@@ -589,6 +598,49 @@ fn a_key_meant_for_an_ask_answered_elsewhere_doesnt_answer_the_one_that_takes_it
     assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "once" })));
 }
 
+/// Answers the first of two asks, the box's word that it's gone coming `before` its own reply or
+/// after it; either way the second shows, and takes no key until it's been there a moment.
+fn answer_racing_the_boxs_word(before: bool, cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second.clone()]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (view, card) = open_asking(&workspace, "ses_limits", cx);
+    quiet(cx);
+    let gone: kuvo_box::asks::Asks = serde_json::from_value(json!({ "asks": [second] })).unwrap();
+    // Allow Once, picked: its reply is on its way until the window runs on.
+    card.update_in(cx, |card, window, cx| card.choose(0, window, cx));
+    if before {
+        view.update(cx, |view, cx| view.take_asks(gone.clone(), cx));
+    }
+    cx.run_until_parked();
+    if !before {
+        view.update(cx, |view, cx| view.take_asks(gone, cx));
+        cx.run_until_parked();
+    }
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").len(), 1);
+    assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
+    assert!(card.read_with(cx, |card, _| card.failed().is_none()), "nothing said of the next one");
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
+    quiet(cx);
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").len(), 1);
+}
+
+#[gpui::test]
+fn your_answer_whose_reply_comes_after_the_boxs_word_leaves_the_next_ask_as_it_should_be(cx: &mut TestAppContext) {
+    answer_racing_the_boxs_word(true, cx);
+}
+
+#[gpui::test]
+fn your_answer_whose_reply_comes_before_the_boxs_word_leaves_the_next_ask_as_it_should_be(cx: &mut TestAppContext) {
+    answer_racing_the_boxs_word(false, cx);
+}
+
 #[gpui::test]
 fn the_agents_question_takes_a_choice_or_your_own_words(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
@@ -598,20 +650,40 @@ fn the_agents_question_takes_a_choice_or_your_own_words(cx: &mut TestAppContext)
     assert!(bounds(cx, "ask-words").is_some(), "it takes words of your own too");
     assert!(card_has_keys(&card, cx));
 
-    // Return with nothing picked or written sends nothing (nor puts it away); it needs an answer,
-    // so it can't be skipped.
-    quiet(cx);
-    let words = card.read_with(cx, |card, cx| card.focus_handle_any(cx));
-    cx.update(|window, cx| window.focus(&words, cx));
+    // A Return as it comes, meant for the composer, answers nothing; the keyboard is on the card,
+    // not its line, so what you were typing doesn't land there.
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty());
+
+    // In its line: Return with nothing written sends nothing (nor puts it away); typing there makes
+    // Return wait a moment too, then it answers in your words.
+    let line = bounds(cx, "ask-words").unwrap();
+    cx.simulate_click(line.center(), Modifiers::default());
+    quiet(cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty());
+    // (It needs an answer: Skip is off.)
     let skip = bounds(cx, "ask-skip").expect("Skip");
     cx.simulate_click(skip.center(), Modifiers::default());
     cx.run_until_parked();
     assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty(), "Skip is off for one that needs an answer");
+    // Written in its line, Return answers in your words.
+    let words = bounds(cx, "ask-words").unwrap();
+    cx.simulate_click(words.center(), Modifiers::default());
+    cx.simulate_keystrokes("k e e p enter");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answers": { "q0": "keep" } })));
+    assert!(bounds(cx, "ask-card").is_none());
+}
 
-    // A click on a choice answers a question that takes one.
+#[gpui::test]
+fn a_click_on_a_choice_answers_the_question(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    open_asking(&workspace, "ses_cms", cx);
     let redirect = bounds(cx, "ask-option-0").unwrap();
     cx.simulate_click(redirect.center(), Modifiers::default());
     cx.run_until_parked();
@@ -980,6 +1052,16 @@ fn until(cx: &mut VisualTestContext, view: &Entity<kuvo::conversation::Conversat
     use futures::StreamExt as _;
     cx.executor().allow_parking();
     let mut told = cx.notifications(view);
+    // A guard, not a clock the test leans on: a follow that never hands anything on would leave it
+    // waiting for good, so the run is ended, saying so, rather than hanging unseen.
+    let (finished, guard) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if guard.recv_timeout(std::time::Duration::from_secs(60)) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+            eprintln!("the live follow handed nothing on for a minute: the test stops here");
+            std::process::exit(101);
+        }
+    });
+    let _finished = finished;
     loop {
         cx.run_until_parked();
         if done(cx) {

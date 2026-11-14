@@ -21,7 +21,7 @@ let sessions: Record<string, any>, permissions: Record<string, any[]>, forms: Re
 let got: { method: string; path: string; body: any }[], refusing: Set<string>
 // An MCP server's forms, filed under no session in a folder; the folder each was asked in; whether
 // listing a session's subagents fails (a busy engine).
-let shared: Record<string, any[]>, folders: Record<string, string>, listingFails: boolean
+let shared: Record<string, any[]>, folders: Record<string, string>, listingFails: boolean, active: string[]
 beforeEach(() => {
   forgetAsks()
   got = []
@@ -29,6 +29,7 @@ beforeEach(() => {
   shared = {}
   folders = {}
   listingFails = false
+  active = []
   sessions = {
     ses_root: { id: "ses_root", location: { directory: work }, time: { created: 1, updated: 1 } },
     ses_child: { id: "ses_child", parentID: "ses_root", location: { directory: work }, time: { created: 2, updated: 2 } },
@@ -65,6 +66,7 @@ const engine = Bun.serve({
     const reply = (value: unknown, status = 200) => Response.json(value, { status })
     const folder = request.headers.get("x-opencode-directory")
     if (folder) folders[`${request.method} ${url.pathname}`] = decodeURIComponent(folder)
+    if (url.pathname === "/api/session/active") return reply({ data: Object.fromEntries(active.map(id => [id, {}])) })
     if (url.pathname === "/api/session") {
       if (listingFails) return reply({ message: "Busy." }, 500)
       const parent = url.searchParams.get("parentID")
@@ -194,11 +196,23 @@ test("an MCP server's form its subagent's step waits on shows in the conversatio
   // Nothing of the server's runs yet: not this conversation's.
   expect((await ask(handler, "GET", "kuvo/sessions/ses_root/asks")).json.asks.some((each: any) => each.id === "frm_issue")).toBe(false)
   messages.ses_child!.push({ id: "msg_2", type: "assistant", content: [{ type: "tool", id: "call_2", name: "github_create_issue", state: { status: "running", input: {} } }] })
+  active = ["ses_child"]
   const listed = (await ask(handler, "GET", "kuvo/sessions/ses_root/asks")).json.asks.find((each: any) => each.id === "frm_issue")
   expect(listed).toEqual({ id: "frm_issue", kind: "other", session: "ses_root", title: "New issue", message: "Which repository?", dismiss: true })
   expect((await ask(handler, "POST", "kuvo/sessions/ses_root/asks/frm_issue", { dismiss: true })).status).toBe(200)
   expect(asked("/api/session/global/form/frm_issue")).toEqual([{ method: "DELETE", path: "/api/session/global/form/frm_issue", body: undefined }])
   expect(folders["DELETE /api/session/global/form/frm_issue"]).toBe(work)
+})
+
+test("an MCP server's form two conversations in a folder wait on is one conversation's only, as its notification names it", async () => {
+  shared[work] = [{ id: "frm_two", sessionID: "global", title: "New issue", metadata: { kind: "mcp-elicitation", server: "github", message: "Which repository?" }, fields: [{ key: "repo", type: "number" }] }]
+  sessions.ses_other = { id: "ses_other", location: { directory: work }, time: { created: 3, updated: 3 } }
+  messages.ses_other = [{ id: "msg_o", type: "assistant", content: [{ type: "tool", id: "call_o", name: "github_list_repos", state: { status: "running", input: {} } }] }]
+  messages.ses_child!.push({ id: "msg_3", type: "assistant", content: [{ type: "tool", id: "call_3", name: "github_create_issue", state: { status: "running", input: {} } }] })
+  active = ["ses_other", "ses_child"]
+  const ids = async (session: string) => (await ask(handler, "GET", `kuvo/sessions/${session}/asks`)).json.asks.map((each: any) => each.id)
+  expect(await ids("ses_other")).toContain("frm_two")
+  expect(await ids("ses_root")).not.toContain("frm_two")
 })
 
 test("a busy engine that couldn't list its subagents says so, rather than their asks seeming gone", async () => {

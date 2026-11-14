@@ -139,6 +139,8 @@ pub struct Composer {
     mentions: Vec<Mention>,
     mentions_for: Option<(For, String)>,
     mention_reads: u64,
+    /// A mention's suggestions asked for and not answered yet.
+    mention_pending: bool,
     /// The agents and sessions picked from "&"'s list, by what went in the message: the send names
     /// those still in it.
     named: Vec<(String, String)>,
@@ -205,6 +207,7 @@ impl Composer {
             mentions: Vec::new(),
             mentions_for: None,
             mention_reads: 0,
+            mention_pending: false,
             named: Vec::new(),
             tasks: Vec::new(),
             _field: subscription,
@@ -752,9 +755,12 @@ impl Composer {
         self.mentions.clear();
         let read = self.mention_reads;
         let Some((wanted, query)) = typed else {
-            self.mentions.clear();
+            self.mention_pending = false;
             return;
         };
+        // Until the box answers, Return and Tab wait with the list rather than send the mention
+        // half typed.
+        self.mention_pending = true;
         let (client, id) = (self.client.clone(), id.clone());
         if self.live {
             // Asked once typing pauses a moment, not on every key.
@@ -768,6 +774,7 @@ impl Composer {
                 this.update(cx, |this, cx| {
                     if this.mention_reads == read {
                         this.mentions = found.unwrap_or_default();
+                        this.mention_pending = false;
                         cx.notify();
                     }
                 })
@@ -776,6 +783,7 @@ impl Composer {
         } else {
             // (Tests and shots: at once, as the box would answer.)
             self.mentions = client.mentions(&id, wanted, &query).unwrap_or_default();
+            self.mention_pending = false;
         }
     }
 
@@ -1124,7 +1132,9 @@ impl Render for Composer {
                 .text_color(if note.warning { c.warning } else { c.text_muted })
                 .child(note.text)
         });
-        let context = if offers.is_empty() { CONTEXT.to_owned() } else { format!("{CONTEXT} {SLASH}") };
+        // The list's keys while it shows, and while a mention's suggestions are on their way.
+        let waiting = self.mention_pending && mention_query(&text).is_some();
+        let context = if offers.is_empty() && !waiting { CONTEXT.to_owned() } else { format!("{CONTEXT} {SLASH}") };
         let card = div()
             .relative()
             .flex()

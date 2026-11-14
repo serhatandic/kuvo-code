@@ -31107,6 +31107,10 @@ var askedBy = (form) => {
   const tool = isObject(form.metadata) && isObject(form.metadata.tool) ? form.metadata.tool : null;
   return typeof tool?.id === "string" && tool.id ? tool.id : null;
 };
+function runsServer(steps, server) {
+  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
+  return steps.some((block) => block.type === "tool" && block.state?.status === "running" && (block.name?.startsWith(name + "_") || block.name === "execute" && String(block.state.input?.code ?? "").includes(server)));
+}
 async function sessionsWaitingOnServer(server, folder, get) {
   const active = (await get("api/session/active").catch(() => null))?.data ?? {};
   const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
@@ -31118,17 +31122,18 @@ async function sessionsWaitingOnServer(server, folder, get) {
       continue;
     const page = await get(`${at}/message?limit=8&order=desc`).catch(() => null);
     const steps = (page?.data ?? []).filter((message) => message.type === "assistant").flatMap((message) => message.content ?? []);
-    if (steps.some((block) => block.type === "tool" && block.state?.status === "running" && (block.name?.startsWith(name + "_") || block.name === "execute" && String(block.state.input?.code ?? "").includes(server))))
+    if (runsServer(steps, server))
       found.push(id);
   }
   return found;
 }
-async function askersOf(target, session, signal) {
+async function askersOf(target, session, signal, strict) {
   const found = [session];
   for (let at = 0;at < found.length && at < 40; at++) {
     if (at > 0 && found.length > 30)
       break;
-    const listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`, undefined, signal).catch(() => null);
+    const route = `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`;
+    const listed = strict ? await call(target, "GET", route, undefined, strict.wait()) : await call(target, "GET", route, undefined, signal).catch(() => null);
     for (const child of Array.isArray(listed) ? listed : [])
       if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id))
         found.push(child.id);
@@ -40453,7 +40458,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f2c653f6d04b";
+var BRIDGE_VERSION = "2c83c9b8df99";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -46019,33 +46024,6 @@ async function* glanceRoute(context, match) {
 
 // Packages/Box/src/link/areas/session-asks.ts
 var SESSION_ASKS_ROUTE = /^kuvo\/sessions\/([^/]+)\/asks(?:\/([^/]+))?$/;
-async function allAskersOf(target, session, wait) {
-  const found = [session];
-  for (let at = 0;at < found.length && at < 40; at++) {
-    if (at > 0 && found.length > 30)
-      break;
-    let listed;
-    try {
-      listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`, undefined, wait());
-    } catch {
-      throw new Unreached("The engine isn't answering.");
-    }
-    for (const child of Array.isArray(listed) ? listed : [])
-      if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id))
-        found.push(child.id);
-  }
-  return found;
-}
-async function waitsOnServer(target, askers, server, wait) {
-  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
-  for (const asker of askers) {
-    const page = await call(target, "GET", `/api/session/${encodeURIComponent(asker)}/message?limit=8&order=desc`, undefined, wait()).catch(() => null);
-    const steps = (Array.isArray(page) ? page : []).filter((message) => isObject(message) && message.type === "assistant").flatMap((message) => Array.isArray(message.content) ? message.content : []);
-    if (steps.some((block) => isObject(block) && block.type === "tool" && isObject(block.state) && block.state.status === "running" && (String(block.name ?? "").startsWith(name + "_") || block.name === "execute" && String(isObject(block.state.input) ? block.state.input.code ?? "" : "").includes(server))))
-      return true;
-  }
-  return false;
-}
 var text5 = (value) => typeof value === "string" ? value : null;
 var strings = (value) => Array.isArray(value) ? value.filter((each) => typeof each === "string") : [];
 function relativeTo(folder, file) {
@@ -46137,7 +46115,9 @@ async function asksOf(target, session, folder, signal) {
   const home = homeFolder();
   const found = [];
   const timeOf = (id, given) => noted.get(id) ?? (typeof given === "number" ? given : 0);
-  const askers = await allAskersOf(target, session, wait);
+  const askers = await askersOf(target, session, undefined, { wait }).catch(() => {
+    throw new Unreached("The engine isn't answering.");
+  });
   for (const asker of askers) {
     const at = `/api/session/${encodeURIComponent(asker)}`;
     let permissions, forms;
@@ -46167,10 +46147,16 @@ async function asksOf(target, session, folder, signal) {
       found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker, form: { fields } } });
     }
   }
-  const shared = folder ? await call(target, "GET", "/api/session/global/form", undefined, wait(), folder).catch(() => null) : null;
+  const shared = folder ? await call(target, "GET", "/api/session/global/form", undefined, wait(), folder).catch(() => {
+    throw new Unreached("The engine isn't answering.");
+  }) : null;
+  const get = (route) => call(target, "GET", `/${route}`, undefined, wait()).then((data) => ({ data }));
   for (const form of Array.isArray(shared) ? shared : []) {
     const server = isObject(form) && isObject(form.metadata) ? text5(form.metadata.server) : null;
-    if (!isObject(form) || typeof form.id !== "string" || !server || !await waitsOnServer(target, askers, server, wait))
+    if (!isObject(form) || typeof form.id !== "string" || !server)
+      continue;
+    const owner = (await sessionsWaitingOnServer(server, folder, get))[0];
+    if (!owner || !askers.includes(owner))
       continue;
     const shown = { id: form.id, kind: "other", session, title: text5(form.title) || server, message: describeForm(form), dismiss: true };
     found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker: "global", folder } });
