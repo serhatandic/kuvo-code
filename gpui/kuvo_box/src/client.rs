@@ -302,6 +302,7 @@ impl BoxClient {
             sending.keyword = send.typed.clone();
             sending.comments = draft.comments.clone();
             sending.named = draft.named.clone();
+            sending.widget = draft.widget.clone();
             if send.steer == Some(true) {
                 sending.delivery = Some(Delivery::Steer);
             }

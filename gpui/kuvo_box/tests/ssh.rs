@@ -46,7 +46,10 @@ impl Machine {
     /// What `box route` prints for a route.
     fn answer(&self, name: &str, status: u16, body: &Value) {
         let printed = json!({ "status": status, "body": body.to_string() });
-        std::fs::write(self.path().join("answers").join(name), format!("{printed}\n")).unwrap();
+        // Put in place whole, as a read may come at any moment.
+        let file = self.path().join("answers").join(name);
+        std::fs::write(file.with_extension("new"), format!("{printed}\n")).unwrap();
+        std::fs::rename(file.with_extension("new"), file).unwrap();
     }
 
     /// What `box route` was asked, a request a line.
@@ -174,10 +177,26 @@ fn a_machines_list_is_followed_by_reading_it_again() {
     let machine = Machine::new();
     machine.answer("info", 200, &machine_info(support::current_features()));
     machine.answer("list", 200, &list());
-    let follow = machine.client().follow_sessions(Timing { retry_after: Duration::ZERO, ..Timing::default() });
+    // Read again at once each time, so the second read follows from what the machine says next.
+    let follow = machine.client().follow_sessions(Timing { retry_after: Duration::ZERO, lists_again: Duration::ZERO, ..Timing::default() });
     let ListUpdate::Listing(listing) = follow.next_blocking().unwrap() else { panic!("the list") };
     assert_eq!(listing.sidebar().projects[0].sessions, vec!["ses_m"]);
     assert_eq!(listing.at(), Some("4"));
-    // Read whole, not followed: a machine over SSH answers once.
-    assert!(machine.asked().iter().any(|asked| asked["path"] == json!("kuvo/sessions/list")));
+
+    // A session made there: read again from where it was, the list has it.
+    let made = json!({ "at": "5", "sessions": { "ses_n": { "kind": "chat", "directory": "/home/me/.kuvo-code/chats", "created": 3, "updated": 4 } }, "projects": { "/home/me/site": { "updated": 2 } } });
+    machine.answer("list", 200, &made);
+    let listing = loop {
+        if let ListUpdate::Listing(listing) = follow.next_blocking().unwrap()
+            && listing.at() == Some("5")
+        {
+            break listing;
+        }
+    };
+    assert_eq!(listing.sidebar().chats, vec!["ses_n"]);
+    assert_eq!(listing.sidebar().projects[0].sessions, vec!["ses_m"]);
+    drop(follow);
+    // Read whole, not followed (a machine over SSH answers once), then from where it was.
+    let paths: Vec<Value> = machine.asked().iter().map(|asked| asked["path"].clone()).collect();
+    assert_eq!(paths[..3], [json!("kuvo/info"), json!("kuvo/sessions/list"), json!("kuvo/sessions/list?since=4")]);
 }

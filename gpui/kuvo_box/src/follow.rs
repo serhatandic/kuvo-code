@@ -171,49 +171,75 @@ impl Stop {
     }
 }
 
-/// What a conversation's reader is asked for: its newest messages again, earlier ones, or to end.
-/// Asked again while it reads, it reads once more after.
+/// What a conversation's reader is asked for: its newest messages again, earlier ones, or to end;
+/// and, while nothing streams (a machine over SSH, or a stream that can't be opened again yet), to
+/// read the newest again on a timer. Asked again while it reads, it reads once more after.
 #[derive(Default)]
 struct Wants {
-    state: Mutex<(bool, bool, bool)>,
+    state: Mutex<Wanted>,
     woken: Condvar,
 }
 
+#[derive(Default)]
+struct Wanted {
+    again: bool,
+    earlier: bool,
+    closed: bool,
+    /// How often the newest is read again with nothing asking, and when it's next due.
+    timer: Option<Duration>,
+    due: Option<Instant>,
+}
+
 impl Wants {
-    fn again(&self) {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).0 = true;
+    fn change(&self, change: impl FnOnce(&mut Wanted)) {
+        change(&mut self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
         self.woken.notify_all();
+    }
+
+    fn again(&self) {
+        self.change(|wanted| wanted.again = true);
     }
 
     fn earlier(&self) {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).1 = true;
-        self.woken.notify_all();
+        self.change(|wanted| wanted.earlier = true);
     }
 
     fn close(&self) {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).2 = true;
-        self.woken.notify_all();
+        self.change(|wanted| wanted.closed = true);
     }
 
-    /// What's wanted (the newest again, earlier ones), waiting for it up to `most` (none: as long
-    /// as it takes); the newest again once `most` has gone by; none once it's ended.
-    fn next(&self, most: Option<Duration>) -> Option<(bool, bool)> {
-        let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let waiting = |state: &mut (bool, bool, bool)| !state.0 && !state.1 && !state.2;
-        let (mut state, timed_out) = match most {
-            Some(most) => {
-                let (state, result) = self.woken.wait_timeout_while(state, most, waiting).unwrap_or_else(|poisoned| poisoned.into_inner());
-                (state, result.timed_out())
+    /// Reads on a timer from now on (`every`), or only as asked (none).
+    fn read_every(&self, every: Option<Duration>) {
+        self.change(|wanted| {
+            if wanted.timer != every {
+                wanted.timer = every;
+                wanted.due = every.map(|every| Instant::now() + every);
             }
-            None => (self.woken.wait_while(state, waiting).unwrap_or_else(|poisoned| poisoned.into_inner()), false),
-        };
-        if state.2 {
-            return None;
+        });
+    }
+
+    /// What's wanted (the newest again, earlier ones), waiting for it, or for the timer to come
+    /// due (asking for earlier ones doesn't put it off); none once it's ended.
+    fn next(&self) -> Option<(bool, bool)> {
+        let mut wanted = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            if wanted.closed {
+                return None;
+            }
+            let due = wanted.due.is_some_and(|due| Instant::now() >= due);
+            if wanted.again || wanted.earlier || due {
+                let asked = (wanted.again || due, wanted.earlier);
+                (wanted.again, wanted.earlier) = (false, false);
+                if asked.0 {
+                    wanted.due = wanted.timer.map(|every| Instant::now() + every);
+                }
+                return Some(asked);
+            }
+            wanted = match wanted.due {
+                Some(due) => self.woken.wait_timeout(wanted, due.saturating_duration_since(Instant::now())).unwrap_or_else(|poisoned| poisoned.into_inner()).0,
+                None => self.woken.wait(wanted).unwrap_or_else(|poisoned| poisoned.into_inner()),
+            };
         }
-        let wanted = (state.0 || timed_out, state.1);
-        state.0 = false;
-        state.1 = false;
-        Some(wanted)
     }
 }
 
@@ -475,24 +501,19 @@ fn is_running(client: &BoxClient, place: Where, session: &str) -> Option<bool> {
     Some(active.get("data")?.as_object()?.contains_key(session))
 }
 
-/// Reads as it's asked to (or, `most` given, on that timer), until it's ended or the conversation's
+/// Reads as it's asked to (and on its timer while one's set), until it's ended or the conversation's
 /// gone.
-fn reader(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUpdate>, stop: &Stop, wants: &Wants, most: Option<Duration>) {
-    // On the timer, by when it's next due: asking for earlier ones meanwhile doesn't put it off.
-    let mut due = most.map(|most| Instant::now() + most);
-    while let Some((again, earlier)) = wants.next(due.map(|due| due.saturating_duration_since(Instant::now()))) {
+fn reader(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUpdate>, stop: &Stop, wants: &Wants) {
+    while let Some((again, earlier)) = wants.next() {
         if stop.is_stopped() {
             return;
         }
         if earlier {
             read_earlier(client, shown, latest);
         }
-        if again {
-            if !read(client, shown, latest) {
-                stop.stop();
-                return;
-            }
-            due = most.map(|most| Instant::now() + most);
+        if again && !read(client, shown, latest) {
+            stop.stop();
+            return;
         }
     }
 }
@@ -519,49 +540,63 @@ fn follow_conversation(client: BoxClient, session: String, timing: Timing, lates
 
     if !client.streams() {
         // Read now, then again on the timer, and earlier ones as asked.
+        wants.read_every(Some(timing.conversation_again));
         wants.again();
-        reader(&client, &shown, latest, stop, wants, Some(timing.conversation_again));
+        reader(&client, &shown, latest, stop, wants);
         return;
     }
 
-    // Reads come on a thread of their own, so the events keep coming meanwhile; it ends with this.
+    // Reads come on a thread of their own, so the events keep coming meanwhile. Once the box no
+    // longer streams, the reader goes on alone, on its timer, until the follow ends.
     thread::scope(|scope| {
         let (client, shown) = (&client, &shown);
-        let reads = thread::Builder::new().name("kuvo-box conversation reads".into()).spawn_scoped(scope, move || reader(client, shown, latest, stop, wants, None));
-        if reads.is_ok() {
-            follow_events(client, place, timing, latest, stop, shown, wants);
+        let reads = thread::Builder::new().name("kuvo-box conversation reads".into()).spawn_scoped(scope, move || reader(client, shown, latest, stop, wants));
+        if reads.is_err() || !follow_events(client, place, timing, latest, stop, shown, wants) {
+            wants.close();
         }
-        wants.close();
     });
 }
 
-fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Latest<ConversationUpdate>, stop: &Stop, shown: &Mutex<Shown>, wants: &Wants) {
+/// Follows the conversation's events, applying them as they come. While its stream can't be opened
+/// again, the reader reads on its timer meanwhile; once the box doesn't stream at all, it's handed
+/// over to the reader for good: true then, false once it's ended.
+fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Latest<ConversationUpdate>, stop: &Stop, shown: &Mutex<Shown>, wants: &Wants) -> bool {
     let mut backoff = Backoff::new(timing);
     while !stop.is_stopped() {
+        if !client.streams() {
+            wants.read_every(Some(timing.conversation_again));
+            wants.again();
+            return true;
+        }
         let mut stream = match client.open(&Request::get(place.events_route()), &|closer| stop.hold(closer)) {
             Ok(stream) if (200..300).contains(&stream.status) => stream,
             Ok(mut stream) => {
                 let refusal = refusal(&mut stream);
                 stop.release();
+                // Read on the timer meanwhile.
+                wants.read_every(Some(timing.conversation_again));
                 latest.put(ConversationUpdate::Failed(Error::Refused(refusal)));
                 if backoff.wait(stop) {
-                    return;
+                    return false;
                 }
                 continue;
             }
             Err(error) => {
                 stop.release();
                 if stop.is_stopped() {
-                    return;
+                    return false;
                 }
+                // Read on the timer meanwhile.
+                wants.read_every(Some(timing.conversation_again));
                 latest.put(ConversationUpdate::Failed(error));
                 if backoff.wait(stop) {
-                    return;
+                    return false;
                 }
                 continue;
             }
         };
-        // Read once it's listening, so nothing from before is missed.
+        // Read once it's listening, so nothing from before is missed; as asked from now on.
+        wants.read_every(None);
         wants.again();
         loop {
             match lines::next_event(&mut *stream.reader) {
@@ -595,8 +630,11 @@ fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Late
             }
         }
         stop.release();
+        // Dropped: read on the timer until it's open again.
+        wants.read_every(Some(timing.conversation_again));
         if stop.is_stopped() || backoff.wait(stop) {
-            return;
+            return false;
         }
     }
+    false
 }

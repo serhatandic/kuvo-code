@@ -349,12 +349,13 @@ fn a_composer_sends_its_fields_and_asks_the_box_what_a_typed_text_means() {
     // as typed and what they reply to, and the box writes what the agent reads.
     let mut plan = Draft::new("msg_p", "/plan sketch it");
     plan.files = vec![File { uri: "data:image/png;base64,AA==".into(), name: None }];
+    plan.widget = Some("Pick one".into());
     let Sent::Typed { answer, message } = client.send_draft("ses_1", &plan, Some(&quote)).unwrap() else { panic!("typed") };
     assert_eq!((answer.agent.as_deref(), message.as_deref()), (Some("plan"), Some("msg_p")));
     let seen = stand_in.seen();
     let [.., typed, sent] = &seen[..] else { panic!() };
     assert_eq!(typed.body.as_ref().unwrap(), &json!({ "id": "msg_p", "text": "/plan sketch it", "files": true, "side": false }));
-    assert_eq!(sent.body.as_ref().unwrap(), &json!({ "id": "msg_p", "words": "> the line\n\nsketch it", "keyword": "/plan", "delivery": "steer", "files": [{ "uri": "data:image/png;base64,AA==" }] }));
+    assert_eq!(sent.body.as_ref().unwrap(), &json!({ "id": "msg_p", "words": "> the line\n\nsketch it", "keyword": "/plan", "delivery": "steer", "files": [{ "uri": "data:image/png;base64,AA==" }], "widget": "Pick one" }));
 
     // A /loop's first goes now, whatever was asked.
     let mut looped = Draft::new("msg_l", "/loop every hour check");
@@ -611,4 +612,33 @@ fn after_a_gap_a_conversation_starts_again_from_its_newest() {
     // Not 1–3 then 7–9, with 4–6 missing: the newest, and the way back from them.
     assert_eq!(shown.messages.iter().map(Message::id).collect::<Vec<_>>(), vec!["msg_7", "msg_8", "msg_9"]);
     assert_eq!(shown.earlier, None, "a page that wasn't full has nothing before it");
+}
+
+#[test]
+fn a_conversation_whose_stream_cant_be_opened_is_read_on_a_timer_meanwhile() {
+    let stored = std::sync::Arc::new(std::sync::Mutex::new(json!([user("msg_1", "Hi", 1.0)])));
+    let messages = stored.clone();
+    let stand_in = StandInBox::start(move |seen| match seen.route() {
+        "kuvo/info" => Answer::json(200, mac_info(current_features())),
+        "api/session/ses_1" => Answer::json(200, json!({ "data": { "id": "ses_1" } })),
+        // Its events can't be followed now.
+        "api/event" => Answer::json(503, json!({ "message": "The engine is starting." })),
+        "api/session/ses_1/message" => {
+            let mut newest: Vec<Value> = messages.lock().unwrap().as_array().unwrap().clone();
+            newest.reverse();
+            Answer::json(200, json!({ "data": newest }))
+        }
+        _ => Answer::json(404, json!({})),
+    });
+    let (_home, _serve, client) = this_mac(&stand_in);
+    let follow = client.follow_conversation("ses_1", Timing { conversation_again: Duration::ZERO, ..at_once() });
+    // A reply comes while nothing streams: it's read all the same.
+    *stored.lock().unwrap() = json!([user("msg_1", "Hi", 1.0), assistant("msg_2", "Hello.", 2.0)]);
+    loop {
+        if let Some(words) = last_words(&follow.next_blocking().expect("the follow goes on"))
+            && words == "Hello."
+        {
+            break;
+        }
+    }
 }

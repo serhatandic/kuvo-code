@@ -22,8 +22,10 @@ that. This note is how phase 2 makes a machine stream, as this Mac's own box doe
    session event reads the list again. Lists and everything else stay on `box route`.
    - Costs: the client handles the engine's password, and two kinds of transport per machine. A
      coding agent's conversation needs a second tunnel, to the agents bridge.
-2. **The box's kept server** (`box.serve`, "Kept for clients"). The client asks for it once with
-   `box route` (`POST kuvo/box/serve {needed: true}`), reads where it answers from `run/serve.json`
+2. **The box's kept server** (`box.serve`, "Kept for clients"). The client asks for it with
+   `box route` each time it connects (`POST kuvo/box/serve {needed: true}`), and leaves it asked
+   for as it quits, for the next time, as the Mac app does for a box attached in place (PROTOCOL.md,
+   "The app attached to this Mac's own box"). It reads where it answers from `run/serve.json`
    (`{pid, port, password, kept: true}`), and opens one tunnel to it. Then every route streams
    through the box, as on this Mac: the list's `…/events`, `api/event`, and
    `kuvo/agents/api/event`. `LocalServer` already speaks it; only the way to the port is new.
@@ -53,11 +55,13 @@ user's or the lead's agreement.
     stream), saying `x-kuvo-from: mac`.
   - Like `LocalServer::recorded`, it reads `run/serve.json` again when a request fails to
     connect: the box's server moves after an update.
-  - `streams()` is true while the tunnel is up. When the tunnel or the server is down, it falls
-    back to `box route` for that request.
-- `BoxClient::machine` uses the tunnel where the box lists `box.serve` and `box.serve.mac`, and `box route` where it
-  doesn't. The follows don't change: they already stream when the transport does, and poll when
-  it doesn't.
+  - `streams()` is true while the tunnel is up, false while it's down (a request then goes by
+    `box route`).
+- `BoxClient::machine` uses the tunnel where the box lists `box.serve` and `box.serve.mac`, and
+  `box route` where it doesn't. The follows don't change: they stream while the transport does.
+  The session list's checks `streams()` each time it opens its route again, and reads on its timer
+  while it's false. A conversation's reads on its timer while its stream can't be opened, and is
+  handed to its timed reader for good once `streams()` is false.
 - Tests use a stand-in `ssh` that opens the forward with a local Unix socket to the stand-in box,
   and the existing stand-in box. No real machine is involved.
 - Its footprint: the socket goes in `/tmp/kuvo-ssh-<uid>` (footprint.md's one exception, which
