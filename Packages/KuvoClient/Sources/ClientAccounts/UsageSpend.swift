@@ -67,7 +67,8 @@ public struct UsageSpend: Hashable, Sendable {
             guard let date, let sum = byDate[date], used(sum) else { continue }
             periods.append(Period(id: id, title: title, cost: sum.cost, tokens: sum.tokens, unknown: sum.unknown.sorted()))
         }
-        let all = byDate.values.reduce((cost: 0.0, tokens: 0, unknown: Set<String>())) { ($0.cost + $1.cost, $0.tokens + $1.tokens, $0.unknown.union($1.unknown)) }
+        // (Added up day by day, the oldest first: the same dollars every time it's drawn.)
+        let all = window.compactMap { byDate[$0] }.reduce((cost: 0.0, tokens: 0, unknown: Set<String>())) { ($0.cost + $1.cost, $0.tokens + $1.tokens, $0.unknown.union($1.unknown)) }
         if used(all) { periods.append(Period(id: "last30", title: "Last 30 Days", cost: all.cost, tokens: all.tokens, unknown: all.unknown.sorted())) }
         self.periods = periods
         trend = all.tokens > 0 ? window.map { TrendDay(date: $0, tokens: byDate[$0]?.tokens ?? 0) } : []
@@ -120,8 +121,9 @@ public struct UsageLayout: Hashable, Sendable {
         self.init(order: (strings("providerOrder") ?? []).map(Self.service(of:)).filter { seen.insert($0).inserted }, placed: strings("placed").map(Set.init))
     }
 
-    /// The panel's own order, where the layout says none: the three it began with, then the rest by name.
-    public static let defaultOrder = ["claude", "codex", "cursor", "antigravity", "copilot", "grok", "opencode", "openrouter", "zai"]
+    /// The panel's own order, where the layout says none (UsageKit's `ProviderCatalog`): the three
+    /// it began with, then the rest by name.
+    public static let defaultOrder = ["claude", "codex", "cursor", "antigravity", "copilot", "grok", "ollama", "opencode", "openrouter", "zai"]
 
     /// `services` in the layout's order: those it names first, as it names them, then the rest in the
     /// panel's own order, then any it doesn't know, as given.

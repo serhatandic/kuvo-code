@@ -4488,9 +4488,13 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   $0, and a box that couldn't be read gives none. A service with use and no plan limits row
   (OpenCode's Zen alone) is a row of its own. The cards go in the order of the usage settings'
   `layout.providerOrder` (a card `claude@…` is Claude's place), the rest in the panel's own
-  (Claude, Codex, Cursor, Antigravity, Copilot, Grok, OpenCode, OpenRouter, Z.ai); a line shows
+  (Claude, Codex, Cursor, Antigravity, Copilot, Grok, Ollama, OpenCode, OpenRouter, Z.ai), the
+  trend after an account's limits and the periods last; a line shows
   where `layout.placed` holds its meter (`<service>.today`, `.yesterday`, `.last30`, `.trend`),
-  and all of them while `layout` was never set. The phone reads every box it reaches this way, a
+  and all of them while `layout` was never set. A box that lists a service without its `totals`
+  doesn't speak for it. Not yet followed: cards turned off (`providers`) and the limits' own
+  meters in `placed`, which the Mac judges by what it finds there (#631 H1 moves that to the box).
+  The phone reads every box it reaches this way, a
   machine's on Linux too, with no Mac app open; a box from before `usage.history` answers 404 and
   shows no spend (the update gate brings it up to date).
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail

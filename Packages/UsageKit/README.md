@@ -66,8 +66,7 @@ here.
   limits, its resets with a Use control that the host spends through its box, once, confirmed in
   place (`askReset`, `useReset`, `HostResetFlow`); the panel's own claims (`ResetClaimService`)
   stand down for a provider the host covers, and its own lines of the same facts aren't shown again
-  beside them. `kuvo/usage` marks the rows whose place the boxes' rows take (`covers`), without
-  their limits.
+  beside them.
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.
 - **A card of the host's** (`Embedding/HostCard.swift`): shown at the foot of the dashboard, above
