@@ -188,8 +188,10 @@ the first error, rather than test an older batch. Call it directly, never inside
 `scripts/heavy.sh`: it takes its turn itself, after any wait for a build, so it holds no slot while
 it waits. Problems found go to fixes merged to main, which the next batch checks.
 
-Between batches, `scripts/batch-build.sh --compile-only [phone|all]` checks that main still
-compiles, the phone app and its tests, after each merge: in one folder kept from check to check
+Between batches, `scripts/batch-build.sh --compile-only [mac|phone|all]` checks that main still
+compiles after each merge: the phone app and its tests, and the retired Mac app and its tests
+(`mac`, in the `mac-build` lane; it has no batch, but the release still builds it for the box
+release, so a shared package's change mustn't break it): in one folder kept from check to check
 (`KuvoBatch/compile`), whose files are brought to main's one by one (only those that changed are
 written again), so it compiles only what changed, in minutes. A batch, a compile check and test
 runs each take the lane slot heavy.sh gives them, and build in folders of their own, under locks

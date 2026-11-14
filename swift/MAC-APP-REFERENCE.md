@@ -13,6 +13,11 @@ Its code stays here **only to read**, for two things:
 **Never edit it.** Don't fix, update or reformat it, and don't move logic into it. A finding goes
 to the box or the desktop app.
 
+The one exception, until the box makes its own release (#713): the release still builds this app
+(below), so it has to keep compiling against the shared packages. When a change to one of them
+breaks it (`scripts/batch-build.sh --compile-only mac`, after each merge, says so), make the
+smallest change here that compiles again, with nothing else in it, and say so in your report.
+
 ## What's the retired app
 
 - `KuvoCode/`: the app (views, stores, design, keeper, resources), and `KuvoCode.xcodeproj`
@@ -25,7 +30,8 @@ to the box or the desktop app.
 ## What's not, and is kept up
 
 The phone (`../kuvo-code-ios`) builds against these packages, and the desktop app's tests read
-some of them, so they're maintained like any other code:
+some of them, so they're maintained like any other code (and this app's compile check, above,
+says when a change to one breaks it):
 
 - `KuvoClient/`, `KuvoLink/` (with the box's link as built, `kuvo-link.js`), `KuvoVoice/`,
   `OpenCodeKit/` and `Textual/`

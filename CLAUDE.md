@@ -4,7 +4,7 @@ A native macOS harness for coding agents that works with any model. It runs the 
 
 Strict rules are marked (strict): never bend them. Contributor docs are in `CONTRIBUTING.md`; longer notes for sessions are in `docs/`.
 
-**The Swift Mac app is retired: read it, never edit it (strict).** Kuvo Code 1.0 is the desktop app in `gpui/`. The Swift app's code (`swift/KuvoCode`, its tests, `swift/Tests`, `swift/UsageKit`, `swift/Config`) stays only as the reference for logic still to move into the box and for what the desktop app must match: `swift/MAC-APP-REFERENCE.md`. The packages the phone builds against (`KuvoClient`, `KuvoLink`, `KuvoVoice`, `OpenCodeKit`, `Textual`) are kept up as before.
+**The Swift Mac app is retired: read it, never edit it (strict).** Kuvo Code 1.0 is the desktop app in `gpui/`. The Swift app's code (`swift/KuvoCode`, its tests, `swift/Tests`, `swift/UsageKit`, `swift/Config`) stays only as the reference for logic still to move into the box and for what the desktop app must match: `swift/MAC-APP-REFERENCE.md`, which also names the one exception (keeping it compiling for the box release until #713). The packages the phone builds against (`KuvoClient`, `KuvoLink`, `KuvoVoice`, `OpenCodeKit`, `Textual`) are kept up as before.
 
 ## The architecture: equal boxes, and clients (strict)
 
