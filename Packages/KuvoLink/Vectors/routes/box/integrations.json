@@ -236,6 +236,10 @@
       "how" : "In the browser",
       "id" : "x",
       "kind" : "Social",
+      "signInCookie" : {
+        "domain" : "x.com",
+        "name" : "auth_token"
+      },
       "site" : "https://x.com",
       "summary" : "Posts, replies and messages",
       "symbol" : "at",
@@ -246,6 +250,10 @@
       "how" : "In the browser",
       "id" : "linkedin",
       "kind" : "Social",
+      "signInCookie" : {
+        "domain" : "linkedin.com",
+        "name" : "li_at"
+      },
       "site" : "https://www.linkedin.com",
       "summary" : "Your feed, posts and messages",
       "symbol" : "person.2",
@@ -256,6 +264,10 @@
       "how" : "In the browser",
       "id" : "reddit",
       "kind" : "Social",
+      "signInCookie" : {
+        "domain" : "reddit.com",
+        "name" : "reddit_session"
+      },
       "site" : "https://www.reddit.com",
       "summary" : "Posts and comments",
       "symbol" : "text.bubble",
