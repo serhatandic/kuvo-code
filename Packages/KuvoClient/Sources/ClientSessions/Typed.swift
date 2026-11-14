@@ -23,8 +23,8 @@ public enum Typed {
     }
 
     /// What's sent: the text as typed, whether pictures or files are attached, whether the side
-    /// thread's tag is on the composer, why the conversation's model can't run (as the client shows
-    /// it), and the model picked last in "Who reads it".
+    /// thread's tag is on the composer, and the model picked last in "Who reads it". (Whether the
+    /// conversation's model can run is the box's to say: it refuses one that can't itself.)
     public struct Ask: Encodable, Sendable {
         /// This send's own id: the same send again (resent after its connection dropped) is
         /// answered as it was, never done twice.
@@ -32,15 +32,13 @@ public enum Typed {
         public var text: String
         public var files: Bool
         public var side: Bool
-        public var refusal: String?
         public var reviewer: ModelRef?
 
-        public init(id: String, text: String, files: Bool, side: Bool = false, refusal: String? = nil, reviewer: ModelRef? = nil) {
+        public init(id: String, text: String, files: Bool, side: Bool = false, reviewer: ModelRef? = nil) {
             self.id = id
             self.text = text
             self.files = files
             self.side = side
-            self.refusal = refusal
             self.reviewer = reviewer
         }
     }

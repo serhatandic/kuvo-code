@@ -1199,9 +1199,9 @@ final class SessionModel {
 
     /// Sends the composer's draft as it is (its text, files and what it replies to), emptying it
     /// first: what can't be sent comes back to it. `unavailable`: why the session's model can't
-    /// run (its account signed out of, or the model gone from it: `Catalog.refusal`), said
-    /// instead, the draft kept: the engine would take the message and drop it without a word. What
-    /// a "/" or "!" text means is its box's to say (`submit`).
+    /// run, as its box words it (`Catalog.refusal`), said instead of a plain message, the draft
+    /// kept: the engine would take the message and drop it without a word. What a "/" or "!" text
+    /// means, a model that can't run too, is its box's to say (`submit`).
     func submitDraft(for model: Model?, queue: Bool, unavailable: String? = nil) {
         failure = nil
         // Carrying on with the coding agents: it stays in the composer, and goes along with it.
@@ -1231,7 +1231,7 @@ final class SessionModel {
         draftText = ""
         draftFiles = []
         restoredGoal = ""
-        submit(text, files: files, for: model, queue: queue, quotes: draftQuotes, side: asksSideThread, refusal: unavailable)
+        submit(text, files: files, for: model, queue: queue, quotes: draftQuotes, side: asksSideThread)
     }
 
     /// The draft as a follow-up in the side thread that shows, answered with the thread so far. One
@@ -1255,10 +1255,10 @@ final class SessionModel {
     /// question, a handoff, a review, a /loop's wake-up, Autopilot on) and says what's left to do
     /// here. What can't be sent goes back to the composer, saying why. In the order they're sent.
     /// `quotes`: the composer's replies, which go with a message (and stay in it otherwise);
-    /// `side`: the side thread's tag is on the composer; `refusal`: why its model can't run.
+    /// `side`: the side thread's tag is on the composer (whether its model can run is its box's to say).
     /// `keptElsewhere`: what's sent is kept on disk until it's gone already (a new session's first
     /// message, kept by its new-session composer), so it isn't kept twice.
-    func submit(_ text: String, files: [URL], for model: Model?, queue: Bool, quotes: [Drafts.Quote] = [], side: Bool = false, refusal: String? = nil, keptElsewhere: Bool = false) {
+    func submit(_ text: String, files: [URL], for model: Model?, queue: Bool, quotes: [Drafts.Quote] = [], side: Bool = false, keptElsewhere: Bool = false) {
         sent += 1
         // A message goes at once, whatever is being asked of the box.
         guard Typed.asksBox(text) else { return sendMessage(text, files: files, for: model, queue: queue, keptElsewhere: keptElsewhere) }
@@ -1280,7 +1280,7 @@ final class SessionModel {
         }
         let shownBefore = shownSideQuestion
         if let onSide, goalBridge()?.showAsking(onSide) == true { shownSideQuestion = onSide.id }
-        let ask = Typed.Ask(id: shown, text: text, files: !files.isEmpty, side: side, refusal: refusal, reviewer: Catalog.lastReviewer)
+        let ask = Typed.Ask(id: shown, text: text, files: !files.isEmpty, side: side, reviewer: Catalog.lastReviewer)
         let route = Typed.route(id)
         // ("/" and "!" texts in the order they were sent.)
         let previous = typedAsks

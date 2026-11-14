@@ -1,0 +1,66 @@
+{
+  "why": "What a session's model being ready means for a composer, decided and worded by the box (PROTOCOL.md, \"A session's model\": `refusal`, `choose`, `action` on kuvo/sessions/models, and the typed send's refusal): the box's link/work/model-words.ts gives `readiness` for each `state` (what it says of the model; `known`, the name it last listed for one gone from its list). A client decodes the two together, as kuvo/sessions/models answers them, and draws only that: KuvoClient's SessionModelState and gpui's kuvo_box::models::ModelState are held to these. Product words: no computer's name, no settings page.",
+  "cases": [
+    {
+      "about": "a model that runs",
+      "state": { "model": { "providerID": "anthropic", "id": "claude-opus-5-5", "variant": "high" }, "name": "Claude Opus 5.5", "runs": true },
+      "readiness": {}
+    },
+    {
+      "about": "none to run on",
+      "state": { "model": null, "runs": false, "missing": "model" },
+      "readiness": { "refusal": "Choose a model to send it.", "choose": true, "action": { "do": "choose", "label": "Choose a Model", "help": "Choose a model" } }
+    },
+    {
+      "about": "a sign-in to an engine provider",
+      "state": { "model": { "providerID": "github-copilot", "id": "gpt-5.5" }, "name": "GPT-5.5", "runs": false, "missing": "signIn", "account": { "id": "github-copilot", "name": "GitHub Copilot" } },
+      "readiness": { "refusal": "GPT-5.5 needs a sign-in to GitHub Copilot: sign in, or choose another model.", "action": { "do": "signIn", "label": "Sign In", "help": "Sign in to GitHub Copilot" } }
+    },
+    {
+      "about": "a sign-in to a coding agent's account you added, named as Accounts names it",
+      "state": { "model": { "providerID": "claude-code@work", "id": "claude-opus-5-5" }, "runs": false, "missing": "signIn", "account": { "id": "claude-code@work", "name": "Claude Code · Work", "label": "Work" } },
+      "readiness": { "refusal": "claude-opus-5-5 needs a sign-in to Claude Code · Work: sign in, or choose another model.", "action": { "do": "signIn", "label": "Sign In", "help": "Sign in to Claude Code · Work" } }
+    },
+    {
+      "about": "a key, where a key is the only way offered",
+      "state": { "model": { "providerID": "deepseek", "id": "deepseek-chat" }, "name": "DeepSeek Chat", "runs": false, "missing": "key", "account": { "id": "deepseek", "name": "DeepSeek" } },
+      "readiness": { "refusal": "DeepSeek Chat needs a DeepSeek key: add one, or choose another model.", "action": { "do": "addKey", "label": "Add Key", "help": "Add a DeepSeek key" } }
+    },
+    {
+      "about": "a key, for a provider whose plan goes through a coding agent (\"an\" before a vowel and before xAI)",
+      "state": { "model": { "providerID": "xai", "id": "grok-4.7" }, "name": "Grok 4.7", "runs": false, "missing": "key", "account": { "id": "xai", "name": "xAI" }, "plan": { "name": "SuperGrok", "agent": "Grok", "provider": "grok-cli" } },
+      "readiness": { "refusal": "Grok 4.7 needs an xAI key: add one, or choose another model (with a SuperGrok plan, one under Grok).", "action": { "do": "addKey", "label": "Add Key", "help": "Add an xAI key (with a SuperGrok plan, choose a model under Grok instead)" } }
+    },
+    {
+      "about": "a key for OpenAI, whose ChatGPT plan is Codex's",
+      "state": { "model": { "providerID": "openai", "id": "gpt-5.5" }, "name": "GPT-5.5", "runs": false, "missing": "key", "account": { "id": "openai", "name": "OpenAI" }, "plan": { "name": "ChatGPT", "agent": "Codex", "provider": "codex-cli" } },
+      "readiness": { "refusal": "GPT-5.5 needs an OpenAI key: add one, or choose another model (with a ChatGPT plan, one under Codex).", "action": { "do": "addKey", "label": "Add Key", "help": "Add an OpenAI key (with a ChatGPT plan, choose a model under Codex instead)" } }
+    },
+    {
+      "about": "a key, for a name said letter by letter (\"an NVIDIA key\")",
+      "state": { "model": { "providerID": "nvidia", "id": "nemotron-4" }, "name": "Nemotron 4", "runs": false, "missing": "key", "account": { "id": "nvidia", "name": "NVIDIA" } },
+      "readiness": { "refusal": "Nemotron 4 needs an NVIDIA key: add one, or choose another model.", "action": { "do": "addKey", "label": "Add Key", "help": "Add an NVIDIA key" } }
+    },
+    {
+      "about": "a coding agent to install",
+      "state": { "model": { "providerID": "cursor", "id": "composer-2" }, "runs": false, "missing": "install", "account": { "id": "cursor", "name": "Cursor" } },
+      "readiness": { "refusal": "composer-2 needs Cursor installed: install it, or choose another model.", "action": { "do": "install", "label": "Install", "help": "Install Cursor" } }
+    },
+    {
+      "about": "gone from its provider's list, by the name it was last listed by",
+      "state": { "model": { "providerID": "anthropic", "id": "claude-3-opus" }, "runs": false, "missing": "gone", "account": { "id": "anthropic", "name": "Anthropic" } },
+      "known": "Claude 3 Opus",
+      "readiness": { "refusal": "Claude 3 Opus is no longer among Anthropic’s models: choose another model.", "choose": true, "action": { "do": "choose", "label": "Choose a Model", "help": "Choose another model" } }
+    },
+    {
+      "about": "gone with its account (one you removed), never listed since the box started",
+      "state": { "model": { "providerID": "claude-code@old", "id": "claude-opus-5-5" }, "runs": false, "missing": "gone" },
+      "readiness": { "refusal": "claude-opus-5-5 is no longer available: choose another model.", "choose": true, "action": { "do": "choose", "label": "Choose a Model", "help": "Choose another model" } }
+    },
+    {
+      "about": "a Custom Auto list emptied, by its name",
+      "state": { "model": { "providerID": "auto", "id": "list_empty" }, "name": "Bugfixes", "runs": false, "missing": "gone" },
+      "readiness": { "refusal": "Bugfixes is no longer available: choose another model.", "choose": true, "action": { "do": "choose", "label": "Choose a Model", "help": "Choose another model" } }
+    }
+  ]
+}

@@ -64,13 +64,15 @@ describe("what a whole text means", () => {
 // ——— The route ———
 
 type Asked = { method: string; path: string; folder: string | null; body: any }
-type Conversation = { id: string; parentID?: string; agent?: string; location: { directory: string }; time: { created: number; updated: number }; metadata?: any }
+type Conversation = { id: string; parentID?: string; agent?: string; model?: { providerID: string; id: string }; location: { directory: string }; time: { created: number; updated: number }; metadata?: any }
 
 let engine: ReturnType<typeof Bun.serve>
 let bridge: ReturnType<typeof Bun.serve>
 let engineAsked: Asked[] = []
 let bridgeAsked: Asked[] = []
 let conversations: Record<string, Conversation> = {}
+/** The coding agents' conversations, the bridge's. */
+let bridgeConversations: Record<string, Conversation> = {}
 let bridgeRuns = true
 const COMMANDS = { status: 200, body: { data: [{ name: "init", description: "Set it up" }, { name: "review", description: "Review" }, { name: "goal", description: "Goal" }] } as unknown }
 let commandsAnswer = COMMANDS
@@ -81,6 +83,8 @@ let held: { reached: () => void; release: Promise<void> } | null = null
 /** What the bridge answers a goal, side question, handoff or review: its status and body. */
 let bridgeSays: (asked: Asked) => { status: number; body: unknown } = () => ({ status: 200, body: {} })
 let typedRoute: typeof import("../src/link/areas/typed").typedRoute
+let forgetModelLists: () => void
+let forgetModelNames: () => void
 let TYPED_SENT: string
 let TYPED_ROUTE: RegExp
 
@@ -101,7 +105,9 @@ function startBridge() {
         held.reached()
         await held.release
       }
-      // (It has none of the engine's conversations.)
+      // (It has none of the engine's conversations: its own only.)
+      const own = /^\/api\/session\/([^/]+)$/.exec(each.path)?.[1]
+      if (own && bridgeConversations[decodeURIComponent(own)]) return Response.json({ data: bridgeConversations[decodeURIComponent(own)] })
       if (/^\/api\/session\//.test(each.path)) return Response.json({ message: "Not here." }, { status: 404 })
       const said = bridgeSays(each)
       return Response.json(said.body, { status: said.status })
@@ -111,6 +117,7 @@ function startBridge() {
 
 beforeAll(async () => {
   ;({ typedRoute, TYPED_ROUTE, TYPED_SENT } = await import("../src/link/areas/typed"))
+  ;({ forgetModelLists, forgetModelNames } = await import("../src/link/work/model-rule"))
   engine = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -149,9 +156,13 @@ beforeEach(() => {
   bridgeRuns = true
   commandsAnswer = COMMANDS
   engineLists = {}
+  // (What the engine listed in one test isn't another's, nor the names it kept.)
+  forgetModelLists()
+  forgetModelNames()
   rmSync(TYPED_SENT, { force: true })
   held = null
   bridgeSays = () => ({ status: 200, body: {} })
+  bridgeConversations = {}
   conversations = {
     ses_main: { id: "ses_main", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 }, metadata: {} },
     ses_sub: { id: "ses_sub", parentID: "ses_main", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 } },
@@ -296,13 +307,11 @@ describe("kuvo/sessions/<id>/typed", () => {
   })
 
   test("a model its provider is retiring can still read a review: the composer offers it", async () => {
-    const { forgetModelLists } = await import("../src/link/work/model-rule")
-    forgetModelLists()
     engineLists = {
       "/api/provider": [{ id: "deepseek" }],
       "/api/model": [{ id: "v3", providerID: "deepseek", name: "DeepSeek V3", status: "deprecated" }, { id: "v4", providerID: "deepseek", name: "DeepSeek V4" }],
       "/api/integration": [{ id: "deepseek", name: "DeepSeek", methods: [{ type: "key" }], connections: [{ type: "credential" }] }],
-      "/api/model/default": null,
+      "/api/model/default": { providerID: "deepseek", id: "v4" },
     }
     bridgeSays = each => ({ status: 200, body: { data: { id: "r1", model: each.body.model } } })
     const { json } = await ask("POST", "ses_main", { text: "/review with DeepSeek V3 the parser" })
@@ -345,9 +354,49 @@ describe("kuvo/sessions/<id>/typed", () => {
     expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "draft" })
   })
 
-  test("a model that can't run: said, all of it kept; a \"!\" command still runs", async () => {
-    expect((await ask("POST", "ses_main", { text: "fix it", refusal: "Sign in to Anthropic again." })).json).toEqual({ restore: { text: "fix it" }, error: "Sign in to Anthropic again." })
-    expect((await ask("POST", "ses_main", { text: "!npm test", refusal: "Sign in to Anthropic again." })).json).toEqual({ shell: "npm test" })
+  test("a model that can't run: said in the box's words with what to do, all of it kept; a \"!\" command still runs", async () => {
+    engineLists = {
+      "/api/provider": [{ id: "deepseek" }],
+      "/api/model": [{ id: "v4", providerID: "deepseek", name: "DeepSeek V4" }, { id: "claude-opus-5-5", providerID: "anthropic", name: "Claude Opus 5.5" }],
+      "/api/integration": [
+        { id: "deepseek", name: "DeepSeek", methods: [{ type: "key" }], connections: [{ type: "credential" }] },
+        { id: "anthropic", name: "Anthropic", methods: [{ type: "oauth", id: "browser" }, { type: "key" }], connections: [] },
+      ],
+      "/api/model/default": { providerID: "anthropic", id: "claude-opus-5-5" },
+    }
+    // (What a client sends as its own words is no longer what's said: the box decides.)
+    expect((await ask("POST", "ses_main", { text: "/goal ship it", refusal: "Sign in to Anthropic again." })).json).toEqual({
+      restore: { text: "/goal ship it" }, error: "Claude Opus 5.5 needs a sign-in to Anthropic: sign in, or choose another model.",
+      action: { do: "signIn", label: "Sign In", help: "Sign in to Anthropic" },
+    })
+    expect((await ask("POST", "ses_main", { text: "!npm test" })).json).toEqual({ shell: "npm test" })
+    // On a model that runs, it goes, whatever a client says.
+    conversations.ses_main.model = { providerID: "deepseek", id: "v4" }
+    expect((await ask("POST", "ses_main", { text: "fix it", refusal: "Sign in to Anthropic again." })).json).toEqual({ send: { text: "fix it", quoted: true } })
+  })
+
+  test("a coding agent's own subagent isn't refused for its model: its agent runs it on what it gives it", async () => {
+    // Claude Code signed out on the bridge: its conversation is refused, its subagent isn't.
+    bridgeSays = each => {
+      if (each.path === "/api/integration") return { status: 200, body: { data: [{ id: "claude-code", name: "Claude Code", metadata: { source: "agent", installed: true, modelsComplete: true }, methods: [{ type: "oauth", id: "browser" }], connections: [] }] } }
+      if (each.path === "/api/model") return { status: 200, body: { data: [] } }
+      if (each.path === "/api/kuvo/auto") return { status: 200, body: { data: { lists: [] } } }
+      return { status: 200, body: {} }
+    }
+    const on = { location: { directory: "/srv/app" }, time: { created: 1, updated: 1 }, model: { providerID: "claude-code", id: "opus" } }
+    bridgeConversations = { ses_agent: { id: "ses_agent", ...on }, ses_agentSub: { id: "ses_agentSub", parentID: "ses_agent", ...on } }
+    expect((await ask("POST", "ses_agent", { text: "fix it" })).json.error).toBe("opus needs a sign-in to Claude Code: sign in, or choose another model.")
+    expect((await ask("POST", "ses_agentSub", { text: "fix it" })).json).toEqual({ send: { text: "fix it", quoted: true } })
+  })
+
+  test("none to run on: choose one; the engine not saying its lists lets it go, as a client does", async () => {
+    engineLists = { "/api/provider": [{ id: "deepseek" }], "/api/model": [{ id: "v4", providerID: "deepseek", name: "DeepSeek V4" }], "/api/integration": [], "/api/model/default": null }
+    expect((await ask("POST", "ses_main", { text: "fix it" })).json).toEqual({
+      restore: { text: "fix it" }, error: "Choose a model to send it.", action: { do: "choose", label: "Choose a Model", help: "Choose a model" },
+    })
+    forgetModelLists()
+    engineLists = {}
+    expect((await ask("POST", "ses_main", { text: "fix it" })).json).toEqual({ send: { text: "fix it", quoted: true } })
   })
 
   test("a conversation that isn't here, and a send without text", async () => {

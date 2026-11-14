@@ -557,7 +557,7 @@ extension ComposerFieldTests {
         await catalog.refresh()
         // This Mac's lists have it; its box says it's gone.
         look.model = ModelRef(id: "v4.1-flash", providerID: "deepseek")
-        look.said = try JSONDecoder().decode(SessionModelState.self, from: Data(#"{"model":{"providerID":"deepseek","id":"v4.1-flash"},"runs":false,"missing":"gone","account":{"id":"deepseek","name":"DeepSeek"}}"#.utf8))
+        look.said = try JSONDecoder().decode(SessionModelState.self, from: Data(#"{"model":{"providerID":"deepseek","id":"v4.1-flash"},"runs":false,"missing":"gone","account":{"id":"deepseek","name":"DeepSeek"},"refusal":"v4.1-flash is no longer among DeepSeek’s models: choose another model.","choose":true,"action":{"do":"choose","label":"Choose a Model","help":"Choose another model"}}"#.utf8))
         try await until { editing == "composer" }
         let field = try #require(field)
         type("Fix the build", in: field)

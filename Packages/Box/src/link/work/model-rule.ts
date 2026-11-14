@@ -4,11 +4,15 @@
 // the same answer. What can't be said yet (a place not answering, an agent's models still being
 // listed, a provider only a project's own settings add) is left unsaid.
 
+import fs from "node:fs";
+import path from "node:path";
+import { placeWhole } from "../../shared/files";
 import { isObject } from "../../shared/json";
 import { isEngineModel } from "../../shared/subagents";
 import type { Target } from "../../shared/records";
 import type { SessionModel } from "../../shared/routes/sessions";
 import { call } from "../engine/client";
+import { BOX } from "../home";
 import { isFree } from "./unanswering";
 
 /** How long the engine or the bridge has to say what it lists. */
@@ -98,13 +102,131 @@ export function noteModelsEvent(event: { type?: string }): void {
   if (event.type && CHANGES.has(event.type)) kept.clear();
 }
 
-/** Lets go of everything kept (a test's own lists). */
+/** Lets go of the lists kept, to be read again (the box heard the engine or the bridge again after
+ * it couldn't: what changed meanwhile went by unheard). The names models were listed by stay:
+ * a model goes missing after just such a restart, and its refusal still names it. */
 export function forgetModelLists(): void {
   kept.clear();
 }
 
+/** Lets go of every name kept, the saved ones too (a test's own); `restart`, only as a box
+ * starting again does: what's saved is saved first, and read again when it's needed. */
+export function forgetModelNames(restart = false): void {
+  if (saving) {
+    clearTimeout(saving);
+    if (restart) saveNames();
+  }
+  saving = undefined;
+  process.removeListener("exit", saveIfWaiting);
+  lastNames.clear();
+  savedNames = undefined;
+  noted.clear();
+  if (!restart) try { fs.rmSync(NAMES_FILE, { force: true }); } catch {}
+}
+
+/** Each model's name as last listed here, for one since gone from its list (its refusal names it so). */
+const lastNames = new Map<string, string>();
+const nameKey = (ref: { providerID: string; id: string }) => `${ref.providerID}\u0000${ref.id}`;
+
+/** The names of the models sessions here were found running on, kept in the box's own folder so
+ * they last past a restart (of the box, or of the engine or bridge with it), most recent last, at
+ * most `SAVED_MOST`: a model a session is on that's gone since is named as it was. */
+const NAMES_FILE = path.join(BOX, "model-names.json");
+const SAVED_MOST = 2_000;
+let savedNames: Map<string, string> | undefined;
+/** Those noted here since the last save: what this process adds to the file. */
+const noted = new Map<string, string>();
+let saving: ReturnType<typeof setTimeout> | undefined;
+
+/** The names the file has now, most recent last (none for none, or one that can't be read). */
+function namesSaved(): Map<string, string> {
+  const names = new Map<string, string>();
+  try {
+    const read = JSON.parse(fs.readFileSync(NAMES_FILE, "utf8"));
+    if (isObject(read) && Array.isArray(read.names)) {
+      for (const each of read.names.slice(-SAVED_MOST)) {
+        if (Array.isArray(each) && each.length === 3 && each.every(part => typeof part === "string")) names.set(nameKey({ providerID: each[0], id: each[1] }), each[2]);
+      }
+    }
+  } catch {}
+  return names;
+}
+
+function saved(): Map<string, string> {
+  return (savedNames ??= namesSaved());
+}
+
+/** `ref`, which a session here runs on, kept as named `name` (saved a moment later, at once for
+ * several). */
+export function rememberName(ref: { providerID: string; id: string }, name: string): void {
+  const names = saved(), key = nameKey(ref);
+  if (names.get(key) === name) return;
+  names.delete(key);
+  names.set(key, name);
+  while (names.size > SAVED_MOST) names.delete(names.keys().next().value!);
+  noted.delete(key);
+  noted.set(key, name);
+  if (!saving) {
+    saving = setTimeout(saveNames, 1_000);
+    saving.unref?.();
+    // (One noted just before the box stops, an update's restart, is saved as it goes.)
+    process.once("exit", saveIfWaiting);
+  }
+}
+
+function saveIfWaiting(): void {
+  if (!saving) return;
+  clearTimeout(saving);
+  saveNames();
+}
+
+/** What's noted here, written into the file as it is now: another of this box's processes (its
+ * relay link and its own server each keep names) may have saved its own since this one read it. */
+function saveNames(): void {
+  saving = undefined;
+  process.removeListener("exit", saveIfWaiting);
+  const merged = namesSaved();
+  for (const [key, name] of noted) {
+    merged.delete(key);
+    merged.set(key, name);
+  }
+  while (merged.size > SAVED_MOST) merged.delete(merged.keys().next().value!);
+  noted.clear();
+  savedNames = merged;
+  const names = [...merged].map(([key, name]) => [...key.split("\u0000"), name]);
+  try {
+    fs.mkdirSync(BOX, { recursive: true, mode: 0o700 });
+    placeWhole(NAMES_FILE, JSON.stringify({ names }));
+  } catch {}
+}
+
+/** `ref`'s name as it was last listed here, or as a session here last ran on it; none for one
+ * never seen. */
+export const lastName = (ref: { providerID: string; id: string }): string | undefined => lastNames.get(nameKey(ref)) ?? saved().get(nameKey(ref));
+
+/** `name` kept as the one last listed for `providerID`'s models `ids` (its own, and those it's
+ * known by: Claude Code's `default`, the newest saying it last). */
+function noteNames(providerID: string, ids: string[], name: string): void {
+  for (const id of ids) {
+    const key = nameKey({ providerID, id });
+    lastNames.delete(key);
+    lastNames.set(key, name);
+  }
+  while (lastNames.size > 20_000) lastNames.delete(lastNames.keys().next().value!);
+}
+
 function modelsIn(listed: unknown): Listed[] | null {
   if (!Array.isArray(listed)) return null;
+  // (The names of those turned off too: one turned off since is named as it was.)
+  for (const each of listed) {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || typeof each.name !== "string" || !each.name) continue;
+    const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias): alias is string => typeof alias === "string") : [];
+    noteNames(each.providerID, [each.id, ...aliases], each.name);
+  }
+  return modelsListed(listed);
+}
+
+function modelsListed(listed: unknown[]): Listed[] {
   return listed.flatMap(each => {
     // (One turned off is as good as gone.)
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) return [];
@@ -176,6 +298,7 @@ async function bridgeLists(bridge: Target): Promise<BridgeLists | null> {
   const lists = isObject(auto) && Array.isArray(auto.lists)
     ? auto.lists.flatMap(each => (isObject(each) && typeof each.id === "string" ? [{ id: each.id, name: typeof each.name === "string" && each.name ? each.name : "Custom Auto", entries: Array.isArray(each.entries) ? each.entries.length : 0 }] : []))
     : null;
+  for (const list of lists ?? []) noteNames("auto", [list.id], list.name);
   return { models, accounts, auto: lists };
 }
 

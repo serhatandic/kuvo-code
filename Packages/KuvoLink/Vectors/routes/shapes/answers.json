@@ -3233,7 +3233,13 @@
             "literal": "models.offered"
            },
            {
+            "literal": "models.offered.folder"
+           },
+           {
             "literal": "models.offered.sides"
+           },
+           {
+            "literal": "models.readiness"
            },
            {
             "literal": "moves"
@@ -3743,7 +3749,13 @@
             "literal": "models.offered"
            },
            {
+            "literal": "models.offered.folder"
+           },
+           {
             "literal": "models.offered.sides"
+           },
+           {
+            "literal": "models.readiness"
            },
            {
             "literal": "moves"
@@ -9846,6 +9858,30 @@
            "agent": "string",
            "provider": "string"
           }
+         },
+         "refusal?": "string",
+         "choose?": "bool",
+         "action?": {
+          "object": {
+           "do": {
+            "oneOf": [
+             {
+              "literal": "signIn"
+             },
+             {
+              "literal": "addKey"
+             },
+             {
+              "literal": "install"
+             },
+             {
+              "literal": "choose"
+             }
+            ]
+           },
+           "label": "string",
+           "help": "string"
+          }
          }
         }
        }
@@ -11222,7 +11258,29 @@
         "beside?": "string"
        }
       },
-      "error?": "string"
+      "error?": "string",
+      "action?": {
+       "object": {
+        "do": {
+         "oneOf": [
+          {
+           "literal": "signIn"
+          },
+          {
+           "literal": "addKey"
+          },
+          {
+           "literal": "install"
+          },
+          {
+           "literal": "choose"
+          }
+         ]
+        },
+        "label": "string",
+        "help": "string"
+       }
+      }
      }
     },
     "400": {

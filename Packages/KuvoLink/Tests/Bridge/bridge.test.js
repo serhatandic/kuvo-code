@@ -1612,8 +1612,11 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (And kuvo/sessions/<id>/send, which the same box answers.)
     "messages.send": ["POST", "kuvo/messages/parts"],
     "models.offered": ["GET", "kuvo/models/offered"],
-    // (Each model's side, efforts and aliases, on the same route.)
+    // (A project's own, its folder asked; each model's side, efforts and aliases; on the same route.)
+    "models.offered.folder": ["GET", "kuvo/models/offered?folder=%2F"],
     "models.offered.sides": ["GET", "kuvo/models/offered"],
+    // (What a model that can't run means for a composer, on kuvo/sessions/models.)
+    "models.readiness": ["GET", "kuvo/sessions/models?sessions=ses_x"],
     moves: ["GET", "kuvo/moves"],
     // (Moves with a coding agent's own conversation: what kuvo/moves takes besides.)
     "moves.agents": ["GET", "kuvo/moves"],

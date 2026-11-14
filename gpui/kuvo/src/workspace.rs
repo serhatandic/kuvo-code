@@ -244,6 +244,19 @@ impl Workspace {
                 // Sessions started here are in the list now: what their box said of them goes.
                 let listing = &self.listing;
                 self.started.retain(|session, _| listing.facts(session).is_none());
+                // A composer opened before the list knew its conversation's folder (or since it
+                // moved): what's offered is read there now.
+                let moved: Vec<_> = self
+                    .composers
+                    .iter()
+                    .filter_map(|(session, (composer, _))| {
+                        let folder = self.listing.facts(session)?.directory.clone();
+                        (composer.read(cx).folder() != Some(folder.as_str())).then(|| (composer.clone(), folder))
+                    })
+                    .collect();
+                for (composer, folder) in moved {
+                    composer.update(cx, |composer, cx| composer.set_folder(Some(folder), cx));
+                }
                 // The panel's folder, as the list says it now (a session opened before the list had
                 // it, a worktree's folder said later).
                 self.place_panel(cx);
@@ -366,15 +379,21 @@ impl Workspace {
     /// `session`'s composer: the one it had, with its draft (its model read again, as it may have
     /// changed meanwhile), or a new one.
     fn composer_for(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
+        // Its folder, where its project's own settings may add models to what's offered.
+        let folder = self.listing.facts(session).map(|facts| facts.directory.clone());
         if let Some((composer, _)) = self.composers.get(session) {
             let composer = composer.clone();
             if self.live {
-                composer.update(cx, |composer, cx| composer.read_models(cx));
+                composer.update(cx, |composer, cx| {
+                    if !composer.set_folder(folder, cx) {
+                        composer.read_models(cx);
+                    }
+                });
             }
             return composer;
         }
         let (client, live) = (self.client.clone(), self.live);
-        let composer = cx.new(|cx| Composer::new(client, Target::Session { id: session.to_owned(), place: Where::Engine }, live, cx));
+        let composer = cx.new(|cx| Composer::in_folder(client, Target::Session { id: session.to_owned(), place: Where::Engine }, folder, live, cx));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
         // Not on screen until its conversation opens.
         composer.update(cx, |composer, cx| composer.set_shown(false, cx));
