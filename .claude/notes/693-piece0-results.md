@@ -6,8 +6,11 @@ left for when the user is at the Mac is at the end (§7). Nothing here is produc
 
 **Where it ran:**
 - This Mac: Apple silicon, macOS (Darwin 27.2).
-- The engine the box runs on: `~/.kuvo-code/engine/2.2.5/opencode`, Bun 1.4.4 with `BUN_BE_BUN=1`.
-  `scripts/build-box.sh` looks for an engine the same way, in the app's folders.
+- The engine this Mac's box in `~/.kuvo-code` runs on: `~/.kuvo-code/engine/2.2.5/opencode`, Bun
+  1.4.4 with `BUN_BE_BUN=1`.
+  - This isn't what `scripts/build-box.sh` picks: it looks in the app's folders for CI's pinned Bun
+    1.4.2.
+  - A box runs on whatever engine it has, so 1.4.4 is the right one to test.
 - Chrome for Testing 155.0.8059.79, mac-arm64, from `mac.json`, set up by the box's own
   `installBrowser()` (§1).
 - The keeper: this worktree's `KuvoCode/Resources/kuvo-browser.js` (`KEEPER = 50`, at `04cd65e35`),
@@ -23,10 +26,10 @@ left for when the user is at the Mac is at the end (§7). Nothing here is produc
 
 | Spike | Result | Numbers | For the design |
 | --- | --- | --- | --- |
-| `serve`: `GET kuvo/browser/view` upgraded to a WebSocket under the engine's Bun | **Works.** `node:http`'s `upgrade` fires on the box's own `serveBox()`, and the handshake and frames work both ways. Backpressure works too: `write()` returns false and `drain` comes. The fallback, a streamed GET plus POSTs, works as well. | Open 3 ms; an input's round trip 0.3 ms; 200 frames of 150 KB, locally, at about 1.3 GB/s. A stalled client holds about 2.1 MB before writes stop. | Keep the WebSocket; no fallback is needed. **Change:** the upgrade checks the password and path itself, because `serveBox`'s request handler never sees an upgrade. The box has no `ws` package, so the RFC 6455 framing is ours to write (§2). |
-| The `Cookies` database while Chrome runs | **Works.** It can be read with sqlite `mode=ro`, `immutable=1`, a copy, or `bun:sqlite` read-only. The profile's lock doesn't stop any of them. Names, hosts and expiry are plain text; values are encrypted. | A new cookie reaches the file **about 30 s** after it's set. Session cookies are in the file while Chrome runs, and gone after it restarts. | As designed: `Storage.getCookies` while Chrome runs, the file otherwise. **Change:** read with `bun:sqlite` read-only (the box already does for the engine's database), skip `is_persistent = 0` rows, and expect a lag of up to 30 s if the file is read while Chrome runs (§3). |
-| Memory of one `mcp` per agent | **Small.** Each one is its own Bun, so the cost grows in a straight line. | One: 26 MB RSS at start, 33 MB after browsing; 13–16 MB physical footprint. Five: 165 MB RSS, 80 MB footprint. Chrome's tabs for the same five agents: about **+530 MB RSS**. | One `mcp` per agent is fine. The real cost is a Chrome tab per agent, kept for an hour (`TAB_IDLE`). §7's "One `mcp` process per agent" risk becomes "a tab per agent for an hour" (§4). |
-| Frame bytes at phone settings, locally | Uncapped, a busy page streams **60 fps** whatever the size. A phone at 1× and quality 50 is **37–40 KB a frame, one relay message**. At 2× it's 109–237 KB, three to five messages. | Busy page: phone 1× q50 at 2.9 MiB/s and 60 messages/s; phone 2× q60 at 8.5 MiB/s and 180 messages/s. Video-like page: up to 18.5 MiB/s and 300 messages/s. Scrolling: about 21 fps. Still page: nothing. | The relay's 4003 counts **messages, not bytes**: 500/s for the box's whole connection. Its 2 MB hold stops **all** of the box's traffic behind one slow phone. **Change:** cap the frame rate, keep a phone's frames to one message, and keep at most two frames in flight per viewer (§5). |
+| `serve`: `GET kuvo/browser/view` upgraded to a WebSocket under the engine's Bun | **Works.** `node:http`'s `upgrade` fires on the box's own `serveBox()`, and the handshake and frames work both ways. Backpressure works too: `write()` returns false and `drain` comes. The fallback, a streamed GET plus POSTs, works as well. | Open 3 ms; an input's round trip 0.3 ms; 200 frames of 150 KB, locally, at about 1.3 GB/s. On loopback, a client that stops reading takes about 2.1 MB before writes stop. Until then a slow client looks like a fast one. | Keep the WebSocket; no fallback is needed. **Change:** the upgrade checks the password and path itself, because `serveBox`'s request handler never sees an upgrade. The box has no `ws` package, so the RFC 6455 framing is ours to write (§2). |
+| The `Cookies` database while Chrome runs | **Works.** Read through sqlite `mode=ro`, `immutable=1`, a copy, or `bun:sqlite` read-only, all while Chrome's network service had the file open. Neither Chrome nor SQLite's own file locks stopped a read. Names, hosts and expiry are plain text; values are encrypted. | A new cookie reached the file **9–30 s** after it was set (Chrome's flush timer). Session cookies are in the file while Chrome runs, and gone after it restarts. | As designed: `Storage.getCookies` while Chrome runs, the file otherwise. **Change:** read with `bun:sqlite` read-only (the box already does for the engine's database), count only `is_persistent = 1 AND` unexpired rows, and expect a lag of up to 30 s if the file is read while Chrome runs (§3). |
+| Memory of one `mcp` per agent | **Small next to the agent's tab.** Each `mcp` is its own Bun, so the cost grows in a straight line. | Measured as physical footprint (and RSS): one `mcp` is **16 MB** (33 MB); five are 80 MB (165 MB). Each further agent's tab on a site of its own adds a renderer and about **86 MB** (150 MB). | One `mcp` per agent is fine. The real cost is a Chrome tab per agent, kept for an hour (`TAB_IDLE`). §7's "One `mcp` process per agent" risk becomes "a tab per agent for an hour" (§4). |
+| Frame bytes at phone settings, locally | With immediate local acknowledgements, a busy page streams **60 fps** whatever the size (an upper bound). A phone at 1× and quality 50 is **37–40 KB a frame, one relay message**. At 2× it's 109–237 KB of JPEG, three to five messages. | Busy page: phone 1× q50 at 2.9 MiB/s and 60 messages/s; phone 2× q60 at 8.5 MiB/s and 180 messages/s. Video-like page: up to 18.5 MiB/s and 300 messages/s. Scrolling: about 21 fps. Still page: no frames once the first has come. | The relay's 4003 counts **messages, not bytes**: 500/s for the box's whole connection. Its 2 MB hold pauses **all** of the box's traffic behind one slow phone. A hold over 30–60 s **drops the box's link**, because the box's pongs aren't read either. **Change:** at most two frames in flight per viewer is the rule everything rests on. On top of that: cap the frame rate, and keep a phone's frames to one message (§5). |
 | Found along the way | **Chrome for Testing for Mac is ad-hoc signed, not Google-signed.** And any Chrome start writes the **Preferences key** in the real home, even with `CFFIXED_USER_HOME`. | `codesign`: `Signature=adhoc`, no Team ID; `spctl` rejects it. The download carries no quarantine flag. The key holds the bundle path of the last Chrome started. | **Changes:** §2's Gatekeeper row is wrong. And piece 7's real-Chrome tests on a Mac would write the user's Preferences key (§6). |
 
 No macOS prompt was seen. I couldn't see the screen, so this is what I checked instead: no
@@ -89,11 +92,13 @@ The box's own `installBrowser({ now: true })` ran in a test folder (Appendix A, 
 - **The fallback**, a streamed GET plus 20 POSTs: the first byte came in 12 ms, all 200 frames
   arrived (about 1.3 GB/s), and a POST's median was 0.14 ms (0.44 ms at most).
 - **Backpressure** (`serve-drain.ts`): a raw client finished the handshake, then stopped reading.
-  - The server's `write()` on the upgraded socket returned false after about 2.1 MB, with 195 KB in
-    Bun's own buffer and the rest in the kernel.
-  - `drain` came each time the client took more.
-  - Once the client read again, all 195 MB arrived. So a view server can tell a slow client and
-    drop frames for it.
+  - While the client wasn't reading, `write()` returned false and `drain` came back six times, as
+    the kernel took bytes off Bun's buffer (195 KB at most).
+  - It stalled for good after about 2.1 MB, all of it in kernel buffers on loopback.
+  - Once the client read again, all 2,000 chunks (200 MB) arrived, with `drain` each time.
+  - So `write()` and `drain` work as in Node, but **on loopback they can't tell a slow client from
+    a fast one until about 2 MB is queued**. A view server paces frames by acknowledgements, as
+    `connect` does (`ahead = 2`), with `drain` only as a backstop. That applies on `serve` too.
 
 **What it means:**
 - `node:http` upgrades work under the engine's Bun 1.4.4, so the design's first choice holds and no
@@ -110,7 +115,7 @@ The box's own `installBrowser({ now: true })` ran in a test folder (Appendix A, 
   - ping and pong;
   - close;
   - 16-bit and 64-bit lengths;
-  - `drain` for dropping frames.
+  - `drain` as a backstop.
 
   Bun's own `Bun.serve` WebSocket isn't an option, because `serve` is `node:http`.
 - **For the Swift client (piece 6):** `URLSessionWebSocketTask.maximumMessageSize` is 1 MB by
@@ -136,16 +141,22 @@ The box's own `installBrowser({ now: true })` ran in a test folder (Appendix A, 
 - **`Storage.getCookies`** had all five at once, with their domains and expiry; the session cookie
   showed `session: true`.
 - **On disk:** the file is `Cookies` with a rollback journal (`Cookies-journal`), not WAL. **The
-  cookies reached the file 30.3 s after the page set them**, which is Chrome's flush delay.
+  cookies reached the file 30.3 s after the page set them in the first run, and 9.1 s in the
+  second.** That's Chrome's flush timer, so up to about 30 s.
 - **Read while Chrome ran, every way worked:**
   - `/usr/bin/sqlite3` with a plain open, `file:…?mode=ro` and `file:…?immutable=1`;
   - a copy, with its journal;
   - `bun:sqlite` with `{ readonly: true }` and with `immutable=1`.
+- **Proof that Chrome ran:** in the second run, `bun-sqlite.ts` called `lsof` right after its
+  reads (`bun-sqlite2.log`). The file was open in PID 29062, a `Google Chrome for Testing Helper`
+  with `--type=utility --utility-sub-type=network.mojom.NetworkService`.
+  - `lsof` reported no lock, but that only shows the moment it ran. The reads succeeding is the
+    evidence.
+  - Every read came after Chrome's flush, so none overlapped a write: "try again on busy" (below)
+    is advice, not something the spike saw.
 - **The columns:** `host_key`, `name`, `expires_utc` (microseconds since 1601), `has_expires` and
   `is_persistent` are plain. `value` is empty; `encrypted_value` is 51 bytes, encrypted with the
   mock keychain's fixed key.
-- **Who holds it:** `lsof` shows Chrome's network service with the file open read/write (`au`),
-  with no exclusive lock that keeps readers out on macOS.
 - **After Chrome restarted,** the file had 4 rows: the session cookie was gone, as expected.
 
 **What it means:**
@@ -155,8 +166,8 @@ The box's own `installBrowser({ now: true })` ran in a test folder (Appendix A, 
     engine's database. A Linux machine may not have the `sqlite3` command.
   - Not `immutable=1`: it ignores the journal, so a read during Chrome's write can see half of it.
   - On `SQLITE_BUSY`, try again shortly.
-  - Count only rows with `is_persistent = 1`, or with `expires_utc` in the future.
-  - Convert `expires_utc` from 1601-based microseconds.
+  - Count only rows with `is_persistent = 1 AND expires_utc > now`, with `now` in microseconds
+    since 1601. An expired persistent cookie mustn't show a site as signed in.
   - If the file has to be read while Chrome runs (for example, the keeper is between restarts),
     expect a sign-in from the last 30 s to be missing.
 - The privacy line in §6.1 ("cookies are effectively plain text there") stays true: the values are
@@ -169,35 +180,54 @@ stdio program would start them. Each ran on the engine's Bun with `KUVO_SESSION`
 session.
 - Each sent `initialize` and `tools/list` (46 tools), then a `browser_navigate` to a local page,
   then a `browser_snapshot`.
-- Measured with `ps -o rss` and `/usr/bin/footprint` (physical footprint, which counts shared pages
-  once).
+- Measured with `ps -o rss` and `/usr/bin/footprint`. Physical footprint is what macOS counts
+  against a process: its dirty and compressed memory, without the shared clean pages that RSS
+  includes.
+- **Chrome** was measured the same way, with `chrome-mem.sh` on the keeper and every process under
+  it.
+  - Each agent opened a site of its own (`a0.localhost`, `b0.localhost`…`b4.localhost`, which
+    Chrome sends to the local server), so each got a renderer of its own, as real agents on
+    different sites would.
+  - A first run put every tab on 127.0.0.1, where Chrome may share one renderer. Its Chrome figures
+    weren't logged and aren't used here.
 
 ```sh
-./clean.sh BUN_BE_BUN=1 ~/.kuvo-code/engine/2.2.5/opencode --config=/dev/null --no-env-file mcp.ts 1 http://127.0.0.1:$SITE/static
-./clean.sh BUN_BE_BUN=1 ~/.kuvo-code/engine/2.2.5/opencode --config=/dev/null --no-env-file mcp.ts 5 http://127.0.0.1:$SITE/long
+./clean.sh BUN_BE_BUN=1 ~/.kuvo-code/engine/2.2.5/opencode --config=/dev/null --no-env-file mcp.ts 1 "http://a{i}.localhost:$SITE/long"
+./chrome-mem.sh $KEEPER "one agent's tab"
+./clean.sh BUN_BE_BUN=1 ~/.kuvo-code/engine/2.2.5/opencode --config=/dev/null --no-env-file mcp.ts 5 "http://b{i}.localhost:$SITE/long"
+./chrome-mem.sh $KEEPER "six agents' tabs, six sites"
 ```
 
-| When | One `mcp`: RSS / footprint | Five: RSS / footprint in all |
+| When | One `mcp`: footprint / RSS | Five: footprint / RSS, in all |
 | --- | --- | --- |
-| started | 26 / 13 MB | 130 / 66 MB |
-| after `initialize` and `tools/list` | 30 / 15 MB | 150 / 75 MB |
-| after one `browser_navigate` each | 32 / 16 MB | 160 / 80 MB |
-| after a `browser_snapshot` each | 33 / 16 MB | 165 / 80 MB |
+| started | 14 / 26 MB | 65 / 130 MB |
+| after `initialize` and `tools/list` | 15 / 30 MB | 75 / 150 MB |
+| after one `browser_navigate` each | 16 / 32 MB | 79 / 160 MB |
+| after a `browser_snapshot` each | 16 / 33 MB | 80 / 165 MB |
 
-**Chrome and the keeper, as one process group:**
-- 814 MB RSS before;
-- 848 MB with one agent's tab;
-- **1,379 MB with six agents' tabs**, which is about 100 MB RSS for each agent's tab;
-- 727 MB physical footprint at that point, across 15 processes.
+(The first run, all on 127.0.0.1, gave the same `mcp` figures to within 1 MB.)
+
+**Chrome and the keeper** (`chrome-mem.jsonl`):
+
+| When | Processes | Renderers | Footprint | RSS |
+| --- | --- | --- | --- | --- |
+| idle, `about:blank` | 11 | 6 | 291 MB | 1,008 MB |
+| one agent's tab | 11 | 6 | 308 MB | 1,049 MB |
+| six agents' tabs, six sites | 16 | 11 | 739 MB | 1,793 MB |
+
+- The first tab took a renderer Chrome already had spare, and added 17 MB.
+- The next five each added a renderer: **about 86 MB of footprint (149 MB RSS) per agent's tab.**
 
 **What it means:**
-- An `mcp` per agent costs about 16 MB (33 MB RSS), so five agents cost 80 MB. Every one runs its
-  own Bun, so it grows in a straight line, and it's small. **There's no need for a shared tool
-  server.**
-- The real per-agent cost is the agent's own Chrome tab, about 100 MB, kept for `TAB_IDLE` (an hour,
+- Per agent, on the same measure:
+  - the `mcp` is 16 MB of footprint (33 MB RSS);
+  - its tab is about 86 MB (149 MB).
+- Every `mcp` runs its own Bun, so the cost grows in a straight line, and it's small. **There's no
+  need for a shared tool server.**
+- The real per-agent cost is the agent's own tab, kept for `TAB_IDLE` (an hour,
   `kuvo-browser.js:59`) after the agent leaves it.
 - **Design change, §7's risks:** "One `mcp` process per agent" becomes "a Chrome tab per agent,
-  about 100 MB, for an hour after it's used". On a laptop, a shorter `TAB_IDLE` could be a browser
+  about 90 MB, for an hour after it's used". On a laptop, a shorter `TAB_IDLE` could be a browser
   setting (§5.1 already moves `TAB_IDLE` into `kuvo/browser/settings`).
   - **Decision for the user:** whether this Mac's default should be shorter than a machine's hour.
     *Recommend:* keep the hour, which matches the WebKit panel's `agentTabIdle`, and revisit after
@@ -218,7 +248,10 @@ assumption. One more case: a 1280 × 800 page, as an agent sizes it, scaled down
 **What ran** (`frames.ts`):
 - Through `kuvo-browser.js connect`, with each frame acknowledged as it came (locally, so as fast as
   Chrome makes them; `connect` keeps two ahead).
-- 8 s per case after the page settled.
+  - So the frame rates are **upper bounds**.
+  - Over a real link, with two frames ahead, the rate is at most the lowest of three: Chrome's rate,
+    2 ÷ the round trip, and the link's bytes ÷ the frame's size.
+- 8 s per case, measured after a 1.5 s load and 0.5 s more once the screencast started.
 - Four local pages (`site.ts`):
   - `static`;
   - `anim`, a busy page: a sliding bar, a spinner and a ticking clock;
@@ -255,11 +288,15 @@ assumption. One more case: a 1280 × 800 page, as an agent sizes it, scaled down
 | noise | phone 3×, q50 | 393x660@3 → 1179x1980 | 60 | 200.4 | 267.4 | 15.7 | 300 |
 | noise | agent's page for a phone, q60 | 1280x800@2 → 786x492 | 60 | 72.3 | 96.6 | 5.7 | 120 |
 
-`static` sent **no frames** after the first, in every case: a still page costs nothing.
+`static` sent **no frames** during the 8 s, in every case.
+- The first frame came in the unmeasured half second after the screencast started, so its size
+  isn't in the table. It's about the size of one busy-page frame at the same settings.
+- After that, a still page costs nothing.
 
 **The relay's limits, from its code** (`kuvo-code-ios/relay/src/relay.ts`, last changed in
 `59da20b`; `server.ts` sets none of these, so they are the deployed defaults):
-- **The payload** is at most 65,600 bytes, or the relay closes with 4000. The box keeps its pieces to
+- **Message size:** a message over 65,600 + 17 bytes, all in, is closed by the `ws` package's own
+  `maxPayload` check (1009). The relay's 4000 is for malformed messages. The box keeps its pieces to
   65,519 (`link/relay/frames.ts:10`).
 - **4003 is a count of messages, not bytes:**
   - a token bucket for each device, refilled at **500 messages a second**, holding 1,000;
@@ -271,6 +308,13 @@ assumption. One more case: a 1280 × 800 page, as an agent sizes it, scaled down
   - when a target has more than **2 MB** waiting (`bufferedAmount`), the sender is held until it's
     under 1 MB;
   - over **8 MB**, the target's connection is cut.
+- **A hold is a `socket.pause()`** (`relay.ts:169`): while held, the relay reads nothing from the
+  device, its pongs included.
+  - The relay pings every 30 s, and ends any connection that hasn't answered since the last ping
+    (`relay.ts:142-148`).
+  - So **a hold that lasts 30–60 s ends the held device's connection**.
+  - That happens when a phone stops reading (it lost signal, or went to the background) with more
+    than 1 MB still waiting for it.
 - **The box is one device.** It has a single relay WebSocket (`link/relay/connection.ts:48`) for all
   its phones and peers. Its 500 messages a second, and any hold, apply to all its traffic at once.
 
@@ -284,21 +328,33 @@ assumption. One more case: a 1280 × 800 page, as an agent sizes it, scaled down
   in.
   - If the box sends faster than a phone reads, the phone's waiting bytes at the relay reach 2 MB,
     and the relay holds the **whole box**, not just that phone's view.
-  - Over 8 MB, the phone's connection is cut.
+  - If that phone then stops reading, the hold lasts until the relay's pings notice, and **the box's
+    own link to the relay is dropped**, for every phone and peer. Over 8 MB, the phone's is cut too.
   - So the budget has to limit the bytes in flight to each viewer, not just the average rate.
-- **Design change, §3.2's relay bullets and piece 3:** the byte budget becomes concrete:
+- **Design change, §3.2's relay bullets and piece 3:** the byte budget becomes concrete.
+  - **The rule everything rests on: at most two frames unacknowledged per viewer**, as `connect`
+    does (`ahead = 2`).
+    - That's at most about 130 KB in flight per phone at the settings below, far under the relay's
+      1–2 MB hold.
+    - A slow phone gets fewer frames rather than a queue, and a phone that stops reading stops
+      getting frames after two.
+    - This must hold before anything else, because nothing the box can see sooner would catch it.
   - **The phone's frames:** 1× of its panel, quality about 50, so a frame is **one relay message**.
-    If a frame would be bigger, the box lowers the quality for the next one. When the page stops, a
-    2× sharp picture at q60 (about 110–240 KB, 2–4 messages), as the Mac does.
+    - If a frame would be bigger, the box lowers the quality for the next one.
+    - When the page stops, a 2× sharp picture at q60, as the Mac does: 109–237 KB of JPEG, 145–316 KB
+      as text, 3–5 messages.
   - **A frame rate cap** in `Kuvo.view`'s `maxFps`: **15 for a phone**. Busy page: about 15
     messages/s and 0.75 MiB/s. Scrolling: under 21 fps anyway.
-  - **At most two frames unacknowledged per viewer**, as `connect` does (`ahead = 2`): at most about
-    130 KB in flight per phone, far under the relay's 1–2 MB hold. A slow phone then gets fewer
-    frames instead of building a queue.
   - **A ceiling for the whole live view:** about **100 messages/s across all relay viewers**, a fifth
-    of the box's 500, so mail and asks always have room. Frames go first; the box checks
-    `host.unsent()` (its socket's `bufferedAmount`, `connection.ts:74`) and skips a frame while
-    anything is waiting.
+    of the box's 500, so mail and asks always have room.
+  - **A backstop only:** `host.unsent()` (the box's socket's `bufferedAmount`, `connection.ts:74`).
+    The box skips a frame while it's above zero. It sees only what the box hasn't yet handed to the
+    kernel (on loopback, about 2 MB went to kernel buffers first, §2), so it can't replace the rule
+    above.
+  - **An option for piece 3, not decided: frames as binary.** Every figure here includes base64,
+    which adds a third. A frame sent as binary `data` (`encodeMessage` takes a `Buffer` body) saves
+    that third: a 1× q75 frame (37–69 KB of JPEG) would then fit one message far more often. The
+    design says frames go as text (§3.2), so piece 3 weighs the two.
   - **The Mac's local panel** (SSH or `serve`) isn't held to the relay's numbers. Its 4–12 MiB/s
     uncapped, measured here, is today's machine behaviour.
 - The real relay's bytes per second to a real phone are still to be measured (§7): these numbers
@@ -329,10 +385,10 @@ the later Gatekeeper and prompts spike under the helper stand-in confirms that (
 
 - The spike's Chrome wrote `~/Library/Preferences/com.google.chrome.for.testing.plist` in the
   **real** home: `{LastRunAppBundlePath = "<the build's app path>"}`.
-- It did so on each of its two starts, though `HOME` and `CFFIXED_USER_HOME` were the scratch
+- It did so on every one of its three starts, though `HOME` and `CFFIXED_USER_HOME` were the scratch
   folder's. The preferences daemon uses the account's real home.
 - This Mac's own box runs Chrome for Testing too (since Nov 11), so the key was already there with
-  that build's path. After the spike I set it back to that path, with `defaults write
+  that build's path. After each start I set it back to that path, with `defaults write
   com.google.chrome.for.testing LastRunAppBundlePath -string …`.
 
 What it means:
@@ -358,32 +414,52 @@ Each of these needs a prompt, a sign-in or the real relay, so none ran.
 | The Preferences key | Already seen here (§6.2): Chrome writes it on each start, with `CFFIXED_USER_HOME` or not. What's left: confirm that under the helper it's the same key and nothing else lands in `~/Library` (`fs_usage` or a before-and-after listing of `~/Library`). That needs the helper, and `fs_usage` needs `sudo`, so the user. |
 | Local Network grant | The helper stand-in's tree running with an `mcp`. Grant Local Network while it runs, then try a LAN page from Chrome started by an old `mcp`, then restart the tree and try again (design §2, "Local Network"). Needs the user to answer the prompt, and a LAN host to open. |
 | Signing in at Google, Microsoft and Apple ID | The user's own accounts, in a scratch profile through the keeper (`browser_sign_in` and the user typing on the live view), to see whether each site refuses Chrome for Testing ("This browser or app may not be secure"). Needs the user present for passwords and two-factor; then delete the scratch profile. |
-| The real relay's frame bytes | A paired test phone (or the phone simulator with a test link) watching the box's browser through the real relay. This needs piece 3's relay socket, or a throwaway relay client that sends `frames.ts`'s lines as relay messages. Measure bytes per second, the hold (`bufferedAmount` at 2 MB), the frame rate over cellular and Wi-Fi, and that peer mail still gets through with §5's caps. Needs the user's phone, a real relay and a pairing. |
+| The real relay's frame bytes | Narrowed to what only a real phone shows: the frame rate and bytes per second over cellular and Wi-Fi, with §5's caps, from a paired test phone watching the box's browser through the real relay. Needs piece 3's relay socket (or a throwaway sender of `frames.ts`'s lines as relay messages), the user's phone and a pairing. The relay's own behaviour can be tested without anyone (below). |
+
+**Still to do, needing nobody** (not run in this pass; each is a short script):
+- **The same spikes on Linux,** in a devbox test folder:
+  - Linux Chrome's `Cookies` file and its locking (there the file is under the box's
+    `--password-store=basic`, not the mock keychain);
+  - the `node:http` upgrade under the Linux engine's Bun;
+  - `mcp` and tab memory.
+
+  Every box piece has to run on Linux, and the cookie advice (`bun:sqlite`, not the `sqlite3`
+  command) is chiefly for Linux.
+- **The relay's limits against a local relay:** `createRelay` from `kuvo-code-ios/relay` with
+  `server.ts`'s defaults, which is what's deployed.
+  - A box-like sender sends frame-sized messages to a phone-like receiver that reads slowly, then
+    stops reading.
+  - Confirm the 2 MB hold, and that a hold over 30–60 s ends the sender's connection (§5).
+  - Confirm that peer mail from the same sender waits during the hold.
+  - Confirm that §5's two-frames-ahead rule keeps every one of these from happening.
 
 ## 8. Design changes, together
 
 1. **§3.2 `serve`:** keep the WebSocket.
    - The upgrade listener checks the `serve.json` password and `canonicalPath` itself.
    - The box writes its own small RFC 6455 framing (no `ws`), with tests for continuation frames,
-     ping, close and `drain`.
+     ping and close; `drain` is only a backstop.
+   - Frames on `serve` are paced by acknowledgements too.
    - Piece 6 sets URLSession's maximum message size.
 2. **§4.5 and piece 2:**
    - read `Cookies` with `bun:sqlite` read-only (`mode=ro`), not `immutable`, and try again on busy;
-   - only persistent or unexpired rows;
+   - only rows that are persistent **and** unexpired;
    - `expires_utc` is 1601-based;
-   - a file read while Chrome runs can lag by 30 s.
-3. **§3.2's relay bullets, piece 3:** the budget in numbers:
+   - a file read while Chrome runs can lag by up to 30 s.
+3. **§3.2's relay bullets, piece 3:** the relay's hold pauses everything the box sends, and a long
+   one drops the box's link. So the budget, in numbers:
+   - **first, two frames unacknowledged per viewer at most**, which everything else rests on;
    - phone frames at 1×, q≈50, one relay message each, with a sharp 2× once still;
    - `maxFps` 15 for phones;
-   - two frames in flight per viewer;
    - about 100 messages/s for the whole live view over the relay;
-   - skip frames while the box's relay socket has anything waiting.
+   - `host.unsent()` above zero skips a frame, as a backstop only;
+   - frames as binary rather than text, an option for piece 3 to weigh.
 4. **§2's Gatekeeper row:** Chrome for Testing is ad-hoc signed, not Google-signed. It must never get
    the quarantine flag, and piece 5 tests for that.
 5. **§7's test rule and piece 7:** a real Chrome on a Mac writes the user's real Preferences key, so
    the real-Chrome lane runs on Linux, or puts the key back.
-6. **§7's risks:** "One `mcp` per agent" becomes "a Chrome tab per agent, about 100 MB, for an hour".
-   The `mcp` itself is about 16 MB.
+6. **§7's risks:** "One `mcp` per agent" becomes "a Chrome tab per agent, about 90 MB, for an hour".
+   The `mcp` itself is about 16 MB (both are physical footprint).
 
 **Decision waiting for the user:** whether this Mac's `TAB_IDLE` default should be shorter than an
 hour. *Recommend:* keep the hour for now, matching the panel's `agentTabIdle`.
@@ -391,12 +467,21 @@ hour. *Recommend:* keep the hour for now, matching the panel's `agentTabIdle`.
 ## 9. Footprint
 
 - **Made, all removed:** `~/.kuvo-code/tmp/693-spike` (Chrome's 362 MB build, a 46 MB profile, the
-  scripts). Only the logs are kept, in `~/.kuvo-code/tmp/693-spike-log` (under 100 KB).
+  scripts). It was made twice: once for the spikes, and once more, rebuilt from Appendix A, for the
+  review's re-measurements (per-site tabs, `bun:sqlite` with `lsof`). Only the logs are kept, in
+  `~/.kuvo-code/tmp/693-spike-log` (60 KB).
 - **Outside it:**
   - `~/Library/Preferences/com.google.chrome.for.testing.plist` was rewritten by each spike Chrome
     start, and put back to this Mac's own box's build path (§6.2).
-  - Nothing in `/tmp`: Chrome's temporary files went to the scratch folder's `TMPDIR`, or its own
-    `browser/tmp`.
+  - `/tmp/bun-node-501-<hash>`: Bun's folder of links to the engine (as `bun` and `node`). It
+    appeared at 07:31:30, the second `mcp.ts` first ran, though `TMPDIR` was the scratch folder. No
+    process was using it, and I removed it.
+    - The earlier scripts spawned the engine the same way and didn't make it, so what makes Bun
+      write it isn't pinned down.
+    - **Worth checking for the box's own `/tmp` footprint:** whether an engine's `mcp` children make
+      it on users' Macs.
+  - Chrome's temporary files went to the scratch folder (its `browser/tmp`, or `TMPDIR`), not
+    `/tmp`.
 - **Processes:** every process the spikes started was stopped by its PID (the keeper, the site, the
   proxy; Chrome went with its keeper). None is left (`ps` for `693-spike` is empty).
 
@@ -404,7 +489,8 @@ hour. *Recommend:* keep the hour for now, matching the panel's `agentTabIdle`.
 
 `clean.sh` runs each command with no `KUVO_*` and the scratch `HOME`. Every `.ts` ran on the
 engine's Bun (`BUN_BE_BUN=1 ~/.kuvo-code/engine/2.2.5/opencode --config=/dev/null --no-env-file`),
-from the scripts' own folder. `<worktree>` is this repository's checkout.
+from the scripts' own folder. `<worktree>` is this repository's checkout. `chrome-mem.sh <keeper
+pid> <label>` measures the keeper and every process under it.
 
 ### `clean.sh`
 
@@ -638,6 +724,9 @@ for (const [how, open] of [["readonly", () => new Database(file, { readonly: tru
     console.log(JSON.stringify({ how, ok: true, rows: rows.length, first: rows[0] }));
   } catch (e) { console.log(JSON.stringify({ how, ok: false, error: String(e) })); }
 }
+// Who holds the file now: proof that Chrome runs while this reads.
+import { execFileSync } from "node:child_process";
+console.log(JSON.stringify({ lsof: execFileSync("/usr/sbin/lsof", ["-F", "pcl", file], { encoding: "utf8" }).trim().split("\n").join(" ") }));
 ```
 
 ### `mcp.ts`
@@ -697,7 +786,7 @@ await Promise.all(agents.map(async a => {
 }));
 await sleep(1000);
 measure("after initialize + tools/list", pids);
-const answers = await Promise.all(agents.map(a => call(a, "tools/call", { name: "browser_navigate", arguments: { url }, _meta: { "ai.opencode/sessionID": a.session } })));
+const answers = await Promise.all(agents.map(a => call(a, "tools/call", { name: "browser_navigate", arguments: { url: url.replace("{i}", String(agents.indexOf(a))) }, _meta: { "ai.opencode/sessionID": a.session } })));
 console.log(JSON.stringify({ navigate: answers.map(r => r.error ? "error: " + JSON.stringify(r.error).slice(0, 120) : (r.result?.isError ? "tool error: " + JSON.stringify(r.result.content).slice(0, 160) : "ok")) }));
 await sleep(2000);
 measure("after one browser_navigate each", pids);
@@ -708,6 +797,21 @@ for (const a of agents) a.child.stdin!.end();
 await sleep(1000);
 for (const a of agents) if (a.child.exitCode === null) a.child.kill();
 process.exit(0);
+```
+
+### `chrome-mem.sh`
+
+```sh
+#!/bin/sh
+# The keeper and every process under it (Chrome): how many, how many renderers, RSS, physical footprint.
+ROOT=$1; LABEL=$2
+pids=$(ps -A -o pid=,ppid= | awk -v root="$ROOT" '{parent[$1]=$2} END {for (p in parent) {q=p; while (q && q!=root && q!=1) q=parent[q]; if (q==root) print p}}' | tr '\n' ' ')
+n=$(echo $pids | wc -w | tr -d ' ')
+list=$(echo $pids | tr ' ' ',')
+rss=$(ps -o rss= -p "$list" | awk '{s+=$1} END {printf "%d", s/1024}')
+renderers=$(ps -o command= -p "$list" | grep -c -- "--type=renderer")
+fp=$(/usr/bin/footprint $(for p in $pids; do printf -- "-p %s " $p; done) 2>/dev/null | awk '/Summary Footprint:/ {print $3, $4}')
+echo "{\"label\":\"$LABEL\",\"processes\":$n,\"renderers\":$renderers,\"rssMB\":$rss,\"footprint\":\"$fp\"}"
 ```
 
 ### `serve-ws.ts`
