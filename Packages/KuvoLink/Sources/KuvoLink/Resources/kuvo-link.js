@@ -25405,11 +25405,12 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os11.hostname();
   const setup = followedSetup(link);
   const shared = sharedMachine(link);
-  const apart = (key) => shared || told[key]?.shared === true || toldShared(key) === true || !!setup && !!told[key]?.setup && told[key].setup !== setup.id;
+  const saysShared = (key) => told[key]?.shared === true || toldShared(key) === true;
+  const apart = (key) => shared || saysShared(key) || !!setup && !!told[key]?.setup && told[key].setup !== setup.id;
   return {
     ...key ? { self: { key, name } } : {},
     also: vouchedOf(link, told).map((box) => ({ key: box.key, name: plainName(box.name) || "another computer" })),
-    boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...apart(peer.key) ? { apart: true } : {} })),
+    boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...apart(peer.key) ? { apart: true } : {}, ...saysShared(peer.key) ? { shared: true } : {} })),
     bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} }))),
     ...setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {},
     ...shared ? { shared: true } : {}
@@ -25421,6 +25422,10 @@ function whereChanged(link) {
   const before = whereSeen;
   whereSeen = now;
   return before !== undefined && before !== now;
+}
+async function tellIfSharingChanged(old, link, ask = bridgeAsk) {
+  if (sharedMachine(old) !== sharedMachine(link))
+    await tellSeatPeers(link, true, ask).catch(() => {});
 }
 var toldSeatPeers = "";
 async function tellSeatPeers(link = readLink(), force = false, ask = bridgeAsk) {
@@ -40290,7 +40295,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "33663a9b99b6";
+var BRIDGE_VERSION = "767a2959f81c";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -52360,6 +52365,7 @@ async function setup() {
     console.log("{}");
     return;
   }
+  await tellIfSharingChanged(old, link);
   let runningVersion = null;
   try {
     runningVersion = fs160.readFileSync(VERSION_FILE, "utf8").trim();
@@ -52941,6 +52947,7 @@ export {
   takeRows,
   takeSeat,
   takeWorkQueueMail,
+  tellIfSharingChanged,
   tellQueuesAgain,
   tellSeatPeers,
   tellWorktree,

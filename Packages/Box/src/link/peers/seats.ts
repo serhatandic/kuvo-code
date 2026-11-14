@@ -209,12 +209,13 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   // `toldShared`), and one that says it follows another setup than this box's (PROTOCOL.md, "Plan
   // limits", "Across your computers", Whose).
   const shared = sharedMachine(link);
-  const apart = (key: string) => shared || told[key]?.shared === true || toldShared(key) === true || (!!setup && !!told[key]?.setup && told[key]!.setup !== setup.id);
+  const saysShared = (key: string) => told[key]?.shared === true || toldShared(key) === true;
+  const apart = (key: string) => shared || saysShared(key) || (!!setup && !!told[key]?.setup && told[key]!.setup !== setup.id);
   return {
     ...(key ? { self: { key, name } } : {}),
     // Boxes only a peer knows, for plan limits alone.
     also: vouchedOf(link, told).map(box => ({ key: box.key, name: plainName(box.name) || "another computer" })),
-    boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...(apart(peer.key) ? { apart: true as const } : {}) })),
+    boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...(apart(peer.key) ? { apart: true as const } : {}), ...(saysShared(peer.key) ? { shared: true as const } : {}) })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
     // (The usage panel's settings go only between its boxes: never a shared machine's. `null` only
@@ -239,6 +240,15 @@ export function whereChanged(link: LinkState | null): boolean {
   const before = whereSeen;
   whereSeen = now;
   return before !== undefined && before !== now;
+}
+
+/**
+ * The link changed by a command of its own (`setup`): if this box became, or stopped being, a
+ * machine Macs of two setups share, its bridge hears at once which computers are yours, the relay
+ * there or not (the running link tells your other computers at its next round).
+ */
+export async function tellIfSharingChanged(old: LinkState | null, link: LinkState, ask: BridgeAsk = bridgeAsk): Promise<void> {
+  if (sharedMachine(old) !== sharedMachine(link)) await tellSeatPeers(link, true, ask).catch(() => {});
 }
 
 let toldSeatPeers = "";

@@ -409,8 +409,8 @@ class Box {
    * `apart`, those of `others` that aren't your own computers (this box or it a machine two people's
    * Macs share, or in another setup).
    */
-  async meet(others: Box[], also: Box[] = [], apart: Box[] = [], shared = false) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true, ...(apart.includes(box) ? { apart: true } : {}) })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [], ...(shared ? { setup: null, shared: true } : {}) }))
+  async meet(others: Box[], also: Box[] = [], apart: Box[] = [], shared = false, sayShared: Box[] = []) {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true, ...(apart.includes(box) ? { apart: true } : {}), ...(sayShared.includes(box) ? { shared: true } : {}) })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [], ...(shared ? { setup: null, shared: true } : {}) }))
   }
   stop() {
     this.following.abort()
@@ -1432,6 +1432,78 @@ describe("a machine two people's Macs set up (#701)", () => {
     } finally {
       machine.stop()
       ada.stop()
+    }
+  })
+
+  test("before its link has said who your computers are (just started), a box uses no one's resets without asking: its agents are told to ask, and nothing is spent", async () => {
+    const relay = new Map<string, Box>()
+    const folder = mkdtempSync(join(base, "not-yet-"))
+    const id = `claude#${identityOf(`anthropic:${ACCOUNT}|${ORG}`)}`
+    writeFileSync(join(folder, "limits-resets.json"), JSON.stringify({ spends: [], allowed: { [id]: { on: true, at: time, from: "" } }, seen: { "claude-code": id } }))
+    const box = new Box("key-l", "hetzner", () => agentAccounts([linuxClaude(folder)]), folder, relay)
+    try {
+      await box.limits.tick()
+      expect(box.resets.agentsMay("claude-code")).toBe(false)
+      const offer = await post(box.limits, { row: id })
+      const done = await post(box.limits, { row: id, confirm: offer.body.data.confirm, unasked: true })
+      expect(done.body.data.outcome).toBe("failed")
+      expect(done.body.data.message).toBe("This computer can't tell yet whether Always Allow holds here: nothing was used. Ask the user first, or try again in a moment.")
+      expect(makers.claims).toEqual([])
+      // Once it has: as decided.
+      await box.meet([])
+      expect(box.resets.agentsMay("claude-code")).toBe(true)
+    } finally {
+      box.stop()
+    }
+  })
+
+  test("the answer to a reset a Mac passed to its machine still comes through once the Mac counts that machine as not its own: it says how it went, never 'may have been used'", async () => {
+    const relay = new Map<string, Box>()
+    const macFolder = mkdtempSync(join(base, "via-mac-"))
+    const claudeMac = macClaude(macFolder)
+    const mac = new Box("key-mac", "MacBook Pro", () => agentAccounts([claudeMac]), macFolder, relay, 2_000)
+    const machineFolder = mkdtempSync(join(base, "via-machine-"))
+    const machine = new Box("key-machine", "hetzner", () => agentAccounts([linuxClaude(machineFolder)]), machineFolder, relay)
+    try {
+      await mac.meet([machine])
+      await machine.meet([mac])
+      await mac.limits.tick()
+      claudeMac.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+      await machine.limits.tick()
+      const merged = () => mac.limits.rows().find((row) => row.boxes.length === 2)
+      await until(() => !!merged()?.extras?.some((extra) => extra.kind === "resets"))
+      const id = merged()!.id
+      // The machine is asked who its sign-in is; meanwhile the Mac's link says it's apart now.
+      makers.holdProfile = new Gate()
+      const offer = await post(mac.limits, { row: id })
+      const spending = post(mac.limits, { row: id, confirm: offer.body.data.confirm })
+      await makers.holdProfile.reached
+      await mac.meet([machine], [], [machine])
+      makers.holdProfile.release()
+      expect((await spending).body.data.outcome).toBe("reset")
+      expect(makers.spends).toBe(1)
+    } finally {
+      mac.stop()
+      machine.stop()
+    }
+  })
+
+  test("an Always Allow kept from before this, whose box isn't known, goes once a peer says it's a shared machine (it may have come from there)", async () => {
+    const relay = new Map<string, Box>()
+    const folder = mkdtempSync(join(base, "legacy-peer-"))
+    const id = `claude#${identityOf(`anthropic:${ACCOUNT}|${ORG}`)}`
+    writeFileSync(join(folder, "limits-resets.json"), JSON.stringify({ spends: [], allowed: { [id]: { on: true, at: time } }, seen: { "claude-code": id } }))
+    const box = new Box("key-l", "hetzner", () => agentAccounts([linuxClaude(folder)]), folder, relay)
+    const shared = new Box("key-shared-3", "shared", () => [], mkdtempSync(join(base, "legacy-peer-shared-")), relay)
+    try {
+      await box.limits.tick()
+      await box.meet([shared])
+      expect(box.resets.agentsMay("claude-code")).toBe(true)
+      await box.meet([shared], [], [shared], false, [shared])
+      expect(box.resets.agentsMay("claude-code")).toBe(false)
+    } finally {
+      box.stop()
+      shared.stop()
     }
   })
 

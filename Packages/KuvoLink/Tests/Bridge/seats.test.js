@@ -539,6 +539,20 @@ test("a box that becomes a machine Macs of two setups share, or follows another 
   assert.equal(link.whereChanged(inSetup), true, "another setup: told at once");
 });
 
+test("a second Mac of another setup setting this machine up (setup, its own command) tells the bridge at once, the relay there or not (#701)", async () => {
+  fresh();
+  const air = box("mac", "air");
+  const before = link.readLink();
+  const told = bridge();
+  await link.tellIfSharingChanged(before, before, told.ask);
+  assert.deepEqual(told.asked, [], "nothing changed: nothing told");
+  await link.tellIfSharingChanged(before, { ...before, macs: [mac.pub, air.pub] }, told.ask);
+  assert.equal(told.asked.length, 1);
+  assert.equal(told.asked[0].method, "PUT");
+  assert.equal(told.asked[0].body.shared, true);
+  assert.ok(told.asked[0].body.boxes.every(each => each.apart === true));
+});
+
 test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between your own computers only: to a peer as a seat's mail, never to a box only a peer knows, and from it never to the bridge", async () => {
   fresh();
   const air = box("mac", "air");

@@ -9529,6 +9529,7 @@ import { mkdirSync as mkdirSync10, readFileSync as readFileSync15, renameSync as
 import { dirname as dirname10 } from "path";
 var isResetMail = (value) => value !== null && typeof value === "object" && value.kind === "reset";
 var NOT_ALLOWED = "Always Allow is off for this account now: nothing was used. Ask the user first.";
+var NOT_YET = "This computer can't tell yet whether Always Allow holds here: nothing was used. Ask the user first, or try again in a moment.";
 var JOIN_FOR = 10 * 60000;
 var STILL_OPEN = "It can't be asked of its maker from here right now. An earlier try may have gone through: asking again later won't use another.";
 var OPEN = new Set(["unknown", "unconfirmed"]);
@@ -9574,10 +9575,11 @@ class LimitResets {
     const becameShared = shared && !this.sharedSeen;
     let changed = shared !== this.sharedSeen;
     this.sharedSeen = shared;
+    const sharedPeer = directory.peerBoxes().some((box) => directory.isSharedPeer?.(box.key) === true);
     for (const [row, decided] of [...this.allowed]) {
       if (!decided.on && decided.from === "")
         continue;
-      const apart = decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false;
+      const apart = decided.from === undefined ? sharedPeer : decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false;
       if (!becameShared && !apart)
         continue;
       this.allowed.set(row, { on: false, at: decided.at, from: "" });
@@ -9593,7 +9595,12 @@ class LimitResets {
     if (live === undefined)
       return false;
     this.saw(provider, live);
-    return this.allowed.get(live)?.on === true;
+    return this.allowedNow(live);
+  }
+  allowedNow(rowID) {
+    if (this.directory && !this.directory.told)
+      return false;
+    return this.allowed.get(rowID)?.on === true;
   }
   saw(provider, live) {
     const before = this.seen.get(provider);
@@ -9759,7 +9766,8 @@ class LimitResets {
   take(from, mail) {
     if (!isResetMail(mail))
       return;
-    if (this.directory && !this.isYours(from)) {
+    const passedThere = !!mail.answer && typeof mail.answer.id === "string" && this.spends.some((each) => each.id === mail.answer.id && each.via === from);
+    if (this.directory && !this.isYours(from) && !passedThere) {
       const ask = mail.ask;
       if (!this.directory.told || !ask || typeof ask.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(ask.id))
         return;
@@ -9850,8 +9858,8 @@ class LimitResets {
       return refused("no-reset");
     if (this.limits.held(account.provider))
       return refused("not-now");
-    if ((unasked || spend?.unasked) && this.allowed.get(rowID)?.on !== true)
-      return refused("failed", NOT_ALLOWED);
+    if ((unasked || spend?.unasked) && !this.allowedNow(rowID))
+      return refused("failed", this.directory && !this.directory.told ? NOT_YET : NOT_ALLOWED);
     if (!spend) {
       spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...by ? { by } : {}, ...unasked ? { unasked: true } : {} };
       this.keep(spend);
@@ -34171,7 +34179,7 @@ class LinkDirectory {
     const boxes = new Map;
     for (const box of given.boxes) {
       if (box && typeof box.key === "string" && box.key)
-        boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true, ...box.apart === true ? { apart: true } : {} });
+        boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true, ...box.apart === true ? { apart: true } : {}, ...box.shared === true ? { shared: true } : {} });
     }
     this.boxes = boxes;
     const self = given.self;
@@ -34220,6 +34228,9 @@ class LinkDirectory {
   }
   isYours(box) {
     return this.told && this.isPeer(box) && this.boxes.get(box)?.apart !== true;
+  }
+  isSharedPeer(box) {
+    return this.boxes.get(box)?.shared === true;
   }
   home(box) {
     let home = this.homes.get(box);
@@ -36042,4 +36053,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8a1a0b4941631b4f3a56f1f9e9080fbc404e36fbb9276acb5721f72840879f61
+// Built from Packages/Box/src/agents 7a5250343b813c922f222bc785e76b867aadde41bfa38c1d6ad59d11203bd430

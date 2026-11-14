@@ -55,6 +55,8 @@ export interface LimitsDirectory {
   isYours?(key: string): boolean
   /** Whether the link says this box is a machine set up by Macs that aren't all in one setup. */
   readonly sharedHere?: boolean
+  /** Whether a peer says it's such a machine. */
+  isSharedPeer?(key: string): boolean
 }
 
 interface Kept {

@@ -91,7 +91,7 @@ import { sendToPhones } from "./notices/push";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
 import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
 import { peerMail, receiveMail } from "./peers/mail";
-import { tellSeatPeers, watchSeats, whereChanged } from "./peers/seats";
+import { tellIfSharingChanged, tellSeatPeers, watchSeats, whereChanged } from "./peers/seats";
 import { changePersonalities, mergePersonalities, readPersonalities } from "./personalities/library";
 import { takePersonalities } from "./personalities/take";
 import { authorizePhone, confirmPhone, foldPhones, newPairingToken, PAIRING_MINUTES, pairingLink } from "./phones";
@@ -207,7 +207,7 @@ export { keptFeatures, peerOf, readPeerAgents, takeAgents, vouchedOf } from "./p
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
-export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeLimits, takeSeat, tellSeatPeers, watchSeats, whereChanged } from "./peers/seats";
+export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeLimits, takeSeat, tellIfSharingChanged, tellSeatPeers, watchSeats, whereChanged } from "./peers/seats";
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
@@ -942,6 +942,9 @@ async function setup(): Promise<void> {
     console.log("{}");
     return;
   }
+  // Shared by Macs of two setups now, or no longer: the bridge hears at once which computers are
+  // yours, the relay or not (the running link tells your other computers at its next round).
+  await tellIfSharingChanged(old, link);
   // A new relay or name needs a new connection, and a newer bridge replaces an older one.
   let runningVersion = null;
   try { runningVersion = fs.readFileSync(VERSION_FILE, "utf8").trim(); } catch {}

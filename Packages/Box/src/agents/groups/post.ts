@@ -245,7 +245,7 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
 
 /** Your other computers and their bots, as the link last said. */
 export class LinkDirectory implements PeerDirectory, LimitsDirectory {
-  private boxes = new Map<string, { name: string; seats: boolean; apart?: true }>()
+  private boxes = new Map<string, { name: string; seats: boolean; apart?: true; shared?: true }>()
   private listed: PeerBot[] = []
   private homes = new Map<string, RemoteHome>()
   private self?: { key: string; name: string }
@@ -270,9 +270,9 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
   /** What the link says (`SeatPeers`, src/shared/seats.ts: `{boxes: [{key, name, seats}], bots: [{id, name, job, box, session, look?}]}`), checked as it's taken. False for what isn't that. */
   set(given: any): boolean {
     if (!given || typeof given !== "object" || !Array.isArray(given.boxes) || !Array.isArray(given.bots)) return false
-    const boxes = new Map<string, { name: string; seats: boolean; apart?: true }>()
+    const boxes = new Map<string, { name: string; seats: boolean; apart?: true; shared?: true }>()
     for (const box of given.boxes) {
-      if (box && typeof box.key === "string" && box.key) boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true, ...(box.apart === true ? { apart: true as const } : {}) })
+      if (box && typeof box.key === "string" && box.key) boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true, ...(box.apart === true ? { apart: true as const } : {}), ...(box.shared === true ? { shared: true as const } : {}) })
     }
     this.boxes = boxes
     const self = given.self
@@ -338,6 +338,11 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
    */
   isYours(box: string): boolean {
     return this.told && this.isPeer(box) && this.boxes.get(box)?.apart !== true
+  }
+
+  /** Whether a peer says it's a machine set up by Macs that aren't all in one setup (#701). */
+  isSharedPeer(box: string): boolean {
+    return this.boxes.get(box)?.shared === true
   }
 
   home(box: string): RemoteHome {

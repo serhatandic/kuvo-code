@@ -108,6 +108,9 @@ type Result = { outcome: ResetOutcome; until?: number; already?: true; message?:
 /** Said of an agent's reset under Always Allow that's off for its account now. */
 const NOT_ALLOWED = "Always Allow is off for this account now: nothing was used. Ask the user first."
 
+/** Said of an agent's reset under Always Allow while this box's link hasn't said who your computers are yet. */
+const NOT_YET = "This computer can't tell yet whether Always Allow holds here: nothing was used. Ask the user first, or try again in a moment."
+
 /** A new confirmation joins a row's open spend this long after it was asked; later, that one is settled first and the new one goes as its own. */
 const JOIN_FOR = 10 * 60_000
 
@@ -185,7 +188,8 @@ export class LimitResets {
    * every decision kept here goes (here, on its own page, or told by a Mac, a journal from before
    * this too), once, so agents here ask again rather than go on under one person's Always Allow.
    * Else a decision a peer told is forgotten once the link names that peer as not one of yours
-   * (never for one merely missing from what it says now). Forgotten is kept as off, as of when it
+   * (never for one merely missing from what it says now), and one from a journal from before this,
+   * whose box isn't known, once any peer says it's a shared machine. Forgotten is kept as off, as of when it
    * was decided, so an older word never brings it back.
    */
   private directorySaid() {
@@ -195,9 +199,11 @@ export class LimitResets {
     const becameShared = shared && !this.sharedSeen
     let changed = shared !== this.sharedSeen
     this.sharedSeen = shared
+    // (One kept from before this, whose box isn't known, may have come from a shared machine.)
+    const sharedPeer = directory.peerBoxes().some((box) => directory.isSharedPeer?.(box.key) === true)
     for (const [row, decided] of [...this.allowed]) {
       if (!decided.on && decided.from === "") continue
-      const apart = decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false
+      const apart = decided.from === undefined ? sharedPeer : decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false
       if (!becameShared && !apart) continue
       this.allowed.set(row, { on: false, at: decided.at, from: "" })
       changed = true
@@ -215,7 +221,16 @@ export class LimitResets {
     const live = this.limits.liveRow(provider)
     if (live === undefined) return false
     this.saw(provider, live)
-    return this.allowed.get(live)?.on === true
+    return this.allowedNow(live)
+  }
+
+  /**
+   * Whether Always Allow holds for this account here now: never before the link has said who your
+   * computers are (whether this box became a shared machine meanwhile isn't known yet).
+   */
+  private allowedNow(rowID: string): boolean {
+    if (this.directory && !this.directory.told) return false
+    return this.allowed.get(rowID)?.on === true
   }
 
   /**
@@ -426,7 +441,10 @@ export class LimitResets {
   /** A peer's reset mail: only from one of your own computers (another owner's, through a machine you share, never spends yours). */
   take(from: string, mail: unknown) {
     if (!isResetMail(mail)) return
-    if (this.directory && !this.isYours(from)) {
+    // (An answer to a spend this box passed to that very box is taken, whatever the link says of it
+    // now: it says how that spend went there.)
+    const passedThere = !!mail.answer && typeof mail.answer.id === "string" && this.spends.some((each) => each.id === mail.answer!.id && each.via === from)
+    if (this.directory && !this.isYours(from) && !passedThere) {
       // (Once the link has said, an ask is answered, so its asker isn't left waiting, and nothing
       // is spent: a spend begun for it here before, as that went, or still open, never "nothing was
       // used" for one that may have gone. Anything else is dropped.)
@@ -538,7 +556,7 @@ export class LimitResets {
     if (this.limits.held(account.provider)) return refused("not-now")
     // An agent's under Always Allow, no one having confirmed it: only while this box, which spends
     // it, has it allowed (turned off anywhere, it's off here once told).
-    if ((unasked || spend?.unasked) && this.allowed.get(rowID)?.on !== true) return refused("failed", NOT_ALLOWED)
+    if ((unasked || spend?.unasked) && !this.allowedNow(rowID)) return refused("failed", this.directory && !this.directory.told ? NOT_YET : NOT_ALLOWED)
     if (!spend) {
       spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...(by ? { by } : {}), ...(unasked ? { unasked: true as const } : {}) }
       // Kept before anything goes to its maker (and before anything is waited for, so another ask

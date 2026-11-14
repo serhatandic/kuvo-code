@@ -30,6 +30,8 @@ export interface SeatBox {
    * Allow and usage totals: this box or it is a machine two people's Macs share, or it follows
    * another setup (PROTOCOL.md, "Plan limits", "Across your computers"). */
   apart?: true;
+  /** It says it's a machine set up by Macs that aren't all in one setup (#701). */
+  shared?: true;
 }
 
 /** A bot on another of your computers, as the link tells the bridge: its computer (`box`, by key),
