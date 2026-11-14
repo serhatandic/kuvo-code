@@ -455,6 +455,8 @@ connection.
     takes on over SSH (by mail, before bridge 0.9.63, too).
 - **Personalities**: each box's view is a document ("Documents"); a box meets a peer's with its
   own, and its bots whose personality changed are told what they are now.
+- **Held bot edits**: `{"botEdit"}` to the computer a bot lives on, and `{"botEdited"}` back, for an
+  edit a box held while it was away (`kuvo/bots`, "Held for another computer").
 - **Letters**: `{"letter": {id, from, to, text, wait, at, answers?, read?, note?, made?}}` goes to the box that
   listed `to`.
   - **Checks**: the receiver drops a letter older than a day. It delivers each `id` once (ids
@@ -3780,6 +3782,36 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   there too. `200 {}`, 404, or 409 `{"message"}` while it moves. Keys of its own that can't be
   reached as it's deleted (this Mac's app not answering) go the next time they can be. A machine's box notes a deleted
   bot in `~/.kuvo-code/bots/deleted.json`, for a Mac of 0.8.0-beta.1 or earlier.
+- **Held for another computer** (`bots.held`): `PATCH` or `DELETE kuvo/bots/<id>` asked of a box the
+  bot doesn't live on, for a bot one of its other computers lists (their agents, "Peers"), is
+  taken at once and held there for that computer: `202 {"held": {bot, box, computer, change?,
+  delete?, since}}` (`box` that computer's key, `computer` its name as this box knows it, `change`
+  each field as `PATCH` takes it, the last given of each, `delete: true` for a delete, `since` when
+  it was first held, ms). So a client whose way to the bot's own computer is down asks any box it
+  reaches, and keeps nothing itself. `?on=<computer>` (its key, or a machine's id on its Mac) names
+  the computer for a bot no computer lists to this box: one it doesn't know now (a machine you
+  removed) is held with `box` empty and `computer` as given, and goes once it's one of this box's
+  computers again. A later edit goes on top, a field at a time (a `work`'s settings each by its
+  own); a delete goes over all of it, and a change after a delete is `404 {"message"}`. The box
+  checks what it can without the bot (`400 {"message"}` for an empty name, a look there isn't, a
+  model, job or work that isn't one, or no field a change has) and leaves the rest to that computer;
+  `404` for a bot no computer lists, `503` when it can't keep it now. It holds each sealed with its
+  own secret (`run/bots-held/<id>.json`), so what anything else there leaves isn't sent or shown.
+  - `kuvo/bots` and its events add `held` (each as above, the first held first) and `refused`
+    (`[{bot, box, computer, message, at}]`, what those computers refused in the last day, with the
+    words to show, gone with a new edit to that bot): facts a client draws (the bot as you left
+    it, "waiting for <computer>"; why it wasn't taken). A bot moving to another computer meanwhile:
+    what's held goes where it lists now.
+  - It goes as `{"botEdit": {id, bot, change? | delete: true, at}}` (`id` `bte_…`, one for each
+    version of what's held) to that computer, if its `features` say `bots.held` (one that doesn't
+    yet waits until it's updated), again each minute while it isn't answered and at once when it's
+    back ("Peers", `run/peer-reach.json`). That computer takes it only from one of its peers, not
+    from a machine that told it's shared (`403`), and does it as `PATCH` or `DELETE` there would,
+    once for each `id` (remembered seven days; one it couldn't do now, `409` or `5xx`, is done when
+    it comes again), and answers `{"botEdited": {id, bot, status, message?}}`, which the holder
+    takes only from it: done (`2xx`, or `404` for a delete), it's let go; `409` or `5xx`, it goes again
+    later; `404` for a change, it goes where the bot lists now, or is refused; any other, it's let
+    go and refused, in words naming that computer.
 - `POST kuvo/bots/<id>/arrived`: a bot whose folder and conversation a client just brought to this
   box from another computer (Move to Computer: the client holds it where it was, copies its folder
   and carries its conversation over, under the same id) is made this box's: what its folder says
@@ -5579,6 +5611,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots` | `kuvo/bots` |
 | `bots.edit` | `PATCH` and `DELETE kuvo/bots/<id>` |
 | `bots.events` | `kuvo/bots/events` |
+| `bots.held` | `PATCH` and `DELETE kuvo/bots/<id>` for a bot on another computer, held there and handed on (`202`, `held` and `refused` in `kuvo/bots`); in a peer's agents' mail, it takes `botEdit` |
 | `bots.job` | a bot's job as its box's record: `jobDetails` in `kuvo/bots`, `job` in `PATCH kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
@@ -8414,6 +8447,11 @@ can go three months after 0.8.0 ships.
   there is taken in again as this one starts. <!-- compat: 0.7 mac-personalities -->
 - Machines' bots' keys of their own, which it kept in your Keychain: each given to its machine,
   then gone from the Keychain. <!-- compat: 0.7 bot-keys-keychain -->
+- Edits to machines' bots it kept while they were away (`botEditOutbox` in its preferences, and
+  `botEditsWaiting` from before it): each handed to this Mac's box once at launch (`PATCH` or
+  `DELETE kuvo/bots/<id>?on=<machine>`), which holds it for that machine ("Held for another
+  computer"), then gone from the preferences; one the box can't keep now stays for the next launch.
+  <!-- compat: 0.7 mac-bot-edits -->
 - The letters it sent its agents' way and those it had delivered (`agent-letters.json`,
   `agent-letters-seen.json`, 0.8.0-beta.1), and the messages it kept for a machine that was away
   (`agent-messages.json`), handed to the box's outbox (`kuvo/link/letters/take`).

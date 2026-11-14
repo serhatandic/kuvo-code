@@ -3,7 +3,8 @@
 
 import { parsed } from "../../shared/json";
 import { changeBot, deleteBot } from "../bots/edit";
-import { botFollowers } from "../bots/here";
+import { botFollowers, botHere } from "../bots/here";
+import { HELD, heldLists, holdEdit } from "../bots/held";
 import { botTemplates, NO_KIT, readKit } from "../bots/kit";
 import { listBots } from "../bots/list";
 import { makeBot, startingModelHere } from "../bots/make";
@@ -41,7 +42,15 @@ export async function* botRoute(context: RouteContext, oneBot: RegExpMatchArray)
   } catch {
     return yield* json(404, { message: "That bot isn’t there any more." });
   }
-  const { status, value } = request.method.toUpperCase() === "PATCH"
+  const deleting = request.method.toUpperCase() === "DELETE";
+  // One that lives on another of your computers: held here for it, and handed on once it answers
+  // ("Held for another computer"). `on` names that computer for one this box hasn't heard of yet.
+  if (!botHere(id)) {
+    const on = new URLSearchParams(request.path.split("?")[1] ?? "").get("on");
+    const held = holdEdit(id, deleting ? { delete: true } : { change: parsed(request.body) }, on);
+    return yield* json(held.status, held.value);
+  }
+  const { status, value } = !deleting
     ? await changeBot(id, parsed(request.body) as BotChange | null | undefined, readEngine, bridge, info.name, signal)
     : await deleteBot(id, readEngine, bridge);
   return yield* json(status, value);
@@ -76,7 +85,7 @@ export async function* botEventsRoute(context: RouteContext): AsyncGenerator<Ans
   const { request, signal, info, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
   yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-  return yield* followed(() => ({ bots: listBots(info.name) }), botFollowers, signal, { folders: [BOTS] });
+  return yield* followed(() => ({ bots: listBots(info.name), ...heldLists() }), botFollowers, signal, { folders: [BOTS, HELD] });
 }
 
 // This machine's bots and wake-ups, from their folders.
@@ -84,6 +93,6 @@ export async function* botsRoute(context: RouteContext): AsyncGenerator<AnswerPi
   const { request, info, text } = context;
   if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return yield* text(405, "Read them with GET.");
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name) })) };
+  yield { body: Buffer.from(JSON.stringify({ bots: listBots(info.name), ...heldLists() })) };
   return;
 }

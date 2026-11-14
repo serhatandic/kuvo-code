@@ -74,6 +74,7 @@ import { writeCard } from "./setup/card";
 import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
 import { FORWARDS, forwardsSoon, sendForwards } from "./work-queue/forward";
+import { heldSoon, sendHeld } from "./bots/held";
 import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
@@ -221,6 +222,7 @@ export { pushRows, takeRows } from "./work/elsewhere";
 export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
 export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
 export { handUpkeep } from "./work-queue/hand";
+export { forgetHeldSends, HELD as BOTS_HELD, heldLists, heldSoon, holdEdit, keeperOf, sendHeld, takeBotEdit, takeBotEdited } from "./bots/held";
 export { forgetActs as forgetQueueActs, FORWARDS as QUEUE_FORWARDS, forwardsSoon as queueForwardsSoon, forwardTiming as queueForwardTiming, sendForwards as sendQueueForwards, takeAct as takeQueueAct } from "./work-queue/forward";
 export { actForPeer as queueActForPeer } from "./work-queue/acts";
 export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
@@ -459,6 +461,10 @@ async function run(): Promise<void> {
   forwardsSoon.send = forwardNow;
   try { fs.mkdirSync(FORWARDS, { recursive: true, mode: 0o700 }); } catch {}
   let forwardsWatch = watchFolders([FORWARDS], forwardNow, { recursive: false });
+  // Edits to bots on your other computers held here (by a route, `box route` too): each goes to
+  // its computer at once, again each minute while it's waited for, and as soon as it's back.
+  const heldNow = () => { try { sendHeld(current); } catch {} };
+  heldSoon.send = heldNow;
   setInterval(() => {
     if (!outboxWatch.whole) {
       outboxWatch.close();
@@ -469,6 +475,7 @@ async function run(): Promise<void> {
       forwardsWatch = watchFolders([FORWARDS], forwardNow, { recursive: false });
     }
     forwardNow();
+    heldNow();
     if (current?.welcomed && docsNoted()) try { docsChanged(current, { tell: true }); } catch {}
     if (current?.welcomed) lastWelcomed = Date.now();
     noteRelay(Boolean(current?.welcomed), lastWelcomed);

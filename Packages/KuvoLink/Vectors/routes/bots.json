@@ -157,6 +157,24 @@
       ]
     },
     {
+      "name": "a bot on none of the box's computers: a change or delete isn't held, and nothing is listed as held",
+      "steps": [
+        {
+          "send": "PATCH kuvo/bots/bot_far",
+          "body": { "name": "Far" },
+          "expect": { "status": 404, "json": { "message": "That bot isn\u2019t there any more." } }
+        },
+        {
+          "send": "DELETE kuvo/bots/bot_far",
+          "expect": { "status": 404, "json": { "message": "That bot isn\u2019t there any more." } }
+        },
+        {
+          "send": "GET kuvo/bots",
+          "expect": { "status": 200, "json": { "bots": [], "held": [], "refused": [] } }
+        }
+      ]
+    },
+    {
       "name": "deleting a bot, and one that isn't there",
       "steps": [
         { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
