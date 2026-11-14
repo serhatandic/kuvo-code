@@ -35,12 +35,13 @@ pub fn missing<S: AsRef<str>>(features: &[S]) -> Vec<String> {
 }
 
 /// Whether a held box is still asked `path`: what it is (`kuvo/info`), its own update
-/// (`kuvo/update`, `kuvo/box/update`), its Mac's app registering with it (`kuvo/box/app`), and
+/// (`kuvo/update`, `kuvo/box/update`), its Mac's app registering with it (`kuvo/box/app`) and the
+/// keys it holds for that app (`kuvo/box/proof`, `kuvo/box/kept-keys`, as KuvoClient's gate), and
 /// what keeps work under way going: its engine (`api/…`), its coding agents' bridge
 /// (`kuvo/agents/…`), its agents' tool calls (`kuvo/agent-tools`), its asks and Auto's decisions.
 pub fn is_allowed(path: &str) -> bool {
     let route = path.split('?').next().unwrap_or(path);
-    if ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/box/app", "kuvo/agent-tools"].contains(&route) {
+    if ["kuvo/info", "kuvo/update", "kuvo/box/update", "kuvo/box/app", "kuvo/box/proof", "kuvo/box/kept-keys", "kuvo/agent-tools"].contains(&route) {
         return true;
     }
     if route.starts_with("api/") || route.starts_with("kuvo/agents/") {

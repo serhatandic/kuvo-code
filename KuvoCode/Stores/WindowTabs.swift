@@ -827,8 +827,9 @@ final class WindowTabs {
             guard let self else { return }
             do {
                 try await app.readChatsHere()
-            } catch let older as AppModel.ChatsNeedNewerBox {
-                return Modal.show(older)
+            } catch let held as BoxRefusal where held.reason == BoxGates.reason {
+                // Held for its update: the gate's words.
+                return Modal.show(held)
             } catch {
                 return Modal.show(BoxRefusal(status: 503, message: "This Mac’s box didn’t answer. Try again in a moment."))
             }

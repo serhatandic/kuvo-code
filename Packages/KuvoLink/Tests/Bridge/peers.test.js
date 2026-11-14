@@ -557,6 +557,26 @@ test("a box tells its peers its agents as they change, and every ten minutes", a
   assert.equal(opened(sent[6], to(sent[6])).payload.ask, "agents");
 });
 
+test("a box tells its peers the setup it follows, or that it's a machine two people's Macs share, so they count it as one of your own computers only within one setup (#701)", async t => {
+  const air = box("mac", "air");
+  const { target } = await engine(t);
+  const readEngine = () => target;
+  const said = async extra => {
+    fresh(extra);
+    const sent = [];
+    await link.announce({ send: bytes => sent.push(bytes) }, readEngine, link.readLink(), Date.now(), true);
+    const toMac = sent.find(bytes => k(bytes.subarray(1, 17)) === mac.address);
+    const agents = opened(toMac, mac).payload.agents;
+    return { setup: agents.setup, shared: agents.shared };
+  };
+  // One Mac's machine, in no setup yet: neither.
+  assert.deepEqual(await said({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } }), { setup: undefined, shared: undefined });
+  // In a setup: it says which.
+  assert.deepEqual(await said({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } }, setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub, sign: mac.pub, role: "member" } }), { setup: "set_AAAAAAAAAAAAAAAAAAAAAA", shared: undefined });
+  // Two people's Macs set it up: it says it's shared.
+  assert.deepEqual(await said({ macs: [mac.pub, air.pub], peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer] }, [air.pub]: { at: 1, peers: [air.peer] } } }), { setup: undefined, shared: true });
+});
+
 test("this box's agents worked out twice at once: the one begun last is kept, so an agent made meanwhile isn't dropped by the older", async t => {
   fresh();
   let asked = 0, firstAsked, letGo;

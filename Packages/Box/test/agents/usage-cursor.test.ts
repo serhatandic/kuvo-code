@@ -514,7 +514,7 @@ describe("Cursor's account across your computers", () => {
     // Its plan can't be read (no subscription): neither computer's limits stand for the other's.
     cursor.usage = { enabled: false }
     cursor.events = eventsEachDay(1)
-    const directory = (self: string, other: string) => ({ told: true, own: () => ({ key: self, name: self }), peerBoxes: () => [{ key: other, name: other }], listen: () => {}, isPeer: () => true })
+    const directory = (self: string, other: string) => ({ told: true, own: () => ({ key: self, name: self }), peerBoxes: () => [{ key: other, name: other }], listen: () => {}, isPeer: () => true, isYours: () => true })
     const boxes: { key: string; peers: UsagePeers }[] = []
     let down = new Set<string>()
     const box = (key: string, other: string, sign: string) => {
@@ -591,7 +591,7 @@ describe("Cursor's account across your computers", () => {
   })
 
   test("a box a peer vouches for (another person's Mac beside a machine you share) is never waited on", async () => {
-    const peers = new UsagePeers(new Usage(() => [], store(cursorPricing()), () => undefined, undefined, () => now), { followed: true, send: () => {} }, { told: true, own: () => ({ key: "b", name: "b" }), peerBoxes: () => [{ key: "a", name: "a" }], listen: () => {}, isPeer: () => false } as any, undefined, () => now)
+    const peers = new UsagePeers(new Usage(() => [], store(cursorPricing()), () => undefined, undefined, () => now), { followed: true, send: () => {} }, { told: true, own: () => ({ key: "b", name: "b" }), peerBoxes: () => [{ key: "a", name: "a" }], listen: () => {}, isPeer: () => false, isYours: () => false } as any, undefined, () => now)
     const identity = "aaaaaaaaaaaaaaaa"
     peers.take("a", { kind: "usage", at: now, digest: "x", accounts: [{ provider: "cursor", service: "cursor", identity, scanned: now, accountWide: true, slots: { models: [], used: [] } }] })
     expect(peers.readsWhole("cursor", identity)).toBe(false)

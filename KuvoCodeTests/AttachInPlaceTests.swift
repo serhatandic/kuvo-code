@@ -400,6 +400,29 @@ import Testing
         #expect(model.tabs.selection == .draft(chats))
     }
 
+    /// A new chat while the update gate holds the box here: the gate's words ("Updating…"), as
+    /// anything started there gets, though its `kuvo/info` (an older box's without a chats folder)
+    /// still answers; let go, its chats folder is read.
+    @Test func aNewChatOnAHeldBoxHereSaysItsUpdating() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        model.workspace.attachedChats = nil
+        model.machines.gates.updating(SSHConnection.thisMac, detail: BoxGate.Words.thisMacTaking)
+        await #expect {
+            try await model.readChatsHere()
+        } throws: { error in
+            (error as? BoxRefusal)?.message == "\(BoxGate.Words.updating) \(BoxGate.Words.thisMacTaking)"
+        }
+        #expect(model.workspace.attachedChats == nil)
+        model.machines.gates.letGo(SSHConnection.thisMac)
+        try await model.readChatsHere()
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
+        #expect(model.workspace.attachedChats == chats)
+    }
+
     /// The box here went (its Mac removed it) and the app starts again: it runs its own box, and
     /// this Mac shows once, as its own; nothing of the box that was is left: listed, its sessions,
     /// their tabs, or a new one in a folder there.

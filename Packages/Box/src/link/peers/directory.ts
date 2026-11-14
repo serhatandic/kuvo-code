@@ -10,6 +10,7 @@ import { plainName } from "../../shared/text";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
 import { KEY, MOST_PEERS, cleanPeer, fitsPeer, ownKey, peersOf } from "./known";
+import { SETUP_ID } from "../setup/record";
 import type { LinkState } from "../state";
 import type { AgentsFile, ListedAgent, ToldAgents } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
@@ -80,7 +81,8 @@ export function takeAgents(sender: { key: string; kind: "mac" | "machine"; id?: 
     }
     all[sender.key] = { at: given.at as number, heard: Date.now(), kind: sender.kind, ...(sender.id ? { id: sender.id } : {}), list: (given.list as unknown[]).filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
       ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}), ...(Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {}),
-      ...(Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {}) };
+      ...(Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {}),
+      ...(typeof given.setup === "string" && SETUP_ID.test(given.setup) ? { setup: given.setup } : {}), ...(given.shared === true ? { shared: true as const } : {}) };
     writePrivate(file, JSON.stringify(all));
     return true;
   });

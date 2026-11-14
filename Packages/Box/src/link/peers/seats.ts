@@ -27,6 +27,7 @@ import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shar
 import type { DocPart, PendingParts } from "../documents/parts";
 import { followedSetup } from "../setup/record";
 import { sharedMachine } from "../setup/settle";
+import { toldShared } from "../work-queue/told";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { MailSender, Peer } from "./known";
@@ -202,18 +203,52 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   const key = link ? ownKey(link) : null;
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os.hostname();
   const setup = followedSetup(link);
+  // A peer that isn't one of your own computers for plan limits' resets and usage totals: every
+  // peer of a machine two people's Macs share, a machine that says it's one (in its agents' mail,
+  // or in its numbering mail, which an older box or one whose engine isn't answering still sends:
+  // `toldShared`), and one that says it follows another setup than this box's (PROTOCOL.md, "Plan
+  // limits", "Across your computers", Whose).
+  const shared = sharedMachine(link);
+  const saysShared = (key: string) => told[key]?.shared === true || toldShared(key) === true;
+  const apart = (key: string) => shared || saysShared(key) || (!!setup && !!told[key]?.setup && told[key]!.setup !== setup.id);
   return {
     ...(key ? { self: { key, name } } : {}),
     // Boxes only a peer knows, for plan limits alone.
     also: vouchedOf(link, told).map(box => ({ key: box.key, name: plainName(box.name) || "another computer" })),
-    boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
+    boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...(apart(peer.key) ? { apart: true as const } : {}), ...(saysShared(peer.key) ? { shared: true as const } : {}) })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
     // (The usage panel's settings go only between its boxes: never a shared machine's. `null` only
     // once that's settled, a machine Macs share or a setup set aside; else not said, as it can't
     // say yet: one it can't follow yet, its keys not read as the link starts, or none made yet.)
     ...(setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}),
+    // (This box is a machine Macs of two setups share: what was decided here goes once, #701.)
+    ...(shared ? { shared: true as const } : {}),
   };
+}
+
+/** The setup this box follows and whether it's a machine Macs of two setups share, as last seen. */
+let whereSeen: string | undefined;
+
+/**
+ * Whether the setup this box follows, or whether it's a machine Macs of two setups share, changed
+ * since last seen (not the first time): then its bridge and its peers are told at once, not at the
+ * next round, so nothing of one setup's stays the other's for that minute.
+ */
+export function whereChanged(link: LinkState | null): boolean {
+  const now = `${followedSetup(link)?.id ?? ""}|${sharedMachine(link)}`;
+  const before = whereSeen;
+  whereSeen = now;
+  return before !== undefined && before !== now;
+}
+
+/**
+ * The link changed by a command of its own (`setup`): if this box became, or stopped being, a
+ * machine Macs of two setups share, its bridge hears at once which computers are yours, the relay
+ * there or not (the running link tells your other computers at its next round).
+ */
+export async function tellIfSharingChanged(old: LinkState | null, link: LinkState, ask: BridgeAsk = bridgeAsk): Promise<void> {
+  if (sharedMachine(old) !== sharedMachine(link)) await tellSeatPeers(link, true, ask).catch(() => {});
 }
 
 let toldSeatPeers = "";

@@ -598,13 +598,15 @@ struct SidebarView: View {
     }
 
     /// A new chat on `machine`, in Kuvo Code's chats folder there, as its box names it (`kuvo/info`).
+    /// One the update gate holds says so in its words (its `kuvo/info` answers, but nothing starts
+    /// there until it's up to date).
     private func newChat(on machine: String) {
         Task {
-            struct Info: Decodable { var chats: String? }
+            struct Info: Decodable { var chats: String }
             do {
-                guard let chats = try await app.box(machine).value(Info.self, "GET", "kuvo/info").chats else {
-                    throw BoxRefusal(status: 404, message: "\(app.machines.engine(machine)?.machine.name ?? machine) needs a newer Kuvo Code to start chats there. It updates by itself overnight.")
-                }
+                let box = app.box(machine)
+                if let held = BoxGates.refusalIfHeld(box.box) { throw held }
+                let chats = try await box.value(Info.self, "GET", "kuvo/info").chats
                 newSession(RemoteFolder.folder(chats, on: machine))
             } catch {
                 Modal.show(error)
