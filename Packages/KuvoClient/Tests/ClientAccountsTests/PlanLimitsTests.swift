@@ -63,8 +63,8 @@ struct PlanLimitsTests {
         #expect(limits.services.isEmpty)
     }
 
-    /// The Mac panel's providers as `kuvo/usage` lists them: Cursor, Claude's place (covered, its
-    /// spend only), Copilot, OpenRouter's place.
+    /// The Mac panel's providers in its order: Cursor, Claude's place (covered, its spend only),
+    /// Copilot, OpenRouter's place.
     struct Entry: Equatable { var id: String; var covers: String? }
 
     @Test func everyClientListsABoxsRowsWhereTheMacPanelSaysTheyGo() throws {

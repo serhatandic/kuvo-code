@@ -136,9 +136,13 @@ final class FileTree {
     private(set) var allFilesFailure: FolderFailure?
     /// The list a filter searches waits for this Mac's box, which is starting.
     @ObservationIgnored private var waitsForBox = false
+    /// A box's routes, by its id: the files a filter searches are listed by the box their folder is
+    /// on, this Mac's too.
+    private let box: (String) -> BoxClient
 
-    init(roots: [URL]) {
+    init(roots: [URL], box: @escaping (String) -> BoxClient = { BoxClient.routes($0) }) {
         self.roots = roots
+        self.box = box
         // With several folders each is a row of its own; the primary one starts open.
         if roots.count > 1, let primary = roots.first { expanded.insert(primary) }
     }
@@ -289,7 +293,7 @@ final class FileTree {
             allFilesFailure = nil
         } else if allFiles != nil {
             let roots = roots
-            let listing = await ProjectFiles.listing(roots)
+            let listing = await ProjectFiles.listing(roots, box: box)
             // This Mac's box starting again (after an update): what showed stays until it answers.
             guard listing.failure != .starting else { return }
             if listing.files != allFiles { allFiles = listing.files }
@@ -335,7 +339,7 @@ final class FileTree {
     func loadAllFiles() async {
         guard allFiles == nil else { return }
         let roots = roots
-        let listing = await ProjectFiles.listing(roots)
+        let listing = await ProjectFiles.listing(roots, box: box)
         // This Mac's box starting (with the app, or again after an update): still loading, and read
         // again as the panel looks again (`refresh`), rather than said it couldn't be read.
         waitsForBox = listing.failure == .starting

@@ -67,16 +67,21 @@ import Testing
         #expect(shown(tree) == ["fixtures", "  Empty", "secrets", "  key.pem", "README.md"])
     }
 
+    /// The tree read here; the files a filter searches, listed by this Mac's box (the real one, as
+    /// ProjectFilesTests has it), which says why it can't.
     @Test func aProjectThisMacCantReadSaysWhyInTheTreesPlace() async throws {
         defer { done() }
+        let box = try await GitTestBox()
+        let client = box.client
         try lock(folder.path)
-        let tree = FileTree(roots: [folder])
+        let tree = FileTree(roots: [folder]) { _ in client }
         let failure = try #require(tree.rootFailure)
         #expect(failure.detail(on: nil) == "Permission denied.")
         // Filtering doesn't say "No matching files" either.
         await tree.loadAllFiles()
         #expect(tree.allFiles == [])
         #expect(tree.allFilesFailure == .denied)
+        withExtendedLifetime(box) {}
     }
 
     /// A machine's folder and every file under it, listed by the same script on Linux's tools and,

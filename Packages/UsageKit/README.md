@@ -66,8 +66,7 @@ here.
   limits, its resets with a Use control that the host spends through its box, once, confirmed in
   place (`askReset`, `useReset`, `HostResetFlow`); the panel's own claims (`ResetClaimService`)
   stand down for a provider the host covers, and its own lines of the same facts aren't shown again
-  beside them. `kuvo/usage` marks the rows whose place the boxes' rows take (`covers`), without
-  their limits.
+  beside them.
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.
 - **A card of the host's** (`Embedding/HostCard.swift`): shown at the foot of the dashboard, above
@@ -75,9 +74,6 @@ here.
   the panel's own card surface, with buttons on the Options button's glass capsule. While Kuvo
   Code is in the background, the Options menu's and the right-click menu's Quit read and do what
   the host says (`HostCard.quitItem`: "Stop Background Work…"), since quitting only takes it there.
-- **The panel for the host's phones** (`Embedding/UsageMenuBar+Phone.swift`): what the Bars view
-  lists, as JSON (providers in its order with their brand color, mark, notice and lines), and a
-  refresh of everything, for Kuvo Code for iPhone.
 - **API keys pasted into the panel go into the Keychain** (`Providers/APIKeySecrets.swift`), not a
   JSON file; a key an earlier version saved in a file moves there the next time it's read. A key in
   another tool's file (`~/.config/openrouter/key.json`, `~/.config/zai/key.json`) is read but never

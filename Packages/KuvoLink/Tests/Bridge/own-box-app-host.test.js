@@ -152,8 +152,8 @@ test("a phone's ask of the Mac's own routes goes to the open app's own host as i
   assert.equal(fs.statSync(path.join(K, "run", "app.json")).mode & 0o777, 0o600);
   const first = await phone("GET", "kuvo/mac/info");
   assert.deepEqual([first.status, first.json], [200, { answered: "app", path: "kuvo/mac/info" }]);
-  await phone("GET", "kuvo/usage");
-  assert.deepEqual(app.asked, ["kuvo/mac/info", "kuvo/usage"]);
+  await phone("GET", "kuvo/asks");
+  assert.deepEqual(app.asked, ["kuvo/mac/info", "kuvo/asks"]);
   assert.equal(app.hellos, 2, "proved for each ask: the box outlives the app, and its port could be anyone's after a crash");
   assert.deepEqual(helper.asked.filter(call => call !== "/link/identity"), []);
   // What the box says of it never gives its host's password.

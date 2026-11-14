@@ -442,10 +442,10 @@ extension Date {
     }
 }
 
-/// What a client lists of a computer's usage, in one order on every client: the Mac panel's own
-/// providers (`kuvo/usage`) in its order, where one says it `covers` a service, that box's rows of
-/// it there (the first with what that provider had besides: spend, its trend); then the box's
-/// other rows (a machine has no panel: all of them). One row per account, as one box lists them
+/// What a client lists of a computer's usage, in one order on every client: the panel's entries in
+/// their order (the Mac's providers; the phone's cards, by service, in the usage settings' order:
+/// `UsageLayout`), where one says it `covers` a service, the rows of it there (the first with what
+/// that entry has besides: spend, its trend); then the other rows. One row per account, as one box lists them
 /// (`listing`, from its `BoxLimits.rows`); merged here only from boxes from before those.
 public enum UsageListing {
     public enum Item<Panel> {
