@@ -14,7 +14,7 @@ use kuvo_ui::{
 
 use super::{
     Area, Badge, Ctx, Scene,
-    data::{self, ACCOUNTS, WORK_NEAR_LIMIT},
+    data::{self, ACCOUNTS, MORE_ACCOUNTS, WORK_NEAR_LIMIT},
     ring::{self, level_color},
 };
 
@@ -23,7 +23,7 @@ fn waiting_in(area: Area, scene: Scene) -> usize {
     if scene == Scene::Empty {
         return 0;
     }
-    // BOX-NEEDED: how many things in each area wait on you: `GET kuvo/attention` (and `kuvo/attention/events`) → `{sessions, bots, queue}` across the box.
+    // BOX-NEEDED: how many things in each area wait on you: a new `GET kuvo/waiting` (and `kuvo/waiting/events`, ndjson) → `{sessions, bots, queue}` across the box (`kuvo/attention` is taken: it's the client-in-use lease).
     match area {
         Area::Sessions => data::SESSIONS_WAITING,
         Area::Bots => data::BOTS_WAITING,
@@ -35,20 +35,33 @@ pub fn render(d: &Ctx, _window: &mut Window, cx: &mut App) -> AnyElement {
     let c = cx.theme().colors.clone();
     let open = d.scene.area();
     // The compact option shows an area's name beside its button under the pointer.
-    let hovered = (d.draft == super::Draft::C && d.scene == Scene::Working).then_some(Area::Bots);
+    let hovered = (d.draft == super::Draft::C && d.scene == Scene::Working).then_some(Area::Queue);
 
     let top = [Area::Sessions, Area::Bots, Area::Queue, Area::Computers]
         .into_iter()
         .map(|area| button(d, area, area == open, hovered == Some(area), waiting_in(area, d.scene), cx));
 
+    // In the box's order (`rows`); past the option's room, the rest wait behind "+N", which opens
+    // Settings › Usage.
     let accounts: Vec<&data::Account> = if d.scene == Scene::Empty {
         Vec::new()
     } else if d.scene == Scene::Limit {
-        std::iter::once(&WORK_NEAR_LIMIT).chain(ACCOUNTS.iter().skip(1)).collect()
+        std::iter::once(&WORK_NEAR_LIMIT).chain(ACCOUNTS.iter().skip(1)).chain(MORE_ACCOUNTS).collect()
     } else {
-        ACCOUNTS.iter().collect()
+        ACCOUNTS.iter().chain(MORE_ACCOUNTS).collect()
     };
-    let rings = accounts.iter().enumerate().map(|(ix, account)| ring_button(d, ix, account, d.scene == Scene::Limit && ix == 0, cx));
+    let shown = accounts.len().min(d.look.max_rings);
+    let mut rings: Vec<AnyElement> = accounts[..shown]
+        .iter()
+        .enumerate()
+        .map(|(ix, account)| ring_button(d, ix, account, d.scene == Scene::Limit && ix == 0, cx))
+        .collect();
+    if accounts.len() > shown {
+        rings.push(more_rings(d, accounts.len() - shown, cx));
+    }
+    if d.scene == Scene::Empty {
+        rings.push(no_accounts(d, cx));
+    }
 
     div()
         .w(d.look.rail_w)
@@ -64,21 +77,73 @@ pub fn render(d: &Ctx, _window: &mut Window, cx: &mut App) -> AnyElement {
         .children(top)
         .child(div().flex_1())
         .child(div().flex().flex_col().items_center().gap(space::S2).pb(space::S2).children(rings))
-        .child(button_with(d, ButtonSpec { id: "help", icon: IconName::Question, name: "Help", shortcut: None, selected: false, hovered: false, waiting: 0 }, cx))
+        .child(button_with(d, ButtonSpec { id: "help", icon: IconName::Question, name: "Help", selected: false, hovered: false, waiting: 0 }, cx))
         .child(button(d, Area::Settings, open == Area::Settings, false, 0, cx))
         .into_any_element()
 }
 
 fn button(d: &Ctx, area: Area, selected: bool, hovered: bool, waiting: usize, cx: &App) -> AnyElement {
-    let (icon, name, shortcut) = (area.icon(), area.name(), area.shortcut());
-    button_with(d, ButtonSpec { id: name, icon, name, shortcut: Some(shortcut), selected, hovered, waiting }, cx)
+    let (icon, name) = (area.icon(), area.name());
+    // No shortcut shown: ⌘1 to ⌘8 are the Mac's tabs, so the areas' keys are the user's call.
+    button_with(d, ButtonSpec { id: name, icon, name, selected, hovered, waiting }, cx)
+}
+
+/// The accounts past the rail's room: "+N", opening Settings › Usage.
+fn more_rings(d: &Ctx, count: usize, cx: &App) -> AnyElement {
+    let c = &cx.theme().colors;
+    let hover = c.hover;
+    div()
+        .id("more-rings")
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(d.look.ring)
+        .rounded(radius::PILL)
+        .border_1()
+        .border_color(c.border_strong)
+        .cursor_pointer()
+        .hover(move |s| s.bg(hover))
+        .text_ui(TypeSize::Caption)
+        .medium()
+        .text_color(c.text_muted)
+        .child(format!("+{count}"))
+        .into_any_element()
+}
+
+/// No account signed in yet: an empty ring that opens Settings › Accounts, named on hover (shown
+/// hovered in the first-run scene).
+fn no_accounts(d: &Ctx, cx: &App) -> AnyElement {
+    let c = &cx.theme().colors;
+    div()
+        .id("no-accounts")
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(d.look.ring)
+        .rounded(radius::PILL)
+        .border_1()
+        .border_color(c.border_strong)
+        .bg(c.hover)
+        .cursor_pointer()
+        .child(Icon::new(IconName::Plus).color(c.text_muted))
+        .child(
+            div()
+                .absolute()
+                .left_full()
+                .top(px(1.))
+                .pl((d.look.rail_w - d.look.ring) / 2.)
+                .child(deferred(tooltip_frame("Sign in to an account to see its limits here".into(), None, cx)).with_priority(1)),
+        )
+        .into_any_element()
 }
 
 struct ButtonSpec {
     id: &'static str,
     icon: IconName,
     name: &'static str,
-    shortcut: Option<&'static str>,
     selected: bool,
     hovered: bool,
     waiting: usize,
@@ -122,7 +187,7 @@ fn button_with(d: &Ctx, b: ButtonSpec, cx: &App) -> AnyElement {
                     .absolute()
                     .left_full()
                     .top(px(1.))
-                    .child(deferred(tooltip_frame(b.name.into(), b.shortcut.map(Into::into), cx)).with_priority(1)),
+                    .child(deferred(tooltip_frame(b.name.into(), None, cx)).with_priority(1)),
             )
         });
     if d.look.rail_labels {

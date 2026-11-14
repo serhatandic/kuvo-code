@@ -170,7 +170,7 @@ pub fn account_card(account: &Account, calm: CalmColor, pointer: bool, cx: &App)
         .children(windows)
         .when(pointer, |card| {
             card.child(div().h(px(1.)).bg(c.border))
-                .child(div().text_ui(TypeSize::Caption).text_color(c.text_muted).child("Usage history and every account in Settings › Usage"))
+                .child(div().text_ui(TypeSize::Small).text_color(c.accent).child("Open Usage in Settings"))
         })
         .into_any_element()
 }

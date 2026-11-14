@@ -173,20 +173,11 @@ impl Area {
         }
     }
 
-    pub fn shortcut(self) -> &'static str {
-        match self {
-            Area::Sessions => "⌘1",
-            Area::Bots => "⌘2",
-            Area::Queue => "⌘3",
-            Area::Computers => "⌘4",
-            Area::Settings => "⌘,",
-        }
-    }
 }
 
 /// How the main view sits beside the sidebars.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Panel {
+pub(super) enum Panel {
     /// One raised panel holds the area's sidebar and the main view, its top left corner rounded
     /// against the rail (OpenBot's).
     Joined,
@@ -211,6 +202,8 @@ struct Look {
     ring: Pixels,
     ring_stroke: Pixels,
     ring_percent: bool,
+    /// How many rings the rail shows before "+N".
+    max_rings: usize,
     calm: CalmColor,
     badge: Badge,
     list_w: Option<Pixels>,
@@ -240,6 +233,7 @@ impl Look {
                 ring: px(34.),
                 ring_stroke: px(3.),
                 ring_percent: false,
+                max_rings: 4,
                 calm: CalmColor::Green,
                 badge: Badge::Count,
                 list_w: (!narrow).then_some(px(272.)),
@@ -259,6 +253,7 @@ impl Look {
                 ring: px(30.),
                 ring_stroke: px(3.),
                 ring_percent: !narrow,
+                max_rings: 3,
                 calm: CalmColor::Green,
                 badge: Badge::Count,
                 list_w: Some(if narrow { px(232.) } else { px(272.) }),
@@ -278,6 +273,7 @@ impl Look {
                 ring: px(26.),
                 ring_stroke: px(2.5),
                 ring_percent: false,
+                max_rings: 4,
                 calm: CalmColor::Grey,
                 badge: Badge::Dot,
                 list_w: Some(px(256.)),
@@ -352,6 +348,15 @@ pub fn render(draft: Draft, scene: Scene, window: &mut Window, cx: &mut App) -> 
                     .h_full()
                     .flex()
                     .child(main_card)
+                    // A scrim over the conversation, so the sidebar reads as floating over it.
+                    .child(
+                        div().absolute().top_0().left_0().right(space::S2).bottom(space::S2).rounded(radius::CARD).bg(gpui::hsla(
+                            0.,
+                            0.,
+                            0.,
+                            if theme.appearance.is_dark() { 0.45 } else { 0.12 },
+                        )),
+                    )
                     .children(list.map(|list| {
                         div()
                             .absolute()

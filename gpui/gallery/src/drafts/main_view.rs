@@ -4,9 +4,9 @@
 
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, prelude::FluentBuilder as _, px};
 use kuvo_ui::{
-    ActiveTheme, Button, ButtonSize, Icon, IconName, IconSize, StyledType, TypeSize,
+    ActiveTheme, Button, Icon, IconName, IconSize, StyledType, TypeSize,
     row::{ListRow, row_card},
-    small::{Avatar, spinner},
+    small::spinner,
     theme::{radius, space},
 };
 
@@ -125,6 +125,8 @@ fn working_line(id: &'static str, verb: &'static str, what: Option<&'static str>
 }
 
 fn composer(working: bool, placeholder: &'static str, cx: &App) -> impl IntoElement {
+    // Nothing signed in on the first run: no model to pick yet.
+    let first_run = !working && placeholder.starts_with("Describe");
     let c = &cx.theme().colors;
     let theme = cx.theme();
     div()
@@ -144,8 +146,8 @@ fn composer(working: bool, placeholder: &'static str, cx: &App) -> impl IntoElem
                 .items_center()
                 .gap(space::S3)
                 .child(Icon::new(IconName::Paperclip).color(c.text_muted))
-                .child(picker("Claude Opus 5.5", cx))
-                .child(picker("High", cx))
+                .child(picker(if first_run { "Choose a Model" } else { "Claude Opus 5.5" }, cx))
+                .when(!first_run, |r| r.child(picker("High", cx)))
                 .child(div().flex_1())
                 .child(
                     div()
@@ -344,10 +346,6 @@ fn label(text: &'static str, cx: &App) -> AnyElement {
     div().px(space::S1).text_ui(TypeSize::Caption).medium().text_color(cx.theme().colors.text_faint).child(text).into_any_element()
 }
 
-fn faint(text: &'static str, cx: &App) -> AnyElement {
-    div().text_ui(TypeSize::Caption).text_color(cx.theme().colors.text_faint).child(text).into_any_element()
-}
-
 fn bot_page(cx: &App) -> AnyElement {
     let c = cx.theme().colors.clone();
     let bot = &BOTS[0];
@@ -355,12 +353,12 @@ fn bot_page(cx: &App) -> AnyElement {
     page(
         bot.name,
         bot.job,
-        Some(Avatar::new(bot.name).size(px(48.)).into_any_element()),
+        Some(super::lists::bot_face(bot, px(48.), cx)),
         Some(
             div()
                 .flex()
                 .gap(space::S2)
-                .child(Button::new("edit-bot", "Edit Bot").size(ButtonSize::Medium))
+                .child(Button::new("edit-bot", "Edit Bot").pill())
                 .child(Button::new("message-bot", "Message").primary().pill())
                 .into_any_element(),
         ),
@@ -403,7 +401,7 @@ fn queue_page(cx: &App) -> AnyElement {
         "Next",
         "6 items, across your computers",
         None,
-        Some(Button::new("new-item", "New Item").icon(IconName::Plus).into_any_element()),
+        Some(Button::new("new-item", "New Item").icon(IconName::Plus).pill().into_any_element()),
         vec![row_card(rows, cx).into_any_element()],
         cx,
     )
@@ -431,19 +429,27 @@ fn computer_page(cx: &App) -> AnyElement {
                 .child(Icon::new(IconName::Terminal).size(IconSize::Card).color(c.text_muted))
                 .into_any_element(),
         ),
-        Some(Button::new("open-terminal", "Open a Terminal").icon(IconName::Terminal).into_any_element()),
+        // Opening a computer here shows its page; the title bar's switcher is what changes whose
+        // box the window shows, so the page offers that.
+        Some(
+            div()
+                .flex()
+                .gap(space::S2)
+                .child(Button::new("open-terminal", "Terminal").icon(IconName::Terminal).pill())
+                .child(Button::new("switch-to", "Switch to devbox").primary().pill())
+                .into_any_element(),
+        ),
         vec![
             // BOX-NEEDED: a computer's facts: reach, Kuvo Code's and the engine's versions, its sessions at work, and which services' limits it reads (`GET kuvo/computers`, below in lists.rs).
             row_card(
                 [
                     fact("c1", "Connected", "Kuvo Code 1.42 · engine 1.19", IconName::Check),
-                    fact("c2", "1 session at work", "API · Rate limits per API key", IconName::Message),
+                    fact("c2", "1 session at work", "Mobile · Push notifications on Android", IconName::Message),
                     fact("c3", "Reads the limits of", "Claude, Codex", IconName::Clock),
                 ],
                 cx,
             )
             .into_any_element(),
-            faint("Its sessions, bots and Work Queue items show in their own areas, with this machine's name.", cx),
         ],
         cx,
     )

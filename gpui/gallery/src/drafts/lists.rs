@@ -7,16 +7,17 @@ use gpui::{
 use kuvo_ui::{
     ActiveTheme, Button, ButtonSize, Icon, IconName, IconSize, StyledType, TypeSize,
     row::{NavRow, SectionHeader},
-    small::{Avatar, count_badge, spinner, status_dot},
+    small::{count_badge, spinner, status_dot},
     theme::{radius, space},
 };
 
 use super::{
     Area, Ctx, Scene,
-    data::{BOTS, CATEGORIES, CHATS, COMPUTERS, Doing, NEEDS_YOU, PROJECTS, Reach, SETTINGS, Session},
+    data::{BOTS, Bot, CATEGORIES, CHATS, COMPUTERS, Doing, NEEDS_YOU, PROJECTS, Reach, SETTINGS, Session},
 };
 
 pub fn render(d: &Ctx, width: Pixels, _window: &mut Window, cx: &mut App) -> AnyElement {
+    let c = cx.theme().colors.clone();
     let area = d.scene.area();
     let rows: Vec<AnyElement> = match area {
         Area::Sessions if d.scene == Scene::Empty => first_run(cx),
@@ -39,7 +40,49 @@ pub fn render(d: &Ctx, width: Pixels, _window: &mut Window, cx: &mut App) -> Any
         .pt(space::S2)
         .when(d.look.list_title, |l| l.child(area_header(area, cx)))
         .child(div().px(space::S2).pb(space::S2).child(search_field(placeholder, cx)))
-        .child(div().flex_1().min_h_0().overflow_hidden().px(space::S2).pb(space::S4).children(rows))
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .px(space::S2)
+                .pb(space::S4)
+                .children(rows)
+                // A long list fades out at the foot, so a row cut by the window reads as more below.
+                .when(area == Area::Settings, |l| {
+                    let under = if d.look.panel == super::Panel::Joined { c.surface } else { c.background };
+                    l.child(
+                        div().absolute().bottom_0().left_0().right_0().h(px(56.)).bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(under.opacity(0.), 0.),
+                            gpui::linear_color_stop(under, 1.),
+                        )),
+                    )
+                }),
+        )
+        .into_any_element()
+}
+
+/// A bot's still face: its tint and form, with calm eyes (a stand-in for the Mac's `BotAvatar`
+/// drawn with `animates: false`, which isn't brought over yet).
+pub fn bot_face(bot: &Bot, size: Pixels, _cx: &App) -> AnyElement {
+    let tint = gpui::Hsla::from(gpui::rgb(bot.tint));
+    // Deep tints get light eyes, as the Mac's; these are all mid tints, so dark ones.
+    let eye = gpui::hsla(0., 0., 0.12, 0.9);
+    let eye_w = size * 0.11;
+    let eye_h = size * 0.2;
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .gap(size * 0.16)
+        .size(size)
+        .rounded(if bot.round { radius::PILL } else { size * 0.3 })
+        .bg(tint)
+        .child(div().w(eye_w).h(eye_h).rounded(radius::PILL).bg(eye))
+        .child(div().w(eye_w).h(eye_h).rounded(radius::PILL).bg(eye))
         .into_any_element()
 }
 
@@ -47,7 +90,8 @@ pub fn render(d: &Ctx, width: Pixels, _window: &mut Window, cx: &mut App) -> Any
 fn area_header(area: Area, cx: &App) -> impl IntoElement {
     let c = &cx.theme().colors;
     let action = match area {
-        Area::Sessions => Some(("New Session", IconName::Plus)),
+        // New Session is the title bar's "+".
+        Area::Sessions => None,
         Area::Bots => Some(("New Bot", IconName::Plus)),
         Area::Queue => Some(("New Item", IconName::Plus)),
         Area::Computers => Some(("Add a Machine", IconName::Plus)),
@@ -88,6 +132,8 @@ fn time(text: &'static str, accent: bool, cx: &App) -> impl IntoElement {
 }
 
 fn session_row(d: &Ctx, s: &Session, section: &str, cx: &App) -> AnyElement {
+    // With "Needs you" on top, the open session is highlighted there only, never twice.
+    let selected = d.scene.open_session() == Some(s.id) && !(d.look.needs_you && NEEDS_YOU.iter().any(|(id, ..)| *id == s.id));
     let c = &cx.theme().colors;
     let leading: AnyElement = match s.doing {
         Doing::Working => spinner(SharedString::from(format!("spin-{section}-{}", s.id)), IconSize::Nav, c.text_muted).into_any_element(),
@@ -97,7 +143,7 @@ fn session_row(d: &Ctx, s: &Session, section: &str, cx: &App) -> AnyElement {
     NavRow::new(SharedString::from(format!("session-{section}-{}", s.id)), s.title)
         .leading(leading)
         .trailing(time(s.when, s.doing == Doing::Asked, cx))
-        .selected(d.scene.open_session() == Some(s.id))
+        .selected(selected)
         .into_any_element()
 }
 
@@ -132,8 +178,7 @@ fn sessions(d: &Ctx, cx: &App) -> Vec<AnyElement> {
     for project in PROJECTS {
         let folded = d.look.folding && project.folded_in_c;
         // BOX-NEEDED: a project's sums: `projects[].{asking, working}` in the same sessions listing (phase 2 counts them in the client today, left to move).
-        let asking = project.sessions.iter().filter(|s| s.doing == Doing::Asked).count();
-        let working = project.sessions.iter().any(|s| s.doing == Doing::Working);
+        let (asking, working) = (project.asking, project.working);
         let trailing: Option<AnyElement> = if asking > 0 {
             Some(count_badge(asking, cx).into_any_element())
         } else if folded && working {
@@ -246,10 +291,12 @@ fn first_run(cx: &App) -> Vec<AnyElement> {
             )
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .child(div().text_ui(TypeSize::Small).medium().text_color(c.text).child("Start your first session"))
-                    .child(div().text_ui(TypeSize::Caption).text_color(c.text_muted).child("In a project folder, or just a chat")),
+                    .child(div().text_ui(TypeSize::Caption).text_color(c.text_muted).child("In a folder, or just a chat")),
             )
             .into_any_element(),
         div()
@@ -290,7 +337,7 @@ fn bots(cx: &App) -> Vec<AnyElement> {
                 .when(selected, |r| r.bg(selected_bg))
                 .hover(move |s| s.bg(if selected { selected_bg } else { hover }))
                 // Still avatars: bots' own animated faces aren't brought over yet.
-                .child(Avatar::new(bot.name).size(px(28.)))
+                .child(bot_face(bot, px(28.), cx))
                 .child(
                     div()
                         .flex_1()
@@ -319,25 +366,29 @@ fn queue(cx: &App) -> Vec<AnyElement> {
         spaced(
             NavRow::new("q-progress", "In Progress")
                 .leading(spinner("q-spin", IconSize::Nav, c.text_muted))
-                .trailing(count(3)),
+                .trailing(count(2)),
         ),
         SectionHeader::new("categories", "Categories")
             .action(Button::icon_only("new-category", IconName::Plus, "New Category").size(ButtonSize::Small))
             .into_any_element(),
     ];
     for (ix, cat) in CATEGORIES.iter().enumerate() {
-        let icon = match cat.name {
-            "Done" => IconName::Check,
-            "Parked" => IconName::Clock,
-            _ => IconName::Queue,
+        // Each category's dot in its colour, by KuvoClient's rule (`WorkItemChip.color(of:)`:
+        // Next teal, Later purple, Parked grey, Done green, a custom one's kept for its id),
+        // shown here with the theme's nearest colours.
+        let dot = match cat.id {
+            "next" => c.syntax.property,
+            "later" => c.syntax.type_name,
+            "parked" => c.text_faint,
+            "done" => c.success,
+            _ => c.syntax.number,
         };
-        let row = NavRow::new(SharedString::from(format!("cat-{ix}")), cat.name).selected(ix == 0).trailing(count(cat.count));
-        let row = if cat.custom {
-            row.leading(div().size(px(8.)).rounded(radius::PILL).bg(c.syntax.type_name))
-        } else {
-            row.icon(icon)
-        };
-        rows.push(spaced(row));
+        rows.push(spaced(
+            NavRow::new(SharedString::from(format!("cat-{ix}")), cat.name)
+                .leading(div().size(px(8.)).rounded(radius::PILL).bg(dot))
+                .selected(ix == 0)
+                .trailing(count(cat.count)),
+        ));
     }
     rows.push(SectionHeader::new("filters", "Show Only").into_any_element());
     rows.push(spaced(NavRow::new("f-issues", "Issues and Pull Requests").icon(IconName::Branch).trailing(count(5))));

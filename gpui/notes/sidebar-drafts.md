@@ -26,6 +26,17 @@ window, green (or grey, in C), amber from 70%, red from 90%; hovering or clickin
 account's windows, each with when it starts over. The title bar has the computer switcher ("This
 Mac ⌄") in OpenBot's workspace switcher's place, then back, forward and New Session.
 
+**The switcher and the Computers area.** The title bar's switcher picks whose box the window shows
+(its sessions, bots and Work Queue); the Computers area lists your computers and their state, and
+opening one there shows its page without switching, with "Switch to devbox" on it.
+
+**Many accounts.** The rings follow the box's order; past the option's room (4 in A and C, 3 in B)
+the rest wait behind "+N", which opens Settings › Usage. With none signed in, an empty ring with
+"+" says to sign in to see the limits there.
+
+**Bots** show a still face (their tint and form, calm eyes) standing in for the Mac's `BotAvatar`
+drawn without animation; the full faces aren't brought over yet.
+
 ## The options
 
 - **A, OpenBot's layout.** 60 px rail, 20 px icons, counts on the icons, coloured rings. The area's
@@ -73,3 +84,17 @@ reached would say so there, as Zed's "Disconnected" (not drawn in these drafts).
 
 Every place a draft draws what the box doesn't say yet has a `// BOX-NEEDED:` comment naming what
 the box should say and where. None is built; the box sessions take them.
+
+## The phone
+
+A rail doesn't fit a phone. There the same areas would be the tab bar (Sessions, Bots, Work Queue,
+Computers, Settings), each tab opening its area's list, and the rings a row at the top of
+Settings › Usage, or of the Sessions tab, with the same colours.
+
+## Decisions for the user
+
+- Which option (or which parts of each).
+- Keys for the areas: ⌘1 to ⌘8 are the Mac's tabs, so none is shown yet.
+- The rail's icons at 20 px in A and B (OpenBot's size; the brief keeps 20 for cards), or 14 as C.
+- The services' marks in the rings (letters stand in), a brand question.
+- Icons beside Settings' sections, as the Mac's sidebar has (not drawn: most aren't in our set).

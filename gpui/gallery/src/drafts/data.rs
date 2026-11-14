@@ -20,6 +20,9 @@ pub struct Session {
 pub struct Project {
     pub name: &'static str,
     pub sessions: &'static [Session],
+    /// Its sums, as the box would state them: sessions waiting on you, and whether one works.
+    pub asking: usize,
+    pub working: bool,
     /// Folded in the compact draft, to show what a folded project sums up.
     pub folded_in_c: bool,
 }
@@ -33,6 +36,8 @@ pub const PROJECTS: &[Project] = &[
             Session { id: "blog", title: "Move the blog to the new CMS", when: "1d", doing: Doing::Asked },
             Session { id: "lighthouse", title: "Get the Lighthouse score above 90", when: "3d", doing: Doing::Idle },
         ],
+        asking: 1,
+        working: true,
         folded_in_c: false,
     },
     Project {
@@ -41,6 +46,8 @@ pub const PROJECTS: &[Project] = &[
             Session { id: "rate", title: "Rate limits per API key", when: "20m", doing: Doing::Asked },
             Session { id: "webhook", title: "Flaky webhook retry test", when: "5h", doing: Doing::Idle },
         ],
+        asking: 1,
+        working: false,
         folded_in_c: false,
     },
     Project {
@@ -48,9 +55,11 @@ pub const PROJECTS: &[Project] = &[
         sessions: &[
             Session { id: "push", title: "Push notifications on Android", when: "2d", doing: Doing::Working },
         ],
+        asking: 0,
+        working: true,
         folded_in_c: true,
     },
-    Project { name: "Infra", sessions: &[], folded_in_c: true },
+    Project { name: "Infra", sessions: &[], asking: 0, working: false, folded_in_c: true },
 ];
 
 pub const CHATS: &[Session] = &[
@@ -67,7 +76,7 @@ pub const NEEDS_YOU: &[(&str, &str, &str, &str)] = &[
 
 /// How many sessions wait on you, and bots, as the rail's badges show: the box's word.
 pub const SESSIONS_WAITING: usize = 2;
-pub const BOTS_WAITING: usize = 1;
+pub const BOTS_WAITING: usize = 2;
 
 pub struct Bot {
     pub name: &'static str,
@@ -76,28 +85,32 @@ pub struct Bot {
     pub now: &'static str,
     pub working: bool,
     pub asking: usize,
+    /// Its look, as the box sends it (`look`): a tint and a form. Drawn still.
+    pub tint: u32,
+    pub round: bool,
 }
 
+// The tints stand for `BotLook.Tint`'s (KuvoClient's ClientDesign/BotAvatar.swift): sky, coral,
+// lime and violet.
 pub const BOTS: &[Bot] = &[
-    Bot { name: "Mira", job: "Looks after the website", now: "1 at work, 1 waiting on you", working: true, asking: 0 },
-    Bot { name: "Inbox Helper", job: "Drafts replies to support mail", now: "Waiting on you", working: false, asking: 1 },
-    Bot { name: "Release Captain", job: "Ships a beta every Friday", now: "Wakes up Fri 09:00", working: false, asking: 0 },
-    Bot { name: "Docs Keeper", job: "Keeps the docs matching the code", now: "Finished 3h ago", working: false, asking: 0 },
+    Bot { name: "Mira", job: "Looks after the website", now: "1 at work, 1 waiting on you", working: true, asking: 1, tint: 0x4F9CF5, round: true },
+    Bot { name: "Inbox Helper", job: "Drafts replies to support mail", now: "Waiting on you", working: false, asking: 1, tint: 0xF2735C, round: false },
+    Bot { name: "Release Captain", job: "Ships a beta every Friday", now: "Wakes up Fri 09:00", working: false, asking: 0, tint: 0x8CCC4F, round: false },
+    Bot { name: "Docs Keeper", job: "Keeps the docs matching the code", now: "Finished 3h ago", working: false, asking: 0, tint: 0x8A5CF5, round: true },
 ];
 
 pub struct Category {
+    pub id: &'static str,
     pub name: &'static str,
     pub count: usize,
-    /// A custom category, with its colour (an index into the avatar fills).
-    pub custom: bool,
 }
 
 pub const CATEGORIES: &[Category] = &[
-    Category { name: "Next", count: 6, custom: false },
-    Category { name: "Later", count: 6, custom: false },
-    Category { name: "Design", count: 3, custom: true },
-    Category { name: "Parked", count: 4, custom: false },
-    Category { name: "Done", count: 31, custom: false },
+    Category { id: "next", name: "Next", count: 6 },
+    Category { id: "later", name: "Later", count: 6 },
+    Category { id: "cat_design", name: "Design", count: 3 },
+    Category { id: "parked", name: "Parked", count: 4 },
+    Category { id: "done", name: "Done", count: 31 },
 ];
 
 pub struct Item {
@@ -108,12 +121,12 @@ pub struct Item {
 }
 
 pub const NEXT_ITEMS: &[Item] = &[
-    Item { number: 214, title: "Keep what was typed when the sign-up email is taken", owner: "Fix the sign-up form wiping…", working: true },
-    Item { number: 209, title: "Say which field is wrong, under the field", owner: "Fix the sign-up form wiping…", working: false },
+    Item { number: 214, title: "Keep what was typed when the sign-up email is taken", owner: "Fix the sign-up form wiping on a taken email", working: true },
+    Item { number: 209, title: "Say which field is wrong, under the field", owner: "Fix the sign-up form wiping on a taken email", working: false },
     Item { number: 203, title: "Rate limits per API key, with a header saying what's left", owner: "Rate limits per API key", working: false },
-    Item { number: 198, title: "Move the blog's 42 posts to the new CMS", owner: "Mira", working: true },
-    Item { number: 190, title: "Push notifications on Android 15", owner: "Push notifications on Android", working: false },
-    Item { number: 188, title: "Lighthouse above 90 on the pricing page", owner: "Get the Lighthouse score…", working: false },
+    Item { number: 198, title: "Move the blog's 42 posts to the new CMS", owner: "Mira", working: false },
+    Item { number: 190, title: "Push notifications on Android 15", owner: "Push notifications on Android", working: true },
+    Item { number: 188, title: "Lighthouse above 90 on the pricing page", owner: "Get the Lighthouse score above 90", working: false },
 ];
 
 pub enum Reach {
@@ -130,7 +143,7 @@ pub struct Computer {
 }
 
 pub const COMPUTERS: &[Computer] = &[
-    Computer { name: "This Mac", detail: "Kuvo Code 1.42", mac: true, reach: Reach::Connected, working: 2 },
+    Computer { name: "This Mac", detail: "Kuvo Code 1.42", mac: true, reach: Reach::Connected, working: 1 },
     Computer { name: "devbox", detail: "Ubuntu 24.04 · through SSH", mac: false, reach: Reach::Connected, working: 1 },
     Computer { name: "studio-mini", detail: "Can't be reached", mac: true, reach: Reach::Unreachable, working: 0 },
 ];
@@ -197,6 +210,26 @@ pub const ACCOUNTS: &[Account] = &[
         label: "GitHub",
         plan: "Pro+",
         windows: &[Window { name: "Premium requests", used: 0.35, resets: "Resets Dec 1" }],
+    },
+];
+
+/// More accounts than the rail shows: they wait behind its "+2".
+pub const MORE_ACCOUNTS: &[Account] = &[
+    Account {
+        used: 0.12,
+        mark: "X",
+        service: "Grok",
+        label: "xAI",
+        plan: "SuperGrok",
+        windows: &[Window { name: "Week", used: 0.12, resets: "Resets Tue 08:00" }],
+    },
+    Account {
+        used: 0.58,
+        mark: "R",
+        service: "OpenRouter",
+        label: "Team key",
+        plan: "Credits",
+        windows: &[Window { name: "Credits", used: 0.58, resets: "$42 of $100 left" }],
     },
 ];
 
