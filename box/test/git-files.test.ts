@@ -240,6 +240,20 @@ test("a discard is refused once its file changed since it was listed, and a new 
   expect(readFileSync(join(top, "README.md"), "utf8")).toBe("# App\n")
 })
 
+test("a file where a committed file's folder was: the deleted file is listed, its diff shows, and Discard brings it back", async () => {
+  const top = repository("file-for-folder")
+  rmSync(join(top, "app"), { recursive: true })
+  writeFileSync(join(top, "app"), "a file in the folder's place\n")
+  const listed = await files(top)
+  const form = listed.files.find((file: any) => file.path === "app/Form.tsx")
+  expect(form).toMatchObject({ status: "deleted" })
+  const diff = await ask(handler, "POST", "kuvo/git/changes", { directory: top, scope: "unstaged", path: "app/Form.tsx" })
+  expect(diff.status).toBe(200)
+  expect(diff.json.patch).toContain("-one\n-two\n-three\n")
+  expect((await discard({ ...form, root: top })).status).toBe(200)
+  expect(readFileSync(join(top, "app", "Form.tsx"), "utf8")).toBe("one\ntwo\nthree\n")
+})
+
 test("discarding a staged deletion of a file still there keeps what was on disk in the Trash", async () => {
   const top = repository("deleted")
   const trash = join(box, "trash")

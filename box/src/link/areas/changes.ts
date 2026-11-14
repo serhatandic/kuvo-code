@@ -255,7 +255,7 @@ async function oneFileIn(root: string, against: string, scope: Scope, compared: 
   const sides = scope === "staged" ? [old, `:${only.path}`] : scope === "unstaged" ? [`:${only.oldPath ?? only.path}`, "disk"] : [old, "disk"];
   const sizes: number[] = [];
   for (const side of sides) {
-    if (side === "disk") sizes.push(fs.statSync(path.join(root, only.path), { throwIfNoEntry: false })?.size ?? 0);
+    if (side === "disk") sizes.push(onDisk(() => fs.statSync(path.join(root, only.path)))?.size ?? 0);
     else {
       const size = (await text(root, ["cat-file", "-s", side]))?.trim();
       if (size) sizes.push(Number(size));
@@ -266,10 +266,22 @@ async function oneFileIn(root: string, against: string, scope: Scope, compared: 
   return ran.ok ? done(ran.out.toString("utf8")) : null;
 }
 
+/** What `look` finds at a path, or undefined when nothing is there: none at all, or a file where one
+ * of its folders was (a deleted file whose folder is a file now). */
+function onDisk<T>(look: () => T): T | undefined {
+  try {
+    return look();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
+  }
+}
+
 /** A file as it is now, for a discard to tell it hasn't changed since it was listed: what the index
  * has at its path, and its size and when it last changed on disk ("gone" without one). */
 export function stampOf(root: string, name: string, indexed: string | undefined, since?: bigint): string {
-  const stat = fs.lstatSync(path.join(root, name), { bigint: true, throwIfNoEntry: false });
+  const stat = onDisk(() => fs.lstatSync(path.join(root, name), { bigint: true }));
   // Changed once the list was being read (`since`): what the row shows may be from before it, so
   // its stamp matches nothing, and a discard waits for the list read again.
   const fresh = since !== undefined && stat && stat.mtimeNs >= since ? ":since" : "";

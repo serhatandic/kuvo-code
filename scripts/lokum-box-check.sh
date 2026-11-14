@@ -13,6 +13,8 @@ set -eo pipefail
 HOST=${HOST:-lokum-local}
 REPO=${1:?checkout}; NAME=${2:?name}; shift 2
 case "$NAME" in ''|*[!a-zA-Z0-9_-]*) echo 'name must contain only letters, digits, _ or -' >&2; exit 64;; esac
+# (The guard removes folders in ~/.kuvo-code-test named like a run of its own whose process is gone.)
+if [[ "$NAME" =~ ^(ku|sb|sa|kv|outside)-[0-9]+(-|$) ]]; then echo "name mustn't look like a test run's own folder: $NAME" >&2; exit 64; fi
 cd "$REPO"
 IFS= read -r -d '' remote <<'REMOTE' || true
 set -eo pipefail
