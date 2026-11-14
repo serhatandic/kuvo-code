@@ -1,4 +1,4 @@
-import { usageNotices } from "../notices/usage";
+import { usageNotices, usageSnapshot } from "../notices/usage";
 // Watching this box's engine and its coding agents' bridge: their events followed, and what the
 // box does as they come (its bots kept told, ended sign-ins noted, news for your phones, a message
 // that steers an agent read at once).
@@ -265,7 +265,7 @@ export function watchBox({ tell = () => true, hold = null, bots = false, notices
   const stopList = keepList();
   signal?.addEventListener("abort", stopList, { once: true });
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine", attachmentsLooked });
-  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true, attachmentsLooked });
+  watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, hold, queues: true, work: "bridge", goals: true, attachmentsLooked });
 }
 
 // The files deleted sessions left on this box (`session`'s, or with none, any deleted while it
@@ -296,6 +296,7 @@ function letSessionFilesGo(looked: (session: string | null) => void, session?: s
 // Either way, a deleted session's files go with it (`letAttachmentsGo`), and any a session deleted
 // meanwhile left as it's found again.
 export async function watchEvents(read: () => Target, tell: (notice: Notice) => void, signal?: AbortSignal, answered: (id: string | undefined) => void = () => {}, { bots = false, notices = !bots, signIns = false, hold = null, signedIn = () => {}, steers = false, steerAfter, learns = false, learned = () => {}, queues = false, work = false, goals = false, attachmentsLooked = () => {} }: WatchOptions = {}): Promise<void> {
+  let usageRevision = 0;
   let attempt = 0;
   let lastLearned = 0;
   let learning = false;
@@ -353,12 +354,13 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // The bridge may have decided notices while this link wasn't listening. Rehydrate facts on
       // every connection and retry failed sends; peer decisions are kept for this Mac but never pushed.
       if (work === "bridge") {
-        const catchUp = () => engineGet(source, "api/kuvo/limits").then((answer: any) => {
-          const data = answer?.data;
-          if (!data) return;
-          usageNotices({ notices: data.ownNotices, push: true }, tell);
-          usageNotices({ notices: data.notices, push: false }, tell);
-        }).catch(() => {});
+        const catchUp = () => {
+          const revision = usageRevision;
+          return engineGet(source, "api/kuvo/limits").then((answer: any) => {
+            if (connection.signal.aborted || revision !== usageRevision || !answer?.data) return;
+            usageSnapshot(answer.data, tell, hold);
+          }).catch(() => {});
+        };
         void catchUp();
         const retry = setInterval(catchUp, 60_000);
         retry.unref?.();
@@ -369,7 +371,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // Its sessions read whole for the lists: what changed meanwhile went by unheard.
       if (work) listPlaceHeard(work, source).catch(() => {});
       // What was answered while its events couldn't be heard (it restarted, the stream dropped).
-      if (notices && hold) settleHeld(source, hold).catch(() => {});
+      if (notices && hold && work !== "bridge") settleHeld(source, hold).catch(() => {});
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
       // and a queue it left waiting held for Resume.
       freshenBots(source).catch(() => {});
@@ -461,7 +463,15 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (typeof settled === "string") settleAskReview(settled);
         // A run's end takes what it asked with it, with no word of each, and so does its session deleted.
         if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
-        if (event.type === "kuvo.usage.notices") usageNotices(event.data ?? {}, tell);
+        if (event.type === "kuvo.usage.notices") {
+          usageRevision++;
+          if (event.data?.push === false) hold?.reconcileUsage([], (event.data.notices ?? []).map((n: any) => n.id));
+          usageNotices(event.data ?? {}, tell);
+        }
+        if (event.type === "kuvo.limits.updated" && event.data?.ownNotices) {
+          usageRevision++;
+          usageSnapshot(event.data, tell, hold);
+        }
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         // A run's end: what it asked the engine let go with it, without a word (stopped, say). Looked

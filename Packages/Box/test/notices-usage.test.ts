@@ -2,7 +2,7 @@ import "./safety"
 import { expect, test } from "bun:test"
 import { randomUUID, randomBytes } from "node:crypto"
 import { newNotice, initialState, noticeAccountName } from "../src/agents/usage/notices"
-import { usageNotices } from "../src/link/notices/usage"
+import { usageNotices, usageSnapshot } from "../src/link/notices/usage"
 import { readTold, toldLately } from "../src/link/notices/told"
 import { NoticeHold } from "../src/link/notices/hold"
 import { mkdtempSync, writeFileSync, unlinkSync, rmSync } from "node:fs"
@@ -137,4 +137,17 @@ test("journal write failure retains in-memory marks and retries persistence with
     expect(() => malformed.mark("new")).not.toThrow()
     expect(new UsageDeliveryJournal(file).has("new")).toBe(true)
   } finally { rmSync(folder, { recursive: true, force: true }) }
+})
+
+test("a queued losing forwarder copy is cancelled when a snapshot agrees on another holder", () => {
+  let now = 0; const sent: string[] = []
+  const hold = new NoticeHold({ send: notice => { sent.push(notice.data!.notice!); return true }, now: () => now, setTimer: (() => 0) as any, clearTimer: () => {} })
+  const n = { ...fact(), forwarder: "z" }
+  hold.attend("mac", { seconds: 90 })
+  usageSnapshot({ notices: [n], ownNotices: [n] }, notice => hold.tell(notice), hold)
+  expect(hold.count).toBe(1)
+  usageSnapshot({ notices: [{ ...n, forwarder: "a" }], ownNotices: [] }, notice => hold.tell(notice), hold)
+  now = 120000; hold.settle()
+  expect(hold.count).toBe(0)
+  expect(sent).toEqual([])
 })

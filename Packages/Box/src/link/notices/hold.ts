@@ -219,6 +219,14 @@ export class NoticeHold {
     return notice.category !== "usage" || usageDelivered(notice);
   }
 
+  /** Cancel a queued usage copy when the bridge's agreed forwarder is another computer. */
+  reconcileUsage(eligible: string[], known: string[]): void {
+    const allowed = new Set(eligible), told = new Set(known);
+    this.held = this.held.filter(entry => entry.notice.category !== "usage"
+      || !told.has(entry.notice.data?.notice ?? "") || allowed.has(entry.notice.data?.notice ?? ""));
+    this.settle();
+  }
+
   // A request or an ask answered (or gone): its notice, waiting, never goes.
   resolve(id: unknown): void {
     if (typeof id !== "string" || !id) return;

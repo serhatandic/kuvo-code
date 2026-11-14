@@ -295,3 +295,24 @@ test("unmappable Codex card identities fall back to enabled matching meters on a
   expect(f.limits.notices()).toHaveLength(2)
 })
 
+
+test("conflicting pins for the same occurrence converge to the smallest forwarder and persist", async () => {
+  const a=fixture(),z=fixture(); a.limits.ownKey=()=>"a"; z.limits.ownKey=()=>"z"
+  await a.limits.tick(); await z.limits.tick(); a.advance(0.95); z.advance(0.95); await a.limits.tick(); await z.limits.tick()
+  const aa=structuredClone(a.limits.list(false)),zz=structuredClone(z.limits.list(false))
+  let zPeers=[{key:"a",name:"a"}], changed=()=>{}
+  const ad={told:true,setup:"set_test",own:()=>({key:"a",name:"a"}),peerBoxes:()=>[{key:"z",name:"z"}],listen:()=>{},isYours:()=>true,isPeer:()=>true}
+  const zd={told:true,setup:"set_test",own:()=>({key:"z",name:"z"}),peerBoxes:()=>zPeers,listen:(f:()=>void)=>{changed=f},isYours:()=>true,isPeer:()=>true}
+  const ap=new LimitsPeers(a.limits,{followed:true,send:()=>{}},ad,undefined,()=>reset-599000)
+  const zp=new LimitsPeers(z.limits,{followed:true,send:()=>{}},zd,undefined,()=>reset-599000)
+  ap.take("z",{kind:"limits",noticeSetup:"set_test",at:reset-599000,accounts:zz})
+  zp.take("a",{kind:"limits",noticeSetup:"set_test",at:reset-599000,accounts:aa})
+  expect(a.limits.notices().every(n=>n.forwarder==="a")).toBe(true)
+  expect(z.limits.notices().every(n=>n.forwarder==="a")).toBe(true)
+  expect(a.limits.pushableNotices()).toHaveLength(2)
+  expect(z.limits.pushableNotices()).toEqual([])
+  expect(z.limits.list(false)[0].notices!.every(n=>n.forwarder==="a")).toBe(true)
+  zPeers=[]; changed()
+  expect(z.limits.pushableNotices()).toEqual([])
+})
+

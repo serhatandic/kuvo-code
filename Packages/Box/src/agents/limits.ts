@@ -361,7 +361,7 @@ export class Limits {
 
   notices(): UsageNotice[] {
     const all = [...this.list(false).flatMap(a => a.notices ?? []), ...(this.peers?.notices() ?? [])]
-    return [...new Map(all.filter(n => currentNotice(n, this.now())).map(n => [n.id, n])).values()].sort((a, b) => a.at - b.at)
+    return reconcileNotices(all.filter(n => currentNotice(n, this.now()))).sort((a, b) => a.at - b.at)
   }
 
   /** Only a current direct account holder forwards a fact; peers never decide it again. */
@@ -382,6 +382,21 @@ export class Limits {
       notice.forwarder = forwarder
       changed = true
     }
+    if (changed) this.save()
+  }
+
+  /** Resolve conflicting pins for the same occurrence once; a later peer removal cannot undo it. */
+  reconcileNoticeForwarders() {
+    const pins = new Map(this.notices().filter(n => n.forwarder).map(n => [n.id, n.forwarder!]))
+    let changed = false
+    for (const entry of this.entries.values()) for (const notice of entry.notices ?? []) {
+      const pin = pins.get(notice.id)
+      if (pin && (!notice.forwarder || pin < notice.forwarder)) {
+        notice.forwarder = pin
+        changed = true
+      }
+    }
+    this.peers?.reconcileForwarders(pins)
     if (changed) this.save()
   }
 
@@ -904,7 +919,7 @@ export class Limits {
     if (own) this.peers?.tell(!heard)
     if (now === this.said) return
     this.said = now
-    emit("kuvo.limits.updated", { accounts: list, rows, notices })
+    emit("kuvo.limits.updated", { accounts: list, rows, notices, ownNotices: this.pushableNotices(), notificationAvailability: notificationAvailability() })
   }
 
   private load() {

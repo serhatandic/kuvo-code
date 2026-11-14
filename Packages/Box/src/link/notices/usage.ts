@@ -1,6 +1,7 @@
 // Bridge-decided quota facts, delivered through the same native/push path as a run's news.
 import { currentNotice, noticeAccountName, takeNotices } from "../../agents/usage/notices";
 import { keepTold } from "./told";
+import type { NoticeHold } from "./hold";
 import type { Notice } from "./notice";
 
 import { usageDelivered } from "./usage-delivery";
@@ -22,4 +23,12 @@ export function usageNotices(data: Record<string, unknown>, tell: (notice: Notic
     // a minute's catch-up retries an unconsumed fact while its short replay window is current.
     if (data.push === true && !usageDelivered(notice)) tell(notice);
   }
+}
+
+/** Both event and reconnect snapshots reconcile queued copies before any can be retried. */
+export function usageSnapshot(data: Record<string, unknown>, tell: (notice: Notice) => unknown, hold?: Pick<NoticeHold, "reconcileUsage"> | null): void {
+  const all = takeNotices(data.notices), eligible = takeNotices(data.ownNotices);
+  hold?.reconcileUsage(eligible.map(n => n.id), all.map(n => n.id));
+  usageNotices({ notices: eligible, push: true }, tell);
+  usageNotices({ notices: all, push: false }, tell);
 }

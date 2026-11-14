@@ -165,6 +165,22 @@ export class LimitsPeers {
     return [...this.peers].flatMap(([key, kept]) => this.noticePeer(key, kept) ? kept.accounts.flatMap(a => a.notices ?? []).filter(n => currentNotice(n, this.now())) : [])
   }
 
+  /** Persist agreed pins in every cached copy before its other source can disappear. */
+  reconcileForwarders(pins: Map<string, string>) {
+    let changed = false
+    for (const [key, kept] of this.peers) {
+      if (!this.noticePeer(key, kept)) continue
+      for (const account of kept.accounts) for (const notice of account.notices ?? []) {
+        const pin = pins.get(notice.id)
+        if (pin && (!notice.forwarder || pin < notice.forwarder)) {
+          notice.forwarder = pin
+          changed = true
+        }
+      }
+    }
+    if (changed) this.save()
+  }
+
   /** Every computer's accounts, this box's first, then each peer's by name. */
   rows(own: AccountLimits[]): LimitRow[] {
     const now = this.now()
@@ -224,9 +240,10 @@ export class LimitsPeers {
     const accounts = !this.ours(from) ? forVouched(read) : read
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
-    const seen = new Set(before?.accounts.flatMap(a => a.notices?.map(n => n.id) ?? []) ?? [])
-    const notices = accounts.flatMap(a => a.notices ?? []).filter(n => !seen.has(n.id))
+    const seen = new Map(before?.accounts.flatMap(a => a.notices?.map(n => [n.id, n.forwarder] as const) ?? []) ?? [])
     this.peers.set(from, { name, heard: now, accounts, ...(this.noticeOurs(from) && given.noticeSetup === this.directory.setup ? { noticeSetup: given.noticeSetup } : {}) })
+    this.limits.reconcileNoticeForwarders()
+    const notices = accounts.flatMap(a => a.notices ?? []).filter(n => !seen.has(n.id) || seen.get(n.id) !== n.forwarder)
     if (notices.length) this.limits.deliverNotices(notices)
     this.save()
     this.limits.peersChanged()
