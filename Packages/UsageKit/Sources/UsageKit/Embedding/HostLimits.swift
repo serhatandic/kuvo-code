@@ -336,27 +336,6 @@ public final class HostLimits {
         return local.isEmpty && Self.limitsOnlyFromHost.contains(family) ? mine : local
     }
 
-    /// The lines a covered provider's card has from the host's rows rather than of its own (Cursor's
-    /// `Credits` and `On-demand`): a phone draws them from the rows themselves, under each account.
-    func rowLines(for family: String) -> Set<String> {
-        rows.filter { ProviderAccountID.family(of: $0.providerID) == family }.reduce(into: Set<String>()) { $0.formUnion(HostLimitData.labels($1)) }
-    }
-
-    /// The panel's own bars a phone gets (`kuvo/usage`), in the Bars view's order: those whose
-    /// place the box's rows take, as the Bars view takes them (`takingPlace`), say so (`covers`,
-    /// their service), keeping only what the box doesn't state (spend, its trend), which the phone
-    /// shows under the first of those rows, where they go.
-    func phoneGroups(_ groups: [ProviderGroup]) -> [(group: ProviderGroup, covers: String?)] {
-        var placed = Set<String>()
-        return groups.compactMap { group in
-            let family = ProviderAccountID.family(of: group.provider.id)
-            guard covers(family), !takingPlace(of: family).isEmpty else { return (group, nil) }
-            // (One place per service: its other account cards go with it.)
-            guard placed.insert(family).inserted else { return nil }
-            return (group, family)
-        }
-    }
-
     /// A plain provider, for a service the panel doesn't know: its mark and color by its ID.
     static func provider(for id: String) -> Provider {
         Provider(id: id, displayName: id.prefix(1).uppercased() + id.dropFirst(), icon: .providerMark(id))

@@ -50,10 +50,10 @@ const appHost = http.createServer((request, response) => {
     }
     if (request.url === "/link/route") {
       app.asked.push(given);
-      if (given.path === "kuvo/usage/events") {
+      if (given.path === "kuvo/asks/events") {
         // Followed: a line now, then open until the app goes.
         response.writeHead(200, { "content-type": "application/x-ndjson", "x-kuvo-answer": "1" });
-        response.write(JSON.stringify({ usage: ["lab"] }) + "\n");
+        response.write(JSON.stringify({ asks: ["lab"] }) + "\n");
         app.streams.add(response);
         return;
       }
@@ -284,8 +284,8 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   fs.rmSync(agentsStopped);
   assert.equal(app.asked.length, asked, "none went to the app");
   // The Mac's own: the app's, with which phone asked.
-  const usage = await it.request("GET", "kuvo/usage");
-  assert.deepEqual(JSON.parse(usage.body), { answered: "app", path: "kuvo/usage", phone: it.public });
+  const asks = await it.request("GET", "kuvo/asks");
+  assert.deepEqual(JSON.parse(asks.body), { answered: "app", path: "kuvo/asks", phone: it.public });
   // Kept where a machine keeps its phones, readable by you alone, with no key in it.
   const kept = JSON.parse(fs.readFileSync(link.LINK_FILE, "utf8"));
   assert.deepEqual(kept.phones.map(each => each.key), [it.public]);
@@ -349,7 +349,7 @@ test("a phone asking what this Mac is hears it from its box, the app away too: a
       assert.equal(typeof said.integrations, "object");
       assert.equal(said.running, undefined, "a machine's alone");
       assert.deepEqual(said.features, link.macFeatures());
-      for (const feature of ["machines", "hosts", "mac", "claude-code", "usage", "accounts.ended", "autopilot", "sessions.agents", "work.elsewhere"]) assert.ok(said.features.includes(feature), feature);
+      for (const feature of ["machines", "hosts", "mac", "claude-code", "usage.history", "accounts.ended", "autopilot", "sessions.agents", "work.elsewhere"]) assert.ok(said.features.includes(feature), feature);
       for (const feature of ["update", "engine.start"]) assert.ok(!said.features.includes(feature), `${feature} is a machine's`);
       // A route no box has is the box's to say so, as a machine's does.
       const none = await it.request("GET", "kuvo/nothing-here");
@@ -412,10 +412,10 @@ test("a phone asking for a pairing link leaves Settings › Phone's as it is: ea
 test("what the app doesn't answer is a 503 at once, and a stream from the app ends when the app goes", async () => {
   const { it } = await paired();
   // Followed through the app: its first line, then the end once the app's gone.
-  it.send("GET", "kuvo/usage/events", 7);
+  it.send("GET", "kuvo/asks/events", 7);
   const first = await it.piece();
   assert.equal(first.head.s, 200);
-  assert.deepEqual(JSON.parse(first.body.toString()), { usage: ["lab"] });
+  assert.deepEqual(JSON.parse(first.body.toString()), { asks: ["lab"] });
   for (const response of app.streams) response.end();
   app.streams.clear();
   let last = first;
@@ -423,7 +423,7 @@ test("what the app doesn't answer is a 503 at once, and a stream from the app en
   assert.equal(last.head.id, 7, "the stream ended");
   app.away = true;
   try {
-    const away = await it.request("GET", "kuvo/usage");
+    const away = await it.request("GET", "kuvo/asks");
     assert.equal(away.status, 503);
     assert.match(JSON.parse(away.body).message, /isn't answering/);
   } finally {
@@ -431,7 +431,7 @@ test("what the app doesn't answer is a 503 at once, and a stream from the app en
   }
   // Back: it proves it's this Mac's app again before it's asked anything.
   const hellos = app.hellos;
-  assert.equal((await it.request("GET", "kuvo/usage")).status, 200);
+  assert.equal((await it.request("GET", "kuvo/asks")).status, 200);
   assert.equal(app.hellos, hellos + 1, "proved again after it went");
 
   // Whatever answers where the app's host.json says (left by an app that crashed) gets a phone's
@@ -446,14 +446,14 @@ test("what the app doesn't answer is a 503 at once, and a stream from the app en
   const hostFile = path.join(process.env.KUVO_HOME, "run", "host.json");
   fs.writeFileSync(hostFile, JSON.stringify({ url: `http://127.0.0.1:${impostor.address().port}`, password: "host-password" }));
   try {
-    const refused = await it.request("GET", "kuvo/usage");
+    const refused = await it.request("GET", "kuvo/asks");
     assert.equal(refused.status, 503);
     assert.deepEqual([...new Set(impostorCalls)], ["/hello"]);
   } finally {
     fs.rmSync(hostFile, { force: true });
     impostor.close();
   }
-  assert.equal((await it.request("GET", "kuvo/usage")).status, 200, "the app again, once the file's gone");
+  assert.equal((await it.request("GET", "kuvo/asks")).status, 200, "the app again, once the file's gone");
 });
 
 test("the app's own answer reaches the phone as it is, a 404 too; an answer cut off ends as cut off, not as whole", async () => {
@@ -461,8 +461,8 @@ test("the app's own answer reaches the phone as it is, a 404 too; an answer cut 
   const gone = await it.request("GET", "kuvo/mac/gone");
   assert.equal(gone.status, 404);
   assert.deepEqual(JSON.parse(gone.body), { message: "Gone." });
-  const usage = await it.request("GET", "kuvo/usage");
-  assert.equal(usage.pieces[0].head.h["cache-control"], "no-store");
+  const asks = await it.request("GET", "kuvo/asks");
+  assert.equal(asks.pieces[0].head.h["cache-control"], "no-store");
   it.send("GET", "kuvo/mac/cut", 9);
   const pieces = [];
   for (let piece = await it.piece(); piece; piece = await it.piece()) {

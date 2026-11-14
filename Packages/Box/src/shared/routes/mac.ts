@@ -1,19 +1,17 @@
 // What only this Mac's box answers, through its app (PhoneLink), or by itself while the app is closed:
-// its own features, its machines, the machines your phones reach directly, and the usage panel's
-// numbers. (Its other own route, `kuvo/mac`, has no scenario asking it yet.)
+// its own features, its machines, and the machines your phones reach directly. (Its other own
+// route, `kuvo/mac`, has no scenario asking it yet.) Usage is every box's: `kuvo/agents/api/kuvo/usage…`.
 
 import { FEATURES, type Feature } from "../features";
-import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape, string } from "../shape";
+import { bool, type Infer, list, literal, NOTHING, object, type RouteShape, string } from "../shape";
 
-/** What only a Mac answers, besides what every box does (`FEATURES`): its usage panel's numbers
- * among them, which its app gives while it's open (PROTOCOL.md, "Features"). One a line, in order,
- * as `FEATURES` are. */
+/** What only a Mac answers, besides what every box does (`FEATURES`; PROTOCOL.md, "Features").
+ * One a line, in order, as `FEATURES` are. */
 export const MAC_FEATURES = [
   "accounts.ended",
   "hosts",
   "mac",
   "machines",
-  "usage",
 ] as const;
 
 /** What only a machine answers: it updates itself, starts an engine an older Mac's Stop left down,
@@ -52,7 +50,4 @@ export const MAC_ROUTES: RouteShape[] = [
   { route: "GET kuvo/machines", answers: { 200: MACHINES } },
   { route: "GET kuvo/hosts", answers: { 200: HOSTS } },
   { route: "DELETE kuvo/hosts/:machine", answers: { 200: NOTHING } },
-  // The usage panel's numbers, as UsageKit gives them to a phone: its own record.
-  { route: "GET kuvo/usage", answers: { 200: any } },
-  { route: "POST kuvo/usage/refresh", answers: { 200: NOTHING } },
 ];
