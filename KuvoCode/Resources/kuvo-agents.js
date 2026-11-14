@@ -9529,6 +9529,7 @@ import { mkdirSync as mkdirSync10, readFileSync as readFileSync15, renameSync as
 import { dirname as dirname10 } from "path";
 var isResetMail = (value) => value !== null && typeof value === "object" && value.kind === "reset";
 var NOT_ALLOWED = "Always Allow is off for this account now: nothing was used. Ask the user first.";
+var NOT_YET = "This computer can't tell yet whether Always Allow holds here: nothing was used. Ask the user first, or try again in a moment.";
 var JOIN_FOR = 10 * 60000;
 var STILL_OPEN = "It can't be asked of its maker from here right now. An earlier try may have gone through: asking again later won't use another.";
 var OPEN = new Set(["unknown", "unconfirmed"]);
@@ -9538,6 +9539,8 @@ var PEER_WAIT = 45000;
 var KEEP = 200;
 var KEEP_FOR = 30 * 24 * 60 * MINUTE;
 var READ_AFTER = 8000;
+var NOT_YOURS = "The computer with its sign-in isn't one of yours now, so it doesn't use your resets: nothing was used.";
+var NOT_YOURS_OPEN = "The computer with its sign-in isn't one of yours now, so it can't be asked again from here. An earlier try may have gone through: nothing more was used.";
 
 class LimitResets {
   limits;
@@ -9550,6 +9553,7 @@ class LimitResets {
   spends = [];
   allowed = new Map;
   seen = new Map;
+  sharedSeen = false;
   waiting = new Map;
   running = new Map;
   constructor(limits, file, now = Date.now, transport, directory, peerWait = PEER_WAIT) {
@@ -9561,13 +9565,42 @@ class LimitResets {
     this.peerWait = peerWait;
     this.load();
     limits.resets = this;
+    directory?.listen(() => this.directorySaid());
+  }
+  directorySaid() {
+    const directory = this.directory;
+    if (!directory?.told)
+      return;
+    const shared = directory.sharedHere === true;
+    const becameShared = shared && !this.sharedSeen;
+    let changed = shared !== this.sharedSeen;
+    this.sharedSeen = shared;
+    const sharedPeer = directory.peerBoxes().some((box) => directory.isSharedPeer?.(box.key) === true);
+    for (const [row, decided] of [...this.allowed]) {
+      if (!decided.on && decided.from === "")
+        continue;
+      const apart = decided.from === undefined ? sharedPeer : decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false;
+      if (!becameShared && !apart)
+        continue;
+      this.allowed.set(row, { on: false, at: decided.at, from: "" });
+      changed = true;
+    }
+    if (!changed)
+      return;
+    this.save();
+    this.changedSoon();
   }
   agentsMay(provider) {
     const live = this.limits.liveRow(provider);
     if (live === undefined)
       return false;
     this.saw(provider, live);
-    return this.allowed.get(live)?.on === true;
+    return this.allowedNow(live);
+  }
+  allowedNow(rowID) {
+    if (this.directory && !this.directory.told)
+      return false;
+    return this.allowed.get(rowID)?.on === true;
   }
   saw(provider, live) {
     const before = this.seen.get(provider);
@@ -9580,19 +9613,22 @@ class LimitResets {
   }
   decideHere(rowID, on) {
     const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1);
-    this.decide(rowID, on, at);
+    this.decide(rowID, on, at, "");
     for (const box of this.yours())
       this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true);
   }
   yours() {
     const own = this.directory?.own()?.key;
-    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true);
+    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.isYours(box.key));
   }
-  decide(rowID, on, at) {
+  isYours(key) {
+    return this.directory?.isYours?.(key) === true;
+  }
+  decide(rowID, on, at, from) {
     const kept = this.allowed.get(rowID);
     if (kept && (kept.at > at || kept.at === at && on && !kept.on))
       return false;
-    this.allowed.set(rowID, { on, at });
+    this.allowed.set(rowID, { on, at, from });
     this.save();
     this.changedSoon();
     return true;
@@ -9730,15 +9766,23 @@ class LimitResets {
   take(from, mail) {
     if (!isResetMail(mail))
       return;
-    if (this.directory && this.directory.isPeer?.(from) !== true)
+    const passedThere = !!mail.answer && typeof mail.answer.id === "string" && this.spends.some((each) => each.id === mail.answer.id && each.via === from);
+    if (this.directory && !this.isYours(from) && !passedThere) {
+      const ask = mail.ask;
+      if (!this.directory.told || !ask || typeof ask.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(ask.id))
+        return;
+      const known = this.spends.find((each) => each.id === `${from}:${ask.id}` || each.also?.includes(`${from}:${ask.id}`));
+      const answer = !known ? { id: ask.id, outcome: "failed", message: NOT_YOURS } : known.state === "done" ? { id: ask.id, outcome: known.outcome, ...known.until ? { until: known.until } : {}, ...known.outcome === "reset" ? { already: true } : {} } : { id: ask.id, outcome: "not-now", open: true, message: NOT_YOURS_OPEN };
+      this.transport?.send(from, { kind: "reset", at: this.now(), answer }, false);
       return;
+    }
     if (mail.answer && typeof mail.answer.id === "string") {
       this.waiting.get(mail.answer.id)?.(mail.answer);
       return;
     }
     if (mail.always && typeof mail.always.row === "string" && mail.always.row.includes("#") && typeof mail.always.on === "boolean") {
       const at = typeof mail.always.at === "number" ? mail.always.at : typeof mail.at === "number" ? mail.at : 0;
-      this.decide(mail.always.row, mail.always.on, at);
+      this.decide(mail.always.row, mail.always.on, at, from);
       return;
     }
     const ask = mail.ask;
@@ -9758,7 +9802,7 @@ class LimitResets {
     });
   }
   reaches(key) {
-    return !!this.transport?.followed && this.directory?.isPeer?.(key) === true;
+    return !!this.transport?.followed && this.isYours(key);
   }
   passing = new Map;
   passed(spend) {
@@ -9814,8 +9858,8 @@ class LimitResets {
       return refused("no-reset");
     if (this.limits.held(account.provider))
       return refused("not-now");
-    if ((unasked || spend?.unasked) && this.allowed.get(rowID)?.on !== true)
-      return refused("failed", NOT_ALLOWED);
+    if ((unasked || spend?.unasked) && !this.allowedNow(rowID))
+      return refused("failed", this.directory && !this.directory.told ? NOT_YET : NOT_ALLOWED);
     if (!spend) {
       spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...by ? { by } : {}, ...unasked ? { unasked: true } : {} };
       this.keep(spend);
@@ -9884,10 +9928,11 @@ class LimitResets {
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string");
       for (const [row, decided] of Object.entries(saved.allowed ?? {}))
         if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number")
-          this.allowed.set(row, { on: decided.on, at: decided.at });
+          this.allowed.set(row, { on: decided.on, at: decided.at, ...typeof decided.from === "string" ? { from: decided.from } : {} });
       for (const [provider, row] of Object.entries(saved.seen ?? {}))
         if (typeof row === "string")
           this.seen.set(provider, row);
+      this.sharedSeen = saved.shared === true;
     } catch {}
   }
   save() {
@@ -9896,7 +9941,7 @@ class LimitResets {
     const at = this.now();
     this.spends = this.spends.filter((spend) => spend.state === "sending" || at - spend.at < KEEP_FOR).slice(-KEEP);
     mkdirSync10(dirname10(this.file), { recursive: true });
-    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen) }), { mode: 384 });
+    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen), ...this.sharedSeen ? { shared: true } : {} }), { mode: 384 });
     renameSync8(this.file + ".new", this.file);
   }
 }
@@ -9967,7 +10012,7 @@ function limitRows(boxes) {
   }
   return groups.map(({ id, members }) => {
     const row = {
-      ...merged(members.map((member) => member.account)),
+      ...merged(members),
       id,
       boxes: members.map(({ box, account }) => ({
         key: box.key,
@@ -10001,10 +10046,13 @@ function withResetsOn(row, members) {
   row.extras = extras;
 }
 var newestOf = (account) => account.checked ?? Math.max(0, ...account.windows.map((window) => window.read));
-function merged(members) {
+function merged(boxes) {
+  const members = boxes.map((member) => member.account);
   const base = members.find((member) => member.agent) ?? members[0];
   if (members.length === 1)
     return base;
+  const yours = boxes.filter((member) => !member.box.vouched).map((member) => member.account);
+  const pool = yours.some((member) => member.checked && !member.problem) ? yours : members;
   const account = { ...base };
   const label = members.map((member) => member.label?.trim()).find(Boolean);
   if (label)
@@ -10022,7 +10070,7 @@ function merged(members) {
     }
   }
   account.windows = windows;
-  const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
+  const newest = [...pool].sort((a, b) => newestOf(b) - newestOf(a));
   const plan = newest.find((member) => member.plan)?.plan;
   const balance = newest.find((member) => member.balance)?.balance;
   const read = newest.find((member) => member.checked && !member.problem);
@@ -10098,6 +10146,50 @@ function noticeAccountName(service, agent, label) {
   const capitalized = (word) => word.charAt(0).toUpperCase() + word.slice(1);
   const base = agent ? agents[agent] ?? capitalized(agent) : services[service] ?? capitalized(service);
   return label?.trim() ? `${base} \xB7 ${label.trim()}` : base;
+}
+var notificationAvailability = () => [{
+  provider: "devin",
+  available: false,
+  message: "Devin alerts are unavailable because Devin is not connected to Kuvo Code\u2019s background service."
+}];
+function visibleMetric(service, window, settings, rawIdentity) {
+  const familyMetric = metricID(service, window);
+  const cardOf = (metric) => metric.slice(0, metric.indexOf("."));
+  const familyOf = (card) => card.split("@")[0];
+  const knownCards = new Set([
+    ...settings?.providers?.known ?? [],
+    ...settings?.providers?.enabled ?? [],
+    ...settings?.layout?.providerOrder ?? [],
+    ...Object.keys(settings?.layout?.metricOrder ?? {}),
+    ...(settings?.layout?.placed ?? []).map(cardOf),
+    ...(settings?.layout?.seeded ?? []).map(cardOf)
+  ]);
+  let exact;
+  if (service === "claude" && rawIdentity?.startsWith("anthropic:")) {
+    const hash = createHash4("sha256").update(rawIdentity.slice("anthropic:".length).toLowerCase()).digest("hex").slice(0, 8);
+    const candidate = `${service}@${hash}`;
+    if (knownCards.has(candidate))
+      exact = candidate;
+  }
+  const enabled = (card) => !settings?.providers?.known.includes(card) || settings.providers.enabled.includes(card);
+  if (!settings?.layout)
+    return enabled(exact ?? service) && DEFAULT_VISIBLE_METRICS.has(familyMetric);
+  const suffix = familyMetric.slice(service.length);
+  return settings.layout.placed.some((metric) => {
+    const card = cardOf(metric);
+    return (exact ? card === exact : familyOf(card) === service) && enabled(card) && metric === card + suffix;
+  });
+}
+function reconcileNotices(notices) {
+  const merged = new Map;
+  const order = (notice) => `${notice.forwarder || "~"}
+${JSON.stringify(notice)}`;
+  for (const notice of notices) {
+    const previous = merged.get(notice.id);
+    if (!previous || order(notice) < order(previous))
+      merged.set(notice.id, notice);
+  }
+  return [...merged.values()];
 }
 function noticeWindowName(window) {
   if (window.name)
@@ -10277,7 +10369,7 @@ class Limits {
   ownKey = () => "";
   notices() {
     const all = [...this.list(false).flatMap((a) => a.notices ?? []), ...this.peers?.notices() ?? []];
-    return [...new Map(all.filter((n) => currentNotice(n, this.now())).map((n) => [n.id, n])).values()].sort((a, b) => a.at - b.at);
+    return reconcileNotices(all.filter((n) => currentNotice(n, this.now()))).sort((a, b) => a.at - b.at);
   }
   pushableNotices() {
     return this.notices().filter((n) => !!n.forwarder && (this.peers?.ownsPush(n.forwarder) ?? n.forwarder === this.ownKey()));
@@ -10298,6 +10390,21 @@ class Limits {
         notice.forwarder = forwarder;
         changed = true;
       }
+    if (changed)
+      this.save();
+  }
+  reconcileNoticeForwarders() {
+    const pins = new Map(this.notices().filter((n) => n.forwarder).map((n) => [n.id, n.forwarder]));
+    let changed = false;
+    for (const entry of this.entries.values())
+      for (const notice of entry.notices ?? []) {
+        const pin = pins.get(notice.id);
+        if (pin && (!notice.forwarder || pin < notice.forwarder)) {
+          notice.forwarder = pin;
+          changed = true;
+        }
+      }
+    this.peers?.reconcileForwarders(pins);
     if (changed)
       this.save();
   }
@@ -10678,14 +10785,11 @@ class Limits {
   }
   decide(account, entry, ids) {
     const settings = this.settings?.values();
-    const visible = (window) => settings?.layout ? settings.layout.placed.includes(metricID(account.service, window)) : DEFAULT_VISIBLE_METRICS.has(metricID(account.service, window));
+    const rawIdentity = account.limits.identity?.();
+    const cardIdentity = rawIdentity && identityOf(rawIdentity) === entry.identity ? rawIdentity : undefined;
+    const visible = (window) => visibleMetric(account.service, window, settings, cardIdentity);
     const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false };
-    const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service);
     const dormant = (state) => ({ ...state, previous: "untracked", fired: [], under: false, primed: false });
-    if (disabled) {
-      entry.noticeState = Object.fromEntries(Object.entries(entry.noticeState ?? {}).map(([id, state]) => [id, dormant(state)]));
-      return;
-    }
     const peers = entry.identity ? this.peers?.noticeStates(account.service, entry.identity) ?? [] : [];
     entry.noticeState ??= {};
     const siblings = entry.identity ? [...this.entries.values()].filter((e) => e !== entry && e.identity === entry.identity) : [];
@@ -10750,7 +10854,7 @@ class Limits {
     if (now === this.said)
       return;
     this.said = now;
-    emit("kuvo.limits.updated", { accounts: list, rows, notices });
+    emit("kuvo.limits.updated", { accounts: list, rows, notices, ownNotices: this.pushableNotices(), notificationAvailability: notificationAvailability() });
   }
   load() {
     if (!this.file)
@@ -10816,7 +10920,7 @@ async function limitsRoutes(limits, method, rest, body = async () => {
     return json7({ message: "Plan limits aren't read on this computer." }, 503);
   if (rest[0] === "reset")
     return resetRoutes(limits.resets, method, rest.slice(1), body);
-  const answer = () => json7({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notices: limits.notices(), ownNotices: limits.pushableNotices() } });
+  const answer = () => json7({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notificationAvailability: notificationAvailability(), notices: limits.notices(), ownNotices: limits.pushableNotices() } });
   if (!rest.length && method === "GET")
     return answer();
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
@@ -24433,7 +24537,7 @@ class UsageSettings {
   }
 }
 var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var answer3 = (settings, extra = {}) => json9({ data: { settings: settings.values(), versions: settings.versions(), imported: settings.imported, ...extra } });
+var answer3 = (settings, extra = {}) => json9({ data: { settings: settings.values(), versions: settings.versions(), imported: settings.imported, notificationAvailability: notificationAvailability(), ...extra } });
 async function settingsRoutes(settings, choices, method, rest, body) {
   if (!rest.length && method === "GET")
     return answer3(settings);
@@ -31058,9 +31162,9 @@ class UsagePeers {
     return usageRows(boxes);
   }
   vouched(key) {
-    if (!this.directory.isPeer)
+    if (!this.directory.isYours)
       return false;
-    return this.directory.told ? !this.directory.isPeer(key) : this.peers.get(key)?.vouched === true;
+    return this.directory.told ? !this.directory.isYours(key) : this.peers.get(key)?.vouched === true;
   }
   tell(changed = false) {
     if (!this.transport.followed || !this.directory.told)
@@ -34397,6 +34501,7 @@ class LinkDirectory {
   told = false;
   setup;
   inNoSetup = false;
+  sharedHere = false;
   constructor(transport, clock = realClock) {
     this.transport = transport;
     this.clock = clock;
@@ -34407,7 +34512,7 @@ class LinkDirectory {
     const boxes = new Map;
     for (const box of given.boxes) {
       if (box && typeof box.key === "string" && box.key)
-        boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true });
+        boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true, ...box.apart === true ? { apart: true } : {}, ...box.shared === true ? { shared: true } : {} });
     }
     this.boxes = boxes;
     const self = given.self;
@@ -34419,6 +34524,7 @@ class LinkDirectory {
     }
     this.setup = typeof given.setup === "string" && /^set_[A-Za-z0-9_-]{1,64}$/.test(given.setup) ? given.setup : undefined;
     this.inNoSetup = given.setup === null;
+    this.sharedHere = given.shared === true;
     this.told = true;
     this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
       id: bot.id,
@@ -34452,6 +34558,12 @@ class LinkDirectory {
   }
   isPeer(box) {
     return this.boxes.has(box);
+  }
+  isYours(box) {
+    return this.told && this.isPeer(box) && this.boxes.get(box)?.apart !== true;
+  }
+  isSharedPeer(box) {
+    return this.boxes.get(box)?.shared === true;
   }
   home(box) {
     let home = this.homes.get(box);
@@ -35621,6 +35733,7 @@ class LimitsPeers {
   peers = new Map;
   told = new Map;
   answered = new Map;
+  noticeBoundary = "";
   constructor(limits, transport, directory, file, now = Date.now) {
     this.limits = limits;
     this.transport = transport;
@@ -35628,6 +35741,9 @@ class LimitsPeers {
     this.file = file;
     this.now = now;
     this.load();
+    this.noticeBoundary = this.boundary();
+    if (directory.told)
+      this.yoursBefore = new Set(directory.peerBoxes().filter(({ key }) => this.ours(key)).map(({ key }) => key));
     limits.peers = this;
     directory.listen(() => this.directorySaid());
     transport.onFollowed?.(() => this.told.clear());
@@ -35640,7 +35756,9 @@ class LimitsPeers {
   }
   freshest(service, identity) {
     let newest;
-    for (const kept of this.peers.values()) {
+    for (const [key, kept] of this.peers) {
+      if (!this.ours(key))
+        continue;
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked)
           continue;
@@ -35678,13 +35796,34 @@ class LimitsPeers {
       return [];
     return [...this.peers].flatMap(([key, kept]) => this.noticePeer(key, kept) ? kept.accounts.flatMap((a) => a.notices ?? []).filter((n) => currentNotice(n, this.now())) : []);
   }
+  reconcileForwarders(pins) {
+    let changed = false;
+    for (const [key, kept] of this.peers) {
+      if (!this.noticePeer(key, kept))
+        continue;
+      for (const account of kept.accounts)
+        for (const notice of account.notices ?? []) {
+          const pin = pins.get(notice.id);
+          if (pin && (!notice.forwarder || pin < notice.forwarder)) {
+            notice.forwarder = pin;
+            changed = true;
+          }
+        }
+    }
+    if (changed)
+      this.save();
+  }
   rows(own) {
     const now = this.now();
     const self = this.directory.own();
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
-    for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...this.directory.isPeer?.(key) === false ? { vouched: true } : {}, accounts: this.noticePeer(key, kept) ? kept.accounts.map((a) => ({ ...a, ...a.notices ? { notices: a.notices.filter((n) => currentNotice(n, now)) } : {} })) : withoutNotices(kept.accounts) });
+    for (const [key, kept] of peers) {
+      const ours = this.ours(key);
+      const accounts = ours ? kept.accounts : forVouched(kept.accounts);
+      const visible = this.noticePeer(key, kept) ? accounts.map((a) => ({ ...a, ...a.notices ? { notices: a.notices.filter((n) => currentNotice(n, now)) } : {} })) : withoutNotices(accounts);
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...!ours ? { vouched: true } : {}, accounts: visible });
+    }
     return limitRows(boxes);
   }
   tell(urgent = false) {
@@ -35714,7 +35853,7 @@ class LimitsPeers {
       return;
     const now = this.now();
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW2 ? now - given.at : 0;
-    const accounts = given.accounts.slice(0, 100).flatMap((account) => {
+    const read = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount2(account, off, now);
       if (taken && (!this.noticeOurs(from) || given.noticeSetup !== this.directory.setup)) {
         delete taken.notices;
@@ -35722,11 +35861,13 @@ class LimitsPeers {
       }
       return taken ? [taken] : [];
     });
+    const accounts = !this.ours(from) ? forVouched(read) : read;
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
-    const seen = new Set(before?.accounts.flatMap((a) => a.notices?.map((n) => n.id) ?? []) ?? []);
-    const notices = accounts.flatMap((a) => a.notices ?? []).filter((n) => !seen.has(n.id));
+    const seen = new Map(before?.accounts.flatMap((a) => a.notices?.map((n) => [n.id, n.forwarder]) ?? []) ?? []);
     this.peers.set(from, { name, heard: now, accounts, ...this.noticeOurs(from) && given.noticeSetup === this.directory.setup ? { noticeSetup: given.noticeSetup } : {} });
+    this.limits.reconcileNoticeForwarders();
+    const notices = accounts.flatMap((a) => a.notices ?? []).filter((n) => !seen.has(n.id) || seen.get(n.id) !== n.forwarder);
     if (notices.length)
       this.limits.deliverNotices(notices);
     this.save();
@@ -35776,10 +35917,10 @@ class LimitsPeers {
     return this.noticeOurs(key) ? accounts : withoutNotices(accounts);
   }
   ours(key) {
-    return this.directory.isPeer?.(key) === true;
+    return this.directory.isYours?.(key) === true;
   }
   noticeOurs(key) {
-    return !!this.directory.told && !!this.directory.setup && this.directory.isPeer?.(key) === true;
+    return !!this.directory.told && !!this.directory.setup && this.ours(key) && this.directory.isPeer?.(key) === true;
   }
   noticePeer(key, kept) {
     return this.noticeOurs(key) && kept.noticeSetup === this.directory.setup;
@@ -35799,14 +35940,36 @@ class LimitsPeers {
       accounts.pop();
     return accounts;
   }
+  yoursBefore = new Set;
+  boundary() {
+    return JSON.stringify([
+      this.directory.told,
+      this.directory.setup ?? null,
+      this.directory.peerBoxes().filter(({ key }) => this.noticeOurs(key)).map(({ key }) => key).sort()
+    ]);
+  }
   directorySaid() {
+    const boundary = this.boundary();
+    const urgent = boundary !== this.noticeBoundary;
+    this.noticeBoundary = boundary;
     const here = new Set(this.directory.peerBoxes().map((box) => box.key));
-    let gone = false;
-    for (const key of [...this.peers.keys()]) {
-      if (here.has(key))
-        continue;
-      this.peers.delete(key);
-      gone = true;
+    const yours = new Set([...here].filter((key) => this.ours(key)));
+    for (const key of yours)
+      if (!this.yoursBefore.has(key))
+        this.told.delete(key);
+    let gone = yours.size !== this.yoursBefore.size || [...yours].some((key) => !this.yoursBefore.has(key));
+    this.yoursBefore = yours;
+    for (const [key, kept] of [...this.peers]) {
+      if (!here.has(key)) {
+        this.peers.delete(key);
+        gone = true;
+      } else if (!this.ours(key)) {
+        const told = forVouched(kept.accounts);
+        if (JSON.stringify(told) === JSON.stringify(kept.accounts))
+          continue;
+        kept.accounts = told;
+        gone = true;
+      }
     }
     for (const key of [...this.told.keys()])
       if (!here.has(key))
@@ -35828,7 +35991,7 @@ class LimitsPeers {
       this.save();
       this.limits.peersChanged();
     }
-    this.tell(true);
+    this.tell(urgent);
   }
   load() {
     if (!this.file)
@@ -36328,4 +36491,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a04224098d1f5946afe87ff872ae2609b280032368b8e432d39ce76ed08abf14
+// Built from Packages/Box/src/agents b258c95547c1edf697f4b81815ce8341337dfb00564cff25ae5cd6eabac551a3
