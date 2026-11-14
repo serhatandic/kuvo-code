@@ -18,6 +18,7 @@ import Testing
     let model: SessionModel
     let id = "ses_growth_" + UUID().uuidString
     static let size = NSSize(width: 720, height: 620)
+    static let directory = "/tmp/kuvo-tests-composer-growth"
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: size.width, height: size.height), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
     /// Its messages' ids of its own: what's opened is kept by them, for as long as the app runs.
     let run = "msg_" + UUID().uuidString.prefix(8) + "_"
@@ -49,8 +50,14 @@ import Testing
     init() async throws {
         TestEnvironment.prepare()
         app.workspace.api = engine.api
-        engine.list([StubEngine.session(id, title: "Growth", directory: "/tmp/kuvo-tests-composer-growth", created: 1),
-                     StubEngine.session(other, title: "Other", directory: "/tmp/kuvo-tests-composer-growth", created: 2)])
+        // What "/" lists here: the project's own commands, as the engine has them. (The keywords
+        // come from the session's box, which this conversation has none of: without these, "/"
+        // matches nothing and opens no list.)
+        catalog.api = engine.api
+        let commands = ["build", "deploy", "lint", "release"].map { ["name": $0, "description": "Runs the project’s \($0) steps"] }
+        engine.on("GET", "/api/command", json: ["location": ["directory": Self.directory], "data": commands])
+        engine.list([StubEngine.session(id, title: "Growth", directory: Self.directory, created: 1),
+                     StubEngine.session(other, title: "Other", directory: Self.directory, created: 2)])
         engine.conversation(id, [])
         engine.conversation(other, [])
         await app.workspace.refresh()
