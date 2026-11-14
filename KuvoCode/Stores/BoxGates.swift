@@ -94,7 +94,7 @@ final class BoxGates {
     /// tells or brings about its update (`BoxGate.isAllowed`).
     nonisolated static func refusal(for box: String, path: String) -> BoxRefusal? {
         guard !BoxGate.isAllowed(path) else { return nil }
-        return held(box)
+        return refusalIfHeld(box)
     }
 
     /// The same refusal for anything `box` would be asked while it's held, where what's read first
