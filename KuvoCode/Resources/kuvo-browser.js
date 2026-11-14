@@ -1,4 +1,4 @@
-// kuvo-browser 3a85c6e041c5e270
+// kuvo-browser a83d152c80a6ae9f
 // Built from Packages/Box/src/browser by scripts/build-browser.sh: change those, then run it. Never edit this file.
 // Kuvo Code's browser on a machine: a Chromium kept running there, which the agent browses with
 // and the app shows live in its panel. The engine's own runtime runs it, so the machine needs
@@ -58,6 +58,16 @@ const CURRENT = path.join(BROWSER, "current");
 const PROFILE = path.join(BROWSER, "profile");
 // What pages download, under their own names; gone after a week.
 const DOWNLOADS = path.join(BROWSER, "downloads");
+// Each page that loads (and its site's icon), noted for the box, which keeps the history from them
+// (`history.json`, in the box's link/browser/history.ts): this only adds lines.
+const VISITS = path.join(BROWSER, "visits.jsonl");
+// Sites whose stored data the box removed while Chrome was stopped: what's left of it, cleared as
+// Chrome starts (the box's link/browser/sites.ts writes it).
+const CLEAR_SITES = path.join(BROWSER, "clear-sites.json");
+// Held while the box changes the profile's files with Chrome stopped: Chrome starts once it's gone.
+const PROFILE_EDITING = path.join(BROWSER, ".profile-editing");
+// The browser's settings, as the box keeps them (`kuvo/browser/settings`): its search engine's address.
+const SETTINGS = path.join(BROWSER, "settings.json");
 // Chromium's temporary files: the socket its lock answers on, and the shared memory that
 // --disable-dev-shm-usage puts there. Emptied each time it starts.
 const TMP = path.join(BROWSER, "tmp");
@@ -75,7 +85,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 // branch bumps it by hand. The keeper of the file that's in place now replaces a different one
 // that's running (its pages close, its sign-ins stay); a process whose file has been replaced since
 // it started never replaces one (`replacesKeeper`).
-const KEEPER = "ac1b3aade08c";
+const KEEPER = "0e9b9fa74ff8";
 // COMPAT(0.7 keeper-number): what a keeper says it is to processes from before KEEPER was a hash. Goes 3 months after 0.8.0.
 // Those compare numbers, raised by hand to 50, and replace a keeper whose number is lower than
 // theirs: every keeper since says 51, so none of them replaces it.
@@ -541,6 +551,21 @@ function keyForHere(params, platform = process.platform) {
 }
 
 /// Starts Chromium and waits until it answers on its pipe.
+// The icons a page names (in the keeper's own world, where the page's scripts can't change what
+// this reads), for its site's in the history.
+const ICON_LINKS = `[...document.querySelectorAll("link[rel][href]")].map((link) => ({ rel: String(link.rel).toLowerCase(), href: link.href, sizes: String(link.getAttribute("sizes") || ""), type: String(link.type || "").toLowerCase() })).filter((link) => /(^|\\s)(icon|apple-touch-icon)(\\s|$)/.test(link.rel)).slice(0, 20)`;
+// An icon bigger than this isn't fetched (nor kept, by the box).
+const ICON_LIMIT = 128 * 1024;
+
+/// The icon to keep of those a page names: one nearest 64 pixels (an icon's own before an
+/// apple-touch-icon), never an SVG; null for none.
+function bestIcon(links) {
+  const usable = (Array.isArray(links) ? links : []).filter((link) => typeof link?.href === "string" && !String(link.type).includes("svg") && !/\.svg([?#]|$)/i.test(link.href));
+  const size = (link) => Math.max(0, ...String(link.sizes ?? "").split(/\s+/).map((each) => Number(each.split("x")[0]) || 0)) || 32;
+  const icons = usable.filter((link) => /(^|\s)icon(\s|$)/.test(link.rel));
+  return (icons.length ? icons : usable).sort((a, b) => Math.abs(size(a) - 64) - Math.abs(size(b) - 64))[0]?.href ?? null;
+}
+
 async function launchChrome(sandbox) {
   const binary = browserBinary(fs.realpathSync(CURRENT)) ?? "chrome-headless-shell";
   const args = [
@@ -691,12 +716,21 @@ async function host() {
   const isRoot = process.getuid && process.getuid() === 0;
   let sandbox = !isRoot;
   // The pages open last time, opened again once the browser's up (after the keeper's own
-  // watch on pages, so they load as the browser it says it is).
+  // watch on pages, so they load as the browser it says it is), each with the conversation that
+  // worked in it last.
   let reopen = [];
   try {
-    reopen = JSON.parse(fs.readFileSync(PAGESFILE, "utf8")).filter((url) => typeof url === "string" && /^(https?|file):/.test(url)).slice(0, 8);
+    reopen = JSON.parse(fs.readFileSync(PAGESFILE, "utf8"))
+      // COMPAT(0.7 pages-addresses): a keeper from before kept addresses alone. Goes 3 months after 0.8.0.
+      .map((page) => (typeof page === "string" ? { url: page } : page))
+      .filter((page) => typeof page?.url === "string" && /^(https?|file):/.test(page.url))
+      .map((page) => ({ url: page.url, session: typeof page.session === "string" ? page.session : null }))
+      .slice(0, 8);
   } catch {}
   fs.rmSync(PAGESFILE, { force: true });
+  // The box removing a site's data from the profile's files while Chrome was stopped: Chrome
+  // starts once it's done (half a minute at most, for one that was cut off).
+  for (const until = Date.now() + 30_000; fs.existsSync(PROFILE_EDITING) && Date.now() < until; ) await sleep(100);
   // What a keeper before this one left asked: it went with it.
   fs.rmSync(ASKSFILE, { force: true });
   let started = await launchChrome(sandbox);
@@ -792,6 +826,12 @@ async function host() {
     pending.set(id, { internal: true });
     toChrome({ id, method, params });
   };
+  // The same, for its answer: its result, or null when Chrome refused it.
+  const ownCall = (method, params = {}, sessionId) => new Promise((resolve) => {
+    const id = next++;
+    pending.set(id, { internal: true, answered: (message) => resolve(message.error ? null : message.result ?? {}) });
+    toChrome({ id, method, params, ...(sessionId ? { sessionId } : {}) });
+  });
   const setActive = (targetId, by, session) => {
     if (active === targetId) return;
     active = targetId;
@@ -813,6 +853,66 @@ async function host() {
   // Each page's address, as the browser last said, and the page it started with.
   const addresses = new Map();
   let firstPage = null;
+  // Each page's title, as the browser last said.
+  const titles = new Map();
+  // A line for the box's history (a page that loaded, or its site's icon); the box is asked to take
+  // them in once they've piled up, so the file stays small with no client asking for the history.
+  let foldAsked = 0;
+  const noteForHistory = (line) => {
+    try {
+      fs.appendFileSync(VISITS, JSON.stringify(line) + "\n", { mode: 0o600 });
+      if (fs.statSync(VISITS).size > 256 * 1024 && Date.now() - foldAsked > 60_000) {
+        foldAsked = Date.now();
+        askBox(["browser", "fold"]);
+      }
+    } catch {}
+  };
+  // Sites whose icon was looked for since Chrome started: once each.
+  const iconsAsked = new Set();
+  // A page that loaded: noted for the history, and its site's icon fetched the first time, by Chrome
+  // as the page's own (from its <link rel=icon>, else /favicon.ico), in a world of the keeper's own.
+  const loaded = async (page, sessionId) => {
+    const url = addresses.get(page);
+    if (!/^https?:/.test(url ?? "")) return;
+    noteForHistory({ url, title: titles.get(page) ?? "", at: Date.now() });
+    let origin;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      return;
+    }
+    if (iconsAsked.has(origin)) return;
+    iconsAsked.add(origin);
+    const icon = await siteIcon(page, sessionId, url).catch(() => null);
+    if (icon) noteForHistory({ url, icon, at: Date.now() });
+  };
+  const siteIcon = async (page, sessionId, url) => {
+    const world = await ownCall("Page.createIsolatedWorld", { frameId: page, worldName: "kuvo-icons" }, sessionId);
+    if (!world?.executionContextId) return null;
+    const found = await ownCall("Runtime.evaluate", { expression: ICON_LINKS, contextId: world.executionContextId, returnByValue: true }, sessionId);
+    const href = bestIcon(found?.result?.value) ?? new URL("/favicon.ico", url).href;
+    const inline = /^data:[^,;]*;base64,(.*)$/s.exec(href);
+    if (inline) return inline[1].length <= ICON_LIMIT * 1.4 ? inline[1] : null;
+    if (!/^https?:/.test(href)) return null;
+    const fetched = await ownCall("Network.loadNetworkResource", { frameId: page, url: href, options: { disableCache: false, includeCredentials: false } }, sessionId);
+    const stream = fetched?.resource?.success && fetched.resource.stream;
+    if (!stream) return null;
+    const chunks = [];
+    let size = 0;
+    try {
+      while (size <= ICON_LIMIT) {
+        const read = await ownCall("IO.read", { handle: stream, size: 65_536 }, sessionId);
+        if (!read) return null;
+        const bytes = Buffer.from(read.data ?? "", read.base64Encoded ? "base64" : "utf8");
+        chunks.push(bytes);
+        size += bytes.length;
+        if (read.eof) break;
+      }
+    } finally {
+      ownCall("IO.close", { handle: stream }, sessionId);
+    }
+    return size > 0 && size <= ICON_LIMIT ? Buffer.concat(chunks).toString("base64") : null;
+  };
   // The page each client's session is attached to, to know which pages a Mac shows.
   const attachedTo = new Map();
   const shown = (targetId) => [...attachedTo].some(([sessionId, target]) => target === targetId && owners.get(sessionId)?.viewer);
@@ -859,8 +959,8 @@ async function host() {
   const stop = async () => {
     if (stopping) return;
     stopping = true;
-    // What's open, to open again next time.
-    const open = [...addresses.values()].filter((url) => /^(https?|file):/.test(url ?? ""));
+    // What's open, to open again next time, with the conversation that worked in each.
+    const open = [...addresses].filter(([, url]) => /^(https?|file):/.test(url ?? "")).map(([targetId, url]) => ({ url, session: claims.get(targetId)?.session ?? null }));
     try {
       if (open.length) fs.writeFileSync(PAGESFILE, JSON.stringify(open.slice(-8)), { mode: 0o600 });
     } catch {}
@@ -902,7 +1002,7 @@ async function host() {
     if (message.id !== undefined) {
       const request = pending.get(message.id);
       pending.delete(message.id);
-      if (!request || request.internal) return;
+      if (!request || request.internal) return request?.answered?.(message);
       if (request.method === "Target.attachToTarget" && message.result?.sessionId) {
         owners.set(message.result.sessionId, request.client);
         request.client.sessions.add(message.result.sessionId);
@@ -1009,6 +1109,7 @@ async function host() {
     }
     if ((message.method === "Target.targetCreated" || message.method === "Target.targetInfoChanged") && message.params.targetInfo.type === "page") {
       addresses.set(message.params.targetInfo.targetId, message.params.targetInfo.url);
+      titles.set(message.params.targetInfo.targetId, message.params.targetInfo.title ?? "");
       firstPage ??= message.params.targetInfo.targetId;
       // A page that's left the site that asked for a passkey: nothing's said of it any more.
       const asked = passkeyPages.get(message.params.targetInfo.targetId);
@@ -1019,6 +1120,7 @@ async function host() {
       openers.delete(message.params.targetId);
       for (const [frame, page] of framePages) if (page === message.params.targetId) framePages.delete(frame);
       addresses.delete(message.params.targetId);
+      titles.delete(message.params.targetId);
       passkeyCleared(message.params.targetId);
       own.delete(message.params.targetId);
       claims.delete(message.params.targetId);
@@ -1027,6 +1129,11 @@ async function host() {
       holdMacs.delete(message.params.targetId);
       if (held.delete(message.params.targetId)) announceHeld();
       if (message.params.targetId === active) setActive(null, "browser");
+    }
+    // A page loaded (heard on the keeper's own session with it, which every page has): for the history.
+    if (message.method === "Page.loadEventFired" && message.sessionId) {
+      const page = [...own].find(([, each]) => each === message.sessionId)?.[0];
+      if (page && targets.has(page)) loaded(page, message.sessionId);
     }
     const owner = message.sessionId ? owners.get(message.sessionId) : null;
     if (owner) send(owner, text);
@@ -1076,7 +1183,7 @@ async function host() {
       }
       if (client.status?.working) broadcast({ method: "Kuvo.status", params: (status = everyStatus()) });
       if (client.viewer) broadcast({ method: "Kuvo.viewers", params: { count: viewers() } });
-      if (!clients.size) idleSoon();
+      if (!client.quiet && ![...clients].some((each) => !each.quiet)) idleSoon();
     });
     lines(socket, (text) => {
       let message;
@@ -1092,7 +1199,10 @@ async function host() {
         client.keyed = true;
         clearTimeout(unkeyed);
         clients.add(client);
-        clearTimeout(idle);
+        // The box reading what the browser keeps (its cookies) or removing a site's data: it doesn't
+        // keep the browser running.
+        client.quiet = message.params?.quiet === true;
+        if (!client.quiet) clearTimeout(idle);
         send(client, { method: "Kuvo.hello", params: { targetId: active, status, version: VERSION, keeper: KEEPER_NUMBER, build: KEEPER, asks: [...asks.values()].map((ask) => ask.params), viewers: viewers(), held: [...held.keys()], holdMacs: Object.fromEntries(holdMacs), passkeys: Object.fromEntries(passkeyPages) } });
         return;
       }
@@ -1203,8 +1313,20 @@ async function host() {
   // And every hour while it runs, which can be for days.
   setInterval(clearOldDownloads, 3_600_000).unref?.();
   internal("Browser.setDownloadBehavior", { behavior: "allowAndName", downloadPath: DOWNLOADS, eventsEnabled: true });
+  // What the box removed while Chrome was stopped, the rest of it: what each site's pages stored.
+  let clearing = [];
+  try {
+    clearing = JSON.parse(fs.readFileSync(CLEAR_SITES, "utf8")).filter((host) => typeof host === "string" && /^[a-z0-9.:[\]-]+$/i.test(host));
+  } catch {}
+  fs.rmSync(CLEAR_SITES, { force: true });
+  for (const host of clearing) for (const scheme of ["https", "http"]) internal("Storage.clearDataForOrigin", { origin: `${scheme}://${host}`, storageTypes: "all" });
   if (reopen.length) {
-    for (const url of reopen) internal("Target.createTarget", { url, newWindow: true });
+    for (const { url, session } of reopen) {
+      // Each page again its conversation's, as when it was last used.
+      ownCall("Target.createTarget", { url, newWindow: true }).then((made) => {
+        if (made?.targetId && session) claims.set(made.targetId, { session, at: Date.now() });
+      });
+    }
     // The blank page the browser starts with goes, once the others are there.
     setTimeout(() => {
       const url = addresses.get(firstPage);
@@ -1755,7 +1877,9 @@ function destination(input) {
   if (text.startsWith("/") || text.startsWith("~/")) return pathToFileURL(text.startsWith("~/") ? path.join(os.homedir(), text.slice(2)) : text).href;
   const looksLikeHost = !text.includes(" ") && (text.includes(".") || text.startsWith("localhost") || text.includes(":"));
   if (looksLikeHost) return (text.startsWith("localhost") || text.startsWith("127.") ? "http://" : "https://") + text;
-  const search = process.env.KUVO_SEARCH || "https://www.google.com/search?q=%s";
+  // The box's own search engine once it has one (`kuvo/browser/settings`), else the one its Mac named.
+  const chosen = readJSON(SETTINGS)?.searchURL;
+  const search = (typeof chosen === "string" && /^https:\/\/[^\s]*%s/.test(chosen) ? chosen : "") || process.env.KUVO_SEARCH || "https://www.google.com/search?q=%s";
   return search.replace("%s", encodeURIComponent(text));
 }
 
