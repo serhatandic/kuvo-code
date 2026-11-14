@@ -6,7 +6,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ## Unreleased
 
-- Your computers now decide usage alerts where they read the account, even with Kuvo Code closed. Your Mac and iPhone each show an alert once, using the same notification settings across your own computers.
+- Your computers now decide usage alerts where they read the account, even with Kuvo Code closed. Your Mac and iPhone each show an alert once, using the same notification settings across your own computers. Devin alerts are unavailable because Devin has no sign-in in Kuvo Code’s background service; Usage settings now says so.
 
 - What goes with your message for the agent (your comments on the changes, where your files are, who the agents you name with & are) is written by the computer the conversation is on, the same way from your Mac and your iPhone; conversations from before show as they did.
 - New sessions in every project open as conversations. The project’s terminal-command setting and terminal tabs in the main window have been removed; existing projects keep their names, folders and Run commands. Terminals remain available in the side panel.
