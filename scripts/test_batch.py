@@ -111,6 +111,7 @@ class Batches(unittest.TestCase):
         self.batches = os.path.join(self.root, "batches")
         self.kuvo_ai = self.repo("kuvo-ai", {
             "swift/KuvoClient/Package.swift": "// let package = Package(name: \"KuvoClient\")\n",
+            "swift/KuvoCode/App.swift": "struct MacApp {}\n",
         })
         self.phone = self.repo("kuvo-code-ios", {
             "KuvoCodeMobile/App.swift": "struct App {}\n",
@@ -467,6 +468,22 @@ class CompileOnly(Batches):
         # The checkouts themselves are untouched.
         self.assertEqual(git(self.phone, "status", "--porcelain"), "")
         self.assertEqual(git(self.kuvo_ai, "status", "--porcelain"), "")
+
+    def test_the_retired_mac_app_is_still_compile_checked_and_all_checks_both(self):
+        # (release.yml still builds it for the box release: a shared package's change that breaks it shows here.)
+        done = self.build("--compile-only", "mac")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("compiles for the mac", done.stdout)
+        said = self.xcode_said()
+        for part in ["-scheme KuvoCode ", "build-for-testing", "-derivedDataPath " + os.path.join(self.batches, "compile", "mac-build"),
+                     os.path.join(self.batches, "compile", "src", "kuvo-ai", "swift", "KuvoCode.xcodeproj")]:
+            self.assertIn(part, said)
+        self.assertTrue(read(os.path.join(self.batches, "compile", "mac.last")).startswith("compiles " + git(self.kuvo_ai, "rev-parse", "main")))
+        self.assertFalse(os.path.exists(os.path.join(self.batches, "mac")), "a compile check, never a batch")
+        done = self.build("--compile-only")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("compiles for the mac", done.stdout)
+        self.assertIn("compiles for the phone", done.stdout)
 
     def test_a_compile_that_fails_says_so(self):
         done = self.build("--compile-only", "phone", FAKE_XCODE_FAIL="1")
