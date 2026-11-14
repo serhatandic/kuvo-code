@@ -2398,8 +2398,8 @@ new version without cutting a turn:
 A client never keeps an older box's way of doing something (#679): it brings a box up to date
 before it uses it, and meanwhile says so. A box is older than a client needs when its `kuvo/info`
 `features` lack any name the client uses with no way around it (or it has no `kuvo/info`): today
-`agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
-`messages.send`, `models.offered`, `models.offered.sides`, `queue.items`, `sessions.asks`,
+`agent-tools.own`, `folders.tree`, `git.branches`, `git.branches.worktree`, `git.changes.path`,
+`git.files`, `git.merge`, `git.pull-request`, `git.status`, `messages.send`, `models.offered`, `models.offered.sides`, `queue.items`, `sessions.asks`,
 `sessions.list`, `sessions.mentions`, `sessions.models`, `sessions.start.empty` and `typed`
 (KuvoClient's `BoxGate.required`, and the same list in every client, gpui's `kuvo_box` too, so
 every client holds the same boxes; a box with `messages.send` has what came before it too,
@@ -3509,7 +3509,28 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     repository inside this one ends in `/`), and `hashes` a stamp of each (its size and when it
     last changed, opaque to a client), by path, so a client reads one again (`kuvo/file`) only when
     it changed; `uncommitted`, anything not committed yet
-    (always true but for `branch`). `500 {"message"}` when git couldn't say.
+    (always true but for `branch`). `500 {"message"}` when git couldn't say. With `"path"` (and
+    `"oldPath"` for a move), a path in the repository as `kuvo/git/files` lists it (`git.changes.path`):
+    that one file's diff alone, as a client opens it; a new file git doesn't know (not for `staged`)
+    as all of its lines added (`new file mode`, git's diff of it against nothing, binary as git
+    says), `untracked` empty; past 4 MB, `patch` empty and `"big": true`, too big to show. `400`
+    for a path that isn't one in the repository.
+  - `GET kuvo/git/files?directory=<folder>` (`git.files`): the folder's changed files as a Changes
+    panel groups them, what `git status` says of each → `{"repository": false}`, or `{"repository":
+    true, root, branch, files, uncommitted}`: `branch` the one checked out (null on none); `files`
+    in the order they show, conflicts, then staged, unstaged and new files (`group`: `conflicted`,
+    `staged`, `unstaged`, `untracked`), by name in each; each `{path, oldPath?, group, status,
+    scope, additions?, deletions?}`, `path` in the repository (`oldPath` where a staged move came
+    from), `status` and `scope` what its stage, unstage, discard and diff (with `path`) take (a
+    staged one `staged`, a conflicted one `uncommitted`, the rest `unstaged`), and git's count of its
+    lines (none for a binary file, a new one or a conflicted one). A file partly staged is in both
+    groups; one in conflict only in `conflicted`. A client stages an `unstaged` or `untracked` one,
+    unstages a `staged` one, and marks a conflicted one resolved by staging it. `404` for a folder
+    that isn't there, `500 {"message"}` when git couldn't say. `GET kuvo/git/files/events?directory=`
+    (`application/x-ndjson`): the same now, and again as it changes: git is asked every 3 seconds
+    (what an agent edits), and within a second of the repository's index or `HEAD` changing
+    (staged, committed, switched); when git can't say, what was said last stands. Through `box
+    route` it answers its first line.
   - `POST kuvo/git/changes/count {"directory", "scope"?, "base"?}` (`git.changes.count`, bridge
     0.9.211): how much `kuvo/git/changes` would show, without the diff, for a count (the phone's
     ••• says how many files changed) → `{"repository": false}`, or `{"repository": true, root,
@@ -3533,8 +3554,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     branch menu (the Mac's title bar) → `{"repository": false}` outside one, else `{"repository":
     true, root, current, branches}`: `root` its top folder, null for a folder with no checkout
     (its `.git` names a bare repository beside it, `gitdir: ./.bare`), `current` the branch checked
-    out (null on none), `branches` its local branches by their names, the latest commit first. Read by names only: nothing the
-    repository's settings name runs. `500 {"message"}` when git couldn't say. A client also reads
+    out (null on none), `branches` its local branches by their names, the latest commit first;
+    in a worktree whose branch Merge into… takes back (`git.branches.worktree`: one of the box's, or a
+    git worktree whose project is its repository's own folder), `worktree: {into}`, the branch it goes
+    into without one named (its `base`, else the one the project's folder has checked out; null on
+    none). Read by names only: nothing the repository's settings name runs. `500 {"message"}` when git couldn't say. A client also reads
     `repository` for whether a folder is in a repository at all (Edit Project's worktree setup).
   - `POST kuvo/git/switch {"directory", "branch", "create"?}` (`git.branches`): switches the
     repository to `branch`, or with `"create": true` to a new branch of that name from where it is,
@@ -3632,7 +3656,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   why as the computer says it (`Permission denied`, `No such folder`, `Not a folder`), so a client
   never shows a folder it couldn't read as empty. With `files=1` (`folders.files`), its files too,
   as a Files panel lists a folder: `files`, their names in the same order (with `hidden=1`, hidden
-  ones too; `.DS_Store` left out).
+  ones too; `.DS_Store` left out), and `folders` without version control's own (`.git`, `.hg`,
+  `.svn`), which nobody works in by hand.
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
@@ -5608,7 +5633,10 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `git.backups` | `kuvo/git/backups…`: branch backups, and taking one back (bridge 0.9.182) |
 | `git.branches` | `POST kuvo/git/branches` and `POST kuvo/git/switch`: a branch menu (#660) |
+| `git.branches.worktree` | `kuvo/git/branches`' `worktree`: a worktree's, with where Merge into… takes it |
 | `git.changes.count` | `POST kuvo/git/changes/count`: how much changed, without the diff (bridge 0.9.211) |
+| `git.changes.path` | `kuvo/git/changes` with `path`: one file's diff, a new file's too |
+| `git.files` | `GET kuvo/git/files` and `…/events`: a Changes panel's files, grouped, followed |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
 | `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |

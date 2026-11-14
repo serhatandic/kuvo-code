@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { askedArgsLater, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
-import type { GitBranches, GitChanges, GitChangesCount, GitStatus, PullRequestDraft } from "../../shared/routes/changes";
+import type { GitBranches, GitChanges, GitChangesCount, GitFiles, GitStatus, PullRequestDraft } from "../../shared/routes/changes";
 import { K } from "../home";
 import { askedEnv, commandEnv } from "../run-command";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -19,6 +19,7 @@ import { FILE_LIMIT } from "./file";
 import { commitPrompt, moveGitSettings, pullRequestPrompt } from "./git-words";
 import { readWorktrees } from "./worktree-records";
 import { linkPull } from "../glance/pulls";
+import { followedLive } from "../follow";
 
 // git's empty tree: what a repository with no commits yet is compared with.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -135,9 +136,17 @@ async function uncommittedIn(root: string, scope: Scope) {
   return status === null || status.length > 0;
 }
 
+/** How often a followed `kuvo/git/files` asks git again by itself (ms). */
+const FILES_EVERY = 3_000;
+
+/** The most of one file's diff `kuvo/git/changes` sends (with `path`): past it, `big`. */
+const ONE_FILE_MOST = 4 * 1024 * 1024;
+
 /** What changed in `directory`'s repository in `scope` (`base`: the branch the Branch scope
- * compares with), or `{repository: false}` outside one. */
-export async function changesIn(directory: string, scope: Scope, base?: string): Promise<GitChanges | null> {
+ * compares with), or `{repository: false}` outside one. With `only` (`git.changes.path`), one file's
+ * changes alone, by its path in the repository (and where it was, moved): a new file git doesn't
+ * know as a diff of all its lines (not for `staged`), and none past `ONE_FILE_MOST` (`big`). */
+export async function changesIn(directory: string, scope: Scope, base?: string, only?: { path: string; oldPath?: string }): Promise<GitChanges | null> {
   const found = await scoped(directory, scope, base);
   if (!found) return { repository: false };
   const { root, against, limit, compared } = found;
@@ -147,6 +156,7 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
   // through a converter (textconv). Clients count each line, and review comments name them.) A
   // submodule as git's own diff of its commit, whatever diff.submodule says, so it's listed.
   const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "-c", "diff.submodule=short", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  if (only) return oneFileIn(root, against, scope, compared, args, only);
   const patch = await text(root, [...args, ...compared, "--", limit]);
   if (patch === null) return null;
   const untracked = await untrackedIn(root, limit, scope);
@@ -170,6 +180,102 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
     }
   }
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
+}
+
+/** One file's changes (`changesIn` with `only`): its own diff, by its literal path (and its old
+ * one, so a move is found); one git doesn't know yet, not for `staged`, as all of its lines added
+ * (git's `--no-index` diff against nothing, which writes a binary one as binary). */
+async function oneFileIn(root: string, against: string, scope: Scope, compared: string[], args: string[], only: { path: string; oldPath?: string }): Promise<GitChanges | null> {
+  const paths = [only.path, ...(only.oldPath ? [only.oldPath] : [])];
+  const known = await git(root, ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", only.path]);
+  const done = (patch: string, big = patch.length > ONE_FILE_MOST): GitChanges => (big
+    ? { repository: true, root, against, patch: "", untracked: [], hashes: {}, uncommitted: true, big: true }
+    : { repository: true, root, against, patch, untracked: [], hashes: {}, uncommitted: true });
+  if (!known.ok && scope !== "staged" && !only.path.endsWith("/")) {
+    const file = path.join(root, only.path);
+    try {
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) return done("");
+      if (stat.size > ONE_FILE_MOST) return done("", true);
+    } catch {
+      return done("");
+    }
+    // Differences found is git's exit 1: what it wrote is the diff all the same.
+    const ran = await git(root, [...args, "--no-index", "--", "/dev/null", only.path]);
+    return done(ran.out.toString("utf8"));
+  }
+  const ran = await git(root, ["--literal-pathspecs", ...args, ...compared, "--", ...paths]);
+  return ran.ok ? done(ran.out.toString("utf8")) : null;
+}
+
+type Group = "conflicted" | "staged" | "unstaged" | "untracked";
+const GROUPS: Group[] = ["conflicted", "staged", "unstaged", "untracked"];
+type Listed = Extract<GitFiles, { repository: true }>["files"][number];
+
+/** What one of git's status letters says changed (`git status --porcelain=v2`). */
+const changeOf = (letter: string): Status => (letter === "A" || letter === "C" ? "added" : letter === "D" ? "deleted" : letter === "R" ? "renamed" : "modified");
+
+/** git's count of each file's lines added and removed (`diff --numstat -z`), by its path: none for
+ * a binary one. */
+async function linesBy(root: string, compared: string[], limit: string): Promise<Map<string, { additions: number; deletions: number }>> {
+  const counted = new Map<string, { additions: number; deletions: number }>();
+  const ran = await git(root, ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", ...compared, "--", limit]);
+  if (!ran.ok) return counted;
+  const fields = ran.out.toString("utf8").split("\0");
+  for (let at = 0; at < fields.length; at++) {
+    const field = fields[at]!;
+    if (!field) continue;
+    const [added = "", deleted = "", ...rest] = field.split("\t");
+    let name = rest.join("\t");
+    // A move: its old and new paths as fields of their own.
+    if (!name) {
+      at += 2;
+      name = fields[at] ?? "";
+    }
+    if (added !== "-" && deleted !== "-") counted.set(name, { additions: Number(added) || 0, deletions: Number(deleted) || 0 });
+  }
+  return counted;
+}
+
+/** `directory`'s repository's changed files as a Changes panel groups them (`kuvo/git/files`): what
+ * `git status` says of each file in the folder, a file in conflict once, a file partly staged in
+ * both groups, each with the scope its actions and diff take; or `{repository: false}` outside one,
+ * null when git couldn't say. */
+export async function filesIn(directory: string): Promise<GitFiles | null> {
+  const found = await scoped(directory, "uncommitted");
+  if (!found) return { repository: false };
+  const { root, against, limit } = found;
+  const status = await git(root, ["-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--find-renames", "--", limit]);
+  if (!status.ok) return null;
+  const [staged, unstaged] = await Promise.all([linesBy(root, ["--cached", against], limit), linesBy(root, [], limit)]);
+  const files: Listed[] = [];
+  const add = (group: Group, path: string, status: Status, oldPath?: string) => {
+    const scope = group === "staged" ? "staged" : group === "conflicted" ? "uncommitted" : "unstaged";
+    const lines = group === "staged" ? staged.get(path) : group === "unstaged" ? unstaged.get(path) : undefined;
+    files.push({ path, ...(oldPath ? { oldPath } : {}), group, status, scope, ...(lines ?? {}) });
+  };
+  const records = status.out.toString("utf8").split("\0");
+  for (let at = 0; at < records.length; at++) {
+    const record = records[at]!;
+    // `1 XY sub mH mI mW hH hI path`, `2 XY … score path` then its old path, `u XY …(10) path`,
+    // `? path`.
+    const kind = record[0];
+    if (kind === "?") add("untracked", record.slice(2), "added");
+    if (kind !== "1" && kind !== "2" && kind !== "u") continue;
+    const fields = record.split(" ");
+    const [x = ".", y = "."] = fields[1] ?? "";
+    const name = fields.slice(kind === "1" ? 8 : kind === "2" ? 9 : 10).join(" ");
+    if (kind === "u") {
+      add("conflicted", name, "modified");
+      continue;
+    }
+    const oldPath = kind === "2" ? records[++at] : undefined;
+    if (x !== ".") add("staged", name, changeOf(x), x === "R" ? oldPath : undefined);
+    // Moved in what's staged, then changed again: the change is to the file where it is now.
+    if (y !== ".") add("unstaged", name, y === "A" ? "added" : changeOf(y));
+  }
+  files.sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" }));
+  return { repository: true, root, branch: await branchOf(root), files, uncommitted: files.length > 0 };
 }
 
 /** How much changed in `directory`'s repository in `scope`, as `changesIn` would list it but
@@ -404,7 +510,11 @@ export async function branchesIn(directory: string): Promise<GitBranches | null>
   if (listed === null) return null;
   const branch = (ref: string) => (ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null);
   const head = (await text(at, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
-  return { repository: true, root, current: branch(head), branches: listed.split("\n").map(branch).filter((name): name is string => !!name) };
+  const branches = listed.split("\n").map(branch).filter((name): name is string => !!name);
+  // A worktree whose branch Merge into… takes back, and where it goes without one named.
+  const tree = root ? await mergedFrom(root) : null;
+  const worktree = tree && fs.existsSync(tree.project) ? { into: tree.base ?? (await branchOf(tree.project)) } : undefined;
+  return { repository: true, root, current: branch(head), branches, ...(worktree ? { worktree } : {}) };
 }
 
 /** Switches `directory`'s repository to `branch`, or (`create`) to a new one from where it is, the
@@ -671,7 +781,7 @@ function authorOf(body: Record<string, unknown>): Record<string, string> {
 
 // `kuvo/git/…` (PROTOCOL.md, "Changes").
 export async function* changesRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
-  const { request, route, json } = context;
+  const { request, route, json, signal } = context;
   const method = request.method.toUpperCase();
   if (route === "kuvo/git/show") {
     if (method !== "GET") return yield* json(405, {});
@@ -687,6 +797,23 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     if (!shown.ok) return yield* json(404, { message: "git has no such file." });
     return yield* [{ head: { status: 200, headers: { "content-type": "application/octet-stream", "content-length": String(shown.out.length) } } }, { body: shown.out }];
   }
+  if (route === "kuvo/git/files" || route === "kuvo/git/files/events") {
+    if (method !== "GET") return yield* json(405, {});
+    const directory = folderAt(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"));
+    if (!directory) return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/files") {
+      const found = await filesIn(directory);
+      return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
+    }
+    // Followed: now, and again as it changes. git is asked each few seconds (an agent's edits), and
+    // at once as its index or HEAD changes (staged, committed, switched); when it can't say, what it
+    // said last stands.
+    const gitDir = (await text(directory, ["rev-parse", "--absolute-git-dir"]))?.trim();
+    const stamp = (file: string) => { try { return String(fs.statSync(file).mtimeMs); } catch { return ""; } };
+    const look = () => (gitDir ? stamp(path.join(gitDir, "index")) + "/" + stamp(path.join(gitDir, "HEAD")) : "");
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followedLive(async () => (await filesIn(directory)) ?? undefined, () => () => {}, signal ?? undefined, { look, every: FILES_EVERY });
+  }
   if (method !== "POST") return yield* json(405, {});
   const body = (parsed(request.body) ?? {}) as Record<string, unknown>;
   const scope = (body.scope ?? "uncommitted") as Scope;
@@ -694,7 +821,12 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
   if (route === "kuvo/git/changes") {
     const directory = folderAt(body.directory);
     if (!directory) return yield* json(404, { message: "That folder isn’t there." });
-    const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
+    // One file's alone (`git.changes.path`): its path in the repository, and where it was.
+    const only = body.path === undefined ? undefined : inRepository(body.path);
+    const was = body.oldPath === undefined || body.oldPath === null ? undefined : inRepository(body.oldPath);
+    if (only === null || was === null) return yield* json(400, { message: "Name a file in the repository." });
+    const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined,
+      only ? { path: String(body.path), ...(was ? { oldPath: was } : {}) } : undefined);
     return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
   }
   if (route === "kuvo/git/changes/count") {

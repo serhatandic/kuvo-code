@@ -1577,7 +1577,12 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
     // (Switching them too: kuvo/git/switch.)
     "git.branches": ["POST", "kuvo/git/branches"],
+    // (A worktree's, in kuvo/git/branches' answer.)
+    "git.branches.worktree": ["POST", "kuvo/git/branches"],
     "git.changes.count": ["POST", "kuvo/git/changes/count"],
+    // (One file's diff: kuvo/git/changes with `path`.)
+    "git.changes.path": ["POST", "kuvo/git/changes"],
+    "git.files": ["GET", "kuvo/git/files?directory=/kuvo-none"],
     "git.merge": ["POST", "kuvo/git/merge"],
     "git.pull-request": ["POST", "kuvo/git/pull-request"],
     "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"],

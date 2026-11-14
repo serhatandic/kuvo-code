@@ -4029,7 +4029,10 @@ var FEATURES = [
   "git",
   "git.backups",
   "git.branches",
+  "git.branches.worktree",
   "git.changes.count",
+  "git.changes.path",
+  "git.files",
   "git.merge",
   "git.pull-request",
   "git.pull-request.draft",
@@ -36646,12 +36649,16 @@ async function uncommittedIn(root, scope) {
   const status = scope === "branch" ? await text4(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
   return status === null || status.length > 0;
 }
-async function changesIn(directory, scope, base) {
+var FILES_EVERY = 3000;
+var ONE_FILE_MOST = 4 * 1024 * 1024;
+async function changesIn(directory, scope, base, only) {
   const found = await scoped(directory, scope, base);
   if (!found)
     return { repository: false };
   const { root, against, limit, compared } = found;
   const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "-c", "diff.submodule=short", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  if (only)
+    return oneFileIn(root, against, scope, compared, args, only);
   const patch = await text4(root, [...args, ...compared, "--", limit]);
   if (patch === null)
     return null;
@@ -36671,6 +36678,89 @@ async function changesIn(directory, scope, base) {
     }
   }
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
+}
+async function oneFileIn(root, against, scope, compared, args, only) {
+  const paths = [only.path, ...only.oldPath ? [only.oldPath] : []];
+  const known = await git2(root, ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", only.path]);
+  const done = (patch, big = patch.length > ONE_FILE_MOST) => big ? { repository: true, root, against, patch: "", untracked: [], hashes: {}, uncommitted: true, big: true } : { repository: true, root, against, patch, untracked: [], hashes: {}, uncommitted: true };
+  if (!known.ok && scope !== "staged" && !only.path.endsWith("/")) {
+    const file = path124.join(root, only.path);
+    try {
+      const stat = fs120.statSync(file);
+      if (!stat.isFile())
+        return done("");
+      if (stat.size > ONE_FILE_MOST)
+        return done("", true);
+    } catch {
+      return done("");
+    }
+    const ran = await git2(root, [...args, "--no-index", "--", "/dev/null", only.path]);
+    return done(ran.out.toString("utf8"));
+  }
+  const ran = await git2(root, ["--literal-pathspecs", ...args, ...compared, "--", ...paths]);
+  return ran.ok ? done(ran.out.toString("utf8")) : null;
+}
+var GROUPS = ["conflicted", "staged", "unstaged", "untracked"];
+var changeOf = (letter) => letter === "A" || letter === "C" ? "added" : letter === "D" ? "deleted" : letter === "R" ? "renamed" : "modified";
+async function linesBy(root, compared, limit) {
+  const counted = new Map;
+  const ran = await git2(root, ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", ...compared, "--", limit]);
+  if (!ran.ok)
+    return counted;
+  const fields = ran.out.toString("utf8").split("\x00");
+  for (let at = 0;at < fields.length; at++) {
+    const field = fields[at];
+    if (!field)
+      continue;
+    const [added = "", deleted = "", ...rest] = field.split("\t");
+    let name = rest.join("\t");
+    if (!name) {
+      at += 2;
+      name = fields[at] ?? "";
+    }
+    if (added !== "-" && deleted !== "-")
+      counted.set(name, { additions: Number(added) || 0, deletions: Number(deleted) || 0 });
+  }
+  return counted;
+}
+async function filesIn2(directory) {
+  const found = await scoped(directory, "uncommitted");
+  if (!found)
+    return { repository: false };
+  const { root, against, limit } = found;
+  const status = await git2(root, ["-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--find-renames", "--", limit]);
+  if (!status.ok)
+    return null;
+  const [staged, unstaged] = await Promise.all([linesBy(root, ["--cached", against], limit), linesBy(root, [], limit)]);
+  const files = [];
+  const add = (group, path, status, oldPath) => {
+    const scope = group === "staged" ? "staged" : group === "conflicted" ? "uncommitted" : "unstaged";
+    const lines = group === "staged" ? staged.get(path) : group === "unstaged" ? unstaged.get(path) : undefined;
+    files.push({ path, ...oldPath ? { oldPath } : {}, group, status, scope, ...lines ?? {} });
+  };
+  const records = status.out.toString("utf8").split("\x00");
+  for (let at = 0;at < records.length; at++) {
+    const record = records[at];
+    const kind = record[0];
+    if (kind === "?")
+      add("untracked", record.slice(2), "added");
+    if (kind !== "1" && kind !== "2" && kind !== "u")
+      continue;
+    const fields = record.split(" ");
+    const [x = ".", y = "."] = fields[1] ?? "";
+    const name = fields.slice(kind === "1" ? 8 : kind === "2" ? 9 : 10).join(" ");
+    if (kind === "u") {
+      add("conflicted", name, "modified");
+      continue;
+    }
+    const oldPath = kind === "2" ? records[++at] : undefined;
+    if (x !== ".")
+      add("staged", name, changeOf(x), x === "R" ? oldPath : undefined);
+    if (y !== ".")
+      add("unstaged", name, y === "A" ? "added" : changeOf(y));
+  }
+  files.sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" }));
+  return { repository: true, root, branch: await branchOf(root), files, uncommitted: files.length > 0 };
 }
 async function countIn(directory, scope, base) {
   const found = await scoped(directory, scope, base);
@@ -36862,8 +36952,11 @@ async function branchesIn(directory) {
     return null;
   const branch = (ref) => ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
   const head = (await text4(at, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
-  return { repository: true, root, current: branch(head), branches: listed.split(`
-`).map(branch).filter((name) => !!name) };
+  const branches = listed.split(`
+`).map(branch).filter((name) => !!name);
+  const tree = root ? await mergedFrom(root) : null;
+  const worktree = tree && fs120.existsSync(tree.project) ? { into: tree.base ?? await branchOf(tree.project) } : undefined;
+  return { repository: true, root, current: branch(head), branches, ...worktree ? { worktree } : {} };
 }
 async function switchBranch(directory, branch, create) {
   const found = await repositoryOf3(directory);
@@ -37105,7 +37198,7 @@ function authorOf(body) {
   return Object.fromEntries(AUTHOR.flatMap((key) => typeof given[key] === "string" ? [[key, given[key]]] : []));
 }
 async function* changesRoute(context) {
-  const { request, route, json } = context;
+  const { request, route, json, signal } = context;
   const method = request.method.toUpperCase();
   if (route === "kuvo/git/show") {
     if (method !== "GET")
@@ -37125,6 +37218,28 @@ async function* changesRoute(context) {
       return yield* json(404, { message: "git has no such file." });
     return yield* [{ head: { status: 200, headers: { "content-type": "application/octet-stream", "content-length": String(shown.out.length) } } }, { body: shown.out }];
   }
+  if (route === "kuvo/git/files" || route === "kuvo/git/files/events") {
+    if (method !== "GET")
+      return yield* json(405, {});
+    const directory = folderAt(new URLSearchParams(request.path.split("?")[1] ?? "").get("directory"));
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/files") {
+      const found = await filesIn2(directory);
+      return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
+    }
+    const gitDir = (await text4(directory, ["rev-parse", "--absolute-git-dir"]))?.trim();
+    const stamp = (file) => {
+      try {
+        return String(fs120.statSync(file).mtimeMs);
+      } catch {
+        return "";
+      }
+    };
+    const look = () => gitDir ? stamp(path124.join(gitDir, "index")) + "/" + stamp(path124.join(gitDir, "HEAD")) : "";
+    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+    return yield* followedLive(async () => await filesIn2(directory) ?? undefined, () => () => {}, signal ?? undefined, { look, every: FILES_EVERY });
+  }
   if (method !== "POST")
     return yield* json(405, {});
   const body = parsed(request.body) ?? {};
@@ -37135,7 +37250,11 @@ async function* changesRoute(context) {
     const directory = folderAt(body.directory);
     if (!directory)
       return yield* json(404, { message: "That folder isn’t there." });
-    const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
+    const only = body.path === undefined ? undefined : inRepository(body.path);
+    const was = body.oldPath === undefined || body.oldPath === null ? undefined : inRepository(body.oldPath);
+    if (only === null || was === null)
+      return yield* json(400, { message: "Name a file in the repository." });
+    const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined, only ? { path: String(body.path), ...was ? { oldPath: was } : {} } : undefined);
     return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
   }
   if (route === "kuvo/git/changes/count") {
@@ -40458,7 +40577,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c31e5da51e21";
+var BRIDGE_VERSION = "1b7aa34fa932";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45133,6 +45252,7 @@ async function withDates(tree, dated) {
   }
   return { ...tree, modified };
 }
+var VERSION_CONTROL = new Set([".git", ".hg", ".svn"]);
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
@@ -45154,8 +45274,9 @@ function listFolders(requestPath) {
       return false;
     }
   })();
-  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs138.existsSync(path144.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => byName(a.name, b.name));
-  const files = query.get("files") === "1" ? entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map((entry) => entry.name).sort(byName) : undefined;
+  const panel = query.get("files") === "1";
+  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && !(panel && VERSION_CONTROL.has(entry.name)) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs138.existsSync(path144.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => byName(a.name, b.name));
+  const files = panel ? entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map((entry) => entry.name).sort(byName) : undefined;
   return { status: 200, value: { path: at, home, parent: at === path144.dirname(at) ? null : path144.dirname(at), folders, ...files ? { files } : {} } };
 }
 function makeFolder(body) {
