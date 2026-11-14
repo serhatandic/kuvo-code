@@ -98,6 +98,8 @@ interface Saved {
   allowed?: Record<string, Decision>
   /** The account each slot here (by provider) was last seen signed in to. */
   seen?: Record<string, string>
+  /** This box was last seen as a machine Macs of two setups share (what was decided before went then). */
+  shared?: boolean
 }
 
 /** How a spend went here or there: `already`, its maker said this same request was done before; `message`, said in place of the outcome's own words. */
@@ -133,8 +135,10 @@ interface Decision {
   from?: string
 }
 
-/** Said to a box that isn't one of yours asking this one to spend a reset. */
-const NOT_YOURS = "This computer isn't one of yours, so it doesn't use your resets: nothing was used."
+/** Said, on the asking computer, of a box that isn't one of yours now asked to spend a reset. */
+const NOT_YOURS = "The computer with its sign-in isn't one of yours now, so it doesn't use your resets: nothing was used."
+/** The same, of a spend it had already begun for that computer while it was: as it went there, never spent again. */
+const NOT_YOURS_OPEN = "The computer with its sign-in isn't one of yours now, so it can't be asked again from here. An earlier try may have gone through: nothing more was used."
 
 /** A refusal, in words, with the status a route answers it with. */
 export interface ResetRefusal {
@@ -156,6 +160,8 @@ export class LimitResets {
   private spends: Spend[] = []
   private allowed = new Map<string, Decision>()
   private seen = new Map<string, string>()
+  /** Whether this box was last seen as a shared machine (journal: `shared`). */
+  private sharedSeen = false
   private waiting = new Map<string, (answer: NonNullable<ResetMail["answer"]>) => void>()
   /** Spends under way here, by id: asked again meanwhile, the same one is waited for. */
   private running = new Map<string, Promise<Result>>()
@@ -175,22 +181,28 @@ export class LimitResets {
   }
 
   /**
-   * The link said who your computers are: a decision a box told this one is forgotten once that
-   * box isn't one of yours (it, or this box, became a machine Macs of two setups share), so agents
-   * here ask again rather than go on under another's Always Allow; one from a journal from before
-   * this, whose box isn't known, once none of this box's peers is yours.
+   * The link said who your computers are. This box just became a machine Macs of two setups share:
+   * every decision kept here goes (here, on its own page, or told by a Mac, a journal from before
+   * this too), once, so agents here ask again rather than go on under one person's Always Allow.
+   * Else a decision a peer told is forgotten once the link names that peer as not one of yours
+   * (never for one merely missing from what it says now). Forgotten is kept as off, as of when it
+   * was decided, so an older word never brings it back.
    */
   private directorySaid() {
-    if (!this.directory?.told) return
-    const peers = this.directory.peerBoxes().map((box) => box.key)
-    const noneYours = peers.length > 0 && !peers.some((key) => this.isYours(key))
-    let forgot = false
+    const directory = this.directory
+    if (!directory?.told) return
+    const shared = directory.sharedHere === true
+    const becameShared = shared && !this.sharedSeen
+    let changed = shared !== this.sharedSeen
+    this.sharedSeen = shared
     for (const [row, decided] of [...this.allowed]) {
-      if (decided.from === "" || (decided.from === undefined ? !noneYours : this.isYours(decided.from))) continue
-      this.allowed.delete(row)
-      forgot = true
+      if (!decided.on && decided.from === "") continue
+      const apart = decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false
+      if (!becameShared && !apart) continue
+      this.allowed.set(row, { on: false, at: decided.at, from: "" })
+      changed = true
     }
-    if (!forgot) return
+    if (!changed) return
     this.save()
     this.changedSoon()
   }
@@ -415,9 +427,18 @@ export class LimitResets {
   take(from: string, mail: unknown) {
     if (!isResetMail(mail)) return
     if (this.directory && !this.isYours(from)) {
-      // (An ask is answered, so its asker isn't left waiting: nothing is used. Anything else is dropped.)
+      // (Once the link has said, an ask is answered, so its asker isn't left waiting, and nothing
+      // is spent: a spend begun for it here before, as that went, or still open, never "nothing was
+      // used" for one that may have gone. Anything else is dropped.)
       const ask = mail.ask
-      if (ask && typeof ask.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(ask.id)) this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: "failed", message: NOT_YOURS } }, false)
+      if (!this.directory.told || !ask || typeof ask.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(ask.id)) return
+      const known = this.spends.find((each) => each.id === `${from}:${ask.id}` || each.also?.includes(`${from}:${ask.id}`))
+      const answer: NonNullable<ResetMail["answer"]> = !known
+        ? { id: ask.id, outcome: "failed", message: NOT_YOURS }
+        : known.state === "done"
+          ? { id: ask.id, outcome: known.outcome!, ...(known.until ? { until: known.until } : {}), ...(known.outcome === "reset" ? { already: true as const } : {}) }
+          : { id: ask.id, outcome: "not-now", open: true, message: NOT_YOURS_OPEN }
+      this.transport?.send(from, { kind: "reset", at: this.now(), answer }, false)
       return
     }
     if (mail.answer && typeof mail.answer.id === "string") {
@@ -594,6 +615,7 @@ export class LimitResets {
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string")
       for (const [row, decided] of Object.entries(saved.allowed ?? {})) if (row.includes("#") && typeof decided?.on === "boolean" && typeof decided.at === "number") this.allowed.set(row, { on: decided.on, at: decided.at, ...(typeof decided.from === "string" ? { from: decided.from } : {}) })
       for (const [provider, row] of Object.entries(saved.seen ?? {})) if (typeof row === "string") this.seen.set(provider, row)
+      this.sharedSeen = saved.shared === true
     } catch {}
   }
 
@@ -603,7 +625,7 @@ export class LimitResets {
     const at = this.now()
     this.spends = this.spends.filter((spend) => spend.state === "sending" || at - spend.at < KEEP_FOR).slice(-KEEP)
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen) } satisfies Saved), { mode: 0o600 })
+    writeFileSync(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen), ...(this.sharedSeen ? { shared: true } : {}) } satisfies Saved), { mode: 0o600 })
     renameSync(this.file + ".new", this.file)
   }
 }

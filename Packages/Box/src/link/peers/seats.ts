@@ -221,6 +221,8 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
     // once that's settled, a machine Macs share or a setup set aside; else not said, as it can't
     // say yet: one it can't follow yet, its keys not read as the link starts, or none made yet.)
     ...(setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}),
+    // (This box is a machine Macs of two setups share: what was decided here goes once, #701.)
+    ...(shared ? { shared: true as const } : {}),
   };
 }
 

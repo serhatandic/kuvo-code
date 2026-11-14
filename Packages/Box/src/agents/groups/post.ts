@@ -259,6 +259,8 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
   /** Whether the link has said this box follows no setup, settled (`setup: null`): not said, it
    * can't say yet, or it's a link from before this. */
   inNoSetup = false
+  /** Whether the link says this box is a machine set up by Macs that aren't all in one setup (#701). */
+  sharedHere = false
 
   constructor(
     private readonly transport: PeerTransport,
@@ -281,6 +283,7 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
     }
     this.setup = typeof given.setup === "string" && /^set_[A-Za-z0-9_-]{1,64}$/.test(given.setup) ? given.setup : undefined
     this.inNoSetup = given.setup === null
+    this.sharedHere = given.shared === true
     this.told = true
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))

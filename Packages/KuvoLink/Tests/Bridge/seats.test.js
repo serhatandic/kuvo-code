@@ -515,6 +515,8 @@ test("the bridge is told which peers aren't your own computers for plan limits' 
   assert.deepEqual(apart(inSetup), { mac: false, second: false });
   // This box is a machine two people's Macs set up: none of its peers is anyone's own computer here.
   assert.deepEqual(apart({ ...link.readLink(), macs: [mac.pub, air.pub] }), { mac: true, second: true });
+  assert.equal(link.seatPeers({ ...link.readLink(), macs: [mac.pub, air.pub] }).shared, true, "and its bridge hears it's shared");
+  assert.equal("shared" in link.seatPeers(link.readLink()), false);
   // A shared machine whose agents' mail doesn't say so (an older box, its engine not answering)
   // but whose numbering mail does: not yours either.
   const queues = path.join(run, "work-queue", "peers");

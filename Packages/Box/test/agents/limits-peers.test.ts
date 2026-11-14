@@ -15,6 +15,7 @@ import type { Clock } from "../../src/agents/groups/peer"
 import { Limits, LimitsProblem, limitsRoutes, type LimitedAccount, type LimitsSource } from "../../src/agents/limits"
 import { LimitsPeers, PEER_AWAY, TELL_AGAIN, type LimitsMail } from "../../src/agents/limits-peers"
 import { limitRows, type LimitRow } from "../../src/agents/limits-rows"
+import { subscribe } from "../../src/agents/events"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-limits-peers-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -636,8 +637,13 @@ describe("whose computers see what's yours alone (#701, the separate review)", (
     mac.start()
     expect(balance(mac)).toBeUndefined()
     expect(mac.rows().find((row) => row.service === "openrouter")).toBeDefined()
+    // Clients hear it as the link says (what they read before was as a box that isn't yours).
+    const heard: any[] = []
+    const stop = subscribe((event) => event.type === "kuvo.limits.updated" && heard.push(event.data))
     await mac.meet([hetzner])
+    stop()
     expect(balance(mac)).toEqual({ left: 7.7, limit: 50, unit: "usd" })
+    expect(heard.at(-1)?.rows.find((row: LimitRow) => row.service === "openrouter")?.balance).toEqual({ left: 7.7, limit: 50, unit: "usd" })
   })
 
   test("a machine that stops being one of your own computers, then is again: its spend is hidden, then asked for and shown at once", async () => {

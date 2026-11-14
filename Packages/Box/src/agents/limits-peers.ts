@@ -53,6 +53,8 @@ export interface LimitsDirectory {
    * two people's Macs share, nor in another setup.
    */
   isYours?(key: string): boolean
+  /** Whether the link says this box is a machine set up by Macs that aren't all in one setup. */
+  readonly sharedHere?: boolean
 }
 
 interface Kept {
@@ -177,11 +179,12 @@ export class LimitsPeers {
       const taken = takenAccount(account, off, now)
       return taken ? [taken] : []
     })
-    // (From a box the link says isn't one of your own computers, only what such a box is told,
-    // whatever it said: a machine Macs of two setups share never keeps one's spending or Always Allow
-    // for the other. Before the link has said, kept whole, and shown as such a box's until it says:
-    // `rows`, `freshest`.)
-    const accounts = this.directory.told && !this.ours(from) ? forVouched(read) : read
+    // (From a box that isn't one of your own computers, or before the link has said, only what such
+    // a box is told, whatever it said: a machine Macs of two setups share never keeps one's spending
+    // or Always Allow for the other. Once the link says one is yours, it's asked for all of its own,
+    // `directorySaid`. What was kept before, from a restart, is kept whole and shown so only once
+    // the link says it's yours: `rows`, `freshest`.)
+    const accounts = !this.ours(from) ? forVouched(read) : read
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     this.peers.set(from, { name, heard: now, accounts })
@@ -258,8 +261,9 @@ export class LimitsPeers {
     const yours = new Set([...here].filter((key) => this.ours(key)))
     // (Told again as if never told: with `ask`, so it tells this box all of its own at once.)
     for (const key of yours) if (!this.yoursBefore.has(key)) this.told.delete(key)
+    // (Which are yours changed, the first time the link says too: what clients see of them with it.)
+    let gone = yours.size !== this.yoursBefore.size || [...yours].some((key) => !this.yoursBefore.has(key))
     this.yoursBefore = yours
-    let gone = false
     for (const [key, kept] of [...this.peers]) {
       if (!here.has(key)) {
         this.peers.delete(key)

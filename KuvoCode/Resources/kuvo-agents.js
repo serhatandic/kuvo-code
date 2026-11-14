@@ -9538,7 +9538,8 @@ var PEER_WAIT = 45000;
 var KEEP = 200;
 var KEEP_FOR = 30 * 24 * 60 * MINUTE;
 var READ_AFTER = 8000;
-var NOT_YOURS = "This computer isn't one of yours, so it doesn't use your resets: nothing was used.";
+var NOT_YOURS = "The computer with its sign-in isn't one of yours now, so it doesn't use your resets: nothing was used.";
+var NOT_YOURS_OPEN = "The computer with its sign-in isn't one of yours now, so it can't be asked again from here. An earlier try may have gone through: nothing more was used.";
 
 class LimitResets {
   limits;
@@ -9551,6 +9552,7 @@ class LimitResets {
   spends = [];
   allowed = new Map;
   seen = new Map;
+  sharedSeen = false;
   waiting = new Map;
   running = new Map;
   constructor(limits, file, now = Date.now, transport, directory, peerWait = PEER_WAIT) {
@@ -9565,18 +9567,23 @@ class LimitResets {
     directory?.listen(() => this.directorySaid());
   }
   directorySaid() {
-    if (!this.directory?.told)
+    const directory = this.directory;
+    if (!directory?.told)
       return;
-    const peers = this.directory.peerBoxes().map((box) => box.key);
-    const noneYours = peers.length > 0 && !peers.some((key) => this.isYours(key));
-    let forgot = false;
+    const shared = directory.sharedHere === true;
+    const becameShared = shared && !this.sharedSeen;
+    let changed = shared !== this.sharedSeen;
+    this.sharedSeen = shared;
     for (const [row, decided] of [...this.allowed]) {
-      if (decided.from === "" || (decided.from === undefined ? !noneYours : this.isYours(decided.from)))
+      if (!decided.on && decided.from === "")
         continue;
-      this.allowed.delete(row);
-      forgot = true;
+      const apart = decided.from ? directory.isPeer?.(decided.from) === true && !this.isYours(decided.from) : false;
+      if (!becameShared && !apart)
+        continue;
+      this.allowed.set(row, { on: false, at: decided.at, from: "" });
+      changed = true;
     }
-    if (!forgot)
+    if (!changed)
       return;
     this.save();
     this.changedSoon();
@@ -9754,8 +9761,11 @@ class LimitResets {
       return;
     if (this.directory && !this.isYours(from)) {
       const ask = mail.ask;
-      if (ask && typeof ask.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(ask.id))
-        this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: "failed", message: NOT_YOURS } }, false);
+      if (!this.directory.told || !ask || typeof ask.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(ask.id))
+        return;
+      const known = this.spends.find((each) => each.id === `${from}:${ask.id}` || each.also?.includes(`${from}:${ask.id}`));
+      const answer = !known ? { id: ask.id, outcome: "failed", message: NOT_YOURS } : known.state === "done" ? { id: ask.id, outcome: known.outcome, ...known.until ? { until: known.until } : {}, ...known.outcome === "reset" ? { already: true } : {} } : { id: ask.id, outcome: "not-now", open: true, message: NOT_YOURS_OPEN };
+      this.transport?.send(from, { kind: "reset", at: this.now(), answer }, false);
       return;
     }
     if (mail.answer && typeof mail.answer.id === "string") {
@@ -9914,6 +9924,7 @@ class LimitResets {
       for (const [provider, row] of Object.entries(saved.seen ?? {}))
         if (typeof row === "string")
           this.seen.set(provider, row);
+      this.sharedSeen = saved.shared === true;
     } catch {}
   }
   save() {
@@ -9922,7 +9933,7 @@ class LimitResets {
     const at = this.now();
     this.spends = this.spends.filter((spend) => spend.state === "sending" || at - spend.at < KEEP_FOR).slice(-KEEP);
     mkdirSync10(dirname10(this.file), { recursive: true });
-    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen) }), { mode: 384 });
+    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, allowed: Object.fromEntries(this.allowed), seen: Object.fromEntries(this.seen), ...this.sharedSeen ? { shared: true } : {} }), { mode: 384 });
     renameSync8(this.file + ".new", this.file);
   }
 }
@@ -34149,6 +34160,7 @@ class LinkDirectory {
   told = false;
   setup;
   inNoSetup = false;
+  sharedHere = false;
   constructor(transport, clock = realClock) {
     this.transport = transport;
     this.clock = clock;
@@ -34171,6 +34183,7 @@ class LinkDirectory {
     }
     this.setup = typeof given.setup === "string" && /^set_[A-Za-z0-9_-]{1,64}$/.test(given.setup) ? given.setup : undefined;
     this.inNoSetup = given.setup === null;
+    this.sharedHere = given.shared === true;
     this.told = true;
     this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
       id: bot.id,
@@ -35449,7 +35462,7 @@ class LimitsPeers {
       const taken = takenAccount2(account, off, now);
       return taken ? [taken] : [];
     });
-    const accounts = this.directory.told && !this.ours(from) ? forVouched(read) : read;
+    const accounts = !this.ours(from) ? forVouched(read) : read;
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
     this.peers.set(from, { name, heard: now, accounts });
@@ -35512,8 +35525,8 @@ class LimitsPeers {
     for (const key of yours)
       if (!this.yoursBefore.has(key))
         this.told.delete(key);
+    let gone = yours.size !== this.yoursBefore.size || [...yours].some((key) => !this.yoursBefore.has(key));
     this.yoursBefore = yours;
-    let gone = false;
     for (const [key, kept] of [...this.peers]) {
       if (!here.has(key)) {
         this.peers.delete(key);
@@ -36029,4 +36042,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a3e0fd5a90fec618345117bb372c1e1e534d73071cda74933d4c4906750ff64a
+// Built from Packages/Box/src/agents 8a1a0b4941631b4f3a56f1f9e9080fbc404e36fbb9276acb5721f72840879f61

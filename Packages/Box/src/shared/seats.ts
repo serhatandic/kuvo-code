@@ -57,4 +57,6 @@ export interface SeatPeers {
    * which the bridge takes as neither. The usage panel's settings go only between boxes of the
    * same setup. */
   setup?: string | null;
+  /** This box is a machine set up by Macs that aren't all in one setup (`sharedMachine`, #701). */
+  shared?: true;
 }

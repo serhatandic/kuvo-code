@@ -4150,19 +4150,26 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     says (`setup` and `shared` in its agents' mail; `shared` in its numbering mail too, which an
     older box, or one whose engine isn't answering, still sends), and tells the bridge each peer
     that isn't yours (`apart: true` in `PUT /api/kuvo/peers`' `boxes`; on a shared machine, every
-    peer), at once when its own setup or sharing changes, else at its next round. A peer that says
-    nothing of a setup (one not in one yet, a box from before this) counts as yours, as before. So
-    on a shared machine no Mac's resets are used (only its own sign-ins' are, here), no Always Allow
-    is taken or passed on, and no one's spend is added up but its own; and each Mac treats that
-    machine as it treats the other Mac (a box a peer vouches for). Such a box is told only what a
-    box a peer vouches for is; what one says is kept as told, and shown, and stands for a read, as
-    such a box's (stripped as it's read) until the link says it's yours (so what your own machines
-    last said comes back whole after a restart); one that becomes yours again is asked for all of
-    its own at once. A reset asked of a box that isn't yours is answered `failed`, saying so, never
-    left to wait. Always Allow decisions are kept with the box they came from (`from` in the
-    journal, `""` decided here): one told by a box that isn't yours any more is forgotten, so
-    agents ask again (one kept from before this, whose box isn't known, once none of the box's
-    peers is yours).
+    peer, and `shared: true` there), as soon as its running link sees its own setup or sharing
+    change, else at its next round. A peer that says nothing of a setup (one not in one yet, a box
+    from before this) counts as yours, as before. So on a shared machine no Mac's resets are used
+    (only its own sign-ins' are, here), no Always Allow is taken or passed on, and no one's spend is
+    added up but its own; and each Mac treats that machine as it treats the other Mac (a box a peer
+    vouches for). Such a box is told only what a box a peer vouches for is, and what one says is
+    kept as such a box's (before the link has said too); what was kept through a restart is kept
+    whole, but read (`rows`) as such a box's, and never stands for a read, until the link says it's
+    yours; one that becomes yours (again, or the first time the link says) is asked for all of its
+    own at once, and clients hear. A reset asked of a box that isn't yours is answered, never left
+    to wait: one it began for that asker before, as it went there (`already`), or open
+    (`not-now`, `open`) where it isn't settled; a new one `failed`, saying the computer with its
+    sign-in isn't one of yours now. Before its link has said, a box answers none. Always Allow
+    decisions are kept with the box they came from (`from` in the journal, `""` decided here): the
+    moment a box becomes a shared machine (the journal keeps `shared`), every decision kept there
+    goes, once (made on its own page, from a card there, by a Mac, or in a journal from before
+    this), so agents there ask again, and one made there after stays; else a decision a peer told
+    goes once the link names that peer as not yours (never for one it merely leaves out for a
+    moment). One that goes is kept as off, as of when it was decided, so an older word never brings
+    it back.
   - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
     `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them, but its own
     numbers only (each account's hashed `identity`, its windows with when each was read, `checked`,
