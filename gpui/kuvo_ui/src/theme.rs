@@ -142,6 +142,15 @@ pub struct Colors {
     pub elevated: Hsla,
     /// Wells sunk into a surface: fields, code blocks, chips, icon tiles.
     pub sunken: Hsla,
+    /// The soft grey the areas' sidebars and the Settings pages sit on, a step lighter than
+    /// `background` (the rail and title bar); white cards and a selected row's card sit on it.
+    pub sidebar: Hsla,
+    /// A card of rows on the sidebar grey (a Settings group): white in light, a step up in dark.
+    pub card: Hsla,
+    /// A selected row or tile in the rail or a sidebar: a card of its own, not a grey wash, with
+    /// a hairline (`selected_edge`) and a soft shadow ([`Theme::selected_shadow`]).
+    pub selected_card: Hsla,
+    pub selected_edge: Hsla,
 
     /// The first level of text: titles, labels, what you read.
     pub text: Hsla,
@@ -149,6 +158,9 @@ pub struct Colors {
     pub text_muted: Hsla,
     /// The third level: hints, placeholders, timestamps, disabled text.
     pub text_faint: Hsla,
+    /// Outline icons at rest (the rail, sidebars, rows): a mid grey between muted and faint text,
+    /// drawn with a thin stroke ([`crate::icon::STROKE`]); one selected takes `text`.
+    pub icon: Hsla,
     /// Text on the primary (inverted) call to action.
     pub text_on_primary: Hsla,
     /// Text on the accent colour.
@@ -229,15 +241,20 @@ fn hexa(value: u32) -> Hsla {
 impl Colors {
     pub fn light() -> Self {
         Self {
-            background: hex(0xF7F7F7),
+            background: hex(0xF3F3F3),
             backdrop_dot: hexa(0x2929291F),
             surface: hex(0xFFFFFF),
             elevated: hex(0xFFFFFF),
             sunken: hex(0xF4F4F4),
+            sidebar: hex(0xF8F8F8),
+            card: hex(0xFFFFFF),
+            selected_card: hex(0xFFFFFF),
+            selected_edge: hexa(0x2929290F),
 
             text: hex(0x292929),
             text_muted: hex(0x5D5D5D),
             text_faint: hex(0x9E9E9E),
+            icon: hex(0x7D7D7D),
             text_on_primary: hex(0xFFFFFF),
             text_on_accent: hex(0xFFFFFF),
 
@@ -298,11 +315,16 @@ impl Colors {
             surface: hex(0x181818),
             elevated: hex(0x242424),
             sunken: hex(0x121212),
+            sidebar: hex(0x141414),
+            card: hex(0x1E1E1E),
+            selected_card: hex(0x232323),
+            selected_edge: hexa(0xFFFFFF12),
 
             // The same three steps as light, mirrored: bright, mid and dim greys.
             text: hex(0xECECEC),
             text_muted: hex(0xA3A3A3),
             text_faint: hex(0x6E6E6E),
+            icon: hex(0x8F8F8F),
             text_on_primary: hex(0x181818),
             text_on_accent: hex(0xFFFFFF),
 
@@ -409,6 +431,16 @@ impl Theme {
         ]
     }
 
+    /// What lifts a selected row's card ([`Colors::selected_card`]) off a sidebar: a hairline
+    /// and a soft shadow under it.
+    pub fn selected_shadow(&self) -> Vec<BoxShadow> {
+        let soft = if self.appearance.is_dark() { hsla(0., 0., 0., 0.35) } else { hsla(0., 0., 0., 0.05) };
+        vec![
+            BoxShadow { color: self.colors.selected_edge, offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(1.), inset: false },
+            BoxShadow { color: soft, offset: point(px(0.), px(1.)), blur_radius: px(3.), spread_radius: px(0.), inset: false },
+        ]
+    }
+
     /// The faint shadow that sets a card off a surface of the same colour.
     pub fn card_shadow(&self) -> Vec<BoxShadow> {
         let color = if self.appearance.is_dark() {
@@ -505,10 +537,13 @@ mod tests {
     #[test]
     fn text_levels_stay_readable_in_both_appearances() {
         for colors in [Colors::light(), Colors::dark()] {
-            for surface in [colors.surface, colors.background, colors.sunken, colors.elevated] {
+            for surface in [colors.surface, colors.background, colors.sunken, colors.elevated, colors.sidebar, colors.card] {
                 assert!(contrast(colors.text, surface) >= 7.0);
                 assert!(contrast(colors.text_muted, surface) >= 4.5);
                 assert!(contrast(colors.text_faint, surface) >= 2.4);
+                // An icon is a graphic: 3:1 (WCAG 1.4.11), lighter than muted text.
+                assert!(contrast(colors.icon, surface) >= 3.0);
+                assert!(contrast(colors.icon, surface) < contrast(colors.text_muted, surface));
             }
             assert!(contrast(colors.text_on_primary, colors.primary) >= 7.0);
             // A destructive button's words, at rest, under the pointer and pressed.

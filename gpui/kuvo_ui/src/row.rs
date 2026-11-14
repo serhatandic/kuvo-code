@@ -125,12 +125,22 @@ impl NavRow {
 }
 
 /// The height of a navigation row.
-pub const NAV_ROW_HEIGHT: Pixels = px(30.);
+pub const NAV_ROW_HEIGHT: Pixels = px(32.);
+
+/// A selected row or tile in the rail or a sidebar, as every one of them draws it: its own card
+/// (the theme's `selected_card`, a hairline and a soft shadow), not a grey wash.
+pub fn selected_card<E: gpui::Styled>(element: E, selected: bool, cx: &App) -> E {
+    if !selected {
+        return element;
+    }
+    let theme = cx.theme();
+    element.bg(theme.colors.selected_card).shadow(theme.selected_shadow())
+}
 
 impl RenderOnce for NavRow {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = &cx.theme().colors;
-        let (hover, pressed, selected_bg, accent) = (c.hover, c.pressed, c.selected, c.accent);
+        let (hover, pressed, selected_bg, accent) = (c.hover, c.pressed, c.selected_card, c.accent);
         let text = if self.disabled {
             c.text_faint
         } else if self.selected || !self.muted {
@@ -143,7 +153,7 @@ impl RenderOnce for NavRow {
         } else if self.selected {
             c.text
         } else {
-            c.text_muted
+            c.icon
         };
         let group: SharedString = format!("row-{:?}", self.id).into();
 
@@ -159,12 +169,10 @@ impl RenderOnce for NavRow {
             .rounded(radius::NAV)
             .border_1()
             .border_color(gpui::transparent_black())
-            .text_ui(TypeSize::Small)
+            .text_ui(TypeSize::Body)
             .text_color(text);
 
-        if self.selected {
-            row = row.bg(selected_bg).medium();
-        }
+        row = selected_card(row, self.selected, cx);
         if self.cursor {
             row = row.border_color(accent);
             if !self.selected {
@@ -181,7 +189,7 @@ impl RenderOnce for NavRow {
                 .cursor_pointer()
                 .tab_index(0)
                 .when_selected_or(self.selected, selected_bg, hover)
-                .active(move |s| s.bg(pressed))
+                .when(!self.selected, |row| row.active(move |s| s.bg(pressed)))
                 .focus_visible(move |s| s.border_color(accent).bg(hover));
             if let Some(handler) = self.on_click {
                 row = row.on_click(move |event, window, cx| handler(event, window, cx));
@@ -346,7 +354,7 @@ impl ListRow {
                 .bg(c.sunken)
                 .border_1()
                 .border_color(c.border)
-                .child(Icon::new(icon).size(IconSize::Card).color(c.text_muted))
+                .child(Icon::new(icon).size(IconSize::Card).color(c.icon))
                 .into_any_element(),
         );
         self

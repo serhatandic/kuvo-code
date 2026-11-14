@@ -188,6 +188,8 @@ pub struct TextField {
     disabled: bool,
     /// What's wrong with the text, shown under the field with a red edge.
     error: Option<SharedString>,
+    /// Drawn as dots and never copied (a key).
+    masked: bool,
     layout: Option<Layout>,
     /// Where Up and Down aim, so moving through short lines keeps the column.
     goal_x: Option<Pixels>,
@@ -221,6 +223,7 @@ impl TextField {
             bare: false,
             disabled: false,
             error: None,
+            masked: false,
             layout: None,
             goal_x: None,
             scroll: px(0.),
@@ -251,6 +254,12 @@ impl TextField {
     /// Whether Return submits (the default) or adds a line.
     pub fn submits_on_enter(mut self, submits: bool) -> Self {
         self.submits = submits;
+        self
+    }
+
+    /// Drawn as a dot a character, and never copied or cut: for a key or a password.
+    pub fn masked(mut self) -> Self {
+        self.masked = true;
         self
     }
 
@@ -638,13 +647,13 @@ impl TextField {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() {
+        if !self.selection.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(self.content[self.selection.clone()].to_string()));
         }
     }
 
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() {
+        if !self.selection.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(self.content[self.selection.clone()].to_string()));
             self.edit(self.selection.clone(), "", EditKind::Other, cx);
         }

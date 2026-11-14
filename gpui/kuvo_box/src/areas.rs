@@ -127,6 +127,15 @@ pub enum Level {
     Over,
 }
 
+/// Which of an account's two rings a window is drawn as: the short one (a 5-hour session) outside,
+/// the long one (the week) inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Span {
+    Short,
+    Long,
+}
+
 /// One window of a plan's limits.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct LimitWindow {
@@ -144,6 +153,9 @@ pub struct LimitWindow {
     // BOX-NEEDED: a window's level, `windows[].level: calm|near|over` in `GET kuvo/agents/api/kuvo/limits`' rows, so every client colours alike (#711).
     #[serde(default)]
     pub level: Option<Level>,
+    // BOX-NEEDED: which ring a window is, `windows[].span: short|long` in `GET kuvo/agents/api/kuvo/limits`' rows (the short window outside, the long one inside), so no client works out which is which from its minutes (#711).
+    #[serde(default)]
+    pub span: Option<Span>,
 }
 
 /// An account across your computers, as the limits' `rows` list it.
@@ -193,6 +205,14 @@ impl Account {
     /// now isn't known), as KuvoClient's `windows(at:)`.
     pub fn windows_at(&self, now: f64) -> impl Iterator<Item = &LimitWindow> {
         self.windows.iter().filter(move |window| window.resets_at.is_none_or(|at| at > now))
+    }
+
+    /// The rings to draw, outside first: the box's short and long windows still current where it
+    /// says which is which (one where it has only one); else the window with the least left, alone.
+    pub fn rings(&self, now: f64) -> Vec<&LimitWindow> {
+        let spanned = |span: Span| self.windows_at(now).find(|window| window.span == Some(span));
+        let rings: Vec<&LimitWindow> = [spanned(Span::Short), spanned(Span::Long)].into_iter().flatten().collect();
+        if rings.is_empty() { self.tightest(now).into_iter().collect() } else { rings }
     }
 
     /// The window with the least left, as the ring shows it (KuvoClient's `tightest(at:)`).
@@ -389,7 +409,7 @@ mod tests {
         assert_eq!(row(r#"{"service":"codex","agent":"codex"}"#).title(), "Codex");
         assert_eq!(row(r#"{"service":"opencode"}"#).title(), "OpenCode Go");
         assert_eq!(row(r#"{"service":"claude","agent":"claude","name":"Claude (studio)","label":"Work"}"#).title(), "Claude (studio)");
-        let window = |minutes: Option<u32>, model: Option<&str>, name: Option<&str>| LimitWindow { id: "w".into(), used: 0., resets_at: None, minutes, model: model.map(str::to_owned), name: name.map(str::to_owned), level: None };
+        let window = |minutes: Option<u32>, model: Option<&str>, name: Option<&str>| LimitWindow { id: "w".into(), used: 0., resets_at: None, minutes, model: model.map(str::to_owned), name: name.map(str::to_owned), level: None, span: None };
         assert_eq!(window(Some(300), None, None).title(), "Session");
         assert_eq!(window(Some(10_080), Some("Sonnet"), None).title(), "Sonnet");
         assert_eq!(window(Some(43_200), None, None).title(), "Monthly");
@@ -398,5 +418,18 @@ mod tests {
         let account = row(r#"{"service":"codex","windows":[{"id":"a","used":0.9,"resetsAt":100,"read":1},{"id":"b","used":0.4,"resetsAt":500,"read":1},{"id":"c","used":0.2,"read":1}]}"#);
         assert_eq!(account.tightest(50.).map(|window| window.id.as_str()), Some("a"));
         assert_eq!(account.tightest(200.).map(|window| window.id.as_str()), Some("b"));
+        assert_eq!(account.rings(50.).iter().map(|window| window.id.as_str()).collect::<Vec<_>>(), ["a"], "a box that doesn't say spans: one ring");
+    }
+
+    /// Two rings where the box says which window is short and which long; one where it has one.
+    #[test]
+    fn the_rings_are_the_boxs_short_and_long_windows() {
+        let row = |json: &str| serde_json::from_str::<Account>(json).unwrap();
+        let both = row(r#"{"service":"claude","windows":[{"id":"week","used":0.2,"span":"long"},{"id":"model","used":0.9},{"id":"five","used":0.5,"span":"short"}]}"#);
+        assert_eq!(both.rings(0.).iter().map(|window| window.id.as_str()).collect::<Vec<_>>(), ["five", "week"]);
+        let one = row(r#"{"service":"grok","windows":[{"id":"week","used":0.2,"span":"long"}]}"#);
+        assert_eq!(one.rings(0.).len(), 1);
+        let started_over = row(r#"{"service":"codex","windows":[{"id":"five","used":0.5,"span":"short","resetsAt":10},{"id":"week","used":0.2,"span":"long"}]}"#);
+        assert_eq!(started_over.rings(20.).iter().map(|window| window.id.as_str()).collect::<Vec<_>>(), ["week"]);
     }
 }

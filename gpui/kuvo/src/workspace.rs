@@ -376,7 +376,7 @@ impl Workspace {
         self.now = Some(now);
         self.rings.update(cx, |rings, _| rings.set_now(now));
         for (_, view) in self.areas.clone() {
-            view.update(cx, |view, _| view.set_now(now));
+            view.update(cx, |view, cx| view.set_now(now, cx));
         }
     }
 
@@ -1150,7 +1150,10 @@ impl Render for Workspace {
 
         let sessions = self.area == Area::Sessions;
         let content: AnyElement = match (&self.open, self.area_view(self.area)) {
-            (_, Some(view)) if !sessions => areas::placeholder(self.area, view.read(cx).title(), cx),
+            (_, Some(view)) if !sessions => match view.read(cx).settings() {
+                Some(settings) => settings.clone().into_any_element(),
+                None => areas::placeholder(self.area, view.read(cx).title(), cx),
+            },
             (Open::Conversation { view, .. }, _) => view.clone().into_any_element(),
             _ => landing::render(self, window, cx),
         };
@@ -1232,7 +1235,7 @@ impl Render for Workspace {
                         .border_color(c.border)
                         .overflow_hidden()
                         .children(sidebar.map(|sidebar| {
-                            div().id("area-sidebar").debug_selector(|| "area-sidebar".into()).w(px(sidebar::WIDTH)).h_full().flex_none().border_r_1().border_color(c.border).child(sidebar)
+                            div().id("area-sidebar").debug_selector(|| "area-sidebar".into()).w(px(sidebar::WIDTH)).h_full().flex_none().bg(c.sidebar).border_r_1().border_color(c.border).child(sidebar)
                         }))
                         .child(div().relative().flex_1().min_w_0().h_full().child(content))
                         .children(panel),

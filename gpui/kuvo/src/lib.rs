@@ -15,6 +15,7 @@ pub mod entries;
 mod landing;
 pub mod panel;
 pub mod rail;
+pub mod settings;
 pub mod sidebar;
 #[cfg(feature = "stand-in")]
 pub mod stand_in;

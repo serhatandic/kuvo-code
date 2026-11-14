@@ -383,7 +383,7 @@ fn found_row(workspace: &Workspace, id: &str, snippet: &str, cursor: bool, cx: &
     let selected = workspace.opened() == Some(id);
     let open = id.to_owned();
     let selector = format!("found-{id}");
-    let (hover, selected_bg) = (c.hover, c.selected);
+    let (hover, selected_bg) = (c.hover, c.selected_card);
     div()
         .id(SharedString::from(format!("found-{id}")))
         .debug_selector(move || selector)
@@ -395,12 +395,12 @@ fn found_row(workspace: &Workspace, id: &str, snippet: &str, cursor: bool, cx: &
         .rounded(radius::NAV)
         .border_1()
         .border_color(if cursor { c.accent } else { gpui::transparent_black() })
-        .when(selected, |d| d.bg(selected_bg))
+        .map(|d| kuvo_ui::row::selected_card(d, selected, cx))
         .when(cursor && !selected, |d| d.bg(hover))
         .cursor_pointer()
         .hover(move |s| s.bg(if selected { selected_bg } else { hover }))
         .on_click(cx.listener(move |this, _, window, cx| this.open_session(&open, window, cx)))
-        .child(div().truncate().text_ui(TypeSize::Small).text_color(c.text).when(selected, |d| d.medium()).child(title))
+        .child(div().truncate().text_ui(TypeSize::Body).text_color(c.text).child(title))
         .child(div().text_ui(TypeSize::Caption).text_color(c.text_muted).line_clamp(2).child(snippet.trim().to_owned()))
         .into_any_element()
 }
@@ -446,7 +446,7 @@ fn needs_row(workspace: &Workspace, id: &str, asks: &str, cursor: bool, cx: &mut
     };
     let when = facts.and_then(|facts| facts.asked).map(|asked| time::ago(asked, workspace.now())).unwrap_or_default();
     let selected = workspace.opened() == Some(id);
-    let (hover, selected_bg) = (c.hover, c.selected);
+    let (hover, selected_bg) = (c.hover, c.selected_card);
     let open = id.to_owned();
     let selector = format!("needs-{id}");
     div()
@@ -460,7 +460,7 @@ fn needs_row(workspace: &Workspace, id: &str, asks: &str, cursor: bool, cx: &mut
         .border_1()
         .border_color(if cursor { c.accent } else { gpui::transparent_black() })
         .cursor_pointer()
-        .when(selected, |r| r.bg(selected_bg))
+        .map(|r| kuvo_ui::row::selected_card(r, selected, cx))
         .when(cursor && !selected, |r| r.bg(hover))
         .hover(move |s| s.bg(if selected { selected_bg } else { hover }))
         .on_click(cx.listener(move |this, _, window, cx| this.open_session(&open, window, cx)))
@@ -471,8 +471,8 @@ fn needs_row(workspace: &Workspace, id: &str, asks: &str, cursor: bool, cx: &mut
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(div().truncate().text_ui(TypeSize::Small).text_color(c.text).when(selected, |t| t.medium()).child(title))
-                .child(div().truncate().text_ui(TypeSize::Caption).text_color(c.text_muted).child(detail)),
+                .child(div().truncate().text_ui(TypeSize::Body).text_color(c.text).child(title))
+                .child(div().truncate().text_ui(TypeSize::Small).text_color(c.text_muted).child(detail)),
         )
         .child(div().flex_none().text_ui(TypeSize::Caption).text_color(c.accent).child(when))
         .into_any_element()
