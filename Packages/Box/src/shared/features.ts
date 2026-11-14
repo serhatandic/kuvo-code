@@ -33,6 +33,7 @@ export const FEATURES = [
   "bots",
   "bots.edit",
   "bots.events",
+  "bots.held",
   "bots.job",
   "bots.keys",
   "bots.make",

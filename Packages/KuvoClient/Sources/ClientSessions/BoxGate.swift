@@ -17,8 +17,11 @@ public enum BoxGate {
     /// the desktop client (gpui), which draws asks, the queue and "@" and "&" as the box says them;
     /// then `git.files`, `git.changes.path` and `git.branches.worktree`, for its side panel's
     /// Changes and Branches.
+    /// `bots.held` (#668 item 8): an edit to a bot whose computer is away is held by the box asked,
+    /// and no client keeps an outbox of its own.
     public static let required: [String] = [
         "agent-tools.own",
+        "bots.held",
         "folders.tree",
         "git.branches",
         "git.branches.worktree",

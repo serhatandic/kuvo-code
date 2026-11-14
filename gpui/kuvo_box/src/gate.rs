@@ -8,6 +8,7 @@
 /// What this client uses with no way around it on a box that hasn't it.
 pub const REQUIRED: &[&str] = &[
     "agent-tools.own",
+    "bots.held",
     "folders.tree",
     "git.branches",
     "git.branches.worktree",

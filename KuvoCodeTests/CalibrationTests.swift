@@ -160,9 +160,9 @@ import Testing
     }
 
     /// What you changed of a machine's bot while it was away, which an earlier version kept in its
-    /// list to tell the machine, waits for that machine here, shown as you left it; what the
-    /// earlier version kept stays for it.
-    @Test func aChangeAnEarlierVersionHadWaitingForAMachineWaitsHere() async throws {
+    /// list to tell the machine, is kept for this Mac's box to take (`Bots.handOverOldEdits`, which
+    /// holds it for that machine); what the earlier version kept stays for it.
+    @Test func aChangeAnEarlierVersionHadWaitingForAMachineIsKeptForThisMacsBox() async throws {
         defer { Self.clean() }
         let scout = try folder("bot_scout00001", memory: "# Scout's memory\n")
         try savedBefore(macFolder: scout).write(to: botsFile)
@@ -170,15 +170,12 @@ import Testing
 
         let app = AppModel()
         await app.calibration.run(app)
-        let waiting = try #require(app.bots.edits.waiting["bot_away000001"])
+        let waiting = try #require(Bots.oldOutbox()["bot_away000001"])
         #expect(waiting.box == "my-server")
         #expect(waiting.fields["name"]?.string == "Away")
         #expect(waiting.fields["look"]?["color"]?.string == "mint")
-        #expect(app.bots.waitingFor(try #require(app.bots.bot("bot_away000001"))) == "my-server")
-        #expect(app.bots.edits.waiting["bot_scout00001"] == nil, "this Mac's own bot waits for nothing")
+        #expect(Bots.oldOutbox()["bot_scout00001"] == nil, "this Mac's own bot waits for nothing")
         #expect(UserDefaults.standard.dictionary(forKey: "botEditsWaiting") != nil, "kept for the earlier version")
-        // Kept across launches, until its machine takes it.
-        #expect(BotEdits().waiting["bot_away000001"] == waiting)
     }
 
     /// A bot of this Mac whose folder an earlier version left without a description or a note of its

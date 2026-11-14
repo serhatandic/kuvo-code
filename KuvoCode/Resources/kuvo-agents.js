@@ -36492,4 +36492,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 70aa7bbb9880c21aec1cfaca6851c4b9d1c3fc7b540865854d7cd919529cb292
+// Built from Packages/Box/src/agents 45371dc5488ed98be4669a59abe2e957c5b5cb6302907ac1b19846e66ba1b668

@@ -4,7 +4,9 @@
 
 import { isObject } from "../../shared/json";
 import { receiveDocs } from "../documents/exchange";
-import { readEngineFile } from "../engine/client";
+import { bridgeTarget, readEngineFile } from "../engine/client";
+import { changeBot, deleteBot } from "../bots/edit";
+import { heldBack, takeBotEdit, takeBotEdited } from "../bots/held";
 import { leaveAnswer, letterWent } from "../letters/outbox";
 import { takeLetter } from "../letters/take";
 import { callsBack, takeCall } from "../letters/calls";
@@ -17,7 +19,7 @@ import { attentionGiven } from "../notices/hold";
 import { macSign, readLink, updateLink } from "../state";
 import { announce, toldPeers, writeAgents } from "./agents";
 import { takeAgents, vouchedOf } from "./directory";
-import { forgetOldMacs, macsOf, mailFor, openMail, takeLegacyPeers } from "./known";
+import { forgetOldMacs, macsOf, mailFor, openMail, peersOf, takeLegacyPeers } from "./known";
 import { bridgeAsk, takeLimits, takeSeat } from "./seats";
 import { queuesBack, takeWorkQueueMail, tellQueuesAgain } from "../work-queue/across";
 import type { PeerPlaces } from "../engine/client";
@@ -75,6 +77,22 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   // The Work Queue across your computers: what each tells of its queue, numbers' asks and blocks,
   // and items handed between them (PROTOCOL.md, "The Work Queue", "Across your computers").
   if (isObject(payload.workQueue)) takeWorkQueueMail(sender, payload.workQueue, host, places).catch(() => {});
+  // An edit to a bot here that box held while this one was away, done as Edit Bot or Delete Bot…
+  // would, and answered; and the answer to one this box held for that one (PROTOCOL.md,
+  // `kuvo/bots`, "Held for another computer").
+  if (isObject(payload.botEdit)) {
+    const reply = (answer: Record<string, unknown>) => {
+      const link = readLink();
+      const peer = peersOf(link).find(each => each.key === sender.key);
+      const bytes = link && peer && mailFor(peer, { ...answer, at: Date.now() }, link);
+      if (bytes) try { host?.send(bytes); } catch {}
+    };
+    takeBotEdit(sender, payload.botEdit, reply, {
+      change: (bot, change, at) => changeBot(bot, change, readEngineFile, bridgeTarget, undefined, undefined, at),
+      delete: bot => deleteBot(bot, readEngineFile, bridgeTarget),
+    }).catch(() => {});
+  }
+  if (isObject(payload.botEdited)) takeBotEdited(sender, payload.botEdited);
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") {
     letterWent(sender, payload.delivered as unknown as Delivered);
     if (payload.delivered.ok === true) rowsWent(sender, payload.delivered.id);
@@ -106,6 +124,7 @@ export function receiveMail(
     callsBack(sender.key);
     rowsBack();
     queuesBack(sender.key);
+    heldBack(sender.key);
   }
   if (macsOf(link).includes(sender.key)) heardFromMac(sender.key, payload);
   const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;
