@@ -596,6 +596,34 @@ mod tests {
         assert_eq!((label.as_ref(), target.as_deref()), ("Running", Some("npm test …")));
     }
 
+    /// Every client's sample steps (`Packages/KuvoLink/Vectors/tool-steps.json`, PROTOCOL.md's "Tool
+    /// steps"): each one's target, and what it opens to.
+    #[test]
+    fn every_sample_step_shows_its_target_and_opens_to_what_the_vectors_say() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/Vectors/tool-steps.json");
+        let vectors: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for case in vectors["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let Content::Tool { name: tool, state, .. } = serde_json::from_value(case["step"].clone()).unwrap() else { panic!("{name}: not a tool step") };
+            let busy = matches!(state["status"].as_str(), Some("running" | "streaming" | "pending"));
+            let (_, _, target) = tool_label(&tool, &state, busy);
+            assert_eq!(target.as_deref(), case["target"].as_str(), "{name}: its target");
+            let opened = details(&tool, &state);
+            match &case["opens"] {
+                Value::String(nothing) if nothing == "nothing" => assert_eq!(opened, None, "{name}"),
+                opens if opens.get("output").is_some() => {
+                    let output = &opens["output"];
+                    assert_eq!(opened, Some(Details::Output { command: output["command"].as_str().map(str::to_owned), text: output["text"].as_str().unwrap().to_owned() }), "{name}");
+                }
+                opens => {
+                    let Some(Details::Changes(files)) = opened else { panic!("{name}: no changes") };
+                    let shown: Vec<Value> = files.iter().map(|file| json!({ "file": file.file, "added": file.added, "removed": file.removed })).collect();
+                    assert_eq!(Value::Array(shown), opens["changes"], "{name}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_step_opens_to_its_changes_its_output_or_its_results_and_a_read_to_nothing() {
         let patch = "--- a\n+++ b\n@@ -1,2 +1,2 @@\n-old\n+new\n same\n";

@@ -9347,7 +9347,7 @@
         }
        }
       },
-      "items": {
+      "items?": {
        "oneOf": [
         {
          "list": {

@@ -1232,8 +1232,9 @@ the same for every client and with none connected, and keeps them in `run/queues
   take the message. A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
   queue and what waited for it with it.
-- **Every message waiting, as one list** (`queue.items`): `GET kuvo/sessions/<id>/queue` also
-  answers `items`, every message waiting in the order clients show it (above), whatever holds it:
+- **Every message waiting, as one list** (`queue.items`): `GET kuvo/sessions/<id>/queue?items=1`
+  also answers `items` (asked for, as it asks the engine too: a client that doesn't draw them gets
+  the box's own state at once, without it), every message waiting in the order clients show it (above), whatever holds it:
   `[{id, words, files, keyword, from, on, delivery, held}]`. `words` is what was written, without
   what the box added for the agent (a message's kept parts' words; another agent's letter, a
   wake-up or the box's own note in its own words, its line); `files` its files' names; `keyword`
@@ -1279,7 +1280,9 @@ Auto's reviewer took up.
     only after another answer), `questions: [{key, title, question, options: [{value, label,
     description}], multiple, custom, required}]`, asked one at a time: `multiple` takes several,
     `custom` takes words of your own (one with no choices does), `required` needs an answer.
-  - `other`: anything else it waits on you for: a form a card can't take (an MCP server's, fields
+  - `other`: anything else it waits on you for: a form a card can't take (an MCP server's: one
+    filed under no session, `global`, in the conversation's folder, is its own once one of its
+    steps, or its subagents', runs a tool of that server, as the Mac's conversation takes it; fields
     a card can't take), or what the box asks you for it or its subagents (a command outside the
     sandbox, something from the vault, as `kuvo/sandbox/asks` and `kuvo/vault/asks` list them;
     only the box's long-running process has them). `message` says what it asks, and a client says
@@ -1297,6 +1300,27 @@ Auto's reviewer took up.
   or `{"dismiss": true}` for any form (not the box's own asks). `200 {}`; `404 {"message"}` when it isn't waiting any more;
   `400 {"message"}` for an answer that doesn't fit (a choice it doesn't offer, a required one
   missing, words for `other`); `503` while its place isn't answering, `502` when it refused.
+
+### Tool steps
+
+What a step of the agent's shows when it's opened, which every client draws from the engine's
+message alone (a step is `{type: "tool", id, name, state}`; `state` has `status`, `input`, and once
+it's done `content` and `metadata`). The engine's own tools, and the coding agents' as their bridge
+names them, by the same names (`bash`, in a conversation from before the engine named it, is
+`shell`). Sample steps every client is held to: `Packages/KuvoLink/Vectors/tool-steps.json`.
+
+| Tool | Its target (on its row) | Opened, it shows |
+| --- | --- | --- |
+| `shell` (`bash`) | `input.command`, its first line | `input.command` whole, then its `content` text (what it printed), once it's `completed`; nothing printed says so |
+| `edit`, `multiedit`, `patch`, `apply_patch`, `write` | `input.filePath` (or `path`) | each of `metadata.files` (`{file, patch, additions, deletions, status}`) as a diff of its unified `patch`, with `+additions −deletions` on the row |
+| `grep` | `input.pattern` | its `content` text (what it found) |
+| `glob`, `list`, `ls` | `input.pattern` (or `path`) | its `content` text |
+| `websearch` | `input.query` | its `content` text |
+| `read`, `webfetch`, `task`, `todowrite`, any other | as its name says | nothing more |
+
+Any step whose `metadata.files` holds a patch opens to it, whatever its name. A step still
+`running` (or `streaming`, `pending`) opens to nothing; one `failed` (`error`) says its `error`'s
+first line under its row. A long output folds to its first lines.
 
 ### Mentions
 

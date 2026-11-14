@@ -59,6 +59,8 @@ export const QUEUE_ITEM = object({
 /** A session's queue with every message waiting, in the order clients show them (`items`: null
  * while the place it runs can't be read). */
 export const QUEUE_SHOWN = object({ paused: bool, held: list(string), "waiting?": list(WAITING), items: nullable(list(QUEUE_ITEM)) });
+/** A session's queue as `GET …/queue` answers it: `items` only when asked (`?items=1`). */
+export const QUEUE_READ = object({ paused: bool, held: list(string), "waiting?": list(WAITING), "items?": nullable(list(QUEUE_ITEM)) });
 
 export type QueueItem = Infer<typeof QUEUE_ITEM>;
 export type QueueShown = Infer<typeof QUEUE_SHOWN>;
@@ -234,7 +236,7 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/list/events", answers: { 200: SESSION_LIST, 405: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/models", answers: { 200: SESSION_MODELS, 400: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/models/offered", answers: { 200: MODELS_OFFERED, 503: REFUSED } },
-  { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE_SHOWN } },
+  { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE_READ } },
   { route: "GET kuvo/sessions/:id/queue/events", answers: { 200: QUEUE_SHOWN } },
   { route: "GET kuvo/sessions/:id/asks", answers: { 200: SESSION_ASKS, 404: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/asks/events", answers: { 200: SESSION_ASKS, 404: REFUSED, 503: REFUSED } },

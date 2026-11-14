@@ -86,3 +86,15 @@ test("without what's suggested, for no such conversation, or one whose place doe
   expect((await ask(handler, "GET", "kuvo/sessions/ses_none/mentions?for=files")).status).toBe(404)
   expect((await ask(handler, "GET", "kuvo/sessions/ses_broken/mentions?for=agents")).status).toBe(503)
 })
+
+test("a listing shared by two requests goes on for the one still waiting when the first stops", async () => {
+  const { filesFor } = await import("../src/link/areas/mentions")
+  const first = new AbortController()
+  const second = new AbortController()
+  const roots = [join(root, "api")]
+  const one = filesFor(roots, false, first.signal)
+  const two = filesFor(roots, false, second.signal)
+  first.abort()
+  expect((await two).map(file => file.path)).toEqual(["README.md"])
+  await one.catch(() => {})
+})

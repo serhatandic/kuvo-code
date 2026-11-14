@@ -40453,7 +40453,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "77ecffe52e43";
+var BRIDGE_VERSION = "f2c653f6d04b";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45650,7 +45650,8 @@ async function* queueRoute(context, match) {
   if (action === "queue" && !step && !item) {
     if (method !== "GET")
       return yield* json(405, {});
-    return yield* json(200, await queueShown(session, targetsOf({ readEngine, bridge })));
+    const wantsItems = new URLSearchParams(request.path.split("?")[1] ?? "").get("items") === "1";
+    return yield* json(200, wantsItems ? await queueShown(session, targetsOf({ readEngine, bridge })) : shownQueue(queueOf(session)));
   }
   if (step === "events") {
     if (method !== "GET")
@@ -46018,6 +46019,33 @@ async function* glanceRoute(context, match) {
 
 // Packages/Box/src/link/areas/session-asks.ts
 var SESSION_ASKS_ROUTE = /^kuvo\/sessions\/([^/]+)\/asks(?:\/([^/]+))?$/;
+async function allAskersOf(target, session, wait) {
+  const found = [session];
+  for (let at = 0;at < found.length && at < 40; at++) {
+    if (at > 0 && found.length > 30)
+      break;
+    let listed;
+    try {
+      listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at])}`, undefined, wait());
+    } catch {
+      throw new Unreached("The engine isn't answering.");
+    }
+    for (const child of Array.isArray(listed) ? listed : [])
+      if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id))
+        found.push(child.id);
+  }
+  return found;
+}
+async function waitsOnServer(target, askers, server, wait) {
+  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
+  for (const asker of askers) {
+    const page = await call(target, "GET", `/api/session/${encodeURIComponent(asker)}/message?limit=8&order=desc`, undefined, wait()).catch(() => null);
+    const steps = (Array.isArray(page) ? page : []).filter((message) => isObject(message) && message.type === "assistant").flatMap((message) => Array.isArray(message.content) ? message.content : []);
+    if (steps.some((block) => isObject(block) && block.type === "tool" && isObject(block.state) && block.state.status === "running" && (String(block.name ?? "").startsWith(name + "_") || block.name === "execute" && String(isObject(block.state.input) ? block.state.input.code ?? "" : "").includes(server))))
+      return true;
+  }
+  return false;
+}
 var text5 = (value) => typeof value === "string" ? value : null;
 var strings = (value) => Array.isArray(value) ? value.filter((each) => typeof each === "string") : [];
 function relativeTo(folder, file) {
@@ -46109,7 +46137,7 @@ async function asksOf(target, session, folder, signal) {
   const home = homeFolder();
   const found = [];
   const timeOf = (id, given) => noted.get(id) ?? (typeof given === "number" ? given : 0);
-  const askers = await askersOf(target, session, wait());
+  const askers = await allAskersOf(target, session, wait);
   for (const asker of askers) {
     const at = `/api/session/${encodeURIComponent(asker)}`;
     let permissions, forms;
@@ -46138,6 +46166,14 @@ async function asksOf(target, session, folder, signal) {
       const shown = questions ? { id: form.id, kind: "question", session: asker, title, questions } : { id: form.id, kind: "other", session: asker, title, message: describeForm(form), dismiss: true };
       found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker, form: { fields } } });
     }
+  }
+  const shared = folder ? await call(target, "GET", "/api/session/global/form", undefined, wait(), folder).catch(() => null) : null;
+  for (const form of Array.isArray(shared) ? shared : []) {
+    const server = isObject(form) && isObject(form.metadata) ? text5(form.metadata.server) : null;
+    if (!isObject(form) || typeof form.id !== "string" || !server || !await waitsOnServer(target, askers, server, wait))
+      continue;
+    const shown = { id: form.id, kind: "other", session, title: text5(form.title) || server, message: describeForm(form), dismiss: true };
+    found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker: "global", folder } });
   }
   const asking = new Set(askers);
   for (const asked of listSandboxAsks()) {
@@ -46289,7 +46325,7 @@ async function* sessionAsksRoute(context, match) {
     return yield* json(400, { message: elsewhere ? "Answer this one in Kuvo Code on a Mac or a phone." : "This one is answered where it was asked: only dismissing it goes from here." });
   }
   try {
-    await call(found.target, sent.method, sent.route, sent.body, AbortSignal.timeout(15000));
+    await call(found.target, sent.method, sent.route, sent.body, AbortSignal.timeout(15000), found.folder);
   } catch (error) {
     const status = error.status;
     if (status === 404)
@@ -46381,19 +46417,37 @@ function filesFor(roots, dated, signal) {
   const key = (withDates) => JSON.stringify([roots, withDates]);
   const fresh = (withDates) => {
     const kept = listed2.get(key(withDates));
-    return kept && Date.now() - kept.at < LISTED_FOR ? kept.files : null;
+    return kept && Date.now() - kept.at < LISTED_FOR ? { key: key(withDates), kept } : null;
   };
-  const kept = fresh(dated) ?? (dated ? null : fresh(true));
-  if (kept)
-    return kept;
-  const files = mentionableFiles(roots, dated, signal);
-  listed2.set(key(dated), { at: Date.now(), files });
-  files.catch(() => listed2.delete(key(dated)));
-  if (signal)
-    signal.addEventListener("abort", () => listed2.delete(key(dated)), { once: true });
+  const found = fresh(dated) ?? (dated ? null : fresh(true));
+  const join = (at, listing) => {
+    listing.waiting += 1;
+    signal?.addEventListener("abort", () => {
+      listing.waiting -= 1;
+      if (!listing.done && listing.waiting === 0) {
+        listing.stop.abort();
+        if (listed2.get(at) === listing)
+          listed2.delete(at);
+      }
+    }, { once: true });
+    return listing.files;
+  };
+  if (found)
+    return join(found.key, found.kept);
+  const stop = new AbortController;
+  const listing = { at: Date.now(), files: mentionableFiles(roots, dated, stop.signal), waiting: 0, stop, done: false };
+  const at = key(dated);
+  listed2.set(at, listing);
+  listing.files.then(() => {
+    listing.done = true;
+  }, () => {
+    listing.done = true;
+    if (listed2.get(at) === listing)
+      listed2.delete(at);
+  });
   if (listed2.size > 20)
     listed2.delete(listed2.keys().next().value);
-  return files;
+  return join(at, listing);
 }
 async function* mentionsRoute(context, match) {
   const { request, readEngine, bridge, signal, json } = context;

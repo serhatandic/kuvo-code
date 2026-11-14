@@ -109,21 +109,44 @@ export function agentDetail(agent: Named["agents"][number]): string {
 // The files listed for "@" a moment ago (or being listed), by folders and whether dated: what's
 // typed next ranks the same list rather than read every folder again for each letter. A dated list
 // serves what's typed too (its order is the ranking's then).
-const listed = new Map<string, { at: number; files: Promise<MentionableFile[]> }>();
+/** A folder's files as last listed, for a moment: one listing shared by every request that comes
+ * meanwhile, stopped only once every one of them has stopped waiting for it. */
+interface Listing {
+  at: number;
+  files: Promise<MentionableFile[]>;
+  waiting: number;
+  stop: AbortController;
+  done: boolean;
+}
+const listed = new Map<string, Listing>();
 const LISTED_FOR = 5_000;
 
-function filesFor(roots: string[], dated: boolean, signal?: AbortSignal): Promise<MentionableFile[]> {
+/** `roots`' files (`dated`: with when each changed), listed once for every request a moment apart.
+ * A request that stops (`signal`) stops the listing only when no other waits for it. */
+export function filesFor(roots: string[], dated: boolean, signal?: AbortSignal): Promise<MentionableFile[]> {
   const key = (withDates: boolean) => JSON.stringify([roots, withDates]);
-  const fresh = (withDates: boolean) => { const kept = listed.get(key(withDates)); return kept && Date.now() - kept.at < LISTED_FOR ? kept.files : null; };
-  const kept = fresh(dated) ?? (dated ? null : fresh(true));
-  if (kept) return kept;
-  const files = mentionableFiles(roots, dated, signal);
-  listed.set(key(dated), { at: Date.now(), files });
+  const fresh = (withDates: boolean) => { const kept = listed.get(key(withDates)); return kept && Date.now() - kept.at < LISTED_FOR ? { key: key(withDates), kept } : null; };
+  const found = fresh(dated) ?? (dated ? null : fresh(true));
+  const join = (at: string, listing: Listing) => {
+    listing.waiting += 1;
+    signal?.addEventListener("abort", () => {
+      listing.waiting -= 1;
+      if (!listing.done && listing.waiting === 0) {
+        listing.stop.abort();
+        if (listed.get(at) === listing) listed.delete(at);
+      }
+    }, { once: true });
+    return listing.files;
+  };
+  if (found) return join(found.key, found.kept);
+  const stop = new AbortController();
+  const listing: Listing = { at: Date.now(), files: mentionableFiles(roots, dated, stop.signal), waiting: 0, stop, done: false };
+  const at = key(dated);
+  listed.set(at, listing);
   // (One that failed, or was stopped, isn't kept.)
-  files.catch(() => listed.delete(key(dated)));
-  if (signal) signal.addEventListener("abort", () => listed.delete(key(dated)), { once: true });
+  listing.files.then(() => { listing.done = true; }, () => { listing.done = true; if (listed.get(at) === listing) listed.delete(at); });
   if (listed.size > 20) listed.delete(listed.keys().next().value!);
-  return files;
+  return join(at, listing);
 }
 
 // `GET kuvo/sessions/<id>/mentions?for=files|agents&q=<typed>[&limit=<n>]`.

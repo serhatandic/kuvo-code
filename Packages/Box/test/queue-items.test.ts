@@ -82,7 +82,7 @@ async function stopAndAdd(): Promise<string> {
 
 test("the queue lists every message waiting, in the order they go, as each was written", async () => {
   const box = await stopAndAdd()
-  const { status, json } = await ask(handler, "GET", "kuvo/sessions/ses_q/queue")
+  const { status, json } = await ask(handler, "GET", "kuvo/sessions/ses_q/queue?items=1")
   expect(status).toBe(200)
   expect(json.paused).toBe(true)
   expect(json.held).toEqual(["msg_steer"])
@@ -103,7 +103,7 @@ test("Edit takes back one the engine holds, with its words and files for the com
   })
   expect(got).toContainEqual({ method: "DELETE", path: "/api/session/ses_q/inbox/msg_steer" })
   // Gone from the list, and from what's held.
-  const now = (await ask(handler, "GET", "kuvo/sessions/ses_q/queue")).json
+  const now = (await ask(handler, "GET", "kuvo/sessions/ses_q/queue?items=1")).json
   expect(now.held).toEqual([])
   expect(now.items.map((each: any) => each.id)).toEqual(["msg_mail", box])
   // Not waiting anywhere: 404.
@@ -117,10 +117,14 @@ test("one the agent took first isn't taken back, and one the engine keeps says s
 })
 
 test("while the engine can't be read the queue says what waits on the box, and that its items can't be said", async () => {
-  const { json } = await ask(handler, "GET", "kuvo/sessions/ses_broken/queue")
+  const { json } = await ask(handler, "GET", "kuvo/sessions/ses_broken/queue?items=1")
   expect(json).toEqual({ paused: false, held: [], items: null })
   // A session no place has: nothing waits for it.
-  expect((await ask(handler, "GET", "kuvo/sessions/ses_none/queue")).json.items).toEqual([])
+  expect((await ask(handler, "GET", "kuvo/sessions/ses_none/queue?items=1")).json.items).toEqual([])
+  // Unasked, the box's own state at once, the engine not asked (the Mac's and the phone's reads).
+  const before = got.length
+  expect((await ask(handler, "GET", "kuvo/sessions/ses_q/queue")).json).toEqual({ paused: false, held: [] })
+  expect(got.length).toBe(before)
 })
 
 test("followed, a session's queue comes again as the engine's inbox for it changes", async () => {

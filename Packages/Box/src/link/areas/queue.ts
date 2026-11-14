@@ -65,7 +65,10 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   const session = decodeURIComponent(rawSession);
   if (action === "queue" && !step && !item) {
     if (method !== "GET") return yield* json(405, {});
-    return yield* json(200, await queueShown(session, targetsOf({ readEngine, bridge })));
+    // Its items only when asked (`?items=1`): a client that doesn't draw them (the Mac's, a
+    // phone's) gets the box's own state at once, without the engine asked.
+    const wantsItems = new URLSearchParams(request.path.split("?")[1] ?? "").get("items") === "1";
+    return yield* json(200, wantsItems ? await queueShown(session, targetsOf({ readEngine, bridge })) : shownQueue(queueOf(session)));
   }
   // One session's queue followed, its items too: again as the box changes it, or the engine's
   // inbox for it does (`session.inbox.*`), and a look each second at what another process changed.

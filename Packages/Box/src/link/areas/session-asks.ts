@@ -12,7 +12,7 @@ import { listAsks as listVaultAsks } from "../vault/asks";
 import { homeFolder } from "../home";
 import { targetsOf } from "../letters/tools";
 import { alwaysWords, describeForm, type EngineForm } from "../notices/news";
-import { askersOf, callOf } from "../work/answers";
+import { callOf } from "../work/answers";
 import { listAskReviews } from "../work/reviewing";
 import { followedLive } from "../follow";
 import { sessionHere, Unreached } from "./glance";
@@ -57,6 +57,40 @@ interface Found {
   target: Target;
   asker: string;
   form?: { fields: Field[] };
+  /** For an MCP server's form, filed under no session (`global`): the folder it's in. */
+  folder?: string;
+}
+
+/** The session and its subagents (theirs too, a few levels down), which ask in its name: each
+ * listing with a time of its own, and one that fails throws `Unreached` (what was said last stands,
+ * rather than its subagents' asks seeming gone). */
+async function allAskersOf(target: Target, session: string, wait: () => AbortSignal): Promise<string[]> {
+  const found = [session];
+  for (let at = 0; at < found.length && at < 40; at++) {
+    if (at > 0 && found.length > 30) break;
+    let listed: unknown;
+    try {
+      listed = await call(target, "GET", `/api/session?limit=50&order=desc&parentID=${encodeURIComponent(found[at]!)}`, undefined, wait());
+    } catch {
+      throw new Unreached("The engine isn't answering.");
+    }
+    for (const child of Array.isArray(listed) ? listed : []) if (isObject(child) && typeof child.id === "string" && child.parentID === found[at] && !found.includes(child.id)) found.push(child.id);
+  }
+  return found;
+}
+
+/** Whether one of `askers` has a step running that an MCP server named `server` asks for (its
+ * tools are named after it; Code Mode's `execute` names it in its code), as the Mac's conversation
+ * takes the forms its tools wait on. */
+async function waitsOnServer(target: Target, askers: string[], server: string, wait: () => AbortSignal): Promise<boolean> {
+  const name = server.replace(/[^\p{L}\p{N}_-]/gu, "_");
+  for (const asker of askers) {
+    const page = await call(target, "GET", `/api/session/${encodeURIComponent(asker)}/message?limit=8&order=desc`, undefined, wait()).catch(() => null);
+    const steps = (Array.isArray(page) ? page : []).filter(message => isObject(message) && message.type === "assistant").flatMap(message => (Array.isArray(message.content) ? message.content : []));
+    if (steps.some(block => isObject(block) && block.type === "tool" && isObject(block.state) && block.state.status === "running"
+      && (String(block.name ?? "").startsWith(name + "_") || (block.name === "execute" && String(isObject(block.state.input) ? block.state.input.code ?? "" : "").includes(server))))) return true;
+  }
+  return false;
 }
 
 const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
@@ -157,7 +191,7 @@ async function asksOf(target: Target, session: string, folder: string, signal?: 
   const home = homeFolder();
   const found: { at: number; ask: Found }[] = [];
   const timeOf = (id: string, given: unknown) => noted.get(id) ?? (typeof given === "number" ? given : 0);
-  const askers = await askersOf(target, session, wait());
+  const askers = await allAskersOf(target, session, wait);
   for (const asker of askers) {
     const at = `/api/session/${encodeURIComponent(asker)}`;
     let permissions: unknown, forms: unknown;
@@ -188,6 +222,14 @@ async function asksOf(target: Target, session: string, folder: string, signal?: 
         : { id: form.id, kind: "other", session: asker, title, message: describeForm(form as EngineForm), dismiss: true };
       found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker, form: { fields } } });
     }
+  }
+  // What MCP servers ask in its folder (filed under no session), those its steps wait on.
+  const shared = folder ? await call(target, "GET", "/api/session/global/form", undefined, wait(), folder).catch(() => null) : null;
+  for (const form of (Array.isArray(shared) ? shared : []) as (EngineForm & { time?: { created?: unknown } })[]) {
+    const server = isObject(form) && isObject(form.metadata) ? text((form.metadata as Record<string, unknown>).server) : null;
+    if (!isObject(form) || typeof form.id !== "string" || !server || !(await waitsOnServer(target, askers, server, wait))) continue;
+    const shown: SessionAsk = { id: form.id, kind: "other", session, title: text(form.title) || server, message: describeForm(form), dismiss: true };
+    found.push({ at: timeOf(form.id, form.time?.created), ask: { shown, target, asker: "global", folder } });
   }
   // What the box itself asks you for it: answered where its own cards are (the Mac, a phone).
   const asking = new Set(askers);
@@ -317,7 +359,7 @@ export async function* sessionAsksRoute(context: RouteContext, match: RegExpMatc
     return yield* json(400, { message: elsewhere ? "Answer this one in Kuvo Code on a Mac or a phone." : "This one is answered where it was asked: only dismissing it goes from here." });
   }
   try {
-    await call(found.target, sent.method, sent.route, sent.body, AbortSignal.timeout(15_000));
+    await call(found.target, sent.method, sent.route, sent.body, AbortSignal.timeout(15_000), found.folder);
   } catch (error) {
     const status = (error as { status?: number }).status;
     if (status === 404) return yield* json(404, GONE);
