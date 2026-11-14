@@ -35950,7 +35950,7 @@ class LimitsPeers {
   }
   directorySaid() {
     const boundary = this.boundary();
-    const urgent = boundary !== this.noticeBoundary;
+    let urgent = boundary !== this.noticeBoundary;
     this.noticeBoundary = boundary;
     const here = new Set(this.directory.peerBoxes().map((box) => box.key));
     const yours = new Set([...here].filter((key) => this.ours(key)));
@@ -35991,6 +35991,7 @@ class LimitsPeers {
       this.save();
       this.limits.peersChanged();
     }
+    urgent ||= gone;
     this.tell(urgent);
   }
   load() {
@@ -36491,4 +36492,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b258c95547c1edf697f4b81815ce8341337dfb00564cff25ae5cd6eabac551a3
+// Built from Packages/Box/src/agents 70aa7bbb9880c21aec1cfaca6851c4b9d1c3fc7b540865854d7cd919529cb292
