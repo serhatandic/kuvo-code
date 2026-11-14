@@ -83,12 +83,21 @@ pub struct UserMessage {
     pub files: Vec<Value>,
     #[serde(default)]
     pub metadata: Option<Value>,
+    /// The parts its box read of it, for one from before that keeps none (`kuvo/messages/parts`).
+    #[serde(skip)]
+    pub read_parts: Option<Parts>,
 }
 
 impl UserMessage {
     /// The parts its box kept with it, if it kept any.
     pub fn kept_parts(&self) -> Option<Parts> {
         Parts::kept(self.metadata.as_ref())
+    }
+
+    /// Its parts, to draw it by: kept with it, else as its box read them, else (not read yet, or its
+    /// box couldn't) its text as it is.
+    pub fn parts(&self) -> Parts {
+        self.kept_parts().or_else(|| self.read_parts.clone()).unwrap_or_else(|| Parts::words(self.text.clone()))
     }
 
     /// One of the box's own notes to the agent (`kuvo.note`), which has no parts to read.
@@ -268,8 +277,51 @@ pub struct Conversation {
     pub earlier: Option<String>,
     /// Whether an earlier page has been read (the way back is then its own, not the newest's).
     paged: bool,
-    /// The parts its box read of messages from before, by id, with the text each was read from.
-    read_parts: HashMap<String, (String, Parts)>,
+}
+
+/// The parts boxes read of messages from before (`kuvo/messages/parts`), by id, with the text each
+/// was read from: asked once for each message, and put on it each time it's read again.
+#[derive(Debug, Default)]
+pub struct ReadParts(HashMap<String, (String, Parts)>);
+
+impl ReadParts {
+    /// Of `messages`, yours and other agents' whose parts are still to be read from their box (none
+    /// kept with them, none read yet, not the box's own notes): their ids and texts. (A message that
+    /// ran one of the engine's commands is read too, for now: which did isn't kept yet.)
+    pub fn unread(&self, messages: &[Message]) -> Vec<(String, String)> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::User(user) if !user.is_box_note() && user.kept_parts().is_none() && self.0.get(&user.id).is_none_or(|(text, _)| *text != user.text) => {
+                    Some((user.id.clone(), user.text.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What a box read, kept by id.
+    pub fn take(&mut self, read: Vec<((String, String), Parts)>) {
+        if self.0.len() > 20_000 {
+            self.0.clear();
+        }
+        for ((id, text), parts) in read {
+            self.0.insert(id, (text, parts));
+        }
+    }
+
+    /// Puts what was read on each of `messages` it's for.
+    pub fn apply(&self, messages: &mut [Message]) {
+        for message in messages {
+            if let Message::User(user) = message
+                && user.read_parts.is_none()
+                && let Some((text, parts)) = self.0.get(&user.id)
+                && *text == user.text
+            {
+                user.read_parts = Some(parts.clone());
+            }
+        }
+    }
 }
 
 /// What an event asks of what's shown.
@@ -285,39 +337,7 @@ pub enum Applied {
 
 impl Conversation {
     pub fn new(session: impl Into<String>, place: Where) -> Conversation {
-        Conversation { session: session.into(), place, messages: Vec::new(), running: false, earlier: None, paged: false, read_parts: HashMap::new() }
-    }
-
-    /// A message's parts, to draw it by: kept with it, else as its box read them, else (not read
-    /// yet, or its box couldn't) its text as it is.
-    pub fn parts_of(&self, user: &UserMessage) -> Parts {
-        user.kept_parts()
-            .or_else(|| self.read_parts.get(&user.id).filter(|(text, _)| *text == user.text).map(|(_, parts)| parts.clone()))
-            .unwrap_or_else(|| Parts::words(user.text.clone()))
-    }
-
-    /// Of `messages`, yours and other agents' whose parts are still to be read from their box (none
-    /// kept with them, none read yet, not the box's own notes): their ids and texts.
-    pub fn unread_parts(&self, messages: &[Message]) -> Vec<(String, String)> {
-        messages
-            .iter()
-            .filter_map(|message| match message {
-                Message::User(user) if !user.is_box_note() && user.kept_parts().is_none() && self.read_parts.get(&user.id).is_none_or(|(text, _)| *text != user.text) => {
-                    Some((user.id.clone(), user.text.clone()))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// What its box read of messages from before (`kuvo/messages/parts`), kept by id.
-    pub fn take_parts(&mut self, read: Vec<((String, String), Parts)>) {
-        if self.read_parts.len() > 20_000 {
-            self.read_parts.clear();
-        }
-        for ((id, text), parts) in read {
-            self.read_parts.insert(id, (text, parts));
-        }
+        Conversation { session: session.into(), place, messages: Vec::new(), running: false, earlier: None, paged: false }
     }
 
     /// An earlier page's messages (newest first, as the engine answers), put ahead of those shown;
@@ -451,8 +471,16 @@ impl Conversation {
     pub fn catch_up(&mut self, mut newest_first: Vec<Message>, earlier: Option<String>, during: &[Value], running: Option<bool>) {
         newest_first.reverse();
         // What was shown before the newest read's (earlier pages, and those the newest left
-        // behind as more came) stays ahead of it.
-        let mut older: Vec<Message> = self.messages.iter().take_while(|shown| !newest_first.iter().any(|read| read.id() == shown.id())).cloned().collect();
+        // behind as more came) stays ahead of it, while it reaches it. After a gap (the read and
+        // what's shown share nothing: more came than a read holds while nothing was heard, or a
+        // revert went back past it all), it starts again from the read.
+        let reaches = self.messages.iter().any(|shown| newest_first.iter().any(|read| read.id() == shown.id()));
+        let mut older: Vec<Message> = if reaches {
+            self.messages.iter().take_while(|shown| !newest_first.iter().any(|read| read.id() == shown.id())).cloned().collect()
+        } else {
+            self.paged = false;
+            Vec::new()
+        };
         if !self.paged && older.is_empty() {
             self.earlier = earlier;
         }

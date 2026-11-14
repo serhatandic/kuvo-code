@@ -183,17 +183,4 @@ impl Sending {
     pub fn words(words: impl Into<String>) -> Sending {
         Sending { words: words.into(), ..Sending::default() }
     }
-
-    /// The parts its message will have, to show it before its box has it: its words trimmed, as the
-    /// box writes them, and what goes with them (the agents it names aren't known yet).
-    pub fn parts(&self) -> Parts {
-        Parts {
-            words: self.words.trim().to_owned(),
-            keyword: self.keyword.clone(),
-            widget: self.widget.clone(),
-            comments: self.comments.clone(),
-            paths: self.notes.paths.iter().chain(&self.notes.unsent).cloned().collect(),
-            ..Parts::default()
-        }
-    }
 }

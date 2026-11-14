@@ -10,14 +10,14 @@
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::client::BoxClient;
 use crate::error::{Error, Refusal};
 use crate::lines;
-use crate::messages::{self, Applied, Conversation, Message, Page, Where};
+use crate::messages::{self, Applied, Conversation, Message, Page, ReadParts, Where};
 use crate::parts::Parts;
 use crate::sessions::{self, Line, Listing};
 use crate::transport::{Closer, Request, Stream};
@@ -72,6 +72,9 @@ pub enum ConversationUpdate {
     Failed(Error),
     /// It isn't on the box (any more): the follow ends.
     Gone(Refusal),
+    /// The messages before those shown couldn't be read; the conversation goes on, and they can be
+    /// asked for again.
+    EarlierFailed(Error),
 }
 
 /// Something followed. Ends when dropped.
@@ -386,6 +389,8 @@ fn follow_sessions(client: BoxClient, timing: Timing, latest: &Latest<ListUpdate
 struct Shown {
     conversation: Conversation,
     during: Option<Vec<Value>>,
+    /// The parts read of its messages from before, kept here (not in each copy handed on).
+    parts: ReadParts,
 }
 
 /// How many of a conversation's newest messages a follow reads.
@@ -410,8 +415,10 @@ fn read(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUp
     match read {
         Ok(page) => {
             let earlier = page.earlier(READ);
-            now.conversation.take_parts(parts);
+            now.parts.take(parts);
             now.conversation.catch_up(page.data, earlier, &during, running);
+            let Shown { conversation, parts, .. } = &mut *now;
+            parts.apply(&mut conversation.messages);
             latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
             true
         }
@@ -437,18 +444,20 @@ fn read_earlier(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<Conver
         Ok((older, earlier)) => {
             let parts = read_parts(client, shown, &older);
             let mut now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            now.conversation.take_parts(parts);
+            now.parts.take(parts);
             now.conversation.take_earlier(older, earlier);
+            let Shown { conversation, parts, .. } = &mut *now;
+            parts.apply(&mut conversation.messages);
             latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
         }
-        Err(error) => latest.put(ConversationUpdate::Failed(error)),
+        Err(error) => latest.put(ConversationUpdate::EarlierFailed(error)),
     }
 }
 
 /// The parts of those of `messages` from before, as their box reads them; none where it couldn't
 /// say (they show as written, and are asked again with the next read).
 fn read_parts(client: &BoxClient, shown: &Mutex<Shown>, messages: &[Message]) -> Vec<((String, String), Parts)> {
-    let unread = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).conversation.unread_parts(messages);
+    let unread = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).parts.unread(messages);
     if unread.is_empty() {
         return Vec::new();
     }
@@ -469,16 +478,21 @@ fn is_running(client: &BoxClient, place: Where, session: &str) -> Option<bool> {
 /// Reads as it's asked to (or, `most` given, on that timer), until it's ended or the conversation's
 /// gone.
 fn reader(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUpdate>, stop: &Stop, wants: &Wants, most: Option<Duration>) {
-    while let Some((again, earlier)) = wants.next(most) {
+    // On the timer, by when it's next due: asking for earlier ones meanwhile doesn't put it off.
+    let mut due = most.map(|most| Instant::now() + most);
+    while let Some((again, earlier)) = wants.next(due.map(|due| due.saturating_duration_since(Instant::now()))) {
         if stop.is_stopped() {
             return;
         }
         if earlier {
             read_earlier(client, shown, latest);
         }
-        if again && !read(client, shown, latest) {
-            stop.stop();
-            return;
+        if again {
+            if !read(client, shown, latest) {
+                stop.stop();
+                return;
+            }
+            due = most.map(|most| Instant::now() + most);
         }
     }
 }
@@ -501,7 +515,7 @@ fn follow_conversation(client: BoxClient, session: String, timing: Timing, lates
             }
         }
     };
-    let shown = Mutex::new(Shown { conversation: Conversation::new(session, place), during: None });
+    let shown = Mutex::new(Shown { conversation: Conversation::new(session, place), during: None, parts: ReadParts::default() });
 
     if !client.streams() {
         // Read now, then again on the timer, and earlier ones as asked.

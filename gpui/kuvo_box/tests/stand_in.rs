@@ -362,9 +362,19 @@ fn a_composer_sends_its_fields_and_asks_the_box_what_a_typed_text_means() {
     client.send_draft("ses_1", &looped, None).unwrap();
     assert_eq!(stand_in.seen().pop().unwrap().body.unwrap(), json!({ "id": "msg_l", "words": "check", "keyword": "/loop every hour", "delivery": "steer" }));
 
-    // One of the engine's commands runs with its arguments as written.
-    client.send_draft("ses_1", &Draft::new("msg_c", "/init now"), None).unwrap();
-    assert_eq!(stand_in.seen().pop().unwrap().body.unwrap(), json!({ "id": "msg_c", "words": "now", "command": "init", "delivery": "steer" }));
+    // One of the engine's commands runs with its arguments as written: not a message, so no id.
+    let Sent::Typed { message: None, .. } = client.send_draft("ses_1", &Draft::new("msg_c", "/init now"), None).unwrap() else { panic!("a command") };
+    let ran = stand_in.seen().pop().unwrap();
+    assert_eq!(ran.body.unwrap(), json!({ "words": "now", "command": "init", "delivery": "steer" }));
+    assert_eq!(ran.headers.get("idempotency-key"), None);
+
+    // With the side thread's tag on, a message is a follow-up there, the client's to ask.
+    let before = stand_in.seen().len();
+    let mut side = Draft::new("msg_t", "what about tests?");
+    side.side = true;
+    let Sent::Typed { answer, message: None } = client.send_draft("ses_1", &side, None).unwrap() else { panic!("side") };
+    assert_eq!(answer.side_thread, Some(true));
+    assert_eq!(stand_in.seen().len(), before);
 
     // "!ls": the client's to run; nothing's sent.
     let before = stand_in.seen().len();
@@ -538,7 +548,7 @@ fn a_conversation_shows_each_message_by_its_parts_and_pages_back() {
     assert_eq!(shown.earlier.as_deref(), Some("c1"));
     let parts = |conversation: &kuvo_box::Conversation, id: &str| {
         let Some(Message::User(user)) = conversation.messages.iter().find(|message| message.id() == id) else { panic!("{id}") };
-        conversation.parts_of(user)
+        user.parts()
     };
     // Kept with it; read by its box; the box's note as it is.
     assert_eq!((parts(&shown, "msg_199").words.as_str(), parts(&shown, "msg_199").keyword.as_deref()), ("kept words", Some("/plan")));
@@ -557,10 +567,48 @@ fn a_conversation_shows_each_message_by_its_parts_and_pages_back() {
     assert_eq!(shown.earlier, None);
     assert_eq!(parts(&shown, "msg_002").words, "read text 2");
 
-    // Read again (a message delivered): the earlier ones stay ahead, and nothing is asked twice.
+    // Read again (a message delivered): the earlier ones stay ahead, their parts with them, and
+    // nothing is asked twice.
     events.send(event("session.inbox.delivered", "ses_1", json!({ "inboxID": "msg_x" }))).unwrap();
     let ConversationUpdate::Conversation(shown) = follow.next_blocking().unwrap() else { panic!() };
     assert_eq!(shown.messages.len(), 103);
     assert_eq!(shown.messages[0].id(), "msg_001");
+    assert_eq!(parts(&shown, "msg_150").words, "read text 150");
     assert_eq!(asked(&stand_in).len(), 2);
+}
+
+#[test]
+fn after_a_gap_a_conversation_starts_again_from_its_newest() {
+    // First the newest are 1–3; then (the stream down while more came than a read holds) 7–9.
+    let user = |n: usize| json!({ "type": "user", "id": format!("msg_{n}"), "time": { "created": n }, "text": format!("text {n}") });
+    let newest = std::sync::Mutex::new(vec![user(3), user(2), user(1)]);
+    let gap = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let later = gap.clone();
+    let stand_in = StandInBox::start(move |seen| match seen.route() {
+        "kuvo/info" => Answer::json(200, mac_info(current_features())),
+        "api/session/ses_1" => Answer::json(200, json!({ "data": { "id": "ses_1" } })),
+        "api/session/ses_1/message" if seen.path.contains("cursor=") => Answer::json(200, json!({ "data": [user(6), user(5), user(4)] })),
+        "api/session/ses_1/message" => {
+            if later.load(std::sync::atomic::Ordering::SeqCst) {
+                *newest.lock().unwrap() = vec![user(9), user(8), user(7)];
+            }
+            Answer::json(200, json!({ "data": newest.lock().unwrap().clone(), "cursor": { "next": "c" } }))
+        }
+        "kuvo/messages/parts" => Answer::json(503, json!({ "message": "Not now." })),
+        _ => Answer::json(404, json!({})),
+    });
+    let events = stand_in.stream_for("api/event");
+    let (_home, _serve, client) = this_mac(&stand_in);
+    let follow = client.follow_conversation("ses_1", at_once());
+    let ConversationUpdate::Conversation(shown) = follow.next_blocking().unwrap() else { panic!() };
+    assert_eq!(shown.messages.iter().map(Message::id).collect::<Vec<_>>(), vec!["msg_1", "msg_2", "msg_3"]);
+    // (Its box couldn't read the parts: each shows as written.)
+    assert!(matches!(&shown.messages[0], Message::User(user) if user.parts().words == "text 1"));
+
+    gap.store(true, std::sync::atomic::Ordering::SeqCst);
+    events.send(event("session.inbox.delivered", "ses_1", json!({ "inboxID": "msg_x" }))).unwrap();
+    let ConversationUpdate::Conversation(shown) = follow.next_blocking().unwrap() else { panic!() };
+    // Not 1–3 then 7–9, with 4–6 missing: the newest, and the way back from them.
+    assert_eq!(shown.messages.iter().map(Message::id).collect::<Vec<_>>(), vec!["msg_7", "msg_8", "msg_9"]);
+    assert_eq!(shown.earlier, None, "a page that wasn't full has nothing before it");
 }

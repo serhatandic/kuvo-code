@@ -95,7 +95,8 @@ while let Some(update) = lists.next_blocking() {       // a GPUI view awaits lis
 let conversation = client.follow_conversation("ses_…", Timing::default());
 conversation.load_earlier();                            // the page before, as you scroll up
 // Each message is drawn by its parts (what was written, its keyword, comments, files, agents named):
-// `conversation.parts_of(&user)`, as the box kept them or read them; no client parses the text.
+// `user.parts()` on a `Message::User` of the conversation an update brings, as the box kept them or
+// read them; no client parses the text.
 
 // What the composer sends: its text and what goes with it, as fields; the box writes what the agent
 // reads. "/…" and "!…" go to the box first, which says what they mean.

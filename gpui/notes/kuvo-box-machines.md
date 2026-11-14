@@ -27,30 +27,39 @@ that. This note is how phase 2 makes a machine stream, as this Mac's own box doe
    (`{pid, port, password, kept: true}`), and opens one tunnel to it. Then every route streams
    through the box, as on this Mac: the list's `…/events`, `api/event`, and
    `kuvo/agents/api/event`. `LocalServer` already speaks it; only the way to the port is new.
-   - Costs: PROTOCOL.md describes `x-kuvo-from: mac` for Kuvo Code on the box's own computer. A
-     client tunnelling in from another computer needs saying there, so the box decides who that is
-     (most likely it's taken as `box route` is, since it's the same user over the same SSH).
+   - Who it is to the box: Kuvo Code, taken as `box route` is. That's `x-kuvo-from: mac`
+     (`box.serve.mac`, which already means "taken as `box route` takes it"); never `app`, which a
+     box trusts with its app's registration. Without the header, the box reads every message as a
+     phone's (`<from-phone>`, `phone: true` in its parts). So it needs a box listing both
+     `box.serve` and `box.serve.mac`; one without them stays on `box route`.
+   - Costs: PROTOCOL.md describes `box.serve.mac` for Kuvo Code on the box's own computer. That a
+     client may reach it through an SSH tunnel from another computer (the same user, over the same
+     SSH that `box route` uses) wants a line there, which is the box's to write.
 
 **Recommendation: 2.** One tunnel, and no engine password in the client. The box keeps deciding,
-and a machine is reached the same way as this Mac. It needs the PROTOCOL.md line first; that's the
-box's to write, and the user's or the lead's to agree.
+and a machine is reached the same way as this Mac. It needs the PROTOCOL.md line first, and the
+user's or the lead's agreement.
 
 ## How it would be built
 
 - A transport `SshTunnel`, made from an `SshBox`:
-  - It holds an `ssh -N` with `ExitOnForwardFailure=yes`, forwarding a Unix socket in the client's
-    temporary folder (`-L <socket>:127.0.0.1:<port>`). A socket rather than a local port: there's
-    no race for a free port, and only this user can open it.
+  - It holds an `ssh -N` with `ExitOnForwardFailure=yes` and `StreamLocalBindUnlink=yes` (else a
+    socket a crash left makes every later start fail), forwarding a Unix socket
+    (`-L <socket>:127.0.0.1:<port>`). A socket rather than a local port: there's no race for a free
+    port, and only this user can open it. Its path must stay under macOS's 104 bytes, so it goes
+    in the same short folder as SSH's shared connections (`/tmp/kuvo-ssh-<uid>`, checked to be
+    this user's alone), not the app's long temporary folder.
   - It speaks HTTP over that socket, with `LocalServer`'s client (already written for a closable
-    stream).
+    stream), saying `x-kuvo-from: mac`.
   - Like `LocalServer::recorded`, it reads `run/serve.json` again when a request fails to
     connect: the box's server moves after an update.
   - `streams()` is true while the tunnel is up. When the tunnel or the server is down, it falls
     back to `box route` for that request.
-- `BoxClient::machine` uses the tunnel where the box lists `box.serve`, and `box route` where it
+- `BoxClient::machine` uses the tunnel where the box lists `box.serve` and `box.serve.mac`, and `box route` where it
   doesn't. The follows don't change: they already stream when the transport does, and poll when
   it doesn't.
 - Tests use a stand-in `ssh` that opens the forward with a local Unix socket to the stand-in box,
   and the existing stand-in box. No real machine is involved.
-- Its footprint: the socket goes in the app's temporary folder and is removed when the tunnel ends.
+- Its footprint: the socket goes in `/tmp/kuvo-ssh-<uid>` (footprint.md's one exception, which
+  this joins) and is removed when the tunnel ends.
   The `ssh -N` process is this client's own, and is stopped by its PID only.

@@ -76,8 +76,9 @@ pub enum Sent {
     Message { id: String },
     /// The box read it (`typed`), or it was kept for a model that can't run: what it did and what
     /// the client does with the rest. Where it said to send a message or run a command, that's been
-    /// sent (`message`, its id); anything else in it is the client's to do (a `!` command, compact,
-    /// switch the mode shown, the side thread), and `restore` and `error` go back to the composer.
+    /// sent (`message`, a message's id; none for a command, which has none); anything else in it is
+    /// the client's to do (a `!` command, compact, switch the mode shown, a follow-up in the side
+    /// thread), and `restore` and `error` go back to the composer.
     Typed { answer: Box<Answer>, message: Option<String> },
 }
 
@@ -243,7 +244,8 @@ impl BoxClient {
     }
 
     /// Sends a message as its fields (`kuvo/sessions/<id>/send`): the box writes what the agent
-    /// reads, and keeps its parts with it. Taken once per `id` however often it comes.
+    /// reads, and keeps its parts with it. A message is taken once per `id` however often it comes;
+    /// a command (`command`) has no id, and runs each time it's sent.
     pub fn send_message(&self, session: &str, sending: &Sending) -> Result<()> {
         let body = serde_json::to_value(sending).map_err(|error| Error::BadAnswer(error.to_string()))?;
         let mut request = Request::post(parts::send_route(session), body);
@@ -262,7 +264,11 @@ impl BoxClient {
     pub fn send_draft(&self, session: &str, draft: &Draft, quote: Option<&dyn Fn(&str) -> String>) -> Result<Sent> {
         let quoted = |words: &str| quote.map_or_else(|| words.to_owned(), |quote| quote(words));
         if !typed::asks_box(&draft.text) {
-            // With a model that can't run, it's kept, saying why, as the box would.
+            // As the box would say: with the side thread's tag on, it's a follow-up there (the
+            // client's to ask); with a model that can't run, it's kept, saying why.
+            if draft.side {
+                return Ok(Sent::Typed { answer: Box::new(Answer { side_thread: Some(true), ..Answer::default() }), message: None });
+            }
             if let Some(refusal) = &draft.refusal {
                 let answer = Answer { restore: Some(Restore { text: draft.text.clone(), beside: None }), error: Some(refusal.clone()), ..Answer::default() };
                 return Ok(Sent::Typed { answer: Box::new(answer), message: None });
@@ -300,8 +306,13 @@ impl BoxClient {
                 sending.delivery = Some(Delivery::Steer);
             }
         } else if let Some(run) = &answer.command {
+            // A command runs once per send, but isn't a message with this id, and isn't taken once
+            // when sent again: the box runs it each time it's asked.
+            sending.id = None;
             sending.words = run.arguments.clone();
             sending.command = Some(run.name.clone());
+            self.send_message(session, &sending)?;
+            return Ok(Sent::Typed { answer: Box::new(answer), message: None });
         } else {
             return Ok(Sent::Typed { answer: Box::new(answer), message: None });
         }
