@@ -11,7 +11,9 @@
 // each, and keeps which page is in use, so the agent and the app follow each other. It stops
 // Chromium after a while with nobody connected.
 //
-// The app writes this file to the machine, with the browsing scripts and tools filled in below.
+// scripts/build-browser.sh builds this into KuvoCode/Resources/kuvo-browser.js, the file every box
+// runs: with the scripts it runs in pages (page.ts), the agent's tools (tools.ts) and what agents are
+// told of them (instructions.ts) filled in below, and the keeper's version (KEEPER).
 
 import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -21,9 +23,17 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const CONFIG = /*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", version: "dev" };
+const CONFIG = /*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", vaultInstructions: "" };
 
 const K = process.env.KUVO_HOME || path.join(os.homedir(), ".kuvo-code");
+// The version of Kuvo Code this box's files are from (`bin/box-version`), for what this says it is.
+const VERSION = (() => {
+  try {
+    return fs.readFileSync(path.join(K, "bin", "box-version"), "utf8").trim() || "dev";
+  } catch {
+    return "dev";
+  }
+})();
 const RUN = path.join(K, "run");
 const SOCKET = path.join(RUN, "browser.sock");
 // What every connection to the keeper gives first, as to the box's vault: Kuvo Code's processes read
@@ -58,9 +68,16 @@ const LANGUAGES = String(process.env.KUVO_LANG || "").split(",").filter((tag) =>
 // Mac's panel keeps an agent's tab you haven't looked at (Utilities.agentTabIdle).
 const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
-// Goes up with every change to the keeper (host mode): a newer one replaces one that's running
-// (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 50;
+// Which keeper this is (host mode): the first 12 hex digits of the SHA-256 of this file as its source
+// has it, which scripts/build-browser.sh writes in, so it changes with every change here and no
+// branch bumps it by hand. The keeper of the file that's in place now replaces a different one
+// that's running (its pages close, its sign-ins stay); a process whose file has been replaced since
+// it started never replaces one (`replacesKeeper`).
+const KEEPER = "0.0.0-keeper-from-its-sources";
+// COMPAT(0.7 keeper-number): what a keeper says it is to processes from before KEEPER was a hash. Goes 3 months after 0.8.0.
+// Those compare numbers, raised by hand to 50, and replace a keeper whose number is lower than
+// theirs: every keeper since says 51, so none of them replaces it.
+const KEEPER_NUMBER = 51;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -174,7 +191,8 @@ function reachable() {
   });
 }
 
-/// The running keeper's version, from its greeting (1 before keepers said).
+/// The running keeper's version, from its greeting: its `number` (1 before keepers said), and its
+/// `build` (KEEPER: null before it was a hash); null if it didn't answer.
 function runningKeeper() {
   return new Promise((resolve) => {
     const socket = keeperConnection();
@@ -191,9 +209,10 @@ function runningKeeper() {
       const end = buffer.indexOf("\n");
       if (end < 0) return;
       try {
-        done(JSON.parse(buffer.slice(0, end)).params?.keeper ?? 1);
+        const params = JSON.parse(buffer.slice(0, end)).params;
+        done({ number: typeof params?.keeper === "number" ? params.keeper : 1, build: typeof params?.build === "string" ? params.build : null });
       } catch {
-        done(1);
+        done({ number: 1, build: null });
       }
     });
     socket.once("error", () => done(null));
@@ -276,8 +295,7 @@ async function setUp(told, { repair = false, wait = 15 * 60_000 } = {}) {
 /// it goes, for `wait` at most); it doesn't start: the box sets it up again, once.
 async function ensure(told, wait) {
   if (await reachable()) {
-    const running = await runningKeeper();
-    if (running === null || running >= KEEPER) return null;
+    if (!replacesKeeper(await runningKeeper())) return null;
     await stopKeeper();
   }
   for (let attempt = 0; ; attempt++) {
@@ -289,6 +307,25 @@ async function ensure(told, wait) {
     if (problem?.kind !== "broken" || attempt > 0) return problem;
     const repaired = await setUp(told, { repair: true, wait });
     if (repaired) return repaired;
+  }
+}
+
+/// Whether this process replaces the keeper that's running (`running`, as `runningKeeper` gives it:
+/// null when it didn't say): only while this process's file is the one in place (one started before
+/// its file was replaced leaves the keeper be, as it would only start that file's again), and then
+/// one from before KEEPER was a hash, or another one.
+function replacesKeeper(running) {
+  if (running === null || keeperInPlace() !== KEEPER) return false;
+  return running.build === null ? running.number < KEEPER_NUMBER : running.build !== KEEPER;
+}
+
+/// The KEEPER of the file this process started from as it is now: null if it can't be read.
+function keeperInPlace() {
+  try {
+    const found = /^const KEEPER = ("[^"\n]*");$/m.exec(fs.readFileSync(SCRIPT, "utf8"));
+    return found ? JSON.parse(found[1]) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -1054,7 +1091,7 @@ async function host() {
         clearTimeout(unkeyed);
         clients.add(client);
         clearTimeout(idle);
-        send(client, { method: "Kuvo.hello", params: { targetId: active, status, version: CONFIG.version, keeper: KEEPER, asks: [...asks.values()].map((ask) => ask.params), viewers: viewers(), held: [...held.keys()], holdMacs: Object.fromEntries(holdMacs), passkeys: Object.fromEntries(passkeyPages) } });
+        send(client, { method: "Kuvo.hello", params: { targetId: active, status, version: VERSION, keeper: KEEPER_NUMBER, build: KEEPER, asks: [...asks.values()].map((ask) => ask.params), viewers: viewers(), held: [...held.keys()], holdMacs: Object.fromEntries(holdMacs), passkeys: Object.fromEntries(passkeyPages) } });
         return;
       }
       switch (message.method) {
@@ -2894,7 +2931,7 @@ async function mcp() {
         return Promise.all([vaultTools(), workQueueTools()]).then(([more, queue]) => reply({
           protocolVersion: supported.includes(params.protocolVersion) ? params.protocolVersion : "2025-06-18",
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "kuvo-browser", title: "Kuvo Code browser", version: CONFIG.version },
+          serverInfo: { name: "kuvo-browser", title: "Kuvo Code browser", version: VERSION },
           instructions: CONFIG.instructions + (more.length ? CONFIG.vaultInstructions ?? "" : "") + queue.instructions,
         }));
       }

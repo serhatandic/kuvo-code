@@ -3,7 +3,8 @@
 # Runs the box tests under the newest engine Bun, in an isolated scratch folder, and exits as they did.
 # It sends the repo's own layout, so the tests that read files beside Packages/Box find them:
 # KuvoLink's vectors and bot-words.json, KuvoClient's BoxVectorsTests.swift (groups.test.ts checks
-# box-vectors.json against it), scripts/route-shapes.sh with what it runs (route-shapes.test.ts), and
+# box-vectors.json against it), scripts/route-shapes.sh and build-browser.sh with what they run and
+# build-browser.sh's file (route-shapes.test.ts, browser-built.test.ts), and
 # the bridge's tests' folder: test-safety.js, which every box test imports first, and the stand-ins
 # some box tests start (browser-source-stand-in.js, relay-stand-in.js).
 # It prints what failed and skipped, with the counts; FULL=1 prints all the run says. HOST defaults
@@ -81,5 +82,6 @@ COPYFILE_DISABLE=1 tar --no-xattrs -czf - \
     Packages/Box/src Packages/Box/test Packages/Box/eval \
     Packages/KuvoLink/Vectors Packages/KuvoLink/Sources/KuvoLink/Resources/bot-words.json \
     Packages/KuvoLink/Tests/Bridge Packages/KuvoClient/Tests/ClientSessionsTests/BoxVectorsTests.swift \
-    scripts/route-shapes.sh scripts/route-shapes.ts scripts/real-app-guard.sh |
+    scripts/route-shapes.sh scripts/route-shapes.ts scripts/real-app-guard.sh \
+    scripts/build-browser.sh scripts/build-browser.ts KuvoCode/Resources/kuvo-browser.js |
     ssh -o BatchMode=yes "$HOST" "$command"

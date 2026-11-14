@@ -446,7 +446,8 @@ against its size and SHA-256 before it's unpacked (by the box itself: no `unzip`
 on the machine). The Mac only shows how it goes (`kuvo/browser`). Its tests serve stand-ins
 (`Tests/Bridge/browser-source-stand-in.js`): never the real sources, never a real `~/.kuvo-code`.
 One script,
-`KuvoCode/Resources/kuvo-browser.js`, runs with the engine's own runtime in three ways:
+`KuvoCode/Resources/kuvo-browser.js`, built from `Packages/Box/src/browser`, runs with the
+engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
   protocol to everyone else on a Unix socket in `~/.kuvo-code/run`, to each connection that
@@ -468,8 +469,16 @@ On a Mac, Chrome's editing keys come from its window's key bindings, which a key
 never reaches: the keeper names what each does (`keyForHere`), so clients send the same keys to
 every machine.
 
-`KEEPER` at its top goes up with every change to the host side, so a newer copy replaces one
-that's running; `BrowserAgent`'s page scripts are shared with this Mac's browser tools.
+Its source is `Packages/Box/src/browser/kuvo-browser.js`; the scripts it runs in pages
+(`page.ts`, with `page/` and browser-use's `buildDomTree.js`), the agents' tools (`tools.ts`) and
+what they're told (`instructions.ts`) are filled in by `./scripts/build-browser.sh`, which you run
+and commit after changing them (CI checks it with `--check`, and so does the box's suite). It
+writes `KEEPER` too, a hash of the source, so a copy built from changed sources replaces the keeper
+that's running; never edit it or the built file. This Mac's panel still has its own copies of the
+page scripts, tools and words (`BrowserAgent`, `BrowserTools`) until its agents use its box's
+browser (#693): change both (`BrowserToolsOnBoxTests` holds them together), and when you change
+what agents are given on purpose, write `Tests/Bridge/browser-tools-before.json` again
+(`browser-tools-built.test.js` says how).
 
 ### The phone link
 
@@ -863,8 +872,9 @@ and the lists they add to merge line by line:
   still builds, with names twice, and only the tests and `route-shapes.sh` catch it.
 - **What's written from those**: `./scripts/route-shapes.sh` writes `routes/shapes/answers.json`
   and `routes/features.json` (each box's `kuvo/info` features, which both route runners check);
-  `./scripts/build-box.sh` and `./scripts/build-agents.sh` write `kuvo-link.js` and
-  `kuvo-agents.js`. Never edit them. After a merge, run the three scripts again and commit what
+  `./scripts/build-box.sh`, `./scripts/build-agents.sh` and `./scripts/build-browser.sh` write
+  `kuvo-link.js`, `kuvo-agents.js` and `kuvo-browser.js` (with its keeper's version, `KEEPER`, a
+  hash: never bump it). Never edit them. After a merge, run the four scripts again and commit what
   they write: that settles a conflict in one (take either side first: names added side by side
   conflict in the JSON, and the bundles always do), and the `--check` of each (CI's, and the box's
   suite for the route shapes) fails on one that isn't what its sources write.
