@@ -47,7 +47,7 @@ summary=${FAKE_XCODE_SUMMARY:-}
 if [ -z "$summary" ]; then
     passed=1
     [ -z "${FAKE_XCODE_NO_TESTS:-}" ] || passed=0
-    summary='{"passedTests": '$passed', "failedTests": 0, "skippedTests": 0, "expectedFailures": 0, "testFailures": []}'
+    summary='{"passedTests": '$passed', "failedTests": 0, "skippedTests": 0, "expectedFailures": 0, "totalTestCount": '$passed', "testFailures": []}'
 fi
 if [ -n "$bundle" ] && [ -z "${FAKE_XCODE_NO_BUNDLE:-}" ]; then
     mkdir -p "$bundle"
@@ -552,7 +552,7 @@ class FromBatch(Batches):
         failures = [{"testIdentifierString": "SlowTests/waits()", "failureText": "Time limit was exceeded"},
                     {"testIdentifierString": "SlowTests/waits()", "failureText": "Test exceeded execution time allowance"},
                     {"testIdentifierString": "OtherTests/breaks()", "failureText": "Expectation failed"}]
-        summary = json.dumps({"passedTests": 7, "failedTests": 2, "skippedTests": 1, "expectedFailures": 0, "testFailures": failures})
+        summary = json.dumps({"passedTests": 7, "failedTests": 2, "skippedTests": 1, "expectedFailures": 0, "totalTestCount": 10, "testFailures": failures})
         output = ("✘ Test waits() recorded an issue at SlowTests.swift:3:6: Time limit was exceeded: 60.000 seconds\n"
                   "Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.\n"
                   "✔ Test run with 8 tests in 1 suite passed after 1.000 seconds.")
@@ -564,7 +564,7 @@ class FromBatch(Batches):
         self.assertEqual(self.result(done), ["RESULT: 7 passed, 2 failed, 1 skipped", "  SlowTests/waits()", "  OtherTests/breaks()"])
 
     def test_a_failure_in_the_results_fails_the_run_though_xcodebuild_passed(self):
-        summary = json.dumps({"passedTests": 3, "failedTests": 1, "skippedTests": 0, "expectedFailures": 0,
+        summary = json.dumps({"passedTests": 3, "failedTests": 1, "skippedTests": 0, "expectedFailures": 0, "totalTestCount": 4,
                               "testFailures": [{"testIdentifierString": "OtherTests/breaks()", "failureText": "Expectation failed"}]})
         self.assertEqual(self.build("mac").returncode, 0)
         done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_SUMMARY=summary)
@@ -577,6 +577,32 @@ class FromBatch(Batches):
         self.assertEqual(done.returncode, 65)
         self.assertIn("xcodebuild exited 65 though no test failed", done.stderr)
         self.assertEqual(self.result(done), ["RESULT: 1 passed, 0 failed"])
+
+    def test_a_run_whose_tests_never_ran_says_there_are_no_results(self):
+        # As a bundle reads when the build failed, or the test copy never started.
+        summary = json.dumps({"passedTests": 0, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0, "totalTestCount": 0,
+                              "testFailures": []})
+        self.assertEqual(self.build("mac").returncode, 0)
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch", FAKE_XCODE_SUMMARY=summary, FAKE_XCODE_STATUS="65",
+                              FAKE_XCODE_OUTPUT="Testing cancelled because the build failed.")
+        self.assertEqual(done.returncode, 65)
+        self.assertEqual(self.result(done), ["RESULT: no results, xcodebuild exited 65"])
+        self.assertNotIn("though no test failed", done.stderr)
+
+    def test_a_run_stopped_before_its_tests_are_over_ends_saying_so(self):
+        self.assertEqual(self.build("mac").returncode, 0)
+        hold = os.path.join(self.root, "hold")
+        os.mkfifo(hold)
+        run = subprocess.Popen(["/bin/sh", TEST_APP, "--from-batch"], env=self.env_for("KuvoCodeTests/WindowTabsTests", FAKE_XCODE_TEST_HOLD=hold),
+                               cwd=self.mac, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               start_new_session=True)
+        wait_for(hold + ".running", "the run never started its tests")
+        # As heavy.sh's time limit, or a caller's TERM, stops it: its process group.
+        os.killpg(run.pid, signal.SIGTERM)
+        out, err = run.communicate(timeout=60)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("Stopped before the tests were over", err)
+        self.assertEqual(out.splitlines()[-1], "RESULT: no results, stopped before the tests were over (exit 143)")
 
     def test_a_run_with_no_results_to_read_fails(self):
         self.assertEqual(self.build("mac").returncode, 0)

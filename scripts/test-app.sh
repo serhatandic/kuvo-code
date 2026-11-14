@@ -13,9 +13,11 @@
 # It ends with what the run's result bundle counts, on a line of its own, then each failing test:
 #   RESULT: <passed> passed, <failed> failed[, <skipped> skipped]
 #     <failing test>
-# (`RESULT: no results, …` when there's no bundle to read, as when the build failed.) It exits 0
-# only when xcodebuild says every test passed and nothing failed: after a test that crashed or ran
-# out of time, the test copy starts again and its last "Test run … passed" counts only itself.
+# Tests as Swift Testing counts them: a test with arguments is one, failed if any of its cases
+# failed. `RESULT: no results, …` when none ran or there's nothing to read (a build that failed, a
+# run stopped before it was over). It exits 0 only when xcodebuild says every test passed, at least
+# one ran and none failed: after a test that crashed or ran out of time, the test copy starts again
+# and its last "Test run … passed" counts only itself.
 #
 # The test copy is built outside the checkout: a copy of the app loading its code from Desktop or
 # Documents would wait on a privacy prompt nobody can answer while tests run. It has a bundle ID
@@ -217,14 +219,14 @@ stop_new_hosts() {
     done
 }
 cleanup_run() {
-    result=$?
+    code=$?
     set +e
     trap - EXIT
     trap '' HUP INT TERM
     if [ -n "$xcode_pid" ]; then
         kill "$xcode_pid" 2>/dev/null || true
     fi
-    if [ "$finished" -eq 0 ] || [ "$result" -ne 0 ]; then
+    if [ "$finished" -eq 0 ] || [ "$code" -ne 0 ]; then
         stop_new_hosts
     fi
     # Do not wait indefinitely: heavy.sh sends KILL to the job group after about three seconds.
@@ -236,16 +238,18 @@ cleanup_run() {
         done
         if ! kill -0 "$xcode_pid" 2>/dev/null; then wait "$xcode_pid" 2>/dev/null; fi
     fi
-    if [ "$finished" -eq 0 ] || [ "$result" -ne 0 ]; then
+    if [ "$finished" -eq 0 ] || [ "$code" -ne 0 ]; then
         stop_new_hosts
     fi
     # Stopped before it was over (heavy.sh's time limit, a caller): where to look for what it was on.
     if [ "$finished" -eq 0 ] && [ -n "$xcode_pid" ]; then echo "Stopped before the tests were over. The whole log: $BUILD/test.log" >&2; fi
+    # And its RESULT line, which a run that's over ends with.
+    if [ "$finished" -eq 0 ]; then echo "RESULT: no results, stopped before the tests were over (exit $code)"; fi
     kill "$caffeinate_pid" 2>/dev/null || true
     wait "$caffeinate_pid" 2>/dev/null || true
     clean
     [ -z "$BATCH" ] || /bin/sh scripts/batch.sh close "$BATCH" "$BATCH_RUN"
-    exit "$result"
+    exit "$code"
 }
 trap cleanup_run EXIT
 trap 'exit 129' HUP
@@ -279,18 +283,22 @@ grep -aE '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|Restarting after|\*\* T
 SUMMARY="$BUILD/results.json"
 rm -f "$SUMMARY"
 counted() { plutil -extract "$1" raw -o - "$SUMMARY" 2>/dev/null || true; }
-passed= failed= skipped= failures=
+passed= failed= skipped= failures= total=
 if [ -d "$RESULTS" ] && xcrun xcresulttool get test-results summary --path "$RESULTS" > "$SUMMARY" 2>/dev/null; then
     passed=$(counted passedTests)
     failed=$(counted failedTests)
     skipped=$(counted skippedTests)
     failures=$(counted testFailures)
+    total=$(counted totalTestCount)
 fi
-for number in "$passed" "$failed" "$skipped" "$failures"; do
+for number in "$passed" "$failed" "$skipped" "$failures" "$total"; do
     case "$number" in "" | *[!0-9]*) passed= ;; esac
 done
-if [ -z "$passed" ]; then
+# None to count: a build that failed, a test copy that never started, or names that match nothing
+# (which xcodebuild counts as passing).
+if [ -z "$passed" ] || [ "$total" -eq 0 ]; then
     result="RESULT: no results, xcodebuild exited $xcode_status"
+    if [ "$xcode_status" -eq 0 ] && [ -n "$passed" ]; then echo "No tests ran${ONLY:+ for $ONLY}." >&2; fi
     [ $status -ne 0 ] || status=1
 else
     result="RESULT: $passed passed, $failed failed"
@@ -300,14 +308,7 @@ else
         echo "xcodebuild exited $xcode_status though no test failed (a crash between tests, or before they ran?)." >&2
     fi
 fi
-if [ -n "$BATCH" ]; then
-    # A name that matches nothing runs nothing, which xcodebuild counts as passing.
-    if [ $status -eq 0 ] && ! grep -qaE 'Test run with [1-9]|Executed [1-9]' "$BUILD/test.log"; then
-        echo "No tests ran for $ONLY." >&2
-        status=1
-    fi
-    echo "Tested the $(/bin/sh scripts/batch.sh stamp "$BATCH")"
-fi
+[ -z "$BATCH" ] || echo "Tested the $(/bin/sh scripts/batch.sh stamp "$BATCH")"
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
 # Last: the counts, and each failing test once (a test failing in several ways is listed once).
 echo "$result"
