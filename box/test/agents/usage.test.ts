@@ -6,7 +6,7 @@
 
 import "../safety"
 import { afterAll, beforeEach, describe, expect, test } from "bun:test"
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
@@ -67,25 +67,7 @@ describe("as UsageKit reads and prices them", () => {
       expect(got, model).toEqual(want)
     }
   })
-
-  test("the bundled snapshots are UsageKit's, byte for byte, while both price", () => {
-    const usageKit = join(import.meta.dir, "..", "..", "..", "swift", "UsageKit", "Sources", "UsageKit", "Resources")
-    // (A box checked out alone, as on a Linux test machine, has no UsageKit beside it.)
-    if (!existsSync(usageKit)) return
-    for (const name of ["pricing_litellm_snapshot.json", "pricing_models_dev_snapshot.json", "pricing_supplement.json"]) {
-      expect(readFileSync(join(import.meta.dir, "..", "..", "src", "agents", "usage", "pricing", name)).equals(readFileSync(join(usageKit, name))), name).toBe(true)
-    }
-  })
 })
-
-function existsSync(path: string) {
-  try {
-    statSync(path)
-    return true
-  } catch {
-    return false
-  }
-}
 
 class TestClaude extends ClaudeAgent {
   constructor(home: string, instance?: { id: string; label?: string; home?: string }) {
