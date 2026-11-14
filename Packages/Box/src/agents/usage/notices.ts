@@ -1,6 +1,6 @@
 // Quota notification decisions belong to the box that read the account. Clients only deliver IDs.
 import { createHash } from "node:crypto"
-import type { NotificationSettings } from "./settings"
+import type { NotificationSettings, SettingsValues } from "./settings"
 
 // Structural inputs keep this pure module usable by the link's Node-only typecheck too.
 interface LimitWindow {
@@ -64,6 +64,52 @@ export function noticeAccountName(service: string, agent?: string, label?: strin
   const capitalized = (word: string) => word.charAt(0).toUpperCase() + word.slice(1)
   const base = agent ? agents[agent] ?? capitalized(agent) : services[service] ?? capitalized(service)
   return label?.trim() ? `${base} · ${label.trim()}` : base
+}
+
+/** The box states unavailable capabilities and wording; native clients only draw this answer. */
+export const notificationAvailability = () => [{
+  provider: "devin", available: false as const,
+  message: "Devin alerts are unavailable because Devin is not connected to Kuvo Code’s background service.",
+}]
+
+/**
+ * Claude's later account cards use Swift's SHA256(identity-without-maker-prefix). A first card's
+ * sticky bare ID, salted collisions, and Codex's email-based card IDs cannot be recovered from a
+ * plan-limit identity. For those, use enabled matching meters on any card of the service family.
+ */
+export function visibleMetric(service: string, window: LimitWindow, settings: SettingsValues | undefined, rawIdentity?: string): boolean {
+  const familyMetric = metricID(service, window)
+  const cardOf = (metric: string) => metric.slice(0, metric.indexOf("."))
+  const familyOf = (card: string) => card.split("@")[0]
+  const knownCards = new Set([
+    ...(settings?.providers?.known ?? []), ...(settings?.providers?.enabled ?? []),
+    ...(settings?.layout?.providerOrder ?? []), ...Object.keys(settings?.layout?.metricOrder ?? {}),
+    ...(settings?.layout?.placed ?? []).map(cardOf), ...(settings?.layout?.seeded ?? []).map(cardOf),
+  ])
+  let exact: string | undefined
+  if (service === "claude" && rawIdentity?.startsWith("anthropic:")) {
+    const hash = createHash("sha256").update(rawIdentity.slice("anthropic:".length).toLowerCase()).digest("hex").slice(0, 8)
+    const candidate = `${service}@${hash}`
+    if (knownCards.has(candidate)) exact = candidate
+  }
+  const enabled = (card: string) => !settings?.providers?.known.includes(card) || settings.providers.enabled.includes(card)
+  if (!settings?.layout) return enabled(exact ?? service) && DEFAULT_VISIBLE_METRICS.has(familyMetric)
+  const suffix = familyMetric.slice(service.length)
+  return settings.layout.placed.some(metric => {
+    const card = cardOf(metric)
+    return (exact ? card === exact : familyOf(card) === service) && enabled(card) && metric === card + suffix
+  })
+}
+
+/** One occurrence can arrive through readers that pinned different forwarders before exchanging. */
+export function reconcileNotices(notices: UsageNotice[]): UsageNotice[] {
+  const merged = new Map<string, UsageNotice>()
+  const order = (notice: UsageNotice) => `${notice.forwarder || "~"}\n${JSON.stringify(notice)}`
+  for (const notice of notices) {
+    const previous = merged.get(notice.id)
+    if (!previous || order(notice) < order(previous)) merged.set(notice.id, notice)
+  }
+  return [...merged.values()]
 }
 
 /** Same priority/cadence naming as KuvoClient LimitsWindow.title. */

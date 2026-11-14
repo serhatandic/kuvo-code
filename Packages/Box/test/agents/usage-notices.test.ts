@@ -271,3 +271,27 @@ test("a direct peer excluded by the private peer boundary receives no notices", 
   peers.take("shared", {kind:"limits",at:reset-599000,noticeSetup:"set_test",accounts:f.limits.list(false)})
   expect(peers.notices()).toEqual([])
 })
+
+const layoutWith = (placed: string[]) => ({placed,providerOrder:[],metricOrder:{},pinned:[],expanded:[],expandOnEnable:[],seeded:[]})
+test("an exact secondary Claude card's meter visibility and enablement override the family card", async () => {
+  const raw="anthropic:user-secondary|organization"
+  const card="claude@"+createHash("sha256").update(raw.slice("anthropic:".length)).digest("hex").slice(0,8)
+  const visible=fixture(); visible.account.limits.identity=()=>raw
+  visible.settings.change({providers:{known:["claude",card],enabled:[card]},layout:layoutWith([`${card}.weekly`])})
+  await visible.limits.tick(); visible.advance(0.95); await visible.limits.tick()
+  expect(visible.limits.notices()).toHaveLength(2)
+  const hidden=fixture(); hidden.account.limits.identity=()=>raw
+  hidden.settings.change({providers:{known:["claude",card],enabled:["claude",card]},layout:layoutWith(["claude.weekly"])})
+  await hidden.limits.tick(); hidden.advance(0.95); await hidden.limits.tick()
+  expect(hidden.limits.notices()).toEqual([])
+})
+
+test("unmappable Codex card identities fall back to enabled matching meters on any family card", async () => {
+  const f=fixture(); f.account.service="codex"; f.account.limits.identity=()=>"chatgpt:workspace/user-id"
+  const read=f.account.limits.read!
+  f.account.limits.read=async now=>{ const r=await read(now); return r?{...r,windows:r.windows.map(w=>({...w,id:"secondary"}))}:null }
+  f.settings.change({providers:{known:["codex","codex@abcdef12"],enabled:["codex@abcdef12"]},layout:layoutWith(["codex@abcdef12.weekly"])})
+  await f.limits.tick(); f.advance(0.95); await f.limits.tick()
+  expect(f.limits.notices()).toHaveLength(2)
+})
+

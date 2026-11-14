@@ -20,7 +20,7 @@ import { emit } from "./events"
 import type { LimitsPeers } from "./limits-peers"
 import { resetRoutes, type LimitResets } from "./limits-resets"
 import { limitRows, type LimitRow } from "./limits-rows"
-import { initialState, meter, metricID, newNotice, currentNotice, DEFAULT_VISIBLE_METRICS, noticeAccountName, transitions, takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
+import { initialState, meter, newNotice, currentNotice, visibleMetric, notificationAvailability, reconcileNotices, noticeAccountName, transitions, takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
 import type { UsageSettings } from "./usage/settings"
 
 /** The services whose limits a box states, by the name clients know them by (their marks and colors). */
@@ -836,14 +836,11 @@ export class Limits {
 
   private decide(account: LimitedAccount, entry: Entry, ids: string[]) {
     const settings = this.settings?.values()
-    const visible = (window: LimitWindow) => settings?.layout ? settings.layout.placed.includes(metricID(account.service, window)) : DEFAULT_VISIBLE_METRICS.has(metricID(account.service, window))
+    const rawIdentity = account.limits.identity?.()
+    const cardIdentity = rawIdentity && identityOf(rawIdentity) === entry.identity ? rawIdentity : undefined
+    const visible = (window: LimitWindow) => visibleMetric(account.service, window, settings, cardIdentity)
     const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false }
-    const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service)
     const dormant = (state: NoticeState): NoticeState => ({ ...state, previous: "untracked", fired: [], under: false, primed: false })
-    if (disabled) {
-      entry.noticeState = Object.fromEntries(Object.entries(entry.noticeState ?? {}).map(([id, state]) => [id, dormant(state)]))
-      return
-    }
     const peers = entry.identity ? this.peers?.noticeStates(account.service, entry.identity) ?? [] : []
     entry.noticeState ??= {}
     const siblings = entry.identity ? [...this.entries.values()].filter(e => e !== entry && e.identity === entry.identity) : []
