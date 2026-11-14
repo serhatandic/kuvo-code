@@ -1,4 +1,5 @@
 import Foundation
+import ClientSessions
 import KuvoLink
 
 /// What each box told you lately (`kuvo/notices/events`, PROTOCOL.md "kuvo/notices"), on this Mac's
@@ -15,6 +16,12 @@ final class BoxNotices {
     var connected: ((String) -> Bool)?
     /// Shows a notice of `box`'s (a test's own; Notifier's otherwise).
     var show: ((_ notice: Told.Notice, _ box: String) -> Void)?
+    /// Usage delivery is global to this app, survives relaunch, and includes the initial read.
+    var usageDelivery = UsageNoticeDelivery()
+    var usageEnabled: () -> Bool = { Notifier.isEnabled }
+    var usageVisible: (() async -> Bool)?
+    var usageShown: ((String) -> Void)?
+    var showUsage: ((_ notice: Told.Notice, _ id: String) async -> Bool)?
     /// What's been shown, by box: a box's first read was news before this Mac was there.
     private var shown: [String: Set<String>] = [:]
     /// Whether each box tells its news now (its bridge runs), as it last said.
@@ -96,7 +103,8 @@ final class BoxNotices {
     }
 
     /// What `box` told lately: each not shown yet, shown once (all of it, the first time it's read).
-    func take(_ told: Told, from box: String) {
+    @discardableResult
+    func take(_ told: Told, from box: String) -> Task<Void, Never> {
         telling[box] = told.telling ?? true
         let first = shown[box] == nil
         var seen = shown[box] ?? []
@@ -105,6 +113,24 @@ final class BoxNotices {
         }
         // (Only what it still lists: older ones won't come again.)
         shown[box] = seen.intersection(told.notices.map(\.id))
+        return Task {
+            for entry in told.notices where entry.notice.category == .usage {
+                guard let id = entry.notice.data?["notice"], !id.isEmpty else { continue }
+                let didShow = await usageDelivery.deliver(id: id, enabled: usageEnabled(), visible: {
+                    if let usageVisible { return await usageVisible() }
+                    if showUsage != nil { return true }
+                    return await Notifier.shared.usageVisible()
+                }) {
+                    if let showUsage { return await showUsage(entry.notice, id) }
+                    return await Notifier.shared.usage(id: id, title: entry.notice.title ?? "",
+                                                       subtitle: entry.notice.subtitle, body: entry.notice.body ?? "")
+                }
+                if didShow {
+                    if let usageShown { usageShown(id) }
+                    else { Notifier.shared.shownHere?(.init(session: entry.notice.thread ?? "usage", ask: false, request: id)) }
+                }
+            }
+        }
     }
 
     /// A notice as this Mac's notification: its conversation or group chat opens from it, Reply

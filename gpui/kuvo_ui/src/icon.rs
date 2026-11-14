@@ -57,6 +57,7 @@ macro_rules! icons {
 icons! {
     ArrowDown => "arrow-down",
     ArrowLeft => "arrow-left",
+    ArrowRight => "arrow-right",
     ArrowUp => "arrow-up",
     Bell => "bell",
     Bot => "bot",
@@ -89,8 +90,10 @@ icons! {
     Pin => "pin",
     Plus => "plus",
     Question => "question",
+    Queue => "queue",
     Return => "return",
     Search => "search",
+    Settings => "settings",
     Shield => "shield",
     Sidebar => "sidebar",
     Sliders => "sliders",
@@ -105,11 +108,34 @@ icons! {
     Warning => "warning",
 }
 
+/// The services' marks, by the box's `service` id (a plan's limits): OpenUsage's provider icons
+/// (MIT), as Kuvo Code ships them (`gpui/LICENSES-DEPS.md`). One colour each, drawn as a mask.
+const MARKS: &[(&str, &str, &[u8])] = &[
+    ("antigravity", "marks/antigravity.svg", include_bytes!("../../assets/marks/antigravity.svg")),
+    ("claude", "marks/claude.svg", include_bytes!("../../assets/marks/claude.svg")),
+    ("codex", "marks/codex.svg", include_bytes!("../../assets/marks/codex.svg")),
+    ("copilot", "marks/copilot.svg", include_bytes!("../../assets/marks/copilot.svg")),
+    ("cursor", "marks/cursor.svg", include_bytes!("../../assets/marks/cursor.svg")),
+    ("grok", "marks/grok.svg", include_bytes!("../../assets/marks/grok.svg")),
+    ("ollama", "marks/ollama.svg", include_bytes!("../../assets/marks/ollama.svg")),
+    ("opencode", "marks/opencode.svg", include_bytes!("../../assets/marks/opencode.svg")),
+    ("openrouter", "marks/openrouter.svg", include_bytes!("../../assets/marks/openrouter.svg")),
+    ("zai", "marks/zai.svg", include_bytes!("../../assets/marks/zai.svg")),
+];
+
+/// The asset path of `service`'s mark, if Kuvo has one (a service a newer box names may not).
+pub fn mark_path(service: &str) -> Option<&'static str> {
+    MARKS.iter().find(|(id, ..)| *id == service).map(|(_, path, _)| *path)
+}
+
 /// The assets Kuvo's blocks need: hand this to `Application::with_assets`.
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
+        if let Some((_, _, bytes)) = MARKS.iter().find(|(_, mark, _)| *mark == path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
         Ok(IconName::ALL
             .iter()
             .find(|icon| icon.path() == path)
@@ -120,6 +146,7 @@ impl AssetSource for Assets {
         Ok(IconName::ALL
             .iter()
             .map(|icon| icon.path())
+            .chain(MARKS.iter().map(|(_, mark, _)| *mark))
             .filter(|p| p.starts_with(path))
             .map(SharedString::from)
             .collect())
@@ -175,5 +202,16 @@ mod tests {
             assert!(text.starts_with("<svg") && text.contains("viewBox=\"0 0 16 16\""));
         }
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
+    }
+
+    /// Every service the box reads limits of has its mark, and it loads as an SVG.
+    #[test]
+    fn every_service_has_a_mark() {
+        for service in ["claude", "codex", "grok", "cursor", "antigravity", "copilot", "openrouter", "zai", "ollama", "opencode"] {
+            let path = mark_path(service).unwrap_or_else(|| panic!("{service}"));
+            let bytes = Assets.load(path).unwrap().unwrap();
+            assert!(std::str::from_utf8(&bytes).unwrap().starts_with("<svg"));
+        }
+        assert_eq!(mark_path("newer"), None);
     }
 }

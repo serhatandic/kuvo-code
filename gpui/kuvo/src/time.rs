@@ -31,6 +31,22 @@ pub fn ago(then: f64, now: f64) -> String {
     }
 }
 
+/// How long until `then`, at `now`: "52 min", "3 h 40 min", "4 days".
+pub fn until(then: f64, now: f64) -> String {
+    let minutes = (((then - now) / 60_000.0).max(0.0)).ceil() as u64;
+    if minutes < 60 {
+        format!("{} min", minutes.max(1))
+    } else if minutes < 24 * 60 {
+        match minutes % 60 {
+            0 => format!("{} h", minutes / 60),
+            rest => format!("{} h {rest} min", minutes / 60),
+        }
+    } else {
+        let days = minutes / (24 * 60);
+        if days == 1 { "1 day".into() } else { format!("{days} days") }
+    }
+}
+
 /// A turn's length: "Worked for 25s", "Worked for 3m 10s", "Worked for 1h 5m".
 pub fn worked_for(ms: f64) -> String {
     let seconds = (ms / 1000.0).round().max(1.0) as u64;

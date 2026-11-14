@@ -32,6 +32,8 @@ public struct Notice: Codable, Equatable, Sendable {
         public static let report = Category(rawValue: "report")
         /// A bot's goal needs you. Quiet (`data["quiet"]`), unless you asked to be woken (`data["wake"]`).
         public static let blocked = Category(rawValue: "blocked")
+        /// A quota or pace notice decided by the account's reading box.
+        public static let usage = Category(rawValue: "usage")
         /// A group chat's message.
         public static let message = Category(rawValue: "message")
     }

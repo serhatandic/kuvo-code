@@ -207,14 +207,14 @@ fn the_gate_needs_what_the_swift_clients_need() {
     assert_eq!(names, gate::REQUIRED);
 }
 
-/// The gate PROTOCOL.md names ("The update gate") is the one every client holds: the same names, in
-/// order.
+/// The protocol names exactly the same required features as both native clients.
 #[test]
-fn the_gate_protocol_names_is_the_clients() {
+fn the_gate_matches_the_protocols_update_gate_list() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/PROTOCOL.md");
     let protocol = std::fs::read_to_string(path).unwrap();
-    let section = protocol.split("### The update gate").nth(1).expect("The update gate");
-    let list = section.split("today").nth(1).and_then(|rest| rest.split("(KuvoClient").next()).expect("its list");
+    let list = protocol.split("### The update gate").nth(1)
+        .and_then(|rest| rest.split("today\n").nth(1))
+        .and_then(|rest| rest.split("(KuvoClient's").next()).expect("documented gate list");
     let names: Vec<&str> = list.split('`').skip(1).step_by(2).collect();
     assert_eq!(names, gate::REQUIRED);
 }

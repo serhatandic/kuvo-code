@@ -13,6 +13,8 @@ import { createHash, randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
+import { notificationAvailability } from "./notices"
+
 /** The parts of the settings, each changed and shared whole. */
 export const SETTINGS_UNITS = ["layout", "providers", "totalSpend", "codexFallback", "notifications"] as const
 export type SettingsUnit = (typeof SETTINGS_UNITS)[number]
@@ -485,7 +487,7 @@ export class UsageSettings {
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })
 
 /** What a client reads: each part set (one never set is the panel's own default), and whether a Mac's came in. */
-const answer = (settings: UsageSettings, extra: Record<string, unknown> = {}) => json({ data: { settings: settings.values(), versions: settings.versions(), imported: settings.imported, ...extra } })
+const answer = (settings: UsageSettings, extra: Record<string, unknown> = {}) => json({ data: { settings: settings.values(), versions: settings.versions(), imported: settings.imported, notificationAvailability: notificationAvailability(), ...extra } })
 
 /**
  * `GET api/kuvo/usage/settings` → `{data: {settings, versions, imported}}`; `PUT api/kuvo/usage/settings`

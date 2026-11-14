@@ -17,6 +17,7 @@ use std::time::Duration;
 
 pub use crate::time::now_ms;
 
+pub mod areas;
 pub mod git;
 
 use kuvo_box::Result;
@@ -94,6 +95,9 @@ struct State {
     /// Those following a folder's changed files (`kuvo/git/files/events`): the folder, and where its
     /// lines go.
     git_followers: HashMap<u64, (String, Sender<String>)>,
+    /// How it answers for the rail's areas, and the moment its samples are made at.
+    areas: areas::Areas,
+    made: Option<f64>,
 }
 
 pub const NAME: &str = "Stand-in Mac";
@@ -118,7 +122,14 @@ impl StandIn {
 
     /// An empty box: no projects, no sessions.
     pub fn empty(replies: Replies) -> StandIn {
-        StandIn { inner: Arc::new(Inner { state: Mutex::new(State { at: 1, next: 1, ..State::default() }), replies }) }
+        let areas = areas::Areas { empty: true, ..areas::Areas::default() };
+        StandIn { inner: Arc::new(Inner { state: Mutex::new(State { at: 1, next: 1, areas, ..State::default() }), replies }) }
+    }
+
+    /// From now on it answers as a box from before #711: no `kuvo/waiting`, nothing of what a bot
+    /// is doing, no queue counts, no rings' shares or levels.
+    pub fn before_711(&self) {
+        self.state().areas.before_711 = true;
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -224,6 +235,7 @@ impl StandIn {
 
     fn fill(&self, now: f64) {
         let mut state = self.state();
+        state.made = Some(now);
         let website = format!("{HOME}/Projects/website");
         let api = format!("{HOME}/Projects/api");
         let mobile = format!("{HOME}/Projects/mobile");
@@ -624,6 +636,15 @@ impl StandIn {
                 }
                 return answer(status, value);
             }
+        }
+        let asked: Vec<(String, f64)> = state
+            .sessions
+            .iter()
+            .filter(|(_, facts)| matches!(facts["kind"].as_str(), Some("project" | "chat")) && facts["archived"] != json!(true))
+            .filter_map(|(id, facts)| facts["asked"].as_f64().map(|asked| (id.clone(), asked)))
+            .collect();
+        if let Some((status, value)) = areas::answer(state.areas, method, route, state.made.unwrap_or_else(now_ms), &asked) {
+            return answer(status, value);
         }
         match (method, segments.as_slice()) {
             ("GET", ["kuvo", "info"]) => {

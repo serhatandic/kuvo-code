@@ -29,6 +29,7 @@ pub const REQUIRED: &[&str] = &[
     "sessions.models",
     "sessions.start.empty",
     "typed",
+    "usage.notices",
 ];
 
 /// The state's title, wherever it shows.

@@ -7126,7 +7126,7 @@ function ancestors(path) {
 }
 
 // Packages/Box/src/agents/agents/antigravity.ts
-import { createHash as createHash7 } from "crypto";
+import { createHash as createHash8 } from "crypto";
 import { chmodSync, existsSync as existsSync13, mkdirSync as mkdirSync14, readdirSync as readdirSync14, readFileSync as readFileSync22, renameSync as renameSync12, rmSync as rmSync11, statSync as statSync8, writeFileSync as writeFileSync16 } from "fs";
 import { dirname as dirname13, join as join23 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
@@ -9519,7 +9519,7 @@ import { readFileSync as readFileSync18, readdirSync as readdirSync10, readlinkS
 import { join as join19 } from "path";
 
 // Packages/Box/src/agents/limits.ts
-import { createHash as createHash4 } from "crypto";
+import { createHash as createHash5 } from "crypto";
 import { mkdirSync as mkdirSync11, readFileSync as readFileSync16, renameSync as renameSync9, writeFileSync as writeFileSync13 } from "fs";
 import { dirname as dirname11 } from "path";
 
@@ -10099,6 +10099,226 @@ function limitOf2(window) {
   return `${window.model?.toLowerCase() ?? ""}|${window.name ?? ""}|${window.minutes ?? ""}`;
 }
 
+// Packages/Box/src/agents/usage/notices.ts
+import { createHash as createHash4 } from "crypto";
+var NOTICE_CATCHUP_MS = 10 * 60000;
+function currentNotice(notice, now) {
+  return notice.at <= now && now - notice.at < NOTICE_CATCHUP_MS && (notice.resetsAt === undefined || notice.resetsAt > now);
+}
+var DEFAULT_VISIBLE_METRICS = new Set([
+  "antigravity.geminiPro",
+  "antigravity.geminiWeekly",
+  "antigravity.argonWeekly",
+  "antigravity.claude",
+  "antigravity.claudeWeekly",
+  "claude.session",
+  "claude.weekly",
+  "claude.fable",
+  "claude.extra",
+  "codex.session",
+  "codex.weekly",
+  "codex.spark",
+  "codex.sparkWeekly",
+  "cursor.usage",
+  "cursor.auto",
+  "cursor.api",
+  "cursor.grokBot",
+  "cursor.onDemand",
+  "copilot.premium",
+  "copilot.chat",
+  "copilot.completions",
+  "grok.weekly",
+  "ollama.session",
+  "ollama.weekly",
+  "ollama.monthly",
+  "opencode.session",
+  "opencode.weekly",
+  "opencode.monthly",
+  "openrouter.credits",
+  "openrouter.keyLimit",
+  "zai.session",
+  "zai.weekly",
+  "zai.webSearches"
+]);
+function noticeAccountName(service, agent, label) {
+  const agents = { claude: "Claude", codex: "Codex", grok: "Grok", cursor: "Cursor", antigravity: "Antigravity" };
+  const services = { codex: "ChatGPT", grok: "SuperGrok", copilot: "Copilot", openrouter: "OpenRouter", zai: "Z.ai", ollama: "Ollama", opencode: "OpenCode Go" };
+  const capitalized = (word) => word.charAt(0).toUpperCase() + word.slice(1);
+  const base = agent ? agents[agent] ?? capitalized(agent) : services[service] ?? capitalized(service);
+  return label?.trim() ? `${base} \xB7 ${label.trim()}` : base;
+}
+var notificationAvailability = () => [{
+  provider: "devin",
+  available: false,
+  message: "Devin alerts are unavailable because Devin is not connected to Kuvo Code\u2019s background service."
+}];
+function visibleMetric(service, window, settings, rawIdentity) {
+  const familyMetric = metricID(service, window);
+  const cardOf = (metric) => metric.slice(0, metric.indexOf("."));
+  const familyOf = (card) => card.split("@")[0];
+  const knownCards = new Set([
+    ...settings?.providers?.known ?? [],
+    ...settings?.providers?.enabled ?? [],
+    ...settings?.layout?.providerOrder ?? [],
+    ...Object.keys(settings?.layout?.metricOrder ?? {}),
+    ...(settings?.layout?.placed ?? []).map(cardOf),
+    ...(settings?.layout?.seeded ?? []).map(cardOf)
+  ]);
+  let exact;
+  if (service === "claude" && rawIdentity?.startsWith("anthropic:")) {
+    const hash = createHash4("sha256").update(rawIdentity.slice("anthropic:".length).toLowerCase()).digest("hex").slice(0, 8);
+    const candidate = `${service}@${hash}`;
+    if (knownCards.has(candidate))
+      exact = candidate;
+  }
+  const enabled = (card) => !settings?.providers?.known.includes(card) || settings.providers.enabled.includes(card);
+  if (!settings?.layout)
+    return enabled(exact ?? service) && DEFAULT_VISIBLE_METRICS.has(familyMetric);
+  const suffix = familyMetric.slice(service.length);
+  return settings.layout.placed.some((metric) => {
+    const card = cardOf(metric);
+    return (exact ? card === exact : familyOf(card) === service) && enabled(card) && metric === card + suffix;
+  });
+}
+function reconcileNotices(notices) {
+  const merged = new Map;
+  const order = (notice) => `${notice.forwarder || "~"}
+${JSON.stringify(notice)}`;
+  for (const notice of notices) {
+    const previous = merged.get(notice.id);
+    if (!previous || order(notice) < order(previous))
+      merged.set(notice.id, notice);
+  }
+  return [...merged.values()];
+}
+function noticeWindowName(window) {
+  if (window.name)
+    return window.name;
+  if (window.model)
+    return window.model;
+  const minutes = window.minutes;
+  if (minutes === 300)
+    return "Session";
+  if (minutes === 10080)
+    return "Weekly";
+  if (minutes !== undefined && minutes >= 40000 && minutes <= 45000)
+    return "Monthly";
+  if (minutes !== undefined && minutes >= 1440)
+    return `${Math.floor(minutes / 1440)}-day`;
+  if (minutes !== undefined && minutes >= 60)
+    return `${Math.floor(minutes / 60)}-hour`;
+  return "Limit";
+}
+var milestones = ["underTenPercent", "healthyToClose", "closeToRunningOut"];
+var initialState = () => ({ fired: [], previous: "untracked", under: false, primed: false });
+var severity = (bucket) => ["untracked", "healthy", "close", "runningOut"].indexOf(bucket);
+function transitions(meter, fraction, resetsAt, previous, toggles) {
+  const state = structuredClone(previous);
+  if (resetsAt !== undefined && (previous.resetsAt === undefined || resetsAt - previous.resetsAt > 1000)) {
+    state.fired = [];
+    state.anchor = Math.round(resetsAt / 1000);
+    state.counts = {};
+    state.under = false;
+    state.previous = "untracked";
+  }
+  state.resetsAt = resetsAt ?? previous.resetsAt;
+  const bucket = meter === "spent" ? "runningOut" : meter === "noData" || meter === "level" ? "untracked" : meter;
+  if (meter === "noData")
+    return { fire: [], state };
+  if (!state.primed) {
+    state.primed = true;
+    state.previous = bucket;
+    state.under = fraction < 0.1;
+    state.fired = [];
+    return { fire: [], state };
+  }
+  const fire = [];
+  const maybe = (milestone) => {
+    if (!toggles[milestone] || state.fired.includes(milestone))
+      return false;
+    fire.push(milestone);
+    return true;
+  };
+  if (bucket !== "untracked") {
+    const before = severity(state.previous), current = severity(bucket);
+    let fired = false;
+    if (bucket === "close" && before < 2)
+      fired = maybe("healthyToClose");
+    if (current >= 3 && before < 3)
+      fired = maybe("closeToRunningOut") || fired;
+    if (current < before) {
+      state.fired = state.fired.filter((m) => !(m === "healthyToClose" && current <= 1) && !(m === "closeToRunningOut" && current <= 2));
+    }
+    if (current <= before || fired)
+      state.previous = bucket;
+  }
+  const under = fraction < 0.1;
+  const crossed = under && !state.under;
+  const fired = crossed && maybe("underTenPercent");
+  if (!under)
+    state.fired = state.fired.filter((m) => m !== "underTenPercent");
+  if (!crossed || fired)
+    state.under = under;
+  return { fire, state };
+}
+function meter(window, now) {
+  if (!Number.isFinite(window.used))
+    return "noData";
+  const amount = window.amount;
+  const remaining = amount && amount.limit > 0 ? amount.limit - amount.used : (1 - window.used) * 100;
+  const precision = amount ? amount.unit === "usd" ? 100 : 10 : 1;
+  if (Math.round(remaining * precision) <= 0)
+    return "spent";
+  if (!window.minutes || !window.resetsAt || window.used <= 0 || now >= window.resetsAt)
+    return "level";
+  const period = window.minutes * 60000;
+  const elapsed = now - (window.resetsAt - period);
+  if (elapsed < Math.max(60000, period * 0.01))
+    return "level";
+  const projected = window.used / elapsed * period;
+  if (projected <= 0.9)
+    return "healthy";
+  if (window.used < 0.05)
+    return "level";
+  return projected <= 1 && Math.round((1 - projected) * 100) >= 1 ? "close" : "runningOut";
+}
+function newNotice(row, service, window, milestone, at, state) {
+  state.counts ??= {};
+  state.counts[milestone] = (state.counts[milestone] ?? 0) + 1;
+  const identity = JSON.stringify([row, window.id, state.anchor ?? 0, milestone, state.counts[milestone]]);
+  const id = "usage_" + createHash4("sha256").update(identity).digest("hex");
+  return { id, row, service, windowName: noticeWindowName(window), window: window.id, milestone, at, remaining: (100 - window.used * 100) / 100, ...window.resetsAt ? { resetsAt: window.resetsAt } : {} };
+}
+function takeNotices(given) {
+  if (!Array.isArray(given))
+    return [];
+  return given.slice(-100).filter((n) => n && typeof n === "object" && typeof n.id === "string" && /^usage_[a-zA-Z0-9-]{1,80}$/.test(n.id) && typeof n.row === "string" && n.row.length <= 300 && typeof n.service === "string" && n.service !== "devin" && n.service.length <= 40 && typeof n.window === "string" && n.window.length <= 200 && milestones.includes(n.milestone) && Number.isFinite(n.at) && Number.isFinite(n.remaining) && n.remaining >= 0 && n.remaining <= 1 && (n.resetsAt === undefined || Number.isFinite(n.resetsAt)) && (n.forwarder === undefined || typeof n.forwarder === "string" && n.forwarder.length <= 200) && [n.accountName, n.windowName].every((name) => name === undefined || typeof name === "string" && name.length <= 200));
+}
+function takeStates(given) {
+  if (!given || typeof given !== "object" || Array.isArray(given))
+    return {};
+  return Object.fromEntries(Object.entries(given).slice(0, 30).flatMap(([id, value]) => {
+    const s = value;
+    return s && Array.isArray(s.fired) && s.fired.every((m) => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) && (s.read === undefined || Number.isFinite(s.read)) && (s.anchor === undefined || Number.isFinite(s.anchor)) && (s.counts === undefined || s.counts && typeof s.counts === "object" && Object.entries(s.counts).every(([m, count]) => milestones.includes(m) && Number.isSafeInteger(count) && count >= 0)) ? [[id, s]] : [];
+  }));
+}
+function metricID(service, window) {
+  const id = window.id;
+  if (service === "codex" && /spark/i.test(window.model ?? id))
+    return `codex.${id.endsWith("secondary") ? "sparkWeekly" : "spark"}`;
+  const aliases = {
+    claude: { five_hour: "session", seven_day: "weekly", seven_day_sonnet: "sonnet", seven_day_fable: "fable", seven_day_opus: "opus" },
+    antigravity: { "gemini-5h": "geminiPro", "gemini-weekly": "geminiWeekly", "argon-weekly": "argonWeekly", "3p-5h": "claude", "3p-weekly": "claudeWeekly" },
+    codex: { primary: "session", secondary: "weekly" },
+    opencode: { rolling: "session" },
+    copilot: { premium_interactions: "premium" },
+    openrouter: { key: "keyLimit" },
+    zai: { web_search: "webSearches", window_10080: "weekly" },
+    cursor: { total: "usage", included: "usage", on_demand: "onDemand", grok_bot: "grokBot" }
+  };
+  return `${service}.${aliases[service]?.[id] ?? id}`;
+}
+
 // Packages/Box/src/agents/limits.ts
 var BOX_ONLY_SERVICES = ["antigravity"];
 
@@ -10145,6 +10365,57 @@ class Limits {
     this.said = this.saying();
   }
   peers;
+  settings;
+  ownKey = () => "";
+  notices() {
+    const all = [...this.list(false).flatMap((a) => a.notices ?? []), ...this.peers?.notices() ?? []];
+    return reconcileNotices(all.filter((n) => currentNotice(n, this.now()))).sort((a, b) => a.at - b.at);
+  }
+  pushableNotices() {
+    return this.notices().filter((n) => !!n.forwarder && (this.peers?.ownsPush(n.forwarder) ?? n.forwarder === this.ownKey()));
+  }
+  settleNoticeForwarders() {
+    const own = this.peers?.ownKey() || this.ownKey();
+    if (!own)
+      return;
+    let changed = false;
+    for (const entry of this.entries.values())
+      for (const notice of entry.notices ?? []) {
+        if (notice.forwarder || !currentNotice(notice, this.now()))
+          continue;
+        const identity = notice.row.startsWith(`${notice.service}#`) ? notice.row.slice(notice.service.length + 1) : undefined;
+        const forwarder = identity && this.peers ? this.peers.forwarder(notice.service, identity) : own;
+        if (!forwarder)
+          continue;
+        notice.forwarder = forwarder;
+        changed = true;
+      }
+    if (changed)
+      this.save();
+  }
+  reconcileNoticeForwarders() {
+    const pins = new Map(this.notices().filter((n) => n.forwarder).map((n) => [n.id, n.forwarder]));
+    let changed = false;
+    for (const entry of this.entries.values())
+      for (const notice of entry.notices ?? []) {
+        const pin = pins.get(notice.id);
+        if (pin && (!notice.forwarder || pin < notice.forwarder)) {
+          notice.forwarder = pin;
+          changed = true;
+        }
+      }
+    this.peers?.reconcileForwarders(pins);
+    if (changed)
+      this.save();
+  }
+  deliverNotices(notices) {
+    const pushes = new Set(this.pushableNotices().map((n) => n.id));
+    for (const push of [false, true]) {
+      const facts = notices.filter((n) => currentNotice(n, this.now()) && pushes.has(n.id) === push);
+      if (facts.length)
+        emit("kuvo.usage.notices", { notices: facts, push });
+    }
+  }
   resets;
   account(provider) {
     return this.accounts().find((account) => account.provider === provider);
@@ -10160,7 +10431,7 @@ class Limits {
     this.changed(true, false);
   }
   saying() {
-    return JSON.stringify([this.list(), this.rows()]);
+    return JSON.stringify([this.list(), this.rows(), this.notices()]);
   }
   start() {
     this.timer ??= setInterval(() => void this.tick(), MINUTE2);
@@ -10206,6 +10477,8 @@ class Limits {
         ...entry.identity ? { identity: entry.identity } : {},
         ...entry.plan ? { plan: entry.plan } : {},
         windows: entry.windows,
+        ...entry.notices?.length ? { notices: entry.notices.filter((n) => currentNotice(n, this.now())) } : {},
+        ...entry.noticeState ? { noticeState: entry.noticeState } : {},
         ...entry.balance ? { balance: entry.balance } : {},
         ...extrasOf(entry, account.limits) ? { extras: extrasOf(entry, account.limits, this.resets?.agentsMay(account.provider)) } : {},
         ...this.resets?.agentsMay(account.provider) ? { agentsReset: true } : {},
@@ -10338,7 +10611,7 @@ class Limits {
       if (source.bucket)
         this.asked.set(source.bucket, at);
       this.forced.delete(account.provider);
-      const sent = await this.readOne(source, entry);
+      const sent = await this.readOne(source, entry, account);
       if (source.bucket && !sent) {
         if (before === undefined)
           this.asked.delete(source.bucket);
@@ -10350,7 +10623,7 @@ class Limits {
     this.forgetGone();
     this.changed();
   }
-  async readOne(source, entry) {
+  async readOne(source, entry, account) {
     const started = this.now();
     entry.next = Math.max(entry.next, started + source.every);
     this.save();
@@ -10384,6 +10657,7 @@ class Limits {
       entry.failures = 0;
       if (source.bucket)
         this.refusals.delete(source.bucket);
+      this.decide(account, entry, reading.windows.filter((w) => Number.isFinite(w.used)).map((w) => w.id));
       return true;
     } catch (caught) {
       const at = this.now();
@@ -10436,6 +10710,8 @@ class Limits {
   }
   forget(entry) {
     entry.windows = [];
+    entry.notices = undefined;
+    entry.noticeState = undefined;
     entry.partialMissing = undefined;
     entry.plan = undefined;
     entry.balance = undefined;
@@ -10456,6 +10732,8 @@ class Limits {
       return;
     if (entry.heardAs !== undefined && entry.heardAs !== now) {
       entry.windows = [];
+      entry.notices = undefined;
+      entry.noticeState = undefined;
       entry.plan = undefined;
       entry.balance = undefined;
       entry.extras = undefined;
@@ -10470,6 +10748,8 @@ class Limits {
     if (source.heard)
       return;
     source.heard = (window) => {
+      if (!Number.isFinite(window.used))
+        return;
       let entry = this.entries.get(provider);
       if (!entry) {
         entry = { windows: [], next: 0 };
@@ -10497,8 +10777,58 @@ class Limits {
       if (heard.resetsAt === undefined)
         delete heard.resetsAt;
       entry.windows = before ? entry.windows.map((each) => each.id === window.id ? heard : each) : [...entry.windows, heard];
+      const account = this.accounts().find((a) => a.provider === provider);
+      if (account)
+        this.decide(account, entry, [heard.id]);
       this.changed(true);
     };
+  }
+  decide(account, entry, ids) {
+    const settings = this.settings?.values();
+    const rawIdentity = account.limits.identity?.();
+    const cardIdentity = rawIdentity && identityOf(rawIdentity) === entry.identity ? rawIdentity : undefined;
+    const visible = (window) => visibleMetric(account.service, window, settings, cardIdentity);
+    const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false };
+    const dormant = (state) => ({ ...state, previous: "untracked", fired: [], under: false, primed: false });
+    const peers = entry.identity ? this.peers?.noticeStates(account.service, entry.identity) ?? [] : [];
+    entry.noticeState ??= {};
+    const siblings = entry.identity ? [...this.entries.values()].filter((e) => e !== entry && e.identity === entry.identity) : [];
+    const candidates = [...peers, ...siblings.map((e) => e.noticeState)];
+    for (const candidate of candidates)
+      for (const [id, state] of Object.entries(takeStates(candidate))) {
+        if ((state.read ?? 0) > (entry.noticeState[id]?.read ?? -1))
+          entry.noticeState[id] = structuredClone(state);
+      }
+    const row = entry.identity ? `${account.service}#${entry.identity}` : `${this.ownKey()}/${account.provider}`;
+    const created = [];
+    for (const window of entry.windows.filter((w) => ids.includes(w.id))) {
+      if (!visible(window)) {
+        if (entry.noticeState[window.id])
+          entry.noticeState[window.id] = dormant(entry.noticeState[window.id]);
+        continue;
+      }
+      const previous = entry.noticeState[window.id] ?? initialState();
+      const result = transitions(meter(window, this.now()), (100 - window.used * 100) / 100, window.resetsAt, previous, toggles);
+      result.state.fired.push(...result.fire);
+      entry.noticeState[window.id] = { ...result.state, read: window.read };
+      for (const milestone of result.fire) {
+        const notice = newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]);
+        notice.accountName = noticeAccountName(account.service, account.agent?.kind, account.label);
+        const forwarder = entry.identity && this.peers ? this.peers.forwarder(account.service, entry.identity) : this.ownKey();
+        if (forwarder)
+          notice.forwarder = forwarder;
+        created.push(notice);
+      }
+    }
+    const present = new Set(entry.windows.filter(visible).map((w) => w.id));
+    for (const id of Object.keys(entry.noticeState))
+      if (!present.has(id))
+        entry.noticeState[id] = dormant(entry.noticeState[id]);
+    if (created.length) {
+      entry.notices = [...entry.notices ?? [], ...created].filter((n) => currentNotice(n, this.now())).slice(-100);
+      this.save();
+      this.deliverNotices(created);
+    }
   }
   forgetGone() {
     if (!this.settled())
@@ -10512,7 +10842,8 @@ class Limits {
   changed(heard = false, own = true) {
     const list = this.list();
     const rows = this.rows();
-    const now = JSON.stringify([list, rows]);
+    const notices = this.notices();
+    const now = JSON.stringify([list, rows, notices]);
     if (own && (!heard || this.now() - this.lastHeardSave >= 30000)) {
       if (heard)
         this.lastHeardSave = this.now();
@@ -10523,7 +10854,7 @@ class Limits {
     if (now === this.said)
       return;
     this.said = now;
-    emit("kuvo.limits.updated", { accounts: list, rows });
+    emit("kuvo.limits.updated", { accounts: list, rows, notices, ownNotices: this.pushableNotices(), notificationAvailability: notificationAvailability() });
   }
   load() {
     if (!this.file)
@@ -10533,6 +10864,8 @@ class Limits {
       for (const [provider, entry] of Object.entries(saved.accounts ?? {})) {
         if (!entry || !Array.isArray(entry.windows) || typeof entry.next !== "number")
           continue;
+        entry.notices = takeNotices(entry.notices);
+        entry.noticeState = takeStates(entry.noticeState);
         this.entries.set(provider, entry);
       }
       for (const [bucket, until] of Object.entries(saved.holds ?? {}))
@@ -10587,7 +10920,7 @@ async function limitsRoutes(limits, method, rest, body = async () => {
     return json7({ message: "Plan limits aren't read on this computer." }, 503);
   if (rest[0] === "reset")
     return resetRoutes(limits.resets, method, rest.slice(1), body);
-  const answer = () => json7({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows() } });
+  const answer = () => json7({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notificationAvailability: notificationAvailability(), notices: limits.notices(), ownNotices: limits.pushableNotices() } });
   if (!rest.length && method === "GET")
     return answer();
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
@@ -10607,10 +10940,10 @@ function agentAccounts(agents) {
   });
 }
 function fingerprint(secret) {
-  return secret ? createHash4("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
+  return secret ? createHash5("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
 }
 function identityOf(raw) {
-  return createHash4("sha256").update(`kuvo-code plan limits account v1
+  return createHash5("sha256").update(`kuvo-code plan limits account v1
 `).update(raw).digest("hex").slice(0, 16);
 }
 function tokenClaims(token) {
@@ -12417,7 +12750,7 @@ function lastLines(text) {
 }
 
 // Packages/Box/src/agents/skills.ts
-import { createHash as createHash5 } from "crypto";
+import { createHash as createHash6 } from "crypto";
 import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync12, readdirSync as readdirSync12, readFileSync as readFileSync20, renameSync as renameSync10, rmSync as rmSync9, statSync as statSync6, symlinkSync, utimesSync, writeFileSync as writeFileSync14 } from "fs";
 import { dirname as dirname12, join as join21, resolve as resolve6, sep as sep10 } from "path";
 var link2;
@@ -12552,7 +12885,7 @@ function skillsFolder(skills) {
   const list = named2(skills);
   if (!list.length)
     return;
-  const set = createHash5("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
+  const set = createHash6("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
 `)).digest("hex").slice(0, 16);
   const root = join21(home, "skills");
   const folder = join21(root, set);
@@ -12619,11 +12952,11 @@ function copySkillsInto(folder, skills) {
     }
     writeFileSync14(record, JSON.stringify(after));
   }
-  return list.length ? createHash5("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
+  return list.length ? createHash6("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
 }
 
 // Packages/Box/src/agents/subagents.ts
-import { createHash as createHash6 } from "crypto";
+import { createHash as createHash7 } from "crypto";
 import { existsSync as existsSync12, lstatSync as lstatSync6, mkdirSync as mkdirSync13, readdirSync as readdirSync13, readFileSync as readFileSync21, realpathSync as realpathSync5, renameSync as renameSync11, rmSync as rmSync10, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync15 } from "fs";
 import { join as join22 } from "path";
 
@@ -12810,7 +13143,7 @@ function antigravityCustomAgents(home, subagents) {
     const tier = antigravityTier(agent.model);
     after[`${file}.md`] = frontMatter({ name: agent.name, description: agent.description, subagent: true, mainAgent: false, ...tier ? { model: tier } : {} }, agent.prompt);
   }
-  const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash6("sha256").update(text).digest("hex").slice(0, 16)]));
+  const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash7("sha256").update(text).digest("hex").slice(0, 16)]));
   try {
     const config = join22(home, "config");
     const folder = join22(config, "agents");
@@ -12840,7 +13173,7 @@ function antigravityCustomAgents(home, subagents) {
     console.error(`Antigravity's custom agents couldn't be written: ${error.message}`);
     return;
   }
-  return Object.keys(after).length ? createHash6("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined;
+  return Object.keys(after).length ? createHash7("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined;
 }
 function frontMatter(fields, body) {
   const lines = Object.entries(fields).map(([key, value]) => `${key}: ${typeof value === "string" ? quoted(value) : value}`);
@@ -12858,7 +13191,7 @@ function setFolder(kind, files) {
   if (!root || !Object.keys(files).length)
     return;
   const names = Object.keys(files).sort();
-  const set = createHash6("sha256").update(names.map((name) => `${name}\x00${files[name]}`).join("\x00\x00")).digest("hex").slice(0, 16);
+  const set = createHash7("sha256").update(names.map((name) => `${name}\x00${files[name]}`).join("\x00\x00")).digest("hex").slice(0, 16);
   const folder = join22(root, `${kind}-${set}`);
   const now = new Date;
   if (existsSync12(join22(folder, ".complete"))) {
@@ -13276,7 +13609,7 @@ class AntigravityAgent {
       const response = await fetch(release.url);
       if (!response.ok || !response.body)
         throw new Error(`Couldn't download Antigravity's agent (HTTP ${response.status}).`);
-      const hash = createHash7("sha256");
+      const hash = createHash8("sha256");
       const writer = Bun.file(archive).writer();
       let bytes = 0;
       this.downloaded = { bytes, total: release.bytes };
@@ -13582,7 +13915,7 @@ function unzipper() {
 
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
-import { createHash as createHash9, randomUUID } from "crypto";
+import { createHash as createHash10, randomUUID } from "crypto";
 import { existsSync as existsSync15, mkdirSync as mkdirSync15, readdirSync as readdirSync15, readFileSync as readFileSync24, rmdirSync as rmdirSync2, rmSync as rmSync12, statSync as statSync10 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname14, join as join26, resolve as resolve7 } from "path";
@@ -13783,7 +14116,7 @@ function homebrewLatest(json, cask) {
 }
 
 // Packages/Box/src/agents/agents/claude-limits.ts
-import { createHash as createHash8 } from "crypto";
+import { createHash as createHash9 } from "crypto";
 import { readFileSync as readFileSync23, statSync as statSync9 } from "fs";
 import { join as join25 } from "path";
 var claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" };
@@ -13847,8 +14180,8 @@ function recordIdentity(configHome, stampText, signatureText, token) {
     const stamp = JSON.parse(stampText);
     if (stamp?.v !== 1 || typeof stamp.identity !== "string")
       return unread(configHome, "its policy note isn't one this version reads");
-    const principal = `token:${createHash8("sha256").update(token.trim()).digest("hex").slice(0, 32)}`;
-    if (stamp?.kind !== "token" || stamp.identity !== createHash8("sha256").update(principal).digest("hex"))
+    const principal = `token:${createHash9("sha256").update(token.trim()).digest("hex").slice(0, 32)}`;
+    if (stamp?.kind !== "token" || stamp.identity !== createHash9("sha256").update(principal).digest("hex"))
       return;
     const payload = String(JSON.parse(signatureText)?.jws ?? "").split(".")[1];
     if (!payload)
@@ -14540,7 +14873,7 @@ class ClaudeAgent {
       written = statSync10(join26(own ?? join26(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
-      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash9("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
+      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash10("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
     return written;
   }
   signsInRemotely = true;
@@ -20798,7 +21131,7 @@ async function branchRoutes(places, method, parts, body) {
 
 // Packages/Box/src/agents/usage/usage.ts
 import { execFileSync as execFileSync2 } from "child_process";
-import { createHash as createHash13 } from "crypto";
+import { createHash as createHash14 } from "crypto";
 import { lstatSync as lstatSync8, mkdirSync as mkdirSync23, readFileSync as readFileSync32, realpathSync as realpathSync8, renameSync as renameSync19, statSync as statSync15, writeFileSync as writeFileSync24 } from "fs";
 import { homedir as homedir5, hostname } from "os";
 import { basename as basename11, dirname as dirname18, join as join37 } from "path";
@@ -23157,7 +23490,7 @@ function readAntigravityDatabase(path) {
 }
 
 // Packages/Box/src/agents/usage/cursor-history.ts
-import { createHash as createHash10 } from "crypto";
+import { createHash as createHash11 } from "crypto";
 import { mkdirSync as mkdirSync20, readFileSync as readFileSync30, renameSync as renameSync16, writeFileSync as writeFileSync21 } from "fs";
 import { join as join34 } from "path";
 var DAY2 = 24 * 60 * 60000;
@@ -23231,7 +23564,7 @@ class CursorHistory {
     const user = cursorSession(access)?.user;
     if (!user)
       throw new LimitsProblem("failed", "Cursor's sign-in doesn't say whose it is.");
-    const key = createHash10("sha256").update(`kuvo-code cursor history v1
+    const key = createHash11("sha256").update(`kuvo-code cursor history v1
 `).update(user).digest("hex").slice(0, 16);
     const under = this.reading.get(key);
     if (under)
@@ -23626,7 +23959,7 @@ function hostedSlots(rows, provider, since) {
 }
 
 // Packages/Box/src/agents/usage/jsonl.ts
-import { createHash as createHash11 } from "crypto";
+import { createHash as createHash12 } from "crypto";
 import { mkdirSync as mkdirSync21, renameSync as renameSync17, rmSync as rmSync15, writeFileSync as writeFileSync22 } from "fs";
 import { open, readdir, readFile as readFile3, stat as stat2 } from "fs/promises";
 import { join as join36 } from "path";
@@ -23853,17 +24186,17 @@ class JSONLFiles {
     return consumed;
   }
 }
-var keptName = (path) => createHash11("sha256").update(path).digest("hex").slice(0, 32) + ".json";
+var keptName = (path) => createHash12("sha256").update(path).digest("hex").slice(0, 32) + ".json";
 async function headOf(handle, length) {
   if (!length)
     return "";
   const buffer = Buffer.alloc(length);
   const { bytesRead } = await handle.read(buffer, 0, length, 0);
-  return createHash11("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
+  return createHash12("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
 }
 
 // Packages/Box/src/agents/usage/settings.ts
-import { createHash as createHash12, randomBytes as randomBytes6 } from "crypto";
+import { createHash as createHash13, randomBytes as randomBytes6 } from "crypto";
 import { mkdirSync as mkdirSync22, readFileSync as readFileSync31, renameSync as renameSync18, statSync as statSync14, writeFileSync as writeFileSync23 } from "fs";
 import { dirname as dirname17 } from "path";
 var SETTINGS_UNITS = ["layout", "providers", "totalSpend", "codexFallback", "notifications"];
@@ -24121,7 +24454,7 @@ class UsageSettings {
       const unit = this.units[name];
       return [name, unit.stamp.v, unit.stamp.by, unit.stamp.imported === true, unit.value];
     });
-    return createHash12("sha256").update(canonical(all)).digest("hex").slice(0, 32);
+    return createHash13("sha256").update(canonical(all)).digest("hex").slice(0, 32);
   }
   change(given, knows, based) {
     const values = [];
@@ -24204,7 +24537,7 @@ class UsageSettings {
   }
 }
 var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var answer3 = (settings, extra = {}) => json9({ data: { settings: settings.values(), versions: settings.versions(), imported: settings.imported, ...extra } });
+var answer3 = (settings, extra = {}) => json9({ data: { settings: settings.values(), versions: settings.versions(), imported: settings.imported, notificationAvailability: notificationAvailability(), ...extra } });
 async function settingsRoutes(settings, choices, method, rest, body) {
   if (!rest.length && method === "GET")
     return answer3(settings);
@@ -24585,7 +24918,7 @@ function placeOf(computer, folder, part) {
   try {
     real = realpathSync8(folder);
   } catch {}
-  const hash = createHash13("sha256").update(`kuvo-code usage place v2
+  const hash = createHash14("sha256").update(`kuvo-code usage place v2
 `).update(computer).update(`
 `).update(real);
   if (part !== undefined)
@@ -24662,7 +24995,7 @@ function claudeSources(folder, computer = ownComputer) {
             found.set(file.path, file);
         const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
         await files.refresh(ordered, since);
-        const listed = createHash13("sha256").update(ordered.map((file) => file.path).join(`
+        const listed = createHash14("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
         const before = last.get(agent.providerID);
         if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -24752,7 +25085,7 @@ function codexSources(folder, fallback = () => {
             }
           }
           await files.refresh(found, since);
-          const listed = createHash13("sha256").update(found.map((file) => file.path).join(`
+          const listed = createHash14("sha256").update(found.map((file) => file.path).join(`
 `)).digest("hex");
           const model = fallback();
           const before = last.get(agent.providerID);
@@ -24835,7 +25168,7 @@ function grokSources(folder, computer = ownComputer) {
                 found.set(file.path, file);
           const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
           await files.refresh(ordered, since);
-          const listed = createHash13("sha256").update(ordered.map((file) => file.path).join(`
+          const listed = createHash14("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -24966,7 +25299,7 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
           if (read.whole)
             wholeAt.set(agent.providerID, now());
           const days = read.days;
-          const said = createHash13("sha256").update(JSON.stringify([...days])).digest("hex");
+          const said = createHash14("sha256").update(JSON.stringify([...days])).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.days === said && before.pricing === pricing && before.since === since)
             return before.slots;
@@ -25121,7 +25454,7 @@ async function updateAll(agents, accounts, noted, known) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash14 } from "crypto";
+import { createHash as createHash15 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync33, realpathSync as realpathSync9, statSync as statSync16 } from "fs";
 import { homedir as homedir6 } from "os";
@@ -26482,7 +26815,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash14("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash15("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -28754,7 +29087,7 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash15 } from "crypto";
+import { createHash as createHash16 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile4, readdir as readdir2, rename, rm, stat as stat3, writeFile } from "fs/promises";
 import { basename as basename12, dirname as dirname20, isAbsolute as isAbsolute3, join as join39, normalize, sep as sep11 } from "path";
@@ -28768,7 +29101,7 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash15("sha256");
+  const hash = createHash16("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
@@ -28786,7 +29119,7 @@ async function plainFiles(from, link, at = "") {
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash15("sha256");
+  const hash = createHash16("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -29076,7 +29409,7 @@ class Carrying {
           const { chat: _, ...kuvo } = session.metadata?.kuvo ?? {};
           session.metadata = { ...session.metadata ?? {}, kuvo: chat ? { ...kuvo, chat } : kuvo };
         }
-        session.projectID = "prj_" + createHash15("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash16("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -30756,7 +31089,7 @@ import { existsSync as existsSync19, readFileSync as readFileSync37, renameSync 
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/usage/usage-peers.ts
-import { createHash as createHash16 } from "crypto";
+import { createHash as createHash17 } from "crypto";
 import { mkdirSync as mkdirSync25, readFileSync as readFileSync36, renameSync as renameSync21, writeFileSync as writeFileSync26 } from "fs";
 import { dirname as dirname21 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
@@ -31031,7 +31364,7 @@ class UsagePeers {
 }
 function digestOf2(accounts) {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []]);
-  return createHash16("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
+  return createHash17("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
 }
 var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
 function fromSlot(slots, first) {
@@ -35400,6 +35733,7 @@ class LimitsPeers {
   peers = new Map;
   told = new Map;
   answered = new Map;
+  noticeBoundary = "";
   constructor(limits, transport, directory, file, now = Date.now) {
     this.limits = limits;
     this.transport = transport;
@@ -35407,6 +35741,9 @@ class LimitsPeers {
     this.file = file;
     this.now = now;
     this.load();
+    this.noticeBoundary = this.boundary();
+    if (directory.told)
+      this.yoursBefore = new Set(directory.peerBoxes().filter(({ key }) => this.ours(key)).map(({ key }) => key));
     limits.peers = this;
     directory.listen(() => this.directorySaid());
     transport.onFollowed?.(() => this.told.clear());
@@ -35431,6 +35768,51 @@ class LimitsPeers {
     }
     return newest;
   }
+  forwarder(service, identity) {
+    const own = this.directory.own()?.key;
+    if (!own || !this.directory.told)
+      return;
+    if (!this.directory.setup || !this.directory.isPeer)
+      return own;
+    const candidates = [own];
+    for (const [key, kept] of this.peers) {
+      if (!this.noticePeer(key, kept) || this.now() - kept.heard > PEER_AWAY2)
+        continue;
+      if (kept.accounts.some((a) => a.service === service && a.identity === identity))
+        candidates.push(key);
+    }
+    return candidates.sort()[0];
+  }
+  ownsPush(key) {
+    return this.directory.own()?.key === key;
+  }
+  noticeStates(service, identity) {
+    if (!this.directory.told || !this.directory.setup || !this.directory.isPeer)
+      return [];
+    return [...this.peers].flatMap(([key, kept]) => this.noticePeer(key, kept) ? kept.accounts.filter((a) => a.service === service && a.identity === identity).map((a) => a.noticeState ?? {}) : []);
+  }
+  notices() {
+    if (!this.directory.told || !this.directory.setup || !this.directory.isPeer)
+      return [];
+    return [...this.peers].flatMap(([key, kept]) => this.noticePeer(key, kept) ? kept.accounts.flatMap((a) => a.notices ?? []).filter((n) => currentNotice(n, this.now())) : []);
+  }
+  reconcileForwarders(pins) {
+    let changed = false;
+    for (const [key, kept] of this.peers) {
+      if (!this.noticePeer(key, kept))
+        continue;
+      for (const account of kept.accounts)
+        for (const notice of account.notices ?? []) {
+          const pin = pins.get(notice.id);
+          if (pin && (!notice.forwarder || pin < notice.forwarder)) {
+            notice.forwarder = pin;
+            changed = true;
+          }
+        }
+    }
+    if (changed)
+      this.save();
+  }
   rows(own) {
     const now = this.now();
     const self = this.directory.own();
@@ -35438,7 +35820,9 @@ class LimitsPeers {
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
     for (const [key, kept] of peers) {
       const ours = this.ours(key);
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...!ours ? { vouched: true } : {}, accounts: ours ? kept.accounts : forVouched(kept.accounts) });
+      const accounts = ours ? kept.accounts : forVouched(kept.accounts);
+      const visible = this.noticePeer(key, kept) ? accounts.map((a) => ({ ...a, ...a.notices ? { notices: a.notices.filter((n) => currentNotice(n, now)) } : {} })) : withoutNotices(accounts);
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...!ours ? { vouched: true } : {}, accounts: visible });
     }
     return limitRows(boxes);
   }
@@ -35449,13 +35833,13 @@ class LimitsPeers {
     const mine = this.shared();
     const theirs = forVouched(mine);
     for (const { key } of this.directory.peerBoxes()) {
-      const accounts = this.ours(key) ? mine : theirs;
-      const json = JSON.stringify(accounts);
+      const accounts = this.forPeer(key, this.ours(key) ? mine : theirs);
+      const json = JSON.stringify([this.noticeEnvelope(key), accounts]);
       const last = this.told.get(key);
       const due = !last || now - last.at >= TELL_AGAIN3 || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
       if (!due)
         continue;
-      this.transport.send(key, { kind: "limits", at: now, accounts, ...!last ? { ask: true } : {} }, false);
+      this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts), ...this.noticeEnvelope(key), ...!last ? { ask: true } : {} }, false);
       this.told.set(key, { json, at: now });
     }
   }
@@ -35471,12 +35855,21 @@ class LimitsPeers {
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW2 ? now - given.at : 0;
     const read = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount2(account, off, now);
+      if (taken && (!this.noticeOurs(from) || given.noticeSetup !== this.directory.setup)) {
+        delete taken.notices;
+        delete taken.noticeState;
+      }
       return taken ? [taken] : [];
     });
     const accounts = !this.ours(from) ? forVouched(read) : read;
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
-    this.peers.set(from, { name, heard: now, accounts });
+    const seen = new Map(before?.accounts.flatMap((a) => a.notices?.map((n) => [n.id, n.forwarder]) ?? []) ?? []);
+    this.peers.set(from, { name, heard: now, accounts, ...this.noticeOurs(from) && given.noticeSetup === this.directory.setup ? { noticeSetup: given.noticeSetup } : {} });
+    this.limits.reconcileNoticeForwarders();
+    const notices = accounts.flatMap((a) => a.notices ?? []).filter((n) => !seen.has(n.id) || seen.get(n.id) !== n.forwarder);
+    if (notices.length)
+      this.limits.deliverNotices(notices);
     this.save();
     this.limits.peersChanged();
     if (given.ask === true || before && now - before.heard > PEER_AWAY2)
@@ -35504,7 +35897,7 @@ class LimitsPeers {
     const now = this.now();
     const mine = this.shared();
     for (const [key, refresh] of asks)
-      this.transport.send(key, { kind: "limits", at: now, accounts: this.ours(key) ? mine : forVouched(mine), refresh }, false);
+      this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, this.ours(key) ? mine : forVouched(mine)), ...this.noticeEnvelope(key), refresh }, false);
   }
   idOf(account, identity) {
     return identity ? `${account.service}#${identity}` : `${this.directory.own()?.key ?? ""}/${account.provider}`;
@@ -35516,21 +35909,49 @@ class LimitsPeers {
     if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY)
       return;
     this.answered.set(key, now);
-    const accounts = this.ours(key) ? this.shared() : forVouched(this.shared());
-    this.transport.send(key, { kind: "limits", at: now, accounts }, false);
-    this.told.set(key, { json: JSON.stringify(accounts), at: now });
+    const accounts = this.forPeer(key, this.ours(key) ? this.shared() : forVouched(this.shared()));
+    this.transport.send(key, { kind: "limits", at: now, accounts, ...this.noticeEnvelope(key) }, false);
+    this.told.set(key, { json: JSON.stringify([this.noticeEnvelope(key), accounts]), at: now });
+  }
+  forPeer(key, accounts) {
+    return this.noticeOurs(key) ? accounts : withoutNotices(accounts);
   }
   ours(key) {
     return this.directory.isYours?.(key) === true;
   }
+  noticeOurs(key) {
+    return !!this.directory.told && !!this.directory.setup && this.ours(key) && this.directory.isPeer?.(key) === true;
+  }
+  noticePeer(key, kept) {
+    return this.noticeOurs(key) && kept.noticeSetup === this.directory.setup;
+  }
+  noticeEnvelope(key) {
+    return this.noticeOurs(key) ? { noticeSetup: this.directory.setup } : {};
+  }
   shared() {
-    const accounts = this.limits.list(false);
+    const accounts = structuredClone(this.limits.list(false));
+    while (Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES3 - 200 * 60) {
+      const largest = accounts.filter((a) => a.notices?.length).sort((a, b) => b.notices.length - a.notices.length)[0];
+      if (!largest)
+        break;
+      largest.notices.shift();
+    }
     while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES3 - 200 * 60)
       accounts.pop();
     return accounts;
   }
   yoursBefore = new Set;
+  boundary() {
+    return JSON.stringify([
+      this.directory.told,
+      this.directory.setup ?? null,
+      this.directory.peerBoxes().filter(({ key }) => this.noticeOurs(key)).map(({ key }) => key).sort()
+    ]);
+  }
   directorySaid() {
+    const boundary = this.boundary();
+    let urgent = boundary !== this.noticeBoundary;
+    this.noticeBoundary = boundary;
     const here = new Set(this.directory.peerBoxes().map((box) => box.key));
     const yours = new Set([...here].filter((key) => this.ours(key)));
     for (const key of yours)
@@ -35556,11 +35977,22 @@ class LimitsPeers {
     for (const key of [...this.answered.keys()])
       if (!here.has(key))
         this.answered.delete(key);
+    for (const [key, kept] of this.peers) {
+      if (this.noticePeer(key, kept))
+        continue;
+      if (kept.noticeSetup || kept.accounts.some((a) => a.notices?.length || Object.keys(a.noticeState ?? {}).length)) {
+        kept.accounts = withoutNotices(kept.accounts);
+        delete kept.noticeSetup;
+        gone = true;
+      }
+    }
+    this.limits.settleNoticeForwarders();
     if (gone) {
       this.save();
       this.limits.peersChanged();
     }
-    this.tell(true);
+    urgent ||= gone;
+    this.tell(urgent);
   }
   load() {
     if (!this.file)
@@ -35570,7 +36002,7 @@ class LimitsPeers {
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount2(account, 0, Infinity) ?? []) });
+        this.peers.set(key, { ...typeof kept.noticeSetup === "string" ? { noticeSetup: kept.noticeSetup } : {}, name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount2(account, 0, Infinity) ?? []) });
       }
     } catch {}
   }
@@ -35586,11 +36018,14 @@ class LimitsPeers {
 }
 function forVouched(accounts) {
   return accounts.map((account) => {
-    const { agentsReset: _, balance: ___, ...told } = account;
+    const { agentsReset: _, balance: ___, notices: ____, noticeState: _____, ...told } = account;
     const extras = (account.extras ?? []).filter((extra) => extra.kind === "resets" || extra.kind === "unreadable").map(({ agents: __, ...extra }) => extra);
     delete told.extras;
     return extras.length ? { ...told, extras } : told;
   });
+}
+function withoutNotices(accounts) {
+  return accounts.map(({ notices, noticeState, ...account }) => account);
 }
 var text7 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 var time2 = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
@@ -35665,6 +36100,8 @@ function takenAccount2(given, off, now) {
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
     ...text7(account.plan, 100) ? { plan: text7(account.plan, 100) } : {},
     windows,
+    notices: takeNotices(account.notices).map((notice) => ({ ...notice, at: moved(notice.at) ?? notice.at })),
+    noticeState: Object.fromEntries(Object.entries(takeStates(account.noticeState)).map(([id, state]) => [id, { ...state, ...state.read !== undefined ? { read: moved(state.read) } : {} }])),
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
     ...extras.length ? { extras } : {},
     ...account.agentsReset === true ? { agentsReset: true } : {},
@@ -35840,6 +36277,8 @@ var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeF
 delete process.env.KUVO_TEST_PRICE_FEEDS;
 var usageFolder = join42(home3, "usage");
 var usageSettings = new UsageSettings(join42(usageFolder, "settings.json"));
+limits.settings = usageSettings;
+limits.ownKey = () => directory.own()?.key ?? "";
 var claudeUsage2 = claudeSources(usageFolder);
 var codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback);
 var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join42(machineHome, "data", "opencode") : undefined);
@@ -36053,4 +36492,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c63fe87e708e7daed892ae8221eed64f42c7b00ac3a0c35ff90279ab9c97e211
+// Built from Packages/Box/src/agents 45371dc5488ed98be4669a59abe2e957c5b5cb6302907ac1b19846e66ba1b668

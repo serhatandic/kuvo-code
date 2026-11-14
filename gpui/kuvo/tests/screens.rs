@@ -32,7 +32,7 @@ fn open(cx: &mut TestAppContext, stand_in: StandIn) -> (Entity<Workspace>, &mut 
     let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
     cx.simulate_resize(size(px(1200.), px(800.)));
     workspace.update_in(cx, |workspace, _, cx| {
-        workspace.set_now(NOW);
+        workspace.set_now(NOW, cx);
         workspace.read_at_once(cx);
     });
     cx.run_until_parked();
@@ -994,8 +994,11 @@ fn the_keyboard_walks_the_sidebar_and_opens_what_its_on(cx: &mut TestAppContext)
     let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
     workspace.update_in(cx, |workspace, window, cx| workspace.focus_search(window, cx));
 
-    // ↓ from the search steps into the list: the first project, then its first session.
+    // ↓ from the search steps into the list: what needs you first, then the first project, then its
+    // first session.
     cx.simulate_keystrokes("down");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), Some("needs:ses_limits".into()));
+    cx.simulate_keystrokes("down down");
     assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), Some(format!("project:{}", "/Users/sam/Projects/website")));
     cx.simulate_keystrokes("down down");
     assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), Some("session-project:ses_dark".into()));
@@ -1007,10 +1010,10 @@ fn the_keyboard_walks_the_sidebar_and_opens_what_its_on(cx: &mut TestAppContext)
 
     // Return on a project folds it; ↑ from the first row goes back to the search.
     workspace.update_in(cx, |workspace, window, cx| workspace.focus_search(window, cx));
-    cx.simulate_keystrokes("down enter");
+    cx.simulate_keystrokes("down down down enter");
     assert!(workspace.read_with(cx, |workspace, _| workspace.is_collapsed("/Users/sam/Projects/website")));
     assert!(bounds(cx, "session-project-ses_signup").is_none());
-    cx.simulate_keystrokes("up");
+    cx.simulate_keystrokes("up up up");
     assert_eq!(workspace.read_with(cx, |workspace, _| workspace.walked().map(str::to_owned)), None);
     let search = workspace.read_with(cx, |workspace, _| workspace.search().clone());
     assert!(cx.update(|window, cx| search.focus_handle(cx).is_focused(window)));

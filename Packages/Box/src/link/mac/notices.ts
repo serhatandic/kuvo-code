@@ -1,6 +1,7 @@
 // This Mac's notices for your phones (PROTOCOL.md, "kuvo/attention")
 
 import fs from "node:fs";
+import { finishUsage } from "../notices/usage-delivery";
 import { writePrivate } from "../files";
 import { HELD_FILE, NoticeHold } from "../notices/hold";
 import { sendToPhones } from "../notices/push";
@@ -37,6 +38,7 @@ export function macNoticeHold(clock = {}) {
 // phone link's on, or until its app says whether it is (as it starts); none while it's off.
 export function macTell(notice: Notice): boolean {
   // Off: let go now, so turning it on later never sends what came while it was off.
-  if (!macLink.hold || (macLink.config && !macLink.config.phones)) return true;
+  if (macLink.config && !macLink.config.phones) { finishUsage(notice); return true; }
+  if (!macLink.hold) return false;
   return macLink.hold.tell(notice);
 }

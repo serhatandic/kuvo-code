@@ -21,7 +21,7 @@ final class AppContainer {
     /// changes through the capability. Empty when no installed provider needs a user key.
     let apiKeyProviders: [any APIKeyManaging]
     /// Quota pace notification preferences (three independent triggers). Drives the Settings section
-    /// and is read by `WidgetDataStore.evaluateNotifications`.
+    /// shared with the box through HostSettings.
     let notificationSettings: NotificationSettingsStore
     /// Source of truth for the popover's transparency: the persisted Increase Transparency toggle, the
     /// ephemeral secret-code easter-egg state, and the system accessibility flags it yields to. Read by both
@@ -93,7 +93,6 @@ final class AppContainer {
             // Refreshed only once its account is connected in the host, whatever's turned on.
             isProviderEnabled: { [enablement, availability] in enablement.isEnabled($0) && availability.isKnownConnected($0) },
             orderedDescriptors: { [layout] in layout.visiblePlaced.compactMap { layout.descriptor(for: $0) } },
-            notificationSettings: { notificationSettings },
             providerIdentityKeys: accountAssembly.identityKeysByCard
         )
         dataStore.availability = availability
@@ -154,10 +153,13 @@ final class AppContainer {
 
         self.transparency = PopoverTransparencyStore()
         self.privacy = MenuBarPrivacyStore()
-        // Become the notification-center delegate so banners show while frontmost — a menu-bar accessory
-        // effectively always is. Notification authorization is requested the first time a trigger is
-        // turned on in Settings, not at launch — triggers default off. No-op under tests.
-        AppNotifications.shared.registerAsDelegate()
+        // The host owns notification presentation and tap routing.
+    }
+
+    var alertAvailabilityMessages: [String] {
+        UsageAlertAvailability.shared.messages(for: registry.providers.filter {
+            enablement.isEnabled($0.id) && availability.isKnownConnected($0.id)
+        }.map(\.id))
     }
 
     deinit {
@@ -242,10 +244,6 @@ final class AppContainer {
             let wakeSignal = RefreshWakeSignal()
             while !Task.isCancelled {
                 await dataStore.refreshAll()
-                // Re-evaluate quota pace milestones every tick — after the refresh so it sees fresh data,
-                // and on every loop (not just on a fetch) so pace worsening from elapsed time alone still
-                // alerts even with the popover closed.
-                await dataStore.evaluateNotifications()
                 await wakeSignal.waitForWake(timeout: RefreshSetting.interval)
             }
         }

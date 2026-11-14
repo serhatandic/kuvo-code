@@ -4,6 +4,7 @@
 // `run/notices/pushed.json`, so a phone that hears nothing can be told from one that was sent nothing.
 
 import path from "node:path";
+import { finishUsageForPhone, usageSentTo } from "./usage-delivery";
 import { isObject } from "../../shared/json";
 import { textOf, writePrivate } from "../files";
 import { RUN } from "../home";
@@ -23,17 +24,24 @@ export interface PushHost {
  * to; false when it can't go now (no connection, or one closing as it's handed over), to be tried
  * again. */
 export function sendToPhones(host: PushHost | null | undefined, link: LinkState | null | undefined, notice: Notice): boolean {
+  const usage = notice.category === "usage" && !!notice.data?.notice;
   const phones = (link?.phones ?? []).filter((phone): phone is Phone & { address: string } => typeof phone.address === "string" && phone.address !== "");
-  if (!phones.length) return true;
+  const pending = usage ? phones.filter(phone => !usageSentTo(notice, phone.key)) : phones;
+  if (!pending.length) return true;
   if (!host?.welcomed || !link?.key) return false;
   const json = noticeJSON(notice);
   const key = Buffer.from(link.key, "base64url");
   let sent = 0;
-  for (const phone of phones) {
+  for (const phone of pending) {
     // Only a connection that took it: one closing takes nothing.
-    try { if (host.send(pushTo(phone, json, key)) === true) sent += 1; } catch {}
+    try {
+      if (host.send(pushTo(phone, json, key)) === true) {
+        sent += 1;
+        if (usage) finishUsageForPhone(notice, phone.key);
+      }
+    } catch {}
   }
-  return sent > 0;
+  return usage ? sent === pending.length : sent > 0;
 }
 
 /** How a push went, as the relay answers it (`0x06`): Apple took it, no phone is registered at that

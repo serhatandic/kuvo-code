@@ -30,7 +30,7 @@ fn open<'a>(cx: &'a mut TestAppContext, stand_in: StandIn, session: &str) -> (En
     let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
     cx.simulate_resize(size(px(1280.), px(820.)));
     workspace.update_in(cx, |workspace, window, cx| {
-        workspace.set_now(NOW);
+        workspace.set_now(NOW, cx);
         workspace.read_at_once(cx);
         workspace.open_read_at_once(session, window, cx);
     });
@@ -102,7 +102,7 @@ fn a_session_started_with_the_panel_open_shows_its_folder_once_the_box_lists_it(
     let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
     cx.simulate_resize(size(px(1280.), px(820.)));
     workspace.update(cx, |workspace, cx| {
-        workspace.set_now(NOW);
+        workspace.set_now(NOW, cx);
         workspace.read_at_once(cx);
         workspace.toggle_panel(cx);
     });

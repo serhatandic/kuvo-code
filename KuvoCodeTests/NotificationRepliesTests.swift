@@ -1,3 +1,4 @@
+import UserNotifications
 import ClientText
 import Foundation
 import OpenCodeKit
@@ -68,4 +69,15 @@ import Testing
         #expect(sent.body["text"] as? String == "Now add tests for it")
         #expect(sent.body["delivery"] as? String == "queue", "it waits in line while the agent works")
     }
+    @Test func aUsageTapOpensTheUsagePanelThroughTheHostsDelegate() {
+        let notifier = Notifier.shared
+        let previous = notifier.openUsage
+        defer { notifier.openUsage = previous }
+        var opened = 0
+        notifier.openUsage = { opened += 1 }
+        let action = Notifier.response(to: UNNotificationDefaultActionIdentifier, info: ["usage": true], text: nil)
+        notifier.handle(action)
+        #expect(opened == 1)
+    }
+
 }

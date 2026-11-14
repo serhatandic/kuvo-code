@@ -3449,6 +3449,9 @@
             "literal": "usage.history"
            },
            {
+            "literal": "usage.notices"
+           },
+           {
             "literal": "usage.settings"
            },
            {
@@ -3966,6 +3969,9 @@
            },
            {
             "literal": "usage.history"
+           },
+           {
+            "literal": "usage.notices"
            },
            {
             "literal": "usage.settings"

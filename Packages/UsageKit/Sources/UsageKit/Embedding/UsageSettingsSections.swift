@@ -102,6 +102,9 @@ public struct UsageSettingsSections: View {
                 milestone(.underTenPercent, isOn: $notifications.underTenPercent)
                 milestone(.healthyToClose, isOn: $notifications.healthyToClose)
                 milestone(.closeToRunningOut, isOn: $notifications.closeToRunningOut)
+                ForEach(container.alertAvailabilityMessages, id: \.self) { message in
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
                 if notifications.anyEnabled, alerts != .allowed {
                     LabeledContent {
                         if alerts == .denied {

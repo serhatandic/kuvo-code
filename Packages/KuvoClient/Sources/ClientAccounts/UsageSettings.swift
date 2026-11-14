@@ -19,8 +19,10 @@ public struct BoxUsageSettings: Decodable, Hashable, Sendable {
     public var versions: [String: String]
     /// The parts of a change turned away for that.
     public var stale: [String]
+    /// Box-owned explanations for providers that cannot send usage alerts.
+    public var notificationAvailability: JSONValue
 
-    private enum CodingKeys: String, CodingKey { case settings, imported, took, versions, stale }
+    private enum CodingKeys: String, CodingKey { case settings, imported, took, versions, stale, notificationAvailability }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -28,6 +30,7 @@ public struct BoxUsageSettings: Decodable, Hashable, Sendable {
         imported = (try? container.decodeIfPresent(Bool.self, forKey: .imported)) ?? false
         took = (try? container.decodeIfPresent([String].self, forKey: .took)) ?? []
         versions = (try? container.decodeIfPresent([String: String].self, forKey: .versions)) ?? [:]
+        notificationAvailability = (try? container.decodeIfPresent(JSONValue.self, forKey: .notificationAvailability)) ?? .array([])
         stale = (try? container.decodeIfPresent([String].self, forKey: .stale)) ?? []
     }
 

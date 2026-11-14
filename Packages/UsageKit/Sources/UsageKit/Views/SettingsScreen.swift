@@ -247,6 +247,9 @@ struct SettingsScreen: View {
                 notifToggleRow(.underTenPercent, isOn: $notifications.underTenPercent)
                 notifToggleRow(.healthyToClose, isOn: $notifications.healthyToClose)
                 notifToggleRow(.closeToRunningOut, isOn: $notifications.closeToRunningOut)
+                ForEach(container.alertAvailabilityMessages, id: \.self) { message in
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
                 if needsAttention {
                     notificationsActionRow
                 }
