@@ -1,7 +1,10 @@
 // The models a session can use here, and the one a new session starts on (PROTOCOL.md, "The models
-// offered"): `GET kuvo/models/offered`, decided by the box's one rule (work/model-rule.ts), so every
-// client's picker offers the same, and a new session starts by the same rule whoever starts it.
+// offered"): `GET kuvo/models/offered[?folder=<path>]`, decided by the box's one rule
+// (work/model-rule.ts), so every client's picker offers the same, and a new session starts by the
+// same rule whoever starts it, in a project's folder by what its own settings add too.
 
+import fs from "node:fs";
+import path from "node:path";
 import type { Target } from "../../shared/records";
 import { targetsOf } from "../letters/tools";
 import { listsHere, offeredHere, startingModel, stillListing, type Lists, type Ref } from "../work/model-rule";
@@ -17,14 +20,26 @@ function wantedIn(requestPath: string): Ref | null {
   return providerID && id ? { providerID, id, ...(variant ? { variant } : {}) } : null;
 }
 
+/** The folder asked about (`folder`: a project's, or a conversation's): the engine's lists there,
+ * where a project's own settings may add providers, models or its default; undefined for none
+ * named (the box's own lists), null for one that isn't a full path. */
+function folderIn(requestPath: string): string | null | undefined {
+  const folder = new URLSearchParams(requestPath.split("?")[1] ?? "").get("folder")?.trim();
+  if (!folder) return undefined;
+  return path.isAbsolute(folder) ? path.resolve(folder) : null;
+}
+
 export async function* modelsOfferedRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  const folder = folderIn(request.path);
+  if (folder === null) return yield* json(400, { message: "Send the folder's full path." });
+  if (folder !== undefined && !(await fs.promises.stat(folder).then(found => found.isDirectory(), () => false))) return yield* json(404, { message: "There's no such folder here." });
   if (!targetsOf({ readEngine, bridge }).length) return yield* json(503, { message: "The engine isn't running." });
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
   const agents = bridge();
-  const lists = await listsHere(engine, agents);
+  const lists = await listsHere(engine, agents, folder);
   return yield* json(200, offeredAnswer(lists, wantedIn(request.path)));
 }
 

@@ -101,10 +101,29 @@ export function noteModelsEvent(event: { type?: string }): void {
 /** Lets go of everything kept (a test's own lists). */
 export function forgetModelLists(): void {
   kept.clear();
+  lastNames.clear();
 }
+
+/** Each model's name as last listed here, for one since gone from its list (its refusal names it so). */
+const lastNames = new Map<string, string>();
+const nameKey = (ref: { providerID: string; id: string }) => `${ref.providerID}\u0000${ref.id}`;
+
+/** `ref`'s name as it was last listed here; none for one never listed since the box started. */
+export const lastName = (ref: { providerID: string; id: string }): string | undefined => lastNames.get(nameKey(ref));
 
 function modelsIn(listed: unknown): Listed[] | null {
   if (!Array.isArray(listed)) return null;
+  const models = modelsListed(listed);
+  for (const model of models) {
+    const key = nameKey(model);
+    lastNames.delete(key);
+    lastNames.set(key, model.name);
+  }
+  while (lastNames.size > 5_000) lastNames.delete(lastNames.keys().next().value!);
+  return models;
+}
+
+function modelsListed(listed: unknown[]): Listed[] {
   return listed.flatMap(each => {
     // (One turned off is as good as gone.)
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) return [];

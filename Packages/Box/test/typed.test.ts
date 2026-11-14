@@ -64,7 +64,7 @@ describe("what a whole text means", () => {
 // ——— The route ———
 
 type Asked = { method: string; path: string; folder: string | null; body: any }
-type Conversation = { id: string; parentID?: string; agent?: string; location: { directory: string }; time: { created: number; updated: number }; metadata?: any }
+type Conversation = { id: string; parentID?: string; agent?: string; model?: { providerID: string; id: string }; location: { directory: string }; time: { created: number; updated: number }; metadata?: any }
 
 let engine: ReturnType<typeof Bun.serve>
 let bridge: ReturnType<typeof Bun.serve>
@@ -81,6 +81,7 @@ let held: { reached: () => void; release: Promise<void> } | null = null
 /** What the bridge answers a goal, side question, handoff or review: its status and body. */
 let bridgeSays: (asked: Asked) => { status: number; body: unknown } = () => ({ status: 200, body: {} })
 let typedRoute: typeof import("../src/link/areas/typed").typedRoute
+let forgetModelLists: () => void
 let TYPED_SENT: string
 let TYPED_ROUTE: RegExp
 
@@ -111,6 +112,7 @@ function startBridge() {
 
 beforeAll(async () => {
   ;({ typedRoute, TYPED_ROUTE, TYPED_SENT } = await import("../src/link/areas/typed"))
+  ;({ forgetModelLists } = await import("../src/link/work/model-rule"))
   engine = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -149,6 +151,8 @@ beforeEach(() => {
   bridgeRuns = true
   commandsAnswer = COMMANDS
   engineLists = {}
+  // (What the engine listed in one test isn't another's.)
+  forgetModelLists()
   rmSync(TYPED_SENT, { force: true })
   held = null
   bridgeSays = () => ({ status: 200, body: {} })
@@ -296,13 +300,11 @@ describe("kuvo/sessions/<id>/typed", () => {
   })
 
   test("a model its provider is retiring can still read a review: the composer offers it", async () => {
-    const { forgetModelLists } = await import("../src/link/work/model-rule")
-    forgetModelLists()
     engineLists = {
       "/api/provider": [{ id: "deepseek" }],
       "/api/model": [{ id: "v3", providerID: "deepseek", name: "DeepSeek V3", status: "deprecated" }, { id: "v4", providerID: "deepseek", name: "DeepSeek V4" }],
       "/api/integration": [{ id: "deepseek", name: "DeepSeek", methods: [{ type: "key" }], connections: [{ type: "credential" }] }],
-      "/api/model/default": null,
+      "/api/model/default": { providerID: "deepseek", id: "v4" },
     }
     bridgeSays = each => ({ status: 200, body: { data: { id: "r1", model: each.body.model } } })
     const { json } = await ask("POST", "ses_main", { text: "/review with DeepSeek V3 the parser" })
@@ -345,9 +347,35 @@ describe("kuvo/sessions/<id>/typed", () => {
     expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "draft" })
   })
 
-  test("a model that can't run: said, all of it kept; a \"!\" command still runs", async () => {
-    expect((await ask("POST", "ses_main", { text: "fix it", refusal: "Sign in to Anthropic again." })).json).toEqual({ restore: { text: "fix it" }, error: "Sign in to Anthropic again." })
-    expect((await ask("POST", "ses_main", { text: "!npm test", refusal: "Sign in to Anthropic again." })).json).toEqual({ shell: "npm test" })
+  test("a model that can't run: said in the box's words with what to do, all of it kept; a \"!\" command still runs", async () => {
+    engineLists = {
+      "/api/provider": [{ id: "deepseek" }],
+      "/api/model": [{ id: "v4", providerID: "deepseek", name: "DeepSeek V4" }, { id: "claude-opus-5-5", providerID: "anthropic", name: "Claude Opus 5.5" }],
+      "/api/integration": [
+        { id: "deepseek", name: "DeepSeek", methods: [{ type: "key" }], connections: [{ type: "credential" }] },
+        { id: "anthropic", name: "Anthropic", methods: [{ type: "oauth", id: "browser" }, { type: "key" }], connections: [] },
+      ],
+      "/api/model/default": { providerID: "anthropic", id: "claude-opus-5-5" },
+    }
+    // (What a client sends as its own words is no longer what's said: the box decides.)
+    expect((await ask("POST", "ses_main", { text: "/goal ship it", refusal: "Sign in to Anthropic again." })).json).toEqual({
+      restore: { text: "/goal ship it" }, error: "Claude Opus 5.5 needs a sign-in to Anthropic: sign in, or choose another model.",
+      action: { do: "signIn", label: "Sign In", help: "Sign in to Anthropic" },
+    })
+    expect((await ask("POST", "ses_main", { text: "!npm test" })).json).toEqual({ shell: "npm test" })
+    // On a model that runs, it goes, whatever a client says.
+    conversations.ses_main.model = { providerID: "deepseek", id: "v4" }
+    expect((await ask("POST", "ses_main", { text: "fix it", refusal: "Sign in to Anthropic again." })).json).toEqual({ send: { text: "fix it", quoted: true } })
+  })
+
+  test("none to run on: choose one; the engine not saying its lists lets it go, as a client does", async () => {
+    engineLists = { "/api/provider": [{ id: "deepseek" }], "/api/model": [{ id: "v4", providerID: "deepseek", name: "DeepSeek V4" }], "/api/integration": [], "/api/model/default": null }
+    expect((await ask("POST", "ses_main", { text: "fix it" })).json).toEqual({
+      restore: { text: "fix it" }, error: "Choose a model to send it.", action: { do: "choose", label: "Choose a Model", help: "Choose a model" },
+    })
+    forgetModelLists()
+    engineLists = {}
+    expect((await ask("POST", "ses_main", { text: "fix it" })).json).toEqual({ send: { text: "fix it", quoted: true } })
   })
 
   test("a conversation that isn't here, and a send without text", async () => {

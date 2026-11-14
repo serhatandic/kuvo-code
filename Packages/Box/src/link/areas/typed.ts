@@ -23,10 +23,11 @@ import { isAutopilot } from "../work/autopilot";
 import { listsHere, offeredHere } from "../work/model-rule";
 import { botOfConversation } from "../work/tree";
 import { zone } from "../work/clock";
-import { decide, writtenBack, GOALS_NOT_RUNNING, KEYWORD_UNAVAILABLE, type BoxStep, type Decision, type Restore } from "../typed/decide";
+import { decide, needsModel, writtenBack, GOALS_NOT_RUNNING, KEYWORD_UNAVAILABLE, type BoxStep, type Decision, type Restore } from "../typed/decide";
 import { KEYWORD_WORDS, KEYWORDS, commandsOffered, splitCommand, parseGoal, parseKeyword, type Command, type Keyword, type ModelRef, type Reader } from "../typed/words";
 import { autopilotRoute } from "./autopilot";
 import { answerWakes } from "./wakes";
+import { modelOf } from "./session-models";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const TYPED_ROUTE = /^kuvo\/sessions\/([^/]+)\/typed$/;
@@ -298,12 +299,17 @@ async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): Asy
   const onAgents = agents !== null && place.target.port === agents.port;
   const readers = typed?.keyword === "review" && !onAgents ? await reviewReaders(engine, folder) : [];
   const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, within(signal, 10_000)).then(() => true, () => false) : false;
+  // Whether its model can run, as this box says it (`kuvo/sessions/models`): only where the text
+  // needs it, and not for a coding agent's own subagent (its agent runs it on the parent's).
+  // One that can't be said now is let go, as a client lets it go.
+  const model = needsModel(text) && !(onAgents && data.parentID) ? await modelOf(place, engine, agents).catch(() => undefined) : undefined;
+  const refusal = model?.refusal ?? null;
   const decision = decide(text, {
     keywords,
     commands: commands ?? [],
     files: body.files === true,
     side: body.side === true,
-    refusal: typeof body.refusal === "string" && body.refusal.trim() ? body.refusal : null,
+    refusal,
     readers,
     reviewer: refOf(body.reviewer),
     subagent: Boolean(data.parentID),
@@ -348,5 +354,7 @@ async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): Asy
   }) : null;
   if (plan && !agent) return yield* json(200, { ...(decision.keyword ? { keyword: decision.keyword } : {}), restore: writtenBack(text), error: "The mode couldn’t be changed: its engine didn’t take it. Try again." });
   const { plan: _plan, ...answer } = answerOf(decision, done, failure) as Record<string, unknown>;
-  return yield* json(200, { ...answer, ...(agent ? { agent } : {}) });
+  // Refused for its model (decide's first rule): what to offer doing about it, with its words.
+  const action = refusal && model?.action ? { action: model.action } : {};
+  return yield* json(200, { ...answer, ...action, ...(agent ? { agent } : {}) });
 }

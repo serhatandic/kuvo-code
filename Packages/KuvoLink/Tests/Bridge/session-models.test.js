@@ -29,7 +29,8 @@ async function standIn(routes) {
   const server = http.createServer((request, response) => {
     if (request.headers["x-opencode-directory"]) folders.push(decodeURIComponent(request.headers["x-opencode-directory"]));
     asked.push(request.url);
-    const value = typeof routes === "function" ? routes(request.url) : routes[request.url];
+    const folder = request.headers["x-opencode-directory"] ? decodeURIComponent(request.headers["x-opencode-directory"]) : undefined;
+    const value = typeof routes === "function" ? routes(request.url, folder) : routes[request.url];
     const status = value === undefined ? 404 : value === FAILS ? 500 : 200;
     response.writeHead(status, { "content-type": "application/json" });
     response.end(JSON.stringify(status !== 200 ? { message: "No such thing." } : { data: value }));
@@ -159,12 +160,17 @@ async function answer(method, route, on = handle) {
   const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
   return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
 }
-const statesOn = async (on, ...ids) => {
+// What the box says of each session's model, with what that means for a composer (its words,
+// `refusal`, `choose` and `action`) apart: `worded` keeps them, the others leave them out (the
+// tests of the words come after).
+const wordedOn = async (on, ...ids) => {
   const { status, json } = await answer("GET", `kuvo/sessions/models?sessions=${ids.join(",")}`, on);
   assert.equal(status, 200);
   return json.sessions;
 };
+const statesOn = async (on, ...ids) => Object.fromEntries(Object.entries(await wordedOn(on, ...ids)).map(([id, { refusal, choose, action, ...state }]) => [id, state]));
 const states = (...ids) => statesOn(handle, ...ids);
+const worded = (...ids) => wordedOn(handle, ...ids);
 
 test("a model that runs: the model and its name, and nothing missing", async () => {
   const shown = await states("ses_fine", "ses_free");
@@ -314,6 +320,34 @@ test("a session with no model of its own runs on the engine's default", async ()
   assert.deepEqual((await states("ses_none")).ses_none, { model: { providerID: "anthropic", id: "claude-opus-5-5" }, name: "Claude Opus 5.5", runs: true });
 });
 
+test("what a composer draws, worded by the box: a refusal saying what to do, whether a model must be chosen, and what to offer", async () => {
+  const shown = await worded("ses_fine", "ses_signedOut", "ses_xai", "ses_cursor", "ses_agentRemoved");
+  // One that runs: nothing to say.
+  assert.deepEqual(shown.ses_fine, { model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" }, name: "Claude Opus 5.5", runs: true });
+  assert.deepEqual([shown.ses_signedOut.refusal, shown.ses_signedOut.choose, shown.ses_signedOut.action], [
+    "GPT-5.5 needs a sign-in to GitHub Copilot: sign in, or choose another model.", undefined, { do: "signIn", label: "Sign In", help: "Sign in to GitHub Copilot" },
+  ]);
+  assert.deepEqual([shown.ses_xai.refusal, shown.ses_xai.action.do], ["Grok 4.7 needs an xAI key: add one, or choose another model (with a SuperGrok plan, one under Grok).", "addKey"]);
+  assert.deepEqual([shown.ses_cursor.refusal, shown.ses_cursor.action.label], ["composer-2 needs Cursor installed: install it, or choose another model.", "Install"]);
+  assert.deepEqual([shown.ses_agentRemoved.refusal, shown.ses_agentRemoved.choose, shown.ses_agentRemoved.action.do], ["claude-opus-5-5 is no longer available: choose another model.", true, "choose"]);
+});
+
+test("a model gone from its provider's list is named as the box last listed it", async () => {
+  link.forgetModelLists();
+  // Listed once (the Claude 3 Opus it was), then gone from Anthropic's list.
+  const before = handlerOn(await engineWith({ "/api/model": [...engineLists["/api/model"], model("anthropic", "claude-3-opus", "Claude 3 Opus")] }));
+  assert.equal((await statesOn(before, "ses_gone")).ses_gone.runs, true);
+  const gone = (await worded("ses_gone")).ses_gone;
+  assert.deepEqual([gone.refusal, gone.choose], ["Claude 3 Opus is no longer among Anthropic’s models: choose another model.", true]);
+});
+
+test("none to run on: choose one", async () => {
+  const none = handlerOn(await engineWith({ "/api/model/default": null }));
+  assert.deepEqual((await wordedOn(none, "ses_none")).ses_none, {
+    model: null, runs: false, missing: "model", refusal: "Choose a model to send it.", choose: true, action: { do: "choose", label: "Choose a Model", help: "Choose a model" },
+  });
+});
+
 test("none named is refused, and it's only read", async () => {
   assert.equal((await answer("GET", "kuvo/sessions/models")).status, 400);
   assert.equal((await answer("POST", "kuvo/sessions/models?sessions=ses_fine")).status, 405);
@@ -407,4 +441,33 @@ test("a provider the engine has ready with a key of its own (an environment vari
   // Without it: its ChatGPT plan's sign-in is Codex's, so the engine's OpenAI needs a key, and isn't offered.
   assert.ok(!refs((await offeredOn(handle)).models).includes("openai/gpt-5.5"));
   assert.equal((await states("ses_chatgpt")).ses_chatgpt.plan?.agent, "Codex");
+});
+
+test("the models offered in a project's folder: the engine's lists there, where its own settings add models, and the default it starts on there", async () => {
+  const project = fs.mkdtempSync(path.join(home, "project-"));
+  // The engine lists a model only that project's settings add, and its default there.
+  const own = await standIn((url, folder) => {
+    const lists = { ...engineLists };
+    if (folder === project) {
+      lists["/api/provider"] = [...lists["/api/provider"], { id: "my-own" }];
+      lists["/api/model"] = [...lists["/api/model"], model("my-own", "local-7b", "Local 7B", { variants: [{ id: "high" }] })];
+      lists["/api/model/default"] = { providerID: "my-own", id: "local-7b" };
+    }
+    return lists[url];
+  });
+  const on = handlerOn(own);
+  link.forgetModelLists();
+  const there = await offeredOn(on, `?folder=${encodeURIComponent(project)}`);
+  const local = there.models.find(each => each.providerID === "my-own");
+  assert.deepEqual(local, { providerID: "my-own", id: "local-7b", name: "Local 7B", side: "engine", efforts: ["high"], aliases: [] });
+  assert.deepEqual(there.starting, { providerID: "my-own", id: "local-7b" });
+  // Not in the box's own lists, nor another folder's.
+  const plain = await offeredOn(on);
+  assert.equal(plain.models.some(each => each.providerID === "my-own"), false);
+  assert.deepEqual(plain.starting, { providerID: "anthropic", id: "claude-opus-5-5" });
+});
+
+test("a folder that isn't a full path, or isn't one here, is refused", async () => {
+  assert.equal((await answer("GET", "kuvo/models/offered?folder=src%2Fapp")).status, 400);
+  assert.equal((await answer("GET", `kuvo/models/offered?folder=${encodeURIComponent(path.join(home, "nowhere"))}`)).status, 404);
 });

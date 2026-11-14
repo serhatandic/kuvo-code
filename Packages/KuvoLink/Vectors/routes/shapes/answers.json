@@ -3221,7 +3221,13 @@
             "literal": "models.offered"
            },
            {
+            "literal": "models.offered.folder"
+           },
+           {
             "literal": "models.offered.sides"
+           },
+           {
+            "literal": "models.readiness"
            },
            {
             "literal": "moves"
@@ -3710,7 +3716,13 @@
             "literal": "models.offered"
            },
            {
+            "literal": "models.offered.folder"
+           },
+           {
             "literal": "models.offered.sides"
+           },
+           {
+            "literal": "models.readiness"
            },
            {
             "literal": "moves"
@@ -9226,6 +9238,30 @@
            "agent": "string",
            "provider": "string"
           }
+         },
+         "refusal?": "string",
+         "choose?": "bool",
+         "action?": {
+          "object": {
+           "do": {
+            "oneOf": [
+             {
+              "literal": "signIn"
+             },
+             {
+              "literal": "addKey"
+             },
+             {
+              "literal": "install"
+             },
+             {
+              "literal": "choose"
+             }
+            ]
+           },
+           "label": "string",
+           "help": "string"
+          }
          }
         }
        }
@@ -9297,6 +9333,16 @@
         "null"
        ]
       }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
      }
     },
     "503": {
@@ -10047,7 +10093,29 @@
         "beside?": "string"
        }
       },
-      "error?": "string"
+      "error?": "string",
+      "action?": {
+       "object": {
+        "do": {
+         "oneOf": [
+          {
+           "literal": "signIn"
+          },
+          {
+           "literal": "addKey"
+          },
+          {
+           "literal": "install"
+          },
+          {
+           "literal": "choose"
+          }
+         ]
+        },
+        "label": "string",
+        "help": "string"
+       }
+      }
      }
     },
     "400": {

@@ -1353,7 +1353,8 @@ What a conversation's model button names, and whether its model can run (`sessio
 box decides it from what its engine and coding agents list, so every client shows the same.
 
 - `GET kuvo/sessions/models?sessions=<id>,<id>…` (at most 200) → `{"sessions": {<id>: {model,
-  name?, runs, missing?, account?: {id, name, label?}, plan?: {name, agent, provider}}}}`. `400
+  name?, runs, missing?, account?: {id, name, label?}, plan?: {name, agent, provider}, refusal?,
+  choose?, action?: {do, label, help}}}}`. `400
   {"message"}` for none named, `405` for anything but `GET`, `503` with neither the engine nor the
   coding agents' bridge running, or while one that might have a session isn't answering.
 - `model`: the model it runs on, `{providerID, id, variant?}` as the session names it: its own,
@@ -1374,6 +1375,22 @@ box decides it from what its engine and coding agents list, so every client show
     there), its account signed in: retired, or a coding agent's it no longer lists. It can't run:
     choose another. Also a coding agent's account you removed, and a Custom Auto list emptied (one
     deleted runs on your first list, as the bridge runs it).
+- What that means for a composer, decided and worded by the box (`models.readiness`), so no
+  client decides or words it (held to `Vectors/model-readiness.json`, which KuvoClient and gpui are
+  held to too):
+  - `refusal`: why a message on it can't go and what to do, a sentence to show as it is ("GPT-5.5
+    needs a sign-in to GitHub Copilot: sign in, or choose another model."); left out where one can
+    go. Every case but `runs` with nothing missing has one.
+  - `choose`: `true` where the model must be chosen (`gone`, `model`): the model button asks for a
+    model ("Choose a Model") and Send waits for one. Left out otherwise, where the button names the
+    model (one whose account needs something is named, and a message on it is refused saying why).
+  - `action`: what to offer doing about it: `do` is `signIn` (to `account`), `addKey` (`account`'s
+    key), `install` (`account`'s coding agent) or `choose` (a model); `label` a button's words
+    ("Sign In", "Add Key", "Install", "Choose a Model"), `help` what it does ("Sign in to GitHub
+    Copilot", "Add an xAI key (with a SuperGrok plan, choose a model under Grok instead)").
+  - The words are product words: no computer's name (the conversation shows where it is) and no
+    settings page. A model gone from its list is named as the box last listed it, since it started
+    (else by its id).
 - The engine's lists (its providers, models, accounts and default) are read in the session's
   folder, where a project's own settings may add to them.
 - An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
@@ -1410,12 +1427,14 @@ box decides it from what its engine and coding agents list, so every client show
   `kuvo.auto.updated`), and once a model it picked is set. What the box said is of the model it
   names: a client draws it only while that's still the session's (another just picked is drawn as
   without the box's word until the box is asked again).
-- Clients draw it alike from ClientSessions' `SessionModelState`: the model button names the model
-  while it runs or its account needs something, and says "Choose a Model" for `gone` and `model`;
-  Send follows `ComposerSend` with that, so it waits for a model for those two, and for the others
-  a message is refused with what to do (a sign-in, a key, an install, where), kept in the field;
-  a failed turn's card, for the model the conversation is on, names its button by what it does
-  (Add Key, Install, Sign In, or Sign In Again for a sign-in that ended). How a signed-out engine
+- Clients draw it from `refusal`, `choose` and `action` alone (the Swift apps through ClientSessions'
+  `SessionModelState`, gpui through `kuvo_box::models::ModelState`): the model button names the
+  model unless `choose`, when it says "Choose a Model"; Send follows `ComposerSend` with that, so it
+  waits for a model where `choose`, and otherwise a message is refused with `refusal`, kept in the
+  field; a sign-in card's help is `action.help`; a failed turn's card, for the model the
+  conversation is on, names its button by `action.label` (or Sign In Again for a sign-in that
+  ended). A client sends a plain message without asking the box, so it refuses one with `refusal`
+  itself; the typed send decides it on the box ("What a typed message means"). How a signed-out engine
   provider is signed in to is held to `Vectors/plan-sign-ins.json` in the box and KuvoClient's
   `PlanSignIns` and `Integration.offeredSignInMethods`, which both apps' Accounts offer from. A
   box without `sessions.models` leaves the Mac deciding from its accounts and models as it did
@@ -1428,10 +1447,16 @@ Which models a session can use on a box, and which one a new session there start
 the same, and a new conversation, a new bot and a lead's session started from another computer
 start on a model by the same rule.
 
-- `GET kuvo/models/offered[?provider=<id>&model=<id>&variant=<effort>]` → `{"models":
+- `GET kuvo/models/offered[?folder=<path>][&provider=<id>&model=<id>&variant=<effort>]` → `{"models":
   [{providerID, id, name, side, efforts, aliases, retiring?, hidden?}], "known": {"engine", "agents"}, "listing"?: [<account id>],
   "starting"?: {providerID, id, variant?} | null}`. `405` for anything but `GET`; `503` with
   neither the engine nor the coding agents' bridge running.
+- `folder` (`models.offered.folder`): a project's folder, or a conversation's, as a full path: the
+  engine's lists are read there, where a project's own settings may add providers and models or
+  set its default, so a picker there offers them (with their efforts) and `starting` is that
+  project's. Without it, the box's own lists. `400` for one that isn't a full path, `404` for one
+  that isn't a folder on the box. A client asks with the folder of the conversation, or of the
+  project a new one starts in.
 - `models`: every model that runs there now (`runs` in "A session's model"): the engine's, its
   featured providers first (OpenAI, GitHub Copilot, Anthropic, Google, xAI, OpenRouter, OpenCode
   Zen, DeepSeek, Mistral, Groq) and the rest by id, each provider's newest first; then the coding
@@ -2289,8 +2314,8 @@ A client never keeps an older box's way of doing something (#679): it brings a b
 before it uses it, and meanwhile says so. A box is older than a client needs when its `kuvo/info`
 `features` lack any name the client uses with no way around it (or it has no `kuvo/info`): today
 `agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
-`messages.send`, `models.offered`, `models.offered.sides`, `sessions.list`, `sessions.models`,
-`sessions.start.empty` and `typed` (KuvoClient's `BoxGate.required`, and the same list in every
+`messages.send`, `models.offered`, `models.offered.folder`, `models.offered.sides`,
+`models.readiness`, `sessions.list`, `sessions.models`, `sessions.start.empty` and `typed` (KuvoClient's `BoxGate.required`, and the same list in every
 client, gpui's `kuvo_box` too, so every client holds the same boxes; a box with `messages.send` has
 what came before it too, `sessions.move`, `projects.folders` and `sign-in.methods` among them, and
 names its chats folder in `kuvo/info`). A client adds a name there as it drops its fallback for a
@@ -5302,7 +5327,8 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   engine's commands in the conversation's folder ("/name arguments"), else a message. With the
   engine's commands unread, a goal or keyword still goes; anything else answers `503`. A text whose
   first character that isn't a space is neither "/" nor "!" is always a message: a client sends it
-  without asking (with a model that can't run, it says why and keeps it, as the box would).
+  without asking (with a model that can't run, it shows the `refusal` its box gave in
+  `kuvo/sessions/models` and keeps it, as the box would).
 - `GET` → what "/" offers there: `{keywords: [{name, title, summary, argument}], commands:
   [{name, description?}]}`. `keywords` in the order to list them, `argument` what's written in grey
   after one until something is (null: it takes nothing). None in a subagent's conversation; `goal`,
@@ -5310,15 +5336,14 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   `compact` always. `commands` is the engine's and yours as "/" lists them: never its `goal`, and
   its `review` as `review-quick` while the keyword has the name. Read it again when the conversation
   opens and as its agents bridge comes or goes.
-- `POST` with `{"id"?, "text", "files"?, "side"?, "refusal"?, "reviewer"?}`: the send's own id
+- `POST` with `{"id"?, "text", "files"?, "side"?, "reviewer"?}`: the send's own id
   (or `idempotency-key`, with which the phone's link sends it again after its session drops: "Sending
   again"), under which the box answers the same send again as it did, never doing it twice,
   whatever became of the first request: an answer that went is kept on disk an hour (the latest
   1000), so it holds after the box starts again too; one that didn't go (refused, the engine not
   there) is tried again; one cut off as its step was done (the box stopped meanwhile) may be done
   again; the text as typed; whether
-  pictures or files are attached; whether the side thread's tag is on the composer; why the
-  conversation's model can't run, as the client says it; the model picked last in "Who reads it"
+  pictures or files are attached; whether the side thread's tag is on the composer; the model picked last in "Who reads it"
   (`{providerID, id}`, which wins a tie between two of the same name). It answers `200` with what it
   meant, `400` without `text`, `404` for a conversation that isn't there, `503` when the engine
   can't be asked; on any of those the client puts it all back, saying why.
@@ -5342,6 +5367,11 @@ client does with the rest; a client keeps the draft, puts back what it's told to
     written since: `text` into an empty composer, else `beside` where it's given (a keyword's words
     alone, which the keyword would otherwise take in; nothing for a goal's pause), else `text`;
     `error` says why, over the composer.
+  - The conversation's model is checked first, by the box, as `kuvo/sessions/models` says it (a text
+    that needs it: all but a "!" command and showing, pausing, resuming or taking away a goal; not
+    in a coding agent's own subagent, which runs on its parent's): with a `refusal`, that's the
+    `error`, all of it goes back, and `action` says what to offer doing about it, as there. One the
+    box can't say about now goes on. (A `refusal` a client still sends is ignored.)
 - **Meanwhile** a client shows the text at once where it was sent (as a message waiting to go; a
   side question, or a follow-up while the side thread's tag shows, in its side thread, being
   answered: it never joins the conversation), and puts what the box says in its place; "/" and "!" texts are asked one after another, and a message sent meanwhile
@@ -5522,7 +5552,9 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
 | `messages.send` | `POST kuvo/sessions/<id>/send` and `…/queue/add` with fields: a message sent as what was written and what goes with it, the box writing what the agent reads and keeping its parts; `POST kuvo/messages/parts` for messages from before ("A message's parts", #668) |
 | `models.offered` | `GET kuvo/models/offered`: which models a session can use here, and the one a new session starts on, by the box's rule ("The models offered", #341) |
+| `models.offered.folder` | `kuvo/models/offered?folder=<path>`: what's offered in a project's folder, its own settings' models too ("The models offered") |
 | `models.offered.sides` | `kuvo/models/offered` says each model's `side`, `efforts` and `aliases` ("The models offered") |
+| `models.readiness` | `kuvo/sessions/models` says `refusal`, `choose` and `action`, and the typed send decides a model's refusal itself ("A session's model") |
 | `moves` | `kuvo/moves`, `…/places`, `…/events`: Move to Computer, done by the boxes (bridge 0.9.108) |
 | `moves.agents` | a bot or chat whose conversations are on the coding agents' bridge moves too, with each agent's own conversation and memory (`api/kuvo/carry/…` on the bridge; "kuvo/moves") |
 | `moves.check` | between boxes, `check` before a move holds anything: whether the box it goes to can run it; a move's `note` says what it does differently there ("kuvo/moves") |
