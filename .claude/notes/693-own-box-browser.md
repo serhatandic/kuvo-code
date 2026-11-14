@@ -254,6 +254,11 @@ add a **view vocabulary** of facts, so a client draws without CDP. Feature `brow
 - `GET kuvo/browser/history` and `DELETE` (a host, or all).
 - **The old history moves in once:** `history.json` and `Icons/`, read by the box from `S/Browser`.
   #333's move knows `S`; the box reads it only, never a client handing it over.
+- **Built in piece 2** (PROTOCOL.md, "The browser's data"): the keeper only appends what loaded
+  (and an icon Chrome fetched) to `browser/visits.jsonl`; the box folds it into `history.json`, so
+  how history is kept is said once, in `link/browser/history.ts`. The one-time read runs as the
+  box's keeper first starts (`kuvo-link.js browser take-in`), which on this Mac is only once piece
+  5 has `browser.own` on.
 
 ### 4.3 Ask-the-user, sign-in and one-time-code tools
 
@@ -382,6 +387,9 @@ add a **view vocabulary** of facts, so a client draws without CDP. Feature `brow
     `~/.kuvo-code/browser`, and downloads there for a week;
     - the folder is one only you can open, which the sandbox keeps from agents' commands;
     - cookies are effectively plain text there, as on machines;
+  - every box keeps its own browser's history and site icons (`browser/history.json`, `icons/`) and
+    settings, machines' too since piece 2: they stay on that box, and leave it only in its
+    `kuvo/browser/…` answers to your own clients;
   - pictures of pages on the phone cross the relay end to end encrypted;
   - the Preferences key, if question 7 allows it.
 - **`docs/footprint.md` and CLAUDE.md's "On the Mac":** the Preferences key. Once question 9's time

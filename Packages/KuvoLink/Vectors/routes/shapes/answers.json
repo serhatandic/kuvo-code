@@ -3110,6 +3110,9 @@
             "literal": "browser"
            },
            {
+            "literal": "browser.data"
+           },
+           {
             "literal": "btw"
            },
            {
@@ -3615,6 +3618,9 @@
            },
            {
             "literal": "browser"
+           },
+           {
+            "literal": "browser.data"
            },
            {
             "literal": "btw"
@@ -5736,6 +5742,289 @@
          "literal": "removed"
         }
        ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/browser/history",
+   "answers": {
+    "200": {
+     "object": {
+      "sites": {
+       "list": {
+        "object": {
+         "host": "string",
+         "url": "string",
+         "title": "string",
+         "visits": "number",
+         "lastVisit": "number",
+         "icon": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/browser/history",
+   "answers": {
+    "200": {
+     "object": {
+      "sites": {
+       "list": {
+        "object": {
+         "host": "string",
+         "url": "string",
+         "title": "string",
+         "visits": "number",
+         "lastVisit": "number",
+         "icon": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/browser/history/:host",
+   "answers": {
+    "200": {
+     "object": {
+      "sites": {
+       "list": {
+        "object": {
+         "host": "string",
+         "url": "string",
+         "title": "string",
+         "visits": "number",
+         "lastVisit": "number",
+         "icon": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/browser/icons/:host",
+   "answers": {
+    "200": "bytes"
+   }
+  },
+  {
+   "route": "GET kuvo/browser/sites",
+   "answers": {
+    "200": {
+     "object": {
+      "sites": {
+       "list": {
+        "object": {
+         "site": "string",
+         "kinds": {
+          "list": {
+           "oneOf": [
+            {
+             "literal": "cookies"
+            },
+            {
+             "literal": "storage"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/browser/sites",
+   "answers": {
+    "200": {
+     "object": {
+      "sites": {
+       "list": {
+        "object": {
+         "site": "string",
+         "kinds": {
+          "list": {
+           "oneOf": [
+            {
+             "literal": "cookies"
+            },
+            {
+             "literal": "storage"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/browser/sites/:site",
+   "answers": {
+    "200": {
+     "object": {
+      "sites": {
+       "list": {
+        "object": {
+         "site": "string",
+         "kinds": {
+          "list": {
+           "oneOf": [
+            {
+             "literal": "cookies"
+            },
+            {
+             "literal": "storage"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/browser/settings",
+   "answers": {
+    "200": {
+     "object": {
+      "searchEngine": {
+       "oneOf": [
+        {
+         "literal": "google"
+        },
+        {
+         "literal": "duckDuckGo"
+        },
+        {
+         "literal": "bing"
+        },
+        {
+         "literal": "brave"
+        },
+        {
+         "literal": "kagi"
+        },
+        {
+         "literal": "ecosia"
+        }
+       ]
+      },
+      "searchEngines": {
+       "list": {
+        "object": {
+         "id": {
+          "oneOf": [
+           {
+            "literal": "google"
+           },
+           {
+            "literal": "duckDuckGo"
+           },
+           {
+            "literal": "bing"
+           },
+           {
+            "literal": "brave"
+           },
+           {
+            "literal": "kagi"
+           },
+           {
+            "literal": "ecosia"
+           }
+          ]
+         },
+         "title": "string"
+        }
+       }
+      },
+      "tidiesAgentTabs": "bool",
+      "offersToSave": "bool",
+      "never": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "PATCH kuvo/browser/settings",
+   "answers": {
+    "200": {
+     "object": {
+      "searchEngine": {
+       "oneOf": [
+        {
+         "literal": "google"
+        },
+        {
+         "literal": "duckDuckGo"
+        },
+        {
+         "literal": "bing"
+        },
+        {
+         "literal": "brave"
+        },
+        {
+         "literal": "kagi"
+        },
+        {
+         "literal": "ecosia"
+        }
+       ]
+      },
+      "searchEngines": {
+       "list": {
+        "object": {
+         "id": {
+          "oneOf": [
+           {
+            "literal": "google"
+           },
+           {
+            "literal": "duckDuckGo"
+           },
+           {
+            "literal": "bing"
+           },
+           {
+            "literal": "brave"
+           },
+           {
+            "literal": "kagi"
+           },
+           {
+            "literal": "ecosia"
+           }
+          ]
+         },
+         "title": "string"
+        }
+       }
+      },
+      "tidiesAgentTabs": "bool",
+      "offersToSave": "bool",
+      "never": {
+       "list": "string"
       }
      }
     }

@@ -1,7 +1,7 @@
 // What scripts/build-browser.sh writes: KuvoCode/Resources/kuvo-browser.js, the browser's keeper and
 // the agents' browser tools every box runs, from Packages/Box/src/browser. Its source with the
 // scripts it runs in pages (page.ts), the tools (tools.ts) and what agents are told of them
-// (instructions.ts) filled in, as JSON with its keys in order, and its keeper's version (KEEPER):
+// (instructions.ts) filled in, with the search engines a box offers (shared/routes/browser.ts), as JSON with its keys in order, and its keeper's version (KEEPER):
 // the first 12 hex digits of the SHA-256 of that source as it is. Its first line names the rest
 // (`// kuvo-browser <16 hex digits of its SHA-256>`), which a box and a Mac tell copies apart by.
 // Run as `bun scripts/build-browser.ts <checkout> [--check]`.
@@ -16,9 +16,10 @@ const folder = path.join(root, "Packages/Box/src/browser");
 const { pageScripts } = await import(path.join(folder, "page.ts"));
 const { TOOLS } = await import(path.join(folder, "tools.ts"));
 const { INSTRUCTIONS, VAULT_INSTRUCTIONS } = await import(path.join(folder, "instructions.ts"));
+const { SEARCH_ENGINES } = await import(path.join(root, "Packages/Box/src/shared/routes/browser.ts"));
 
 const OUT = "KuvoCode/Resources/kuvo-browser.js";
-const CONFIG = `/*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", vaultInstructions: "" }`;
+const CONFIG = `/*KUVO_CONFIG*/ { scripts: {}, tools: [], instructions: "", vaultInstructions: "", searchEngines: [] }`;
 const KEEPER = `const KEEPER = "0.0.0-keeper-from-its-sources";`;
 const BANNER = "// Built from Packages/Box/src/browser by scripts/build-browser.sh: change those, then run it. Never edit this file.\n";
 
@@ -44,7 +45,7 @@ function fill(text: string, part: string, by: string): string {
 }
 
 const source = fs.readFileSync(path.join(folder, "kuvo-browser.js"), "utf8");
-const config = JSON.stringify(inOrder({ scripts: pageScripts(), tools: TOOLS, instructions: INSTRUCTIONS, vaultInstructions: VAULT_INSTRUCTIONS }));
+const config = JSON.stringify(inOrder({ scripts: pageScripts(), tools: TOOLS, instructions: INSTRUCTIONS, vaultInstructions: VAULT_INSTRUCTIONS, searchEngines: SEARCH_ENGINES }));
 const body = BANNER + fill(fill(source, KEEPER, `const KEEPER = "${sha256(source).slice(0, 12)}";`), CONFIG, config);
 const built = `// kuvo-browser ${sha256(body).slice(0, 16)}\n` + body;
 

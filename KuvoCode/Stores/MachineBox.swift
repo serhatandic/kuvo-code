@@ -82,7 +82,10 @@ enum MachineBox {
             entry["by"] = by
             if let help { entry["help"] = help }
             if macOnly { entry["macOnly"] = true }
-        case .browser: entry["way"] = "browser"
+        case .browser:
+            entry["way"] = "browser"
+            // The cookie its site keeps while you're signed in, which tells a box whether its browser is.
+            if let cookie = Integrations.signInCookies[service.id] { entry["signInCookie"] = ["domain": cookie.domain, "name": cookie.name] }
         }
         let keys = Integrations.keys(of: service.way)
         if !keys.isEmpty { entry["keys"] = keys.map { ["name": $0.name, "label": $0.label, "prompt": $0.prompt] } }

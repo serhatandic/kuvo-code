@@ -48,6 +48,7 @@ export const FEATURES = [
   "box.update",
   "branch",
   "browser",
+  "browser.data",
   "btw",
   "btw.threads",
   "claude-code",
