@@ -1561,6 +1561,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
     // (Its browser, set up by the box itself.)
     browser: ["GET", "kuvo/browser"],
+    "browser.data": ["GET", "kuvo/browser/settings"],
     btw: ["GET", "kuvo/agents/api/kuvo/btw"],
     // (What a side question's routes take besides, on the coding agents' bridge.)
     "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"],

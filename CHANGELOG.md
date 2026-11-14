@@ -12,6 +12,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The usage panel shows what a plan has beyond its limits under each account: Claude's extra usage, Codex's credits, an OpenRouter key's spend today, this week and this month, and a Copilot organization's credits, read by your computers with the app closed.
 - Your iPhone now reads usage from each of your computers directly, a Linux machine's too, so it shows your accounts' limits and spend with Kuvo Code closed on your Mac.
 - Use a rate-limit reset (Claude's reset grants, Codex's reset credits) from an account's row in the usage panel: Use asks you to confirm in place, and it's used once, on the computer of yours that has the account's sign-in. A Mac's own Claude sign-in can't read resets; they show when one of your machines is signed in to the same account.
+- On your machines, an agent goes on in its own browser tab after the machine's browser was idle and stopped, rather than opening a new one.
 - Agents can use a reset when work can't wait (`use_limit_reset`): each use asks you on a card in the conversation (Allow, Always Allow for that account, Don't). Always Allow can be turned off in Settings › Accounts, in the account's menu.
 
 ### Highlights

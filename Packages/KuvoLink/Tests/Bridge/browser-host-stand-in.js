@@ -36,8 +36,9 @@ export class Heard {
   }
 }
 
-/** Starts the keeper with its stand-in Chrome. */
-export async function browserHost() {
+/** Starts the keeper with its stand-in Chrome; `before(home, answer)` sets up what the keeper finds
+ * as it starts (what a keeper before it left), and Chrome's answers from its start. */
+export async function browserHost({ before } = {}) {
   // A short path: Unix sockets' are limited.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kbh-"));
   const home = path.join(root, "home");
@@ -86,6 +87,7 @@ socket.on("close", () => process.exit(0));
   fs.mkdirSync(path.join(home, "run"), { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(home, "run", "socket.key"), socketKey + "\n", { mode: 0o600 });
 
+  before?.(home, (method, give) => answers.set(method, give));
   const host = spawn(process.execPath, [keeper, "host"], {
     env: { ...process.env, KUVO_HOME: home, KUVO_TEST_CHROME: pipePath },
     stdio: "ignore",
