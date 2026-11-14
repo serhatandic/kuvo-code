@@ -180,7 +180,12 @@ never inside `scripts/heavy.sh`: it takes its turn itself, after any wait for a 
 no slot while it waits. Then it waits for its turn in
 `mac` (or a `phone` slot) and runs `xcodebuild test-without-building` with the batch's `.xctestrun`:
 the same test copy, clean settings, `KUVO_TEST_BUN`, account check and guards as a run that builds.
-It prints the stamp of the batch it tested. Problems found go to fixes merged to main, which the next batch
+It prints the stamp of the batch it tested, and ends, with or without `--from-batch`, with what the
+run's result bundle counts, then each failing test:
+`RESULT: <passed> passed, <failed> failed[, <skipped> skipped]` (`RESULT: no results, …` with
+none to read). Go by that line and the exit code (0 only when nothing failed), not the last
+"Test run … passed": after a test that crashed or ran out of time, xcodebuild starts the test copy
+again ("Restarting after…"), and that line counts only its last launch. Problems found go to fixes merged to main, which the next batch
 checks. `scripts/test-app.sh` without `--from-batch` still builds from your worktree, for an urgent
 run only.
 
