@@ -96,11 +96,17 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
     public static let feature = "models.offered"
 
     /// The route that asks it, as a link request's path (query and all): for a new session that
-    /// would start on `wanted` (the model picked last).
-    public static func path(wanted: ModelRef? = nil) -> String {
-        guard let wanted else { return route }
-        var query = [URLQueryItem(name: "provider", value: wanted.providerID), URLQueryItem(name: "model", value: wanted.id)]
-        if let variant = wanted.variant { query.append(URLQueryItem(name: "variant", value: variant)) }
+    /// would start on `wanted` (the model picked last), in `folder` (a project's or a
+    /// conversation's, as a full path: what its own settings add is offered there too,
+    /// `models.offered.folder`); none, the box's own lists.
+    public static func path(wanted: ModelRef? = nil, folder: String? = nil) -> String {
+        var query: [URLQueryItem] = []
+        if let folder, !folder.isEmpty { query.append(URLQueryItem(name: "folder", value: folder)) }
+        if let wanted {
+            query += [URLQueryItem(name: "provider", value: wanted.providerID), URLQueryItem(name: "model", value: wanted.id)]
+            if let variant = wanted.variant { query.append(URLQueryItem(name: "variant", value: variant)) }
+        }
+        guard !query.isEmpty else { return route }
         var parts = URLComponents()
         parts.queryItems = query
         // ("+" stays as it is in a query; the box would read it as a space.)

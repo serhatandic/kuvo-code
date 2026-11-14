@@ -3,10 +3,11 @@ import Foundation
 import OpenCodeKit
 
 /// What a session's box says of its model (`kuvo/sessions/models`, KuvoLink's PROTOCOL.md, "A
-/// session's model"): the model it runs on, whether that can run now, and what's missing if not.
-/// The box decides it, from what its engine and coding agents list, so every client shows the
-/// same; a client draws it: the model button's name (or "Choose a Model"), Send (`ComposerSend`),
-/// what a message refused says, and a sign-in card's help.
+/// session's model"): the model it runs on, whether that can run now, what's missing if not, and
+/// what that means for a composer, decided and worded by the box (`refusal`, `choose`, `action`), so
+/// every client shows the same and none decides or words it; a client draws it: the model button's
+/// name (or "Choose a Model"), Send (`ComposerSend`), what a message refused says, and a sign-in
+/// card's button and help. Held to Packages/KuvoLink/Vectors/model-readiness.json.
 public struct SessionModelState: Decodable, Equatable, Sendable {
     /// What a model that can't run needs.
     public enum Missing: Equatable, Sendable {
@@ -51,6 +52,58 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         }
     }
 
+    /// What to offer doing about a model that can't run, as its box words it: `label` a button's
+    /// words ("Sign In", "Add Key", "Install", "Choose a Model"), `help` what it does ("Sign in to
+    /// Anthropic").
+    public struct Action: Decodable, Equatable, Sendable {
+        public enum Kind: Equatable, Sendable {
+            /// Signing in to its `account`.
+            case signIn
+            /// Adding its `account`'s key.
+            case addKey
+            /// Installing its `account`'s coding agent.
+            case install
+            /// Choosing a model.
+            case choose
+            /// One a newer box says that this client doesn't know.
+            case other(String)
+        }
+
+        public var kind: Kind
+        public var label: String
+        public var help: String
+
+        public init(kind: Kind, label: String, help: String) {
+            self.kind = kind
+            self.label = label
+            self.help = help
+        }
+
+        private enum CodingKeys: String, CodingKey { case kind = "do", label, help }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let word = try container.decode(String.self, forKey: .kind)
+            kind = switch word {
+            case "signIn": .signIn
+            case "addKey": .addKey
+            case "install": .install
+            case "choose": .choose
+            default: .other(word)
+            }
+            label = try container.decode(String.self, forKey: .label)
+            help = try container.decode(String.self, forKey: .help)
+        }
+
+        /// It's about the model's account: signing in, adding a key, or installing its agent.
+        public var isAccount: Bool {
+            switch kind {
+            case .signIn, .addKey, .install: true
+            default: false
+            }
+        }
+    }
+
     /// The model it runs on: its own, else the engine's default; nil for none.
     public var model: ModelRef?
     /// Its name, as its provider or agent lists it (nil for one gone from the list).
@@ -60,17 +113,27 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
     /// The account to sign in to, add a key for or install; for one gone, its provider.
     public var account: Account?
     public var plan: Plan?
+    /// Why a message on it can't go, and what to do, in its box's words; nil for one that can go.
+    public var refusal: String?
+    /// The model button asks for a model ("Choose a Model") and Send waits for one: one gone, or
+    /// none to run on.
+    public var choose: Bool
+    /// What to offer doing about it; nil for one that runs.
+    public var action: Action?
 
-    public init(model: ModelRef?, name: String? = nil, runs: Bool, missing: Missing? = nil, account: Account? = nil, plan: Plan? = nil) {
+    public init(model: ModelRef?, name: String? = nil, runs: Bool, missing: Missing? = nil, account: Account? = nil, plan: Plan? = nil, refusal: String? = nil, choose: Bool = false, action: Action? = nil) {
         self.model = model
         self.name = name
         self.runs = runs
         self.missing = missing
         self.account = account
         self.plan = plan
+        self.refusal = refusal
+        self.choose = choose
+        self.action = action
     }
 
-    private enum CodingKeys: String, CodingKey { case model, name, runs, missing, account, plan }
+    private enum CodingKeys: String, CodingKey { case model, name, runs, missing, account, plan, refusal, choose, action }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -89,6 +152,9 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         }
         account = try container.decodeIfPresent(Account.self, forKey: .account)
         plan = try container.decodeIfPresent(Plan.self, forKey: .plan)
+        refusal = try container.decodeIfPresent(String.self, forKey: .refusal)
+        choose = try container.decodeIfPresent(Bool.self, forKey: .choose) ?? false
+        action = try container.decodeIfPresent(Action.self, forKey: .action)
     }
 
     /// The route a box answers it on, `sessions=<id>,<id>…` its query.
@@ -107,115 +173,28 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         return ref.sameModel(as: model)
     }
 
-    /// The model button names the model, and Send sends with it: one that runs, or one whose
-    /// account needs something (a message on it says what, instead of going). For one gone, or
-    /// none chosen, the button says "Choose a Model" and Send waits for one.
-    public var namesModel: Bool {
-        switch missing {
-        case nil: runs
-        case .model, .gone: false
-        case .signIn, .key, .install, .other: true
-        }
-    }
+    /// The model button names the model, and Send sends with it, unless its box says to choose
+    /// one (`choose`): one that runs, or one whose account needs something (a message on it says
+    /// what, instead of going).
+    public var namesModel: Bool { !choose }
 
-    /// What a sign-in card's button does for its account, which it's labelled by.
-    public enum AccountStep: Equatable, Sendable {
-        case signIn, addKey, install
-
-        /// The button's words: what it does, not "Sign In" for a sheet that takes a key.
-        public var title: String {
-            switch self {
-            case .signIn: "Sign In"
-            case .addKey: "Add Key"
-            case .install: "Install"
-            }
-        }
-    }
-
-    /// What its account needs done: signing in, adding a key, or installing its agent; nil for one
-    /// that needs none of those.
-    public var accountStep: AccountStep? {
-        switch missing {
-        case .signIn: .signIn
-        case .key: .addKey
-        case .install: .install
-        default: nil
-        }
-    }
-
-    /// The same, for a card about `provider`'s account: nil for another's.
-    public func accountStep(for provider: String) -> AccountStep? {
-        account?.id == provider ? accountStep : nil
-    }
-
-    /// What a failed turn's card button says for the model the turn `failed` on, labelled by what
-    /// it does: Add Key, Install, Sign In, or Sign In Again for a sign-in that `ended`. Only where
-    /// this is said of that model (the conversation's now): nil for another model, or one that
-    /// needs none of those, which the app's own words say then.
+    /// What a failed turn's card button says for the model the turn `failed` on: its box's
+    /// `action.label` (Add Key, Install, Sign In), or Sign In Again for a sign-in that `ended`.
+    /// Only where this is said of that model (the conversation's now) and its account: nil for
+    /// another model or account, or one that needs none of those, which the app's own words say then.
     public func cardButton(for failed: ModelRef, ended: Bool) -> String? {
-        guard isAbout(failed), let step = accountStep(for: failed.providerID) else { return nil }
-        return ended && step == .signIn ? "Sign In Again" : step.title
+        guard isAbout(failed), account?.id == failed.providerID, let action, action.isAccount else { return nil }
+        return ended && action.kind == .signIn ? "Sign In Again" : action.label
     }
 
     /// Its account needs something before it runs: a sign-in, a key, or its agent installed.
-    public var needsAccount: Bool {
-        switch missing {
-        case .signIn, .key, .install: true
-        default: false
-        }
-    }
+    public var needsAccount: Bool { action?.isAccount == true }
 
-    /// Why a message on it can't go, and what to do (`there`: " on Studio Mac", or nothing for the
-    /// computer it's on; `accounts`: where accounts are, "Settings › Accounts" on the Mac);
-    /// `shownName` names it where the box has no name for it (one gone from its list). Nil for one
-    /// that runs.
-    public func refusal(there: String = "", accounts: String, shownName: String? = nil) -> String? {
-        guard !runs || missing != nil else { return nil }
-        let name = self.name ?? shownName ?? model?.id ?? "This model"
-        let account = self.account?.name ?? model?.providerID ?? "its account"
-        switch missing {
-        case .model, nil:
-            return "Choose a model to send it."
-        case .signIn:
-            return "\(name) needs a sign-in\(there): sign in to \(account) in \(accounts), or choose another model."
-        case .key:
-            if let plan {
-                return "\(name) needs \(Self.article(account)) \(account) key\(there): add one in \(accounts), or choose another model (with \(Self.article(plan.name)) \(plan.name) plan, one under \(plan.agent))."
-            }
-            return "\(name) needs \(Self.article(account)) \(account) key\(there): add one in \(accounts), or choose another model."
-        case .install:
-            return "\(name) needs \(account) installed\(there): install it in \(accounts), or choose another model."
-        case .gone:
-            if let provider = self.account?.name { return "\(name) is no longer among \(provider)’s models\(there): choose another model." }
-            return "\(name) is no longer available\(there): choose another model."
-        case .other:
-            return "\(name) can’t run\(there) now: choose another model."
-        }
-    }
-
-    /// What a sign-in card's Sign In for `provider` does, as its help says it, where it's this
-    /// model's account (`there`: " on devbox"): adds a key where that's the only way offered, signs
-    /// in, or installs its agent. Nil for another account, or one that needs nothing.
-    public func signInHelp(_ provider: String, there: String = "") -> String? {
-        guard let account, account.id == provider else { return nil }
-        switch missing {
-        case .key:
-            if let plan { return "Add \(Self.article(account.name)) \(account.name) key\(there) (with \(Self.article(plan.name)) \(plan.name) plan, choose a model under \(plan.agent) instead)" }
-            return "Add \(Self.article(account.name)) \(account.name) key\(there)"
-        case .signIn:
-            return "Sign in to \(account.name)\(there)"
-        case .install:
-            return "Install \(account.name)\(there)"
-        default:
-            return nil
-        }
-    }
-
-    /// "an" before a name said starting with a vowel ("an OpenAI key", "an xAI key", said "ex-A-I"),
-    /// else "a" ("a Xiaomi key").
-    static func article(_ word: String) -> String {
-        guard let first = word.lowercased().first else { return "a" }
-        return "aeiou".contains(first) || word.hasPrefix("xA") ? "an" : "a"
+    /// What a sign-in card's button for `provider` does, as its box words it ("Add an xAI key
+    /// (…)"), where it's this model's account. Nil for another account, or one that needs nothing.
+    public func signInHelp(_ provider: String) -> String? {
+        guard account?.id == provider, let action, action.isAccount else { return nil }
+        return action.help
     }
 }
 

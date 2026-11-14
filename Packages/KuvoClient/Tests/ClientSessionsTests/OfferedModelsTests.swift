@@ -72,4 +72,16 @@ struct OfferedModelsTests {
         #expect(query.map(\.value) == ["openrouter", "anthropic/claude+1:8b", "high"])
         #expect(path.contains("%2B"))
     }
+
+    /// A project's folder goes with it, read back whole (a space, a "+"), so its own settings'
+    /// models are offered there.
+    @Test func theFolderGoesWhole() throws {
+        let alone = OfferedModels.path(folder: "/Users/me/My Project+1")
+        let query = try #require(URLComponents(string: "x://y/" + alone)?.queryItems)
+        #expect(query.map(\.name) == ["folder"])
+        #expect(query.map(\.value) == ["/Users/me/My Project+1"])
+        let both = try #require(URLComponents(string: "x://y/" + OfferedModels.path(wanted: ModelRef(id: "opus", providerID: "claude-code"), folder: "/srv/app"))?.queryItems)
+        #expect(both.map(\.name) == ["folder", "provider", "model"])
+        #expect(OfferedModels.path(folder: "") == "kuvo/models/offered")
+    }
 }
