@@ -622,9 +622,9 @@ fn answer_racing_the_boxs_word(before: bool, cx: &mut TestAppContext) {
     assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").len(), 1);
     assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
     assert!(card.read_with(cx, |card, _| card.failed().is_none()), "nothing said of the next one");
-    cx.simulate_keystrokes("1");
-    cx.run_until_parked();
-    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
+    // Its keys wait (whichever came first), then the first key pressed answers it: none is
+    // swallowed by what became of the one before.
+    assert!(!card.read_with(cx, |card, cx| card.takes_keys(cx)));
     quiet(cx);
     cx.simulate_keystrokes("1");
     cx.run_until_parked();
@@ -639,6 +639,72 @@ fn your_answer_whose_reply_comes_after_the_boxs_word_leaves_the_next_ask_as_it_s
 #[gpui::test]
 fn your_answer_whose_reply_comes_before_the_boxs_word_leaves_the_next_ask_as_it_should_be(cx: &mut TestAppContext) {
     answer_racing_the_boxs_word(false, cx);
+}
+
+#[gpui::test]
+fn after_an_answer_in_your_own_words_the_next_card_has_the_keyboard(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
+    quiet(cx);
+    // Tell It What to Do Instead, in your words.
+    cx.simulate_keystrokes("escape");
+    cx.simulate_input("Not yet");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
+    // The next card has the keyboard: its 1, once it's been still, answers it.
+    assert!(card_has_keys(&card, cx));
+    quiet(cx);
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "once" })));
+}
+
+#[gpui::test]
+fn after_a_question_answered_in_your_own_words_the_next_one_takes_its_keys(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut two = kuvo::stand_in::cms_question();
+    let mut next = two["questions"][0].clone();
+    next["key"] = json!("q1");
+    next["question"] = json!("And the drafts?");
+    two["questions"].as_array_mut().unwrap().push(next);
+    stand_in.set_asks("ses_cms", vec![two]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_cms", cx);
+    quiet(cx);
+    // The first in your words, in its line.
+    let line = bounds(cx, "ask-words").unwrap();
+    cx.simulate_click(line.center(), Modifiers::default());
+    cx.simulate_keystrokes("k e e p enter");
+    cx.run_until_parked();
+    // The second: the card has the keyboard (not the line), so its 2 is a pick, once it's still.
+    assert!(card_has_keys(&card, cx));
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty(), "too soon: nothing, and nothing typed in its line");
+    quiet(cx);
+    cx.simulate_keystrokes("2");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answers": { "q0": "keep", "q1": "keep" } })));
+}
+
+#[gpui::test]
+fn an_ask_takes_the_keyboard_from_wherever_it_was_in_the_conversation(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (view, card) = open_asking(&workspace, "ses_limits", cx);
+    // The keyboard nowhere (a click on the conversation itself), then an ask comes.
+    cx.update(|window, cx| window.blur(cx));
+    let asks: kuvo_box::asks::Asks = serde_json::from_value(json!({ "asks": [kuvo::stand_in::redis_permission()] })).unwrap();
+    view.update(cx, |view, cx| view.take_asks(asks, cx));
+    cx.run_until_parked();
+    assert!(card_has_keys(&card, cx));
 }
 
 #[gpui::test]

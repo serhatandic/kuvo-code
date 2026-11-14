@@ -108,6 +108,8 @@ pub struct AskCard {
     /// ([`QUIET`]), so a key meant for the one before it (or for the composer it took the place of)
     /// never answers it, as the Mac's `KeysTyped` holds them.
     quiet_since: Option<std::time::Instant>,
+    /// What's shown moved on since it was last drawn (see [`AskCard::moved_on`]).
+    refocus: bool,
     focus: FocusHandle,
     tasks: Vec<Task<()>>,
     _words: Subscription,
@@ -149,6 +151,7 @@ impl AskCard {
             failed: None,
             failed_for: None,
             quiet_since: None,
+            refocus: false,
             focus: cx.focus_handle(),
             tasks: Vec::new(),
             _words: subscription,
@@ -198,12 +201,19 @@ impl AskCard {
 
     /// A new ask shows: nothing picked, nothing written.
     fn reset(&mut self, cx: &mut Context<Self>) {
+        self.moved_on();
         self.quiet_since = Some(cx.background_executor().now());
         self.question = 0;
         self.picked.clear();
         self.instead = false;
         self.failed = None;
         self.words.update(cx, |field, cx| field.set_text("", cx));
+    }
+
+    /// What's shown moved on (another ask, the next question): the line it had isn't drawn the same,
+    /// so the keyboard goes back to the card as it's drawn next, and its keys wait again.
+    fn moved_on(&mut self) {
+        self.refocus = true;
     }
 
     /// Pages to the ask at `index`.
@@ -307,6 +317,8 @@ impl AskCard {
         self.words.update(cx, |field, cx| field.set_text("", cx));
         if self.question + 1 < question.questions.len() {
             self.question += 1;
+            self.moved_on();
+            self.quiet_since = Some(cx.background_executor().now());
             cx.notify();
             return;
         }
@@ -322,6 +334,8 @@ impl AskCard {
         self.words.update(cx, |field, cx| field.set_text("", cx));
         if self.question + 1 < question.questions.len() {
             self.question += 1;
+            self.moved_on();
+            self.quiet_since = Some(cx.background_executor().now());
             cx.notify();
         } else {
             self.send_questions(&question, cx);
@@ -572,7 +586,12 @@ impl AskCard {
 }
 
 impl Render for AskCard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Moved on while its line had the keyboard: the card takes it back, so its keys answer the
+        // one now shown (and a key meant for the one before never lands in the new line).
+        if std::mem::take(&mut self.refocus) && self.words.focus_handle(cx).is_focused(window) {
+            window.focus(&self.focus, cx);
+        }
         let theme = cx.theme().clone();
         let c = &theme.colors;
         let parts: Vec<AnyElement> = match self.shown().cloned() {

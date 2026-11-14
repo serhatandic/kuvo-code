@@ -219,8 +219,11 @@ async function asksOf(target: Target, session: string, folder: string, signal?: 
     const message = [what, asked.why].filter((each): each is string => typeof each === "string" && each.trim() !== "").join("\n") || "It asks for something from the vault.";
     found.push({ at: asked.at, ask: { shown: { id: asked.id, kind: "other", session: asked.session, title, message, dismiss: false }, target, asker: asked.session } });
   }
-  // (Stable: what came at the same time, or unnoted, stays in the order it was listed.)
-  return found.sort((a, b) => a.at - b.at).map(each => each.ask);
+  // Those a client answers first, oldest first; then those answered elsewhere (`other`), so a card
+  // a client can answer shows ahead of one it can't. (Stable: what came at the same time, or
+  // unnoted, stays in the order it was listed.)
+  const elsewhere = (ask: Found) => (ask.shown.kind === "other" ? 1 : 0);
+  return found.sort((a, b) => elsewhere(a.ask) - elsewhere(b.ask) || a.at - b.at).map(each => each.ask);
 }
 
 /** The session here, where it runs and its folder; null for none. Throws `Unreached`. */

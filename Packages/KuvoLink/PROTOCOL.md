@@ -1263,7 +1263,8 @@ composer show it, so a client draws each card and works nothing out: every permi
 waiting in the conversation and its subagents, on the engine or the coding agents' bridge, but one
 Auto's reviewer took up.
 
-- `GET kuvo/sessions/<id>/asks` → `{"asks": [ask…]}`, oldest first. Each has `id`, `kind`,
+- `GET kuvo/sessions/<id>/asks` → `{"asks": [ask…]}`, oldest first, those a client answers
+  ahead of those answered elsewhere (`other`, below), so the card it can answer shows first. Each has `id`, `kind`,
   `session` (the session asking: a subagent's own) and `title`:
   - `permission`: `{message, command, files, resources, choices}`. `title` as the Mac's card says
     it ("Allow editing src/App.swift and 2 more?", "Allow running this command?"); `message` the
@@ -1307,7 +1308,8 @@ What a step of the agent's shows when it's opened, which every client draws from
 message alone (a step is `{type: "tool", id, name, state}`; `state` has `status`, `input`, and once
 it's done `content` and `metadata`). The engine's own tools, and the coding agents' as their bridge
 names them, by the same names (`bash`, in a conversation from before the engine named it, is
-`shell`). Sample steps every client is held to: `Packages/KuvoLink/Vectors/tool-steps.json`.
+`shell`). Sample steps: `Packages/KuvoLink/Vectors/tool-steps.json`, which only the desktop
+client (gpui) tests against for now; the phone is to hold itself to it too.
 
 | Tool | Its target (on its row) | Opened, it shows |
 | --- | --- | --- |

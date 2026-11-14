@@ -110,7 +110,8 @@ test("a conversation's asks, its subagents' too, come worded as the cards show t
   noteAskEvent({ type: "form.created", data: { form: { id: "que_1", sessionID: "ses_root" } } }, "engine", 1_000)
   noteAskEvent({ type: "permission.asked", data: { id: "per_push", sessionID: "ses_child" } }, "engine", 2_000)
   noteAskEvent({ type: "permission.asked", data: { id: "per_edit", sessionID: "ses_root" } }, "engine", 3_000)
-  noteAskEvent({ type: "form.created", data: { form: { id: "frm_mcp", sessionID: "ses_root" } } }, "engine", 4_000)
+  // (An MCP server's form, asked first, but answered elsewhere: after those a client answers.)
+  noteAskEvent({ type: "form.created", data: { form: { id: "frm_mcp", sessionID: "ses_root" } } }, "engine", 500)
   const { status, json } = await ask(handler, "GET", "kuvo/sessions/ses_root/asks")
   expect(status).toBe(200)
   expect(json.asks.map((each: any) => each.id)).toEqual(["per_out", "que_1", "per_push", "per_edit", "frm_mcp"])
@@ -235,12 +236,14 @@ test("one the engine refuses says why; no such conversation, or one whose place 
 test("followed, the asks come again as one comes or is answered", async () => {
   const stream = follow(handler, "kuvo/sessions/ses_root/asks/events")
   try {
-    expect((await stream.next()).asks.map((each: any) => each.id)).toEqual(["per_edit", "per_out", "que_1", "frm_mcp", "per_push"])
+    expect((await stream.next()).asks.map((each: any) => each.id)).toEqual(["per_edit", "per_out", "que_1", "per_push", "frm_mcp"])
     // A subagent asks: the box's long-running process hears it, and every follower reads again.
     permissions.ses_child!.push({ id: "per_read", sessionID: "ses_child", action: "read", resources: [`${work}/secrets.txt`] })
     noteAskEvent({ type: "permission.asked", data: { id: "per_read", sessionID: "ses_child" } }, "engine")
     const now = (await stream.next()).asks
-    expect(now.at(-1)).toMatchObject({ id: "per_read", title: "Allow reading secrets.txt?", resources: ["secrets.txt"] })
+    // (The newest a client answers, ahead of the form answered elsewhere.)
+    expect(now.map((each: any) => each.id).slice(-2)).toEqual(["per_read", "frm_mcp"])
+    expect(now.at(-2)).toMatchObject({ id: "per_read", title: "Allow reading secrets.txt?", resources: ["secrets.txt"] })
     // Answered on another client: gone.
     permissions.ses_child = permissions.ses_child!.filter(each => each.id !== "per_read")
     noteAskEvent({ type: "permission.replied", data: { requestID: "per_read", sessionID: "ses_child" } }, "engine")

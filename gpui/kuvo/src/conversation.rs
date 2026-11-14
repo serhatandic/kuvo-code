@@ -67,6 +67,8 @@ pub struct ConversationView {
     asks_failed: Option<String>,
     /// Whether the card had the composer's place (and the keyboard with it) last it was drawn.
     card_took_keys: bool,
+    /// The whole conversation's, so the card can tell the keyboard is somewhere in it.
+    focus: FocusHandle,
     client: BoxClient,
     live: bool,
     _queue_follow: Option<Follow<Followed<Queue>>>,
@@ -107,6 +109,7 @@ impl ConversationView {
             queue_failed: None,
             asks_failed: None,
             card_took_keys: false,
+            focus: cx.focus_handle(),
             client: client.clone(),
             live,
             _queue_follow: None,
@@ -243,8 +246,17 @@ impl ConversationView {
             return;
         }
         self.card_took_keys = taking;
-        let (from, to) = if taking { (self.composer.focus_handle(cx), self.asks.focus_handle(cx)) } else { (self.asks.read(cx).focus_handle_any(cx), self.composer.focus_handle(cx)) };
-        if from.contains_focused(window, cx) || from.is_focused(window) {
+        // Coming, it takes the keyboard from anywhere in the conversation (or from nowhere); going,
+        // it gives it back to the composer if it had it.
+        let (has, to) = if taking {
+            // (The composer asked for by name too: before the conversation's first drawing, its focus
+            // doesn't know what's inside it yet.)
+            let composer = self.composer.focus_handle(cx).is_focused(window);
+            (composer || self.focus.contains_focused(window, cx) || window.focused(cx).is_none(), self.asks.focus_handle(cx))
+        } else {
+            (self.asks.read(cx).focus_handle_any(cx).contains_focused(window, cx), self.composer.focus_handle(cx))
+        };
+        if has {
             window.focus(&to, cx);
         }
     }
@@ -563,6 +575,7 @@ impl Render for ConversationView {
         };
         let gone = matches!(self.problem, Some(Problem::Gone(_)));
         div()
+            .track_focus(&self.focus)
             .size_full()
             .flex()
             .flex_col()
