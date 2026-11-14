@@ -647,11 +647,15 @@ fn whats_offered_is_read_in_the_conversations_folder(cx: &mut TestAppContext) {
             .collect()
     };
     let client = BoxClient::new(stand_in.clone());
-    let conversation = cx.new(|cx| Composer::new(client.clone(), kuvo::composer::Target::Session { id: "ses_limits".into(), place: Where::Engine }, true, cx));
-    conversation.update(cx, |composer, cx| composer.set_folder(Some("/Users/sam/Projects/api".into()), cx));
+    let api = Some("/Users/sam/Projects/api".to_owned());
+    let conversation = cx.new(|cx| Composer::in_folder(client.clone(), kuvo::composer::Target::Session { id: "ses_limits".into(), place: Where::Engine }, api.clone(), true, cx));
     cx.run_until_parked();
-    // (Read again once its folder's known; the read before it, without, is let go.)
-    assert!(folders(&stand_in).contains(&Some("/Users/sam/Projects/api".to_owned())), "{:?}", folders(&stand_in));
+    assert_eq!(folders(&stand_in), vec![api.clone()], "read there from the first read");
+    // The same folder again reads nothing more; another (a conversation moved) reads there.
+    assert!(!conversation.update(cx, |composer, cx| composer.set_folder(api.clone(), cx)));
+    assert!(conversation.update(cx, |composer, cx| composer.set_folder(Some("/Users/sam/Projects/web".into()), cx)));
+    cx.run_until_parked();
+    assert_eq!(folders(&stand_in), vec![api, Some("/Users/sam/Projects/web".to_owned())]);
 
     let stand_in = StandIn::at(Replies::Never, NOW);
     let client = BoxClient::new(stand_in.clone());

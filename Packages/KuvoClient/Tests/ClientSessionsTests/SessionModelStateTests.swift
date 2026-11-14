@@ -88,5 +88,9 @@ struct SessionModelStateTests {
         let answer = try JSONDecoder().decode(SessionModelStates.self, from: Data(#"{"sessions":{"ses_a":{"model":null,"runs":false,"missing":"model","choose":true}}}"#.utf8))
         #expect(answer.sessions["ses_a"]?.missing == .model)
         #expect(SessionModelState.path(["ses_a", "ses_b"]) == "kuvo/sessions/models?sessions=ses_a,ses_b")
+        // An action it can't read: none, the rest of what its box says standing.
+        let partial = try state(#"{"model":null,"runs":false,"missing":"model","refusal":"Choose a model to send it.","choose":true,"action":{"do":"choose"}}"#)
+        #expect(partial.action == nil)
+        #expect(partial.refusal == "Choose a model to send it." && partial.choose)
     }
 }

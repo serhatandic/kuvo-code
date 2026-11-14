@@ -141,6 +141,12 @@ impl Composer {
     /// A composer for `target`. `read`: whether to read what it shows (the model, the efforts,
     /// "/"'s offers) from the box now.
     pub fn new(client: BoxClient, target: Target, read: bool, cx: &mut Context<Self>) -> Composer {
+        Composer::in_folder(client, target, None, read, cx)
+    }
+
+    /// The same, for a conversation in `folder` (as its box lists it): what's offered is read
+    /// there from the first read (`set_folder`).
+    pub fn in_folder(client: BoxClient, target: Target, folder: Option<String>, read: bool, cx: &mut Context<Self>) -> Composer {
         let placeholder = match &target {
             Target::Session { .. } => "Ask anything, / for commands",
             Target::New(_) => "What should we work on?",
@@ -170,7 +176,7 @@ impl Composer {
             live: read,
             models: Models::default(),
             picked: None,
-            folder: None,
+            folder,
             reads: 0,
             retry: RETRY_FIRST,
             retrying: None,
@@ -228,21 +234,24 @@ impl Composer {
 
     /// The conversation's folder, as its box lists it: what's offered is read there, its project's
     /// own models too (`models.offered.folder`).
-    pub fn set_folder(&mut self, folder: Option<String>, cx: &mut Context<Self>) {
-        if self.folder != folder {
-            self.folder = folder;
-            if self.live {
-                self.read_models(cx);
-            }
+    /// Whether it was read again for it (a folder it didn't have, in the app).
+    pub fn set_folder(&mut self, folder: Option<String>, cx: &mut Context<Self>) -> bool {
+        if self.folder == folder {
+            return false;
         }
+        self.folder = folder;
+        if self.live {
+            self.read_models(cx);
+        }
+        self.live
     }
 
-    /// The folder what's offered is read in: a conversation's, or the project a new one starts in
-    /// (by its folder; a project named otherwise, the box's own lists).
+    /// The folder what's offered is read in: a conversation's, or the project a new one starts in.
     fn offered_in(&self) -> Option<String> {
         match &self.target {
             Target::Session { .. } => self.folder.clone(),
-            Target::New(StartIn::Project(project)) if project.starts_with('/') => Some(project.clone()),
+            // (The box reads its own lists for one that isn't a folder there.)
+            Target::New(StartIn::Project(project)) => Some(project.clone()),
             Target::New(_) => None,
         }
     }
@@ -510,7 +519,9 @@ impl Composer {
         let mut draft = Draft::new(BoxClient::new_id(), text.clone());
         draft.refusal = self.models.state.as_ref().and_then(|state| state.refusal.clone());
         if self.needs_model() {
-            self.set_note(Note { text: "Choose a model to send it.".into(), warning: true }, cx);
+            // As its box words it, for a conversation; a new one's box says only that none runs.
+            let words = self.models.state.as_ref().and_then(|state| state.refusal.clone()).unwrap_or_else(|| "Choose a model to send it.".to_owned());
+            self.set_note(Note { text: words.into(), warning: true }, cx);
             cx.notify();
             return;
         }

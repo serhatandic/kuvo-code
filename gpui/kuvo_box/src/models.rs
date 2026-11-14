@@ -73,9 +73,15 @@ pub struct ModelState {
     /// The chip says "Choose a Model" and Send waits for one (a model gone, or none to run on).
     #[serde(default)]
     pub choose: bool,
-    /// What to offer doing about it.
-    #[serde(default)]
+    /// What to offer doing about it (none for one a newer box words otherwise: the rest stands).
+    #[serde(default, deserialize_with = "lenient")]
     pub action: Option<Action>,
+}
+
+/// An action as the box says it; one this client can't read is none, never the whole answer lost.
+fn lenient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<Action>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 impl ModelState {
@@ -310,6 +316,12 @@ mod tests {
 
     fn state(value: Value) -> ModelState {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn an_action_this_client_cant_read_leaves_the_rest() {
+        let said = state(json!({ "model": null, "runs": false, "missing": "model", "refusal": "Choose a model to send it.", "choose": true, "action": { "do": "choose" } }));
+        assert_eq!((said.refusal.as_deref(), said.choose, said.action), (Some("Choose a model to send it."), true, None));
     }
 
     #[test]

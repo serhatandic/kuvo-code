@@ -467,7 +467,29 @@ test("the models offered in a project's folder: the engine's lists there, where 
   assert.deepEqual(plain.starting, { providerID: "anthropic", id: "claude-opus-5-5" });
 });
 
-test("a folder that isn't a full path, or isn't one here, is refused", async () => {
-  assert.equal((await answer("GET", "kuvo/models/offered?folder=src%2Fapp")).status, 400);
-  assert.equal((await answer("GET", `kuvo/models/offered?folder=${encodeURIComponent(path.join(home, "nowhere"))}`)).status, 404);
+test("a folder that isn't a full path, or isn't one here (a worktree removed since), is offered the box's own", async () => {
+  link.forgetModelLists();
+  const own = await offeredOn(handle);
+  for (const folder of ["src/app", path.join(home, "nowhere")]) {
+    folders.length = 0;
+    const offered = await offeredOn(handle, `?folder=${encodeURIComponent(folder)}`);
+    assert.deepEqual(refs(offered.models), refs(own.models), folder);
+    assert.ok(!folders.includes(folder), `not asked of the engine: ${folders}`);
+  }
+});
+
+test("a model whose account was signed out since is named as it was listed, by an id it's known by too (Claude Code's default), and a Custom Auto list by its name", async () => {
+  link.forgetModelLists();
+  // Listed while signed in: Claude Code's `default` stands for Opus 5.5.
+  await statesOn(handle, "ses_agentFine");
+  // Then signed out, and its Custom Auto lists deleted: it lists none of either.
+  const out = await standIn(url => {
+    const one = url.match(/^\/api\/session\/([^/?]+)$/);
+    if (one) return bridgeSessions[decodeURIComponent(one[1])];
+    return { "/api/integration": [agent("claude-code", "Claude Code", { signedIn: false })], "/api/model?hidden=1": [], "/api/kuvo/auto": { entries: [], lists: [], limits: [] } }[url];
+  });
+  const signedOut = link.engineHandler(() => ({ pid: process.pid, ...engine, version: "2.0.32" }), { name: "Studio" }, () => ({ pid: agents, ...out }));
+  const shown = await wordedOn(signedOut, "ses_agentFine", "ses_autoEmpty");
+  assert.equal(shown.ses_agentFine.refusal, "Opus 5.5 needs a sign-in to Claude Code: sign in, or choose another model.");
+  assert.equal(shown.ses_autoEmpty.refusal, "Bugfixes is no longer available: choose another model.");
 });

@@ -1389,8 +1389,9 @@ box decides it from what its engine and coding agents list, so every client show
     ("Sign In", "Add Key", "Install", "Choose a Model"), `help` what it does ("Sign in to GitHub
     Copilot", "Add an xAI key (with a SuperGrok plan, choose a model under Grok instead)").
   - The words are product words: no computer's name (the conversation shows where it is) and no
-    settings page. A model gone from its list is named as the box last listed it, since it started
-    (else by its id).
+    settings page. A model that isn't listed now (gone from its list, or its account signed out
+    of) is named as the box last listed it since it started, by its own id or one it's known by,
+    and a Custom Auto list by its name (else by its id).
 - The engine's lists (its providers, models, accounts and default) are read in the session's
   folder, where a project's own settings may add to them.
 - An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
@@ -1454,9 +1455,9 @@ start on a model by the same rule.
 - `folder` (`models.offered.folder`): a project's folder, or a conversation's, as a full path: the
   engine's lists are read there, where a project's own settings may add providers and models or
   set its default, so a picker there offers them (with their efforts) and `starting` is that
-  project's. Without it, the box's own lists. `400` for one that isn't a full path, `404` for one
-  that isn't a folder on the box. A client asks with the folder of the conversation, or of the
-  project a new one starts in.
+  project's. Without it, or for one that isn't a full path to a folder on the box (a worktree
+  removed since), the box's own lists. A client asks with the folder of the conversation, or of
+  the project a new one starts in.
 - `models`: every model that runs there now (`runs` in "A session's model"): the engine's, its
   featured providers first (OpenAI, GitHub Copilot, Anthropic, Google, xAI, OpenRouter, OpenCode
   Zen, DeepSeek, Mistral, Groq) and the rest by id, each provider's newest first; then the coding

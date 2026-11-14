@@ -17163,17 +17163,21 @@ function forgetModelLists() {
 var lastNames = new Map;
 var nameKey = (ref) => `${ref.providerID}\x00${ref.id}`;
 var lastName = (ref) => lastNames.get(nameKey(ref));
+function noteNames(providerID, ids, name) {
+  for (const id of ids) {
+    const key = nameKey({ providerID, id });
+    lastNames.delete(key);
+    lastNames.set(key, name);
+  }
+  while (lastNames.size > 20000)
+    lastNames.delete(lastNames.keys().next().value);
+}
 function modelsIn(listed) {
   if (!Array.isArray(listed))
     return null;
   const models = modelsListed(listed);
-  for (const model of models) {
-    const key = nameKey(model);
-    lastNames.delete(key);
-    lastNames.set(key, model.name);
-  }
-  while (lastNames.size > 5000)
-    lastNames.delete(lastNames.keys().next().value);
+  for (const model of models)
+    noteNames(model.providerID, [model.id, ...model.aliases], model.name);
   return models;
 }
 function modelsListed(listed) {
@@ -17238,6 +17242,8 @@ async function bridgeLists(bridge) {
   if (!models || !accounts)
     return null;
   const lists = isObject(auto) && Array.isArray(auto.lists) ? auto.lists.flatMap((each) => isObject(each) && typeof each.id === "string" ? [{ id: each.id, name: typeof each.name === "string" && each.name ? each.name : "Custom Auto", entries: Array.isArray(each.entries) ? each.entries.length : 0 }] : []) : null;
+  for (const list of lists ?? [])
+    noteNames("auto", [list.id], list.name);
   return { models, accounts, auto: lists };
 }
 function engineListsIn(engine, folder) {
@@ -40312,7 +40318,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "98ba684ed4e2";
+var BRIDGE_VERSION = "70e9417f4cfa";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45931,21 +45937,18 @@ function wantedIn(requestPath) {
   const providerID = query.get("provider")?.trim(), id = query.get("model")?.trim(), variant = query.get("variant")?.trim();
   return providerID && id ? { providerID, id, ...variant ? { variant } : {} } : null;
 }
-function folderIn(requestPath) {
+async function folderIn(requestPath) {
   const folder = new URLSearchParams(requestPath.split("?")[1] ?? "").get("folder")?.trim();
-  if (!folder)
+  if (!folder || !path148.isAbsolute(folder))
     return;
-  return path148.isAbsolute(folder) ? path148.resolve(folder) : null;
+  const resolved = path148.resolve(folder);
+  return await fs142.promises.stat(resolved).then((found) => found.isDirectory(), () => false) ? resolved : undefined;
 }
 async function* modelsOfferedRoute(context) {
   const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "GET")
     return yield* json(405, {});
-  const folder = folderIn(request.path);
-  if (folder === null)
-    return yield* json(400, { message: "Send the folder's full path." });
-  if (folder !== undefined && !await fs142.promises.stat(folder).then((found) => found.isDirectory(), () => false))
-    return yield* json(404, { message: "There's no such folder here." });
+  const folder = await folderIn(request.path);
   if (!targetsOf({ readEngine, bridge }).length)
     return yield* json(503, { message: "The engine isn't running." });
   let engine = null;
@@ -49596,14 +49599,15 @@ async function* typedAnswer(context, match) {
   }
   const text = body.text;
   const slash = splitCommand(text) !== null;
+  const onAgents = agents !== null && place.target.port === agents.port;
+  const modelRead = needsModel(text) && !(onAgents && data.parentID) ? modelOf2(place, engine, agents).catch(() => {
+    return;
+  }) : Promise.resolve(undefined);
   const commands = slash ? await engineCommands(engine, folder, signal) : [];
   const typed = parseKeyword(text);
-  const onAgents = agents !== null && place.target.port === agents.port;
   const readers = typed?.keyword === "review" && !onAgents ? await reviewReaders(engine, folder) : [];
   const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, within6(signal, 1e4)).then(() => true, () => false) : false;
-  const model = needsModel(text) && !(onAgents && data.parentID) ? await modelOf2(place, engine, agents).catch(() => {
-    return;
-  }) : undefined;
+  const model = await modelRead;
   const refusal = model?.refusal ?? null;
   const decision = decide2(text, {
     keywords,

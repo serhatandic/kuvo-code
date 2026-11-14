@@ -111,15 +111,21 @@ const nameKey = (ref: { providerID: string; id: string }) => `${ref.providerID}\
 /** `ref`'s name as it was last listed here; none for one never listed since the box started. */
 export const lastName = (ref: { providerID: string; id: string }): string | undefined => lastNames.get(nameKey(ref));
 
+/** `name` kept as the one last listed for `providerID`'s models `ids` (its own, and those it's
+ * known by: Claude Code's `default`, the newest saying it last). */
+function noteNames(providerID: string, ids: string[], name: string): void {
+  for (const id of ids) {
+    const key = nameKey({ providerID, id });
+    lastNames.delete(key);
+    lastNames.set(key, name);
+  }
+  while (lastNames.size > 20_000) lastNames.delete(lastNames.keys().next().value!);
+}
+
 function modelsIn(listed: unknown): Listed[] | null {
   if (!Array.isArray(listed)) return null;
   const models = modelsListed(listed);
-  for (const model of models) {
-    const key = nameKey(model);
-    lastNames.delete(key);
-    lastNames.set(key, model.name);
-  }
-  while (lastNames.size > 5_000) lastNames.delete(lastNames.keys().next().value!);
+  for (const model of models) noteNames(model.providerID, [model.id, ...model.aliases], model.name);
   return models;
 }
 
@@ -195,6 +201,7 @@ async function bridgeLists(bridge: Target): Promise<BridgeLists | null> {
   const lists = isObject(auto) && Array.isArray(auto.lists)
     ? auto.lists.flatMap(each => (isObject(each) && typeof each.id === "string" ? [{ id: each.id, name: typeof each.name === "string" && each.name ? each.name : "Custom Auto", entries: Array.isArray(each.entries) ? each.entries.length : 0 }] : []))
     : null;
+  for (const list of lists ?? []) noteNames("auto", [list.id], list.name);
   return { models, accounts, auto: lists };
 }
 

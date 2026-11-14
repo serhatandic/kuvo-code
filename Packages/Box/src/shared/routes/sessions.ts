@@ -181,7 +181,7 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/list", answers: { 200: SESSION_LIST, 405: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/list/events", answers: { 200: SESSION_LIST, 405: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/models", answers: { 200: SESSION_MODELS, 400: REFUSED, 503: REFUSED } },
-  { route: "GET kuvo/models/offered", answers: { 200: MODELS_OFFERED, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/models/offered", answers: { 200: MODELS_OFFERED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE } },
   { route: "POST kuvo/sessions/:id/stop", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/hold", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },

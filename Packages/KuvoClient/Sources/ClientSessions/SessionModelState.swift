@@ -154,7 +154,8 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         plan = try container.decodeIfPresent(Plan.self, forKey: .plan)
         refusal = try container.decodeIfPresent(String.self, forKey: .refusal)
         choose = try container.decodeIfPresent(Bool.self, forKey: .choose) ?? false
-        action = try container.decodeIfPresent(Action.self, forKey: .action)
+        // (One this client can't read is none: the rest of what its box says stands.)
+        action = (try? container.decodeIfPresent(Action.self, forKey: .action)) ?? nil
     }
 
     /// The route a box answers it on, `sessions=<id>,<id>…` its query.

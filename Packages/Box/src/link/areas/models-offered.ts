@@ -20,21 +20,20 @@ function wantedIn(requestPath: string): Ref | null {
   return providerID && id ? { providerID, id, ...(variant ? { variant } : {}) } : null;
 }
 
-/** The folder asked about (`folder`: a project's, or a conversation's): the engine's lists there,
- * where a project's own settings may add providers, models or its default; undefined for none
- * named (the box's own lists), null for one that isn't a full path. */
-function folderIn(requestPath: string): string | null | undefined {
+/** The folder asked about (`folder`: a project's, or a conversation's), where the engine's lists
+ * are read, a project's own settings adding providers, models or its default; none named, or one
+ * that isn't a folder here (a worktree removed since, a project named otherwise), the box's own. */
+async function folderIn(requestPath: string): Promise<string | undefined> {
   const folder = new URLSearchParams(requestPath.split("?")[1] ?? "").get("folder")?.trim();
-  if (!folder) return undefined;
-  return path.isAbsolute(folder) ? path.resolve(folder) : null;
+  if (!folder || !path.isAbsolute(folder)) return undefined;
+  const resolved = path.resolve(folder);
+  return (await fs.promises.stat(resolved).then(found => found.isDirectory(), () => false)) ? resolved : undefined;
 }
 
 export async function* modelsOfferedRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
-  const folder = folderIn(request.path);
-  if (folder === null) return yield* json(400, { message: "Send the folder's full path." });
-  if (folder !== undefined && !(await fs.promises.stat(folder).then(found => found.isDirectory(), () => false))) return yield* json(404, { message: "There's no such folder here." });
+  const folder = await folderIn(request.path);
   if (!targetsOf({ readEngine, bridge }).length) return yield* json(503, { message: "The engine isn't running." });
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
