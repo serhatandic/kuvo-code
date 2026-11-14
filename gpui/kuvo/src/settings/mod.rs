@@ -221,6 +221,14 @@ impl SettingsView {
     }
 
     /// The sections the search finds something on (all of them without one).
+    /// The line under a row on the page open, as drawn.
+    pub fn row_detail(&self, key: &str) -> Option<String> {
+        self.items.iter().find_map(|item| match item {
+            Item::Row { row, .. } if row.key == key => Some(row.detail.clone()),
+            _ => None,
+        })
+    }
+
     pub fn sections_found(&self) -> Vec<&'static str> {
         rows::BUILT
             .iter()
@@ -416,11 +424,11 @@ impl SettingsView {
                 |this, approval| this.approval = Reading::Ready(approval),
                 cx,
             ),
-            Act::CheckSandbox => {
-                self.set_busy("row-sandbox", "Checking…");
+            Act::SandboxAction { method, path } => {
+                self.set_busy("row-sandbox", "Working…");
                 self.run(
                     "row-sandbox",
-                    |client| client.check_sandbox().and_then(|_| client.sandbox()),
+                    move |client| client.sandbox_action(&method, &path),
                     |this, done, _| {
                         this.done("row-sandbox");
                         match done {

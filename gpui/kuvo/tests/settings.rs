@@ -133,7 +133,8 @@ fn accounts_lists_the_agents_and_providers_as_the_box_says_them(cx: &mut TestApp
     for row in ["account-claude-code", "account-claude-code@w0rk1a2b", "account-codex-cli", "account-cursor", "account-grok-cli", "account-github-copilot", "account-anthropic", "account-groq"] {
         assert!(shown(cx, row), "{row}");
     }
-    assert!(!shown(cx, "account-tavily") && !shown(cx, "account-linear"), "a search service and an MCP server's sign-in aren't accounts");
+    // Every account the box lists, none left out here: which aren't providers is the box's to say.
+    assert!(shown(cx, "account-tavily") && shown(cx, "account-linear"));
     // Signed in, ended, never: each says so, with the box's ways.
     assert!(shown(cx, "account-antigravity-sign-in-again"), "an agent whose sign-in ended");
     assert!(shown(cx, "account-gitlab-sign-in-again") && shown(cx, "account-gitlab-disconnect"), "an engine plan the box says ended");
@@ -344,11 +345,35 @@ fn permissions_show_the_boxs_approval_and_sandbox_and_change_through_it(cx: &mut
     assert!(shown(cx, "row-default-mode") && shown(cx, "row-full-access"));
     click(cx, "row-other-computers-switch");
     assert_eq!(bodies(&stand_in, "PATCH", "kuvo/approval"), vec![json!({ "otherComputers": true })]);
-    click(cx, "row-sandbox-check-again");
-    assert_eq!(stand_in.seen_at("POST", "kuvo/sandbox/check").len(), 1);
     click(cx, "allowed-alw_1-remove");
     assert_eq!(stand_in.seen_at("DELETE", "kuvo/sandbox/allowed/alw_1").len(), 1);
     assert!(!shown(cx, "allowed-alw_1") && shown(cx, "allowed-alw_2"));
+}
+
+/// The sandbox in the box's words alone: on, off with its `why` and the button it words (at the
+/// route it names), and off with nothing said.
+#[gpui::test]
+fn the_sandbox_is_drawn_in_the_boxs_words(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    section(&workspace, cx, "Permissions");
+    let line = |workspace: &Entity<Workspace>, cx: &mut VisualTestContext| settings(workspace, cx).read_with(cx, |view, _| view.row_detail("row-sandbox"));
+    assert_eq!(line(&workspace, cx).as_deref(), Some(""), "on: nothing worded here");
+    assert!(!shown(cx, "row-sandbox-try-again"));
+
+    stand_in.set_sandbox(json!({ "on": false, "able": true, "agents": false, "why": "Its check failed: a command could write outside its folder.", "reason": "checkFailed", "action": "retry", "route": "POST kuvo/sandbox/check", "actionLabel": "Try Again" }));
+    section(&workspace, cx, "Browser");
+    section(&workspace, cx, "Permissions");
+    assert_eq!(line(&workspace, cx).as_deref(), Some("Its check failed: a command could write outside its folder."));
+    click(cx, "row-sandbox-try-again");
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sandbox/check").len(), 1, "at the box's route");
+
+    // Off, and the box words nothing: one neutral line, no button of this app's own.
+    stand_in.set_sandbox(json!({ "on": false, "able": true, "agents": false, "reason": "engineDown", "action": "restartEngine", "route": "POST kuvo/engine/restart" }));
+    section(&workspace, cx, "Browser");
+    section(&workspace, cx, "Permissions");
+    assert_eq!(line(&workspace, cx).as_deref(), Some("This needs your OK."));
+    assert!(!shown(cx, "row-sandbox-try-again") && !shown(cx, "row-sandbox-restart-engine"));
 }
 
 #[gpui::test]

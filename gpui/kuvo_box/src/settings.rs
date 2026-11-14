@@ -92,9 +92,25 @@ pub struct Sandbox {
     /// `engineDown`, `waiting`.
     #[serde(default)]
     pub reason: Option<String>,
-    /// `help`, `softwareUpdate`, `retry`, `fix`, `restartEngine`.
+    /// `help`, `softwareUpdate`, `retry`, `fix`, `restartEngine`: a word for a client to map,
+    /// which this one doesn't (its button's words are the box's to say, below).
     #[serde(default)]
     pub action: Option<String>,
+    /// The box's route that does it (`POST kuvo/sandbox/check`).
+    #[serde(default)]
+    pub route: Option<String>,
+    // BOX-NEEDED: the words of the button that does `action`, `actionLabel` in `GET kuvo/sandbox` (and `why` for every `reason`): KuvoClient's `SandboxNotice` words them in each client today; this draws a button only with the box's words and its `route`.
+    #[serde(default, rename = "actionLabel")]
+    pub action_label: Option<String>,
+}
+
+impl Sandbox {
+    /// What its button sends, where the box words one and names its route: `(method, path)`.
+    pub fn button(&self) -> Option<(String, String, String)> {
+        let label = self.action_label.clone().filter(|label| !label.trim().is_empty())?;
+        let (method, path) = self.route.as_deref()?.split_once(' ')?;
+        Some((label, method.to_owned(), path.to_owned()))
+    }
 }
 
 /// Whose a folder the sandbox also lets agents write to is.
@@ -206,9 +222,10 @@ impl BoxClient {
         self.get("kuvo/sandbox")
     }
 
-    /// Asks the box to check its sandbox again.
-    pub fn check_sandbox(&self) -> Result<()> {
-        self.done(&Request::post("kuvo/sandbox/check", json!({})))
+    /// Does what the sandbox's button says, at the route the box named for it, then reads it again.
+    pub fn sandbox_action(&self, method: &str, path: &str) -> Result<Sandbox> {
+        self.done(&with_method(method, path, json!({})))?;
+        self.sandbox()
     }
 
     pub fn also_allowed(&self) -> Result<Vec<Allowed>> {

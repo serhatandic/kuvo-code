@@ -60,7 +60,8 @@ pub enum Act {
     /// A model setting at a path in the engine's settings, from what was read there.
     SetModel { path: &'static [&'static str], model: Option<String>, was: Option<String> },
     SetOtherComputers(bool),
-    CheckSandbox,
+    /// The sandbox's button, at the route the box named.
+    SandboxAction { method: String, path: String },
     RemoveAllowed(String),
     SetSearchEngine(String),
     SetTidies(bool),
@@ -468,14 +469,13 @@ fn permissions(facts: &Facts) -> Vec<Block> {
     }
     match facts.sandbox {
         Reading::Ready(sandbox) => {
-            // BOX-NEEDED: what the sandbox's state means and what to do, as sentences in `GET kuvo/sandbox` (`why` for every `reason`, and the button's words for `action`): KuvoClient's `SandboxNotice` words them in the clients today, so this says on or off and the box's `why` alone.
-            let detail = if sandbox.on {
-                "Agents’ commands run in a sandbox: they can’t read your keys or sign-ins.".to_owned()
-            } else {
-                sandbox.why.clone().unwrap_or_else(|| "It’s off on this computer.".into())
-            };
-            let control = facts.busy("row-sandbox").unwrap_or(Control::Buttons(vec![("Check Again".into(), Act::CheckSandbox)]));
-            let state = Row::new("row-sandbox", if sandbox.on { "Sandbox is on" } else { "Sandbox is off" }, detail, control).warning(!sandbox.on);
+            // BOX-NEEDED: why it's off and what to do, as sentences in `GET kuvo/sandbox` (`why` for every `reason`, and `actionLabel` for its button): drawn only as the box words them; otherwise one neutral line, and no button.
+            let detail = if sandbox.on { String::new() } else { sandbox.why.clone().filter(|why| !why.trim().is_empty()).unwrap_or_else(|| "This needs your OK.".into()) };
+            let control = facts.busy("row-sandbox").unwrap_or_else(|| match sandbox.button() {
+                Some((label, method, path)) if !sandbox.on => Control::Buttons(vec![(label, Act::SandboxAction { method, path })]),
+                _ => Control::Text(if sandbox.on { "On".into() } else { "Off".into() }),
+            });
+            let state = Row::new("row-sandbox", "Sandbox", detail, control).warning(!sandbox.on);
             blocks.push(Block::Group("Sandbox".into(), vec![state]));
         }
         reading => blocks.extend(unread(reading, "note-sandbox", "the sandbox")),

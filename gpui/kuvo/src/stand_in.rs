@@ -150,6 +150,11 @@ impl StandIn {
         self.state().settings.set_config(path, value);
     }
 
+    /// From now on, it says this of its sandbox (`kuvo/sandbox`).
+    pub fn set_sandbox(&self, sandbox: Value) {
+        self.state().settings.set_sandbox(sandbox);
+    }
+
     /// Sign-ins under way are forgotten, as by an engine that started over.
     pub fn forget_sign_ins(&self) {
         self.state().settings.forget_sign_ins();

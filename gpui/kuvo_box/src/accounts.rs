@@ -170,11 +170,6 @@ impl Integration {
         self.meta(key).and_then(Value::as_bool).unwrap_or(false)
     }
 
-    /// An MCP server's sign-in, which Settings › Integrations keeps, not Accounts.
-    pub fn is_mcp(&self) -> bool {
-        self.meta("source").and_then(Value::as_str) == Some("mcp")
-    }
-
     /// A coding agent's program isn't installed on this computer (`metadata.installed: false`).
     pub fn needs_install(&self) -> bool {
         self.meta("installed").and_then(Value::as_bool) == Some(false)
@@ -326,15 +321,6 @@ pub(crate) fn readable<'de, D: serde::Deserializer<'de>, T: serde::de::Deseriali
     Ok(values.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect())
 }
 
-/// The engine's integrations Accounts leaves out: web search services, whose keys Settings › Engine
-/// keeps, and the engine's own way to Claude's plan (Claude comes through the coding agents) unless
-/// it's signed in already. KuvoClient's `EngineProviders`, ported as the view rule it is.
-// BOX-NEEDED: which of the engine's integrations are providers Accounts lists, `kind: "provider" | "search" | "agentDuplicate"` on each account in `GET kuvo/sign-in/accounts` (or the box leaving the rest out), so no client keeps these lists.
-pub fn listed(integration: &Integration) -> bool {
-    const SEARCH: [&str; 5] = ["exa", "firecrawl", "parallel", "tavily", "tinyfish"];
-    !integration.is_mcp() && !SEARCH.contains(&integration.id.as_str()) && (integration.connected() || integration.id != "claude-agent")
-}
-
 /// The data an engine or bridge answer carries (`{data: …}`).
 #[derive(Deserialize)]
 struct Data<T> {
@@ -362,9 +348,9 @@ impl BoxClient {
             Side::Agents => "kuvo/sign-in/accounts?agents=1",
         };
         let ways: Vec<Entry> = self.get::<Answer>(route).map(|answer| answer.accounts)?;
+        // BOX-NEEDED: which of the engine's integrations are providers Accounts lists, `kind: "provider" | "search" | "agentDuplicate"` on each account in `GET kuvo/sign-in/accounts` (or the box leaving the rest out: web search services, MCP servers' sign-ins, the engine's own way to a plan a coding agent brings): until the box says, every account it lists is shown, none left out here.
         Ok(integrations
             .into_iter()
-            .filter(|integration| side == Side::Agents || listed(integration))
             .map(|integration| {
                 let ways = ways.iter().find(|entry| entry.id == integration.id).map(|entry| entry.ways.clone()).unwrap_or_default();
                 let ended = ended.contains(&integration.id);
@@ -510,15 +496,5 @@ mod tests {
         }
         let pending: Status = serde_json::from_value(json!({ "status": "pending", "message": "Downloading…" })).unwrap();
         assert_eq!(pending.failure_words(), None);
-    }
-
-    #[test]
-    fn accounts_leaves_out_search_services_and_mcp_servers() {
-        let integration = |json: Value| serde_json::from_value::<Integration>(json).unwrap();
-        assert!(listed(&integration(json!({ "id": "openrouter", "name": "OpenRouter" }))));
-        assert!(!listed(&integration(json!({ "id": "tavily", "name": "Tavily" }))));
-        assert!(!listed(&integration(json!({ "id": "linear", "name": "Linear", "metadata": { "source": "mcp" } }))));
-        assert!(!listed(&integration(json!({ "id": "claude-agent", "name": "Claude Agent" }))));
-        assert!(listed(&integration(json!({ "id": "claude-agent", "name": "Claude Agent", "connections": [{ "type": "credential", "method": "oauth" }] }))));
     }
 }

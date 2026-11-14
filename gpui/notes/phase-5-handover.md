@@ -20,7 +20,8 @@ restyle.
    by KuvoClient's names); Models (`kuvo/config`'s `model`, `agents.title.model`,
    `subagent_model`, from the engine's models offered, each sent with what was read, `was`);
    Permissions (`kuvo/approval`: the mode new sessions start in, Full Access, Auto held, other
-   computers' switch; `kuvo/sandbox` with Check Again; `kuvo/sandbox/allowed` with Remove);
+   computers' switch; `kuvo/sandbox` in the box's words, its button only where the box words it;
+   `kuvo/sandbox/allowed` with Remove);
    Notifications (the usage notices, #631 G, as one part from its version, and the box's words for
    providers that can't send them); Browser (`kuvo/browser/settings`, #693: search engine, tidying
    agents' tabs, offering to save sign-ins, and the sites never offered with Offer Again).
@@ -66,10 +67,10 @@ the shapes are proposals.
 | What | Route and shape | Where it's drawn | Until then |
 |---|---|---|---|
 | Which window is each ring | `rows[].windows[].span: short\|long` in `GET kuvo/agents/api/kuvo/limits` (#711) | `rail.rs`, `ring_button`; `kuvo_box/src/areas.rs`, `Account::rings` | one ring, the fullest window (the stand-in sends it) |
-| Which engine integrations are providers | `kind: provider\|search\|agentDuplicate` on each account in `GET kuvo/sign-in/accounts`, or the box leaving the rest out | `kuvo_box/src/accounts.rs`, `listed` | KuvoClient's `EngineProviders` rule, ported (search services, `claude-agent`), and MCP servers left out |
+| Which engine integrations are providers | `kind: provider\|search\|agentDuplicate` on each account in `GET kuvo/sign-in/accounts`, or the box leaving the rest out (web search services, MCP servers' sign-ins, `claude-agent`) | `kuvo_box/src/accounts.rs`, `side_accounts` | every account the box lists, unfiltered (no rule ported) |
 | An account's mark | `service` (the limits' ids) on each account in `GET kuvo/sign-in/accounts` | `settings/rows.rs`, `provider_row` | the provider's first letter (agents use the bridge's `metadata.agent`) |
 | A device code, the engine's too | `userCode` on `POST api/integration/<id>/connect/oauth`'s answer or `GET kuvo/sign-in/status`, for Copilot, OpenCode, SuperGrok | `settings/sign_in.rs`, `waiting` | the page and its instructions, no code apart (the bridge says it for agents) |
-| The sandbox's words | `why` for every `reason`, and a button's words for `action`, in `GET kuvo/sandbox` | `settings/rows.rs`, `permissions` | "Sandbox is on/off", the box's `why` where it gives one, Check Again |
+| The sandbox's words | `why` for every `reason`, and `actionLabel`, the words of the button that does `action` at its `route`, in `GET kuvo/sandbox` | `kuvo_box/src/settings.rs`, `Sandbox`; `settings/rows.rs`, `permissions` | "Sandbox" On or Off; off, the box's `why`, else "This needs your OK."; a button only with the box's words and route (none today) |
 | A window's level (#711, as before) | `windows[].level` | `rail.rs`, `settings/page.rs` `windows` | quiet grey meters and arcs |
 
 ## Review
@@ -101,6 +102,15 @@ One reviewer pass. Fixed, each with a test that fails on the code before where o
 - NITs left: Permissions', Vault's and Privacy's icons are all the shield (the set has no better
   yet); clearing the search doesn't go back to the section open before it; the composer's and the
   Files panel's selections keep the grey wash (they sit on white, not the sidebar grey).
+
+## The lead's follow-up
+
+Stand-ins draw a neutral default and port no rule or wording the box should own: Accounts lists
+every account the box returns (KuvoClient's `EngineProviders` rule removed), and the sandbox row
+words nothing of its own (its "Check Again" and the client's sentences removed; the box's `why`,
+or "This needs your OK.", and a button only with the box's words and route). Tests:
+`accounts_lists_the_agents_and_providers_as_the_box_says_them` (unfiltered),
+`the_sandbox_is_drawn_in_the_boxs_words` (on, off with the box's words and button, off with none).
 
 ## Left
 

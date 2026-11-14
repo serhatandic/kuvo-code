@@ -77,7 +77,8 @@ impl Default for Settings {
             integration("mistral", "Mistral", json!([]), json!({})),
             // Its page turns every sign-in down (`access_denied`), for what a failure shows.
             integration("poe", "Poe", json!([]), json!({})),
-            // Left out of Accounts: a web search service and an MCP server's sign-in.
+            // A web search service and an MCP server's sign-in, which the engine lists too: the box
+            // doesn't yet say they aren't providers (BOX-NEEDED in `kuvo_box/src/accounts.rs`).
             integration("tavily", "Tavily", json!([]), json!({})),
             integration("linear", "Linear", json!([]), json!({ "source": "mcp" })),
         ];
@@ -312,6 +313,10 @@ impl Settings {
             _ => return None,
         };
         Some(answer)
+    }
+
+    pub fn set_sandbox(&mut self, sandbox: Value) {
+        self.sandbox = sandbox;
     }
 
     pub fn set_config(&mut self, path: &[&str], value: Value) {
