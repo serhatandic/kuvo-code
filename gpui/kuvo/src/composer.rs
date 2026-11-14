@@ -11,7 +11,9 @@ use gpui::{
     KeyBinding, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, actions,
     div, prelude::FluentBuilder as _, px,
 };
-use kuvo_box::models::{ModelState, OfferedModel, StartIn, effort_title};
+use std::time::Duration;
+
+use kuvo_box::models::{ModelState, Offered, OfferedModel, Side, StartIn, effort_title};
 use kuvo_box::typed::{self, Answer, ModelRef, Offers};
 use kuvo_box::{BoxClient, Draft, Sent, Where};
 use kuvo_ui::{
@@ -25,8 +27,11 @@ actions!(composer, [SlashNext, SlashPrevious, SlashPick, SlashDismiss]);
 
 const CONTEXT: &str = "Composer";
 const SLASH: &str = "SlashMenu";
-/// Where a model's accounts are, as a refusal names it.
-const ACCOUNTS: &str = "Settings › Accounts";
+/// Where a model's accounts are, as a refusal names it: this app has no Accounts of its own yet.
+const ACCOUNTS: &str = "Kuvo Code on your Mac or iPhone";
+/// How long before what the box couldn't say of its models is asked again, at first and at most.
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MOST: Duration = Duration::from_secs(30);
 /// How many of "/"'s offers show at once (the rest scroll).
 const SLASH_MOST: usize = 8;
 
@@ -53,11 +58,12 @@ pub enum Target {
 }
 
 /// What the composer tells its owner.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ComposerEvent {
-    /// A new conversation was started on the box, and what was written sent to it; or, where it
-    /// couldn't be sent, what was written and why, for the conversation's own composer.
-    Started { session: String, unsent: Option<(String, String)> },
+    /// A new conversation was started on the box (in `folder`, filed under `project`), and what
+    /// was written (`written`) sent to it: what the box said of it, or why it couldn't go, is for
+    /// the conversation's own composer.
+    Started { session: String, folder: Option<String>, project: Option<String>, written: String, sent: Result<Sent, String> },
 }
 
 /// What the chips show, as the box says it.
@@ -65,16 +71,9 @@ pub enum ComposerEvent {
 pub struct Models {
     /// What its box says of the conversation's model.
     pub state: Option<ModelState>,
-    /// The models its menu offers: for a conversation, those of its own side (its engine's, or its
-    /// coding agents'), as that side lists them; for a new one, every one the box offers.
-    pub offered: Vec<OfferedModel>,
-    /// Whether the box offers models a conversation can't be put on in place (another side's).
-    pub left_out: bool,
-    /// Where a new conversation starts: none where the box couldn't say, `Some(None)` where nothing
-    /// runs there.
-    pub starting: Option<Option<ModelRef>>,
-    /// The model's efforts.
-    pub efforts: Vec<String>,
+    /// What the box offers (`kuvo/models/offered`): each model with its side and efforts, and where
+    /// a new conversation starts.
+    pub offered: Option<Offered>,
 }
 
 /// A line under the composer: what the box did with a typed text, or what this app can't do yet.
@@ -98,13 +97,16 @@ pub struct Composer {
     /// Whether the conversation has a run under way (Send turns to Stop with nothing written).
     running: bool,
     sending: bool,
-    /// The conversation's folder (or the new one's project), whose settings may add models.
-    directory: Option<String>,
+    /// Whether it reads the box by itself (the app), or shows what it's handed (tests and shots).
+    live: bool,
     models: Models,
     /// The model a new conversation starts on, as picked here (the box's `starting` until then).
     picked: Option<ModelRef>,
     /// Which read of the models is the latest: an older one coming back late is left.
     reads: u64,
+    /// How long before what the box couldn't say is asked again (longer each time).
+    retry: Duration,
+    retrying: Option<Task<()>>,
     offers: Option<Offers>,
     slash_scroll: ScrollHandle,
     slash_at: usize,
@@ -128,7 +130,7 @@ impl Focusable for Composer {
 impl Composer {
     /// A composer for `target`. `read`: whether to read what it shows (the model, the efforts,
     /// "/"'s offers) from the box now.
-    pub fn new(client: BoxClient, target: Target, directory: Option<String>, read: bool, cx: &mut Context<Self>) -> Composer {
+    pub fn new(client: BoxClient, target: Target, read: bool, cx: &mut Context<Self>) -> Composer {
         let placeholder = match &target {
             Target::Session { .. } => "Ask anything, / for commands",
             Target::New(_) => "What should we work on?",
@@ -155,10 +157,12 @@ impl Composer {
             field,
             running: false,
             sending: false,
-            directory,
+            live: read,
             models: Models::default(),
             picked: None,
             reads: 0,
+            retry: RETRY_FIRST,
+            retrying: None,
             offers: None,
             slash_scroll: ScrollHandle::new(),
             slash_at: 0,
@@ -201,18 +205,21 @@ impl Composer {
         if let Target::New(was) = &self.target
             && *was != place
         {
-            self.directory = match &place {
-                StartIn::Project(folder) => Some(folder.clone()),
-                StartIn::Chat => None,
-            };
             self.target = Target::New(place);
+            if self.live {
+                self.read_models(cx);
+            }
             cx.notify();
         }
     }
 
-    /// Puts what couldn't be sent back in the field, with why.
-    pub fn restore(&mut self, text: &str, error: &str, cx: &mut Context<Self>) {
-        self.put_back(text, Some(error.to_owned()), cx);
+    /// What became of `written`, sent from the landing view to the conversation this composer is
+    /// for: the box's answer (what goes back, its note), or, where it couldn't go, it and why.
+    pub fn take_sent(&mut self, written: &str, sent: Result<Sent, String>, cx: &mut Context<Self>) {
+        match sent {
+            Ok(sent) => self.sent(sent, written, cx),
+            Err(error) => self.put_back(written, Some(error), cx),
+        }
         cx.notify();
     }
 
@@ -231,19 +238,60 @@ impl Composer {
         }
     }
 
+    /// What the box offers: for a conversation, its own side's models (it's put on one of those in
+    /// place); for a new one, all of them. Those a picker leaves out (retiring, hidden) aren't here.
+    pub fn menu_models(&self) -> Vec<OfferedModel> {
+        let side = match &self.target {
+            Target::Session { place, .. } => Some(Side::of(*place)),
+            Target::New(_) => None,
+        };
+        let models = self.models.offered.as_ref().map(|offered| offered.models.as_slice()).unwrap_or_default();
+        models.iter().filter(|model| model.is_offered() && side.is_none_or(|side| model.side == Some(side))).cloned().collect()
+    }
+
+    /// What the model chip says: the model's name, "Choose a Model", or (its model not said yet, or
+    /// not read) "Model", so one can still be picked; none before the box has said anything.
+    pub fn chip_label(&self) -> Option<String> {
+        let model = self.model();
+        if self.models.offered.is_none() && model.is_none() {
+            return None;
+        }
+        if self.needs_model() {
+            return Some("Choose a Model".to_owned());
+        }
+        let named = self.models.state.as_ref().and_then(|state| state.name.clone());
+        let listed = model.as_ref().and_then(|model| self.menu_models().into_iter().find(|offered| offered.is(model))).map(|offered| offered.name);
+        Some(named.or(listed).or_else(|| model.map(|model| model.id)).unwrap_or_else(|| "Model".to_owned()))
+    }
+
+    /// Whether the box offers models of another side than the conversation's, which it can't be
+    /// put on in place.
+    pub fn left_out(&self) -> bool {
+        let Target::Session { place, .. } = &self.target else { return false };
+        let models = self.models.offered.as_ref().map(|offered| offered.models.as_slice()).unwrap_or_default();
+        models.iter().any(|model| model.is_offered() && model.side != Some(Side::of(*place)))
+    }
+
+    /// The model's efforts, as the box offers it.
+    pub fn efforts(&self) -> Vec<String> {
+        let Some(model) = self.model() else { return Vec::new() };
+        let models = self.models.offered.as_ref().map(|offered| offered.models.as_slice()).unwrap_or_default();
+        models.iter().find(|offered| offered.is(&model)).map(|offered| offered.efforts.clone()).unwrap_or_default()
+    }
+
     /// Whether Send waits for a model to be chosen: the conversation's is gone or there's none, or
     /// (a new one) the box says nothing runs and none's picked.
     pub fn needs_model(&self) -> bool {
         match &self.target {
             Target::Session { .. } => self.models.state.as_ref().is_some_and(ModelState::needs_choosing),
-            Target::New(_) => self.picked.is_none() && self.models.starting == Some(None),
+            Target::New(_) => self.picked.is_none() && self.models.offered.as_ref().is_some_and(|offered| offered.starting == Some(None)),
         }
     }
 
     /// Takes what the box says of the models, as a read brings it (tests and shots hand it in).
     pub fn take_models(&mut self, models: Models, cx: &mut Context<Self>) {
         if self.picked.is_none() {
-            self.picked = models.starting.clone().flatten();
+            self.picked = models.offered.as_ref().and_then(|offered| offered.starting.clone().flatten());
         }
         self.models = models;
         cx.notify();
@@ -264,22 +312,52 @@ impl Composer {
         }));
     }
 
-    /// Reads the conversation's model (or where a new one starts), what's offered, and its efforts.
+    /// Reads the conversation's model and what the box offers. What a side couldn't say is kept
+    /// as it said it before, and asked again in a while (PROTOCOL.md, "The models offered"); a model
+    /// whose state couldn't be read keeps what was said of it.
     pub fn read_models(&mut self, cx: &mut Context<Self>) {
         self.reads += 1;
         let read = self.reads;
-        let (client, target, picked, directory) = (self.client.clone(), self.target.clone(), self.picked.clone(), self.directory.clone());
-        self.spawn(cx, move || models_of(&client, &target, picked.as_ref(), directory.as_deref()), move |this, models, cx| {
+        let (client, target, picked, before) = (self.client.clone(), self.target.clone(), self.picked.clone(), self.models.offered.clone());
+        self.spawn(cx, move || models_of(&client, &target, picked.as_ref(), before.as_ref()), move |this, (offered, state), cx| {
             if this.reads == read {
-                this.take_models(models, cx);
+                this.took_models(offered, state, cx);
             }
         });
     }
 
+    /// What a read of the models said, taken: a failed part keeps what was there.
+    fn took_models(&mut self, offered: Option<Offered>, state: Option<ModelState>, cx: &mut Context<Self>) {
+        let whole = offered.as_ref().is_some_and(Offered::is_whole);
+        if let Some(offered) = offered {
+            if self.picked.is_none() {
+                self.picked = offered.starting.clone().flatten();
+            }
+            self.models.offered = Some(offered);
+        }
+        if state.is_some() {
+            self.models.state = state;
+        }
+        // A side that couldn't say (or a read that failed): asked again in a while, longer each time.
+        if whole {
+            self.retry = RETRY_FIRST;
+            self.retrying = None;
+        } else if self.live {
+            let wait = self.retry;
+            self.retry = (self.retry * 2).min(RETRY_MOST);
+            self.retrying = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wait).await;
+                this.update(cx, |this, cx| this.read_models(cx)).ok();
+            }));
+        }
+        cx.notify();
+    }
+
     /// Reads what the chips and "/" show at once, on this thread (shots and tests, against a stand-in).
+    #[cfg(feature = "stand-in")]
     pub fn read_at_once(&mut self, cx: &mut Context<Self>) {
-        let models = models_of(&self.client, &self.target, self.picked.as_ref(), self.directory.as_deref());
-        self.take_models(models, cx);
+        let (offered, state) = models_of(&self.client, &self.target, self.picked.as_ref(), self.models.offered.as_ref());
+        self.took_models(offered, state, cx);
         if let Target::Session { id, .. } = &self.target
             && let Ok(offers) = self.client.typed_offers(id)
         {
@@ -316,10 +394,14 @@ impl Composer {
             }
             Target::Session { id, place } => {
                 // Shown at once; what its box says of it comes with the next read.
+                // As without the box's word on it, until it's asked again.
+                let name = self.menu_models().into_iter().find(|offered| offered.is(&model)).map(|offered| offered.name);
                 if let Some(state) = self.models.state.as_mut() {
                     state.model = Some(model.clone());
-                    state.name = self.models.offered.iter().find(|offered| offered.provider_id == model.provider_id && offered.id == model.id).map(|offered| offered.name.clone()).or(state.name.take());
-                    state.runs = None;
+                    state.name = name.or(state.name.take());
+                    state.runs = true;
+                    state.missing = None;
+                    state.account = None;
                 }
                 cx.notify();
                 let client = self.client.clone();
@@ -372,18 +454,21 @@ impl Composer {
                     cx,
                     move || {
                         let started = client.start_session(&place, model.as_ref())?;
-                        let sent = client.send_draft(&started.session, &draft, None);
-                        Ok::<_, kuvo_box::Error>((started.session, sent))
+                        let sent = client.send_draft(&started.session, &draft, None).map_err(|error| error.to_string());
+                        Ok::<_, kuvo_box::Error>((started, sent))
                     },
                     move |this, result, cx| {
                         this.sending = false;
                         match result {
-                            // Started: what was written goes with the conversation, sent or not.
-                            Ok((session, Ok(sent))) => {
-                                this.sent(sent, &text, cx);
-                                cx.emit(ComposerEvent::Started { session, unsent: None });
-                            }
-                            Ok((session, Err(error))) => cx.emit(ComposerEvent::Started { session, unsent: Some((text.clone(), error.to_string())) }),
+                            // Started: what was written, and what the box said of it, go with the
+                            // conversation; this composer is left empty for the next one.
+                            Ok((started, sent)) => cx.emit(ComposerEvent::Started {
+                                session: started.session,
+                                folder: started.folder,
+                                project: started.project,
+                                written: text.clone(),
+                                sent,
+                            }),
                             Err(error) => this.put_back(&text, Some(error.to_string()), cx),
                         }
                         cx.notify();
@@ -404,8 +489,7 @@ impl Composer {
         }
         if let Some(restore) = restore {
             let now = self.text(cx);
-            let back = restore.text_beside(&now).to_owned();
-            let joined = if now.is_empty() { back } else if back.is_empty() { now } else { format!("{back} {now}") };
+            let joined = ahead_of(restore.text_beside(&now), &now);
             self.field.update(cx, |field, cx| field.set_text(joined, cx));
         }
         self.field.update(cx, |field, cx| field.set_error(error.map(SharedString::from), cx));
@@ -423,7 +507,7 @@ impl Composer {
     /// What was written, back in the field (ahead of anything written since), with why.
     fn put_back(&mut self, text: &str, error: Option<String>, cx: &mut Context<Self>) {
         let now = self.text(cx);
-        let joined = if now.is_empty() { text.to_owned() } else { format!("{text}\n{now}") };
+        let joined = ahead_of(text, &now);
         self.field.update(cx, |field, cx| {
             field.set_text(joined, cx);
             field.set_error(error.map(SharedString::from), cx);
@@ -452,11 +536,17 @@ impl Composer {
         let typed = typed.to_lowercase();
         let keywords = offers.keywords.iter().map(|keyword| Offer { name: keyword.name.clone(), summary: keyword.summary.clone() });
         let commands = offers.commands.iter().map(|command| Offer { name: command.name.clone(), summary: command.description.clone().unwrap_or_default() });
-        // Names starting with what's typed first, then those containing it (as KuvoClient's
-        // `SlashCommands.matches`), each in the box's order.
-        let all: Vec<Offer> = keywords.chain(commands).collect();
-        let (starting, rest): (Vec<Offer>, Vec<Offer>) = all.into_iter().partition(|offer| offer.name.to_lowercase().starts_with(&typed));
-        starting.into_iter().chain(rest.into_iter().filter(|offer| offer.name.to_lowercase().contains(&typed))).collect()
+        // Names starting with what's typed first, then those containing it, each by name, as
+        // KuvoClient's `SlashCommands.matches` orders them.
+        let mut matched: Vec<(bool, Offer)> = keywords
+            .chain(commands)
+            .filter_map(|offer| {
+                let name = offer.name.to_lowercase();
+                name.contains(&typed).then(|| (!name.starts_with(&typed), offer))
+            })
+            .collect();
+        matched.sort_by(|(a_later, a), (b_later, b)| a_later.cmp(b_later).then_with(|| a.name.cmp(&b.name)));
+        matched.into_iter().map(|(_, offer)| offer).collect()
     }
 
     fn slash_step(&mut self, by: isize, cx: &mut Context<Self>) {
@@ -519,16 +609,10 @@ impl Composer {
     }
 
     fn model_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let name = self.chip_label()?;
         let model = self.model();
-        let name = if self.needs_model() {
-            "Choose a Model".to_owned()
-        } else {
-            let named = self.models.state.as_ref().and_then(|state| state.name.clone());
-            let listed = model.as_ref().and_then(|model| self.models.offered.iter().find(|offered| offered.provider_id == model.provider_id && offered.id == model.id)).map(|offered| offered.name.clone());
-            named.or(listed).or_else(|| model.as_ref().map(|model| model.id.clone()))?
-        };
-        let offered: Vec<OfferedModel> = self.models.offered.iter().filter(|offered| offered.is_offered()).cloned().collect();
-        let left_out = self.models.left_out;
+        let offered = self.menu_models();
+        let left_out = self.left_out();
         let this = cx.entity().downgrade();
         let current = model.clone();
         let trigger = Button::new("model-chip", name).ghost().size(ButtonSize::Small).icon_after(IconName::ChevronDown);
@@ -563,11 +647,11 @@ impl Composer {
 
     fn effort_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let model = self.model()?;
-        if self.models.efforts.is_empty() || self.needs_model() {
+        let efforts = self.efforts();
+        if efforts.is_empty() || self.needs_model() {
             return None;
         }
         let label = model.variant.as_deref().map(effort_title).unwrap_or_else(|| "Default".into());
-        let efforts = self.models.efforts.clone();
         let this = cx.entity().downgrade();
         let trigger = Button::new("effort-chip", label).ghost().size(ButtonSize::Small).icon_after(IconName::ChevronDown);
         Some(
@@ -591,33 +675,27 @@ impl Composer {
     }
 }
 
-/// What the chips show, as the box says it: the conversation's model, the models its menu offers,
-/// where a new one starts, and the model's efforts.
-fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, directory: Option<&str>) -> Models {
-    let offered = client.offered_models(picked).ok();
-    let starting = offered.as_ref().and_then(|offered| offered.starting.clone());
-    let all = offered.map(|offered| offered.models).unwrap_or_default();
-    match target {
-        Target::Session { id, place } => {
-            let state = client.session_models(&[id.as_str()]).ok().and_then(|mut all| all.remove(id));
-            // Its own side's models, as that side lists them: it's put on one of those in place.
-            let listed = client.listed_models(*place, directory).unwrap_or_default();
-            let (offered, others): (Vec<OfferedModel>, Vec<OfferedModel>) = all.into_iter().partition(|offered| listed.iter().any(|listed| listed.is(&offered.reference())));
-            let model = state.as_ref().and_then(|state| state.model.clone());
-            let efforts = model.and_then(|model| listed.into_iter().find(|listed| listed.is(&model))).map(|listed| listed.efforts).unwrap_or_default();
-            Models { state, offered, left_out: others.iter().any(OfferedModel::is_offered), starting, efforts }
-        }
-        Target::New(_) => {
-            // A new one starts on whichever side has the model: its efforts are as that side lists them.
-            let model = picked.cloned().or_else(|| starting.clone().flatten());
-            let efforts = model
-                .and_then(|model| {
-                    [Where::Engine, Where::Agents].into_iter().find_map(|side| client.listed_models(side, directory).ok()?.into_iter().find(|listed| listed.is(&model)))
-                })
-                .map(|listed| listed.efforts)
-                .unwrap_or_default();
-            Models { state: None, offered: all, left_out: false, starting, efforts }
-        }
+/// What the box offers (kept, for a side it couldn't say now, as it said before) and what it says
+/// of the conversation's model; none for a read that failed (what's shown stays).
+fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, before: Option<&Offered>) -> (Option<Offered>, Option<ModelState>) {
+    let offered = client.offered_models(picked).ok().map(|offered| offered.keeping(before));
+    let state = match target {
+        Target::Session { id, .. } => client.session_models(&[id.as_str()]).ok().and_then(|mut all| all.remove(id)),
+        Target::New(_) => None,
+    };
+    (offered, state)
+}
+
+/// `front` put back ahead of what's written since, as one text.
+fn ahead_of(front: &str, now: &str) -> String {
+    if now.is_empty() {
+        front.to_owned()
+    } else if front.is_empty() {
+        now.to_owned()
+    } else if front.ends_with(char::is_whitespace) {
+        format!("{front}{now}")
+    } else {
+        format!("{front} {now}")
     }
 }
 

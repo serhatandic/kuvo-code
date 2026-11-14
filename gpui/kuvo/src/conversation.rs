@@ -6,21 +6,20 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, Styled, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use kuvo_box::follow::{ConversationUpdate, Follow, Timing};
-use kuvo_box::messages::{self, Page};
-use kuvo_box::{BoxClient, Conversation};
+use kuvo_box::BoxClient;
 use kuvo_ui::{
     ActiveTheme, Button, ButtonSize, IconSize, StyledType, TypeSize,
     chat_list::{ChatListState, chat_list},
-    small::spinner,
+    small::{spinner, status_dot},
     theme::space,
 };
 
 use crate::composer::Composer;
-use crate::entries::{self, COLUMN, Entry};
+use crate::entries::{self, Block, COLUMN, Entry};
 
 /// What's wrong, said over the conversation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,15 +32,25 @@ pub enum Problem {
 
 pub struct ConversationView {
     session: String,
-    conversation: Option<Conversation>,
+    /// Whether its box has answered yet.
+    read: bool,
+    /// The way back to messages before those shown, while there may be some.
+    earlier: Option<String>,
+    /// How often its box's models were heard to change, as last seen: the composer reads the
+    /// conversation's model again as it goes up.
+    models_changed: Option<u64>,
+    /// Whether it waits on you (its box's list says so).
+    asking: bool,
     entries: Vec<Entry>,
+    /// Each row's revision: a row is drawn again only once it's changed.
+    revisions: Vec<u64>,
     list: ChatListState,
     problem: Option<Problem>,
     earlier_failed: Option<String>,
     /// The way back already asked for, so it's asked once.
     asked_earlier: Rc<RefCell<Option<String>>>,
     /// Thinking blocks opened.
-    expanded: HashSet<String>,
+    expanded: HashSet<Block>,
     /// Its composer, which the workspace keeps (with its draft) while you're elsewhere.
     composer: Entity<Composer>,
     follow: Option<Rc<Follow<ConversationUpdate>>>,
@@ -60,8 +69,12 @@ impl ConversationView {
     pub fn new(client: BoxClient, session: String, composer: Entity<Composer>, live: bool, cx: &mut Context<Self>) -> ConversationView {
         let mut view = ConversationView {
             session: session.clone(),
-            conversation: None,
+            read: false,
+            earlier: None,
+            models_changed: None,
+            asking: false,
             entries: Vec::new(),
+            revisions: Vec::new(),
             list: ChatListState::new(0, cx),
             problem: None,
             earlier_failed: None,
@@ -111,6 +124,18 @@ impl ConversationView {
         self.problem.as_ref()
     }
 
+    /// Whether it waits on you, as its box's list says: this app can't answer yet, and says so.
+    pub fn set_asking(&mut self, asking: bool, cx: &mut Context<Self>) {
+        if self.asking != asking {
+            self.asking = asking;
+            cx.notify();
+        }
+    }
+
+    pub fn is_asking(&self) -> bool {
+        self.asking
+    }
+
     /// What the box's follow says, shown.
     pub fn take(&mut self, update: ConversationUpdate, cx: &mut Context<Self>) {
         match update {
@@ -118,15 +143,24 @@ impl ConversationView {
                 self.problem = None;
                 // A page that couldn't be read is said until Try Again, or until there's another
                 // way back (another page came), so a run streaming meanwhile doesn't ask again.
-                if self.conversation.as_ref().map(|shown| &shown.earlier) != Some(&conversation.earlier) {
+                if self.earlier != conversation.earlier {
                     self.earlier_failed = None;
                 }
                 let (running, place) = (conversation.running, conversation.place);
-                self.show(entries::entries(&conversation));
-                self.conversation = Some(conversation);
+                // The box's models (or this conversation's model) changed since: read again.
+                let models_changed = conversation.models_changed;
+                let read_models = self.models_changed.is_some_and(|seen| seen != models_changed);
+                self.models_changed = Some(models_changed);
+                self.earlier = conversation.earlier.clone();
+                self.read = true;
+                let (rows, revisions) = entries::entries(conversation);
+                self.show(rows, revisions);
                 self.composer.update(cx, |composer, cx| {
                     composer.set_running(running, cx);
                     composer.set_place(place, cx);
+                    if read_models {
+                        composer.read_models(cx);
+                    }
                 });
             }
             ConversationUpdate::Failed(error) => self.problem = Some(Problem::Failed(error.to_string())),
@@ -147,8 +181,9 @@ impl ConversationView {
     /// The list made to show `new`, keeping the reader's place: rows put ahead (an earlier page)
     /// go above where they are, rows that changed are measured again, and new ones added at the
     /// end, which the list follows while the reader's at the bottom.
-    fn show(&mut self, new: Vec<Entry>) {
+    fn show(&mut self, new: Vec<Entry>, revisions: Vec<u64>) {
         let old = std::mem::replace(&mut self.entries, new);
+        let old_revisions = std::mem::replace(&mut self.revisions, revisions);
         let new = &self.entries;
         if old.is_empty() {
             self.list.reset(new.len());
@@ -157,14 +192,15 @@ impl ConversationView {
         let state = self.list.list_state().clone();
         let is_earlier = |entries: &[Entry]| matches!(entries.first(), Some(Entry::Earlier));
         let is_working = |entries: &[Entry]| matches!(entries.last(), Some(Entry::Working));
-        fn messages(entries: &[Entry]) -> Vec<&Entry> {
-            entries.iter().filter(|entry| !matches!(entry, Entry::Earlier | Entry::Working)).collect()
+        // Each message's row by its key and revision: nothing is compared deeper.
+        fn messages<'a>(entries: &'a [Entry], revisions: &[u64]) -> Vec<(&'a str, u64)> {
+            entries.iter().zip(revisions).filter(|(entry, _)| !matches!(entry, Entry::Earlier | Entry::Working)).map(|(entry, revision)| (entry.key(), *revision)).collect()
         }
-        let (old_messages, new_messages) = (messages(&old), messages(new));
+        let (old_messages, new_messages) = (messages(&old, &old_revisions), messages(new, &self.revisions));
         // Where what was shown sits among what's shown now.
         let ahead = match old_messages.first() {
             None => 0,
-            Some(first) => match new_messages.iter().position(|entry| entry.key() == first.key()) {
+            Some(first) => match new_messages.iter().position(|(key, _)| *key == first.0) {
                 Some(ahead) => ahead,
                 None => {
                     self.list.reset(new.len());
@@ -173,7 +209,7 @@ impl ConversationView {
             },
         };
         let kept_in_order = new_messages.len() >= ahead + old_messages.len()
-            && old_messages.iter().zip(&new_messages[ahead..]).all(|(was, now)| was.key() == now.key());
+            && old_messages.iter().zip(&new_messages[ahead..]).all(|(was, now)| was.0 == now.0);
         if !kept_in_order {
             self.list.reset(new.len());
             return;
@@ -198,7 +234,7 @@ impl ConversationView {
             state.splice(offset..offset, ahead);
         }
         for (n, (was, now)) in old_messages.iter().zip(&new_messages[ahead..]).enumerate() {
-            if was != now {
+            if was.1 != now.1 {
                 self.list.changed(offset + ahead + n);
             }
         }
@@ -214,11 +250,11 @@ impl ConversationView {
         debug_assert_eq!(state.item_count(), self.entries.len());
     }
 
-    fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
-        if !self.expanded.remove(&key) {
-            self.expanded.insert(key.clone());
+    fn toggle(&mut self, block: Block, cx: &mut Context<Self>) {
+        let step = block.0.clone();
+        if !self.expanded.remove(&block) {
+            self.expanded.insert(block);
         }
-        let step = key.split(':').next().unwrap_or("");
         if let Some(ix) = self.entries.iter().position(|entry| entry.key() == step) {
             self.list.changed(ix);
         }
@@ -256,7 +292,7 @@ impl ConversationView {
                 .into_any_element();
         }
         // Asked once for each way back, as the row first shows.
-        let cursor = self.conversation.as_ref().and_then(|conversation| conversation.earlier.clone());
+        let cursor = self.earlier.clone();
         if let (Some(follow), Some(cursor)) = (&self.follow, cursor) {
             let mut asked = self.asked_earlier.borrow_mut();
             if asked.as_deref() != Some(cursor.as_str()) {
@@ -279,7 +315,10 @@ impl ConversationView {
 
 /// `session`'s conversation as its box has it now, read at once (no follow): for shots and tests,
 /// handed to [`ConversationView::take`] as a follow would hand it.
-pub fn read_now(client: &BoxClient, session: &str) -> kuvo_box::Result<Conversation> {
+#[cfg(feature = "stand-in")]
+pub fn read_now(client: &BoxClient, session: &str) -> kuvo_box::Result<kuvo_box::Conversation> {
+    use kuvo_box::Conversation;
+    use kuvo_box::messages::{self, Page};
     let place = client.where_is(session)?;
     let page: Page = client.get(&messages::newest_route(place, session, 100))?;
     let running: Option<bool> = client.get::<serde_json::Value>(&format!("{}api/session/active", place.prefix())).ok().map(|active| active["data"].get(session).is_some());
@@ -294,7 +333,7 @@ impl Render for ConversationView {
         let theme = cx.theme().clone();
         let c = &theme.colors;
         let view = cx.entity();
-        let body: AnyElement = if self.conversation.is_none() {
+        let body: AnyElement = if !self.read {
             match &self.problem {
                 Some(Problem::Gone(why)) | Some(Problem::Failed(why)) => centred(SharedString::from(why.clone()), false, cx),
                 None => centred("Loading the conversation…".into(), true, cx),
@@ -303,22 +342,37 @@ impl Render for ConversationView {
             centred("Nothing here yet. Write below to start.".into(), false, cx)
         } else {
             chat_list(&self.list, move |ix, _window, cx| {
+                let cx: &App = cx;
                 let this = view.read(cx);
-                let Some(entry) = this.entries.get(ix).cloned() else { return div().into_any_element() };
+                let Some(entry) = this.entries.get(ix) else { return div().into_any_element() };
                 let earlier = if matches!(entry, Entry::Earlier) { this.earlier_row(&view, cx) } else { div().into_any_element() };
-                let expanded = this.expanded.clone();
                 let toggle_view = view.clone();
-                let toggle = move |key: String, cx: &mut App| toggle_view.update(cx, |this, cx| this.toggle(key, cx));
-                entries::render(ix, &entry, &expanded, toggle, earlier, cx)
+                let toggle = move |block: Block, cx: &mut App| toggle_view.update(cx, |this, cx| this.toggle(block, cx));
+                entries::render(ix, entry, &this.expanded, toggle, earlier, cx)
             })
             .into_any_element()
         };
         // A problem while it's shown: said above the composer; it's tried again meanwhile.
-        let banner = match (&self.problem, &self.conversation) {
-            (Some(Problem::Failed(why)), Some(_)) => Some((why.clone(), c.warning)),
-            (Some(Problem::Gone(why)), Some(_)) => Some((why.clone(), c.danger)),
+        let banner = match (&self.problem, self.read) {
+            (Some(Problem::Failed(why)), true) => Some((why.clone(), c.warning)),
+            (Some(Problem::Gone(why)), true) => Some((why.clone(), c.danger)),
             _ => None,
         };
+        // Waiting on you for something this app can't answer yet: said plainly, above the composer.
+        let asking = (self.asking && !matches!(self.problem, Some(Problem::Gone(_)))).then(|| {
+            div()
+                .debug_selector(|| "asking".into())
+                .w_full()
+                .max_w(px(COLUMN))
+                .pb(space::S2)
+                .flex()
+                .items_center()
+                .gap(space::S2)
+                .text_ui(TypeSize::Caption)
+                .text_color(c.text_muted)
+                .child(status_dot(c.accent))
+                .child("It’s waiting on you for an answer this app can’t give yet: answer it in Kuvo Code on your Mac or iPhone.")
+        });
         let gone = matches!(self.problem, Some(Problem::Gone(_)));
         div()
             .size_full()
@@ -332,6 +386,7 @@ impl Render for ConversationView {
                     .items_center()
                     .px(space::S6)
                     .pb(space::S5)
+                    .children(asking)
                     .children(banner.map(|(why, color)| {
                         div().w_full().max_w(px(COLUMN)).pb(space::S2).text_ui(TypeSize::Caption).text_color(color).child(why)
                     }))

@@ -444,7 +444,7 @@ fn read(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUp
             now.parts.take(parts);
             now.conversation.catch_up(page.data, earlier, &during, running);
             let Shown { conversation, parts, .. } = &mut *now;
-            parts.apply(&mut conversation.messages);
+            conversation.take_parts(parts);
             latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
             true
         }
@@ -473,7 +473,7 @@ fn read_earlier(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<Conver
             now.parts.take(parts);
             now.conversation.take_earlier(older, earlier);
             let Shown { conversation, parts, .. } = &mut *now;
-            parts.apply(&mut conversation.messages);
+            conversation.take_parts(parts);
             latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
         }
         Err(error) => latest.put(ConversationUpdate::EarlierFailed(error)),

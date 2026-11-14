@@ -1,5 +1,5 @@
-//! Opens Kuvo. `cargo run -p kuvo` reaches this Mac's own box; `cargo run -p kuvo -- --stand-in`
-//! runs against a made-up one, touching nothing real.
+//! Opens Kuvo. `cargo run -p kuvo` reaches this Mac's own box;
+//! `cargo run -p kuvo --features stand-in -- --stand-in` runs against a made-up one, touching nothing real.
 
 use std::path::PathBuf;
 
@@ -7,15 +7,13 @@ use gpui::{
     App, AppContext as _, Bounds, Context, Focusable, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, TitlebarOptions, Window,
     WindowBounds, WindowOptions, div, point, px, size,
 };
-use kuvo::stand_in::{Replies, StandIn};
 use kuvo::{Quit, Workspace, bind_keys};
 use kuvo_box::BoxClient;
 use kuvo_ui::{ActiveTheme, Appearance, Assets, StyledType, Theme, TypeSize};
 
 fn main() {
-    let stand_in = std::env::args().any(|argument| argument == "--stand-in");
-    let client = if stand_in {
-        Ok(BoxClient::new(StandIn::new(Replies::Live)))
+    let client = if stand_in() {
+        Ok(stand_in_box())
     } else {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
         BoxClient::this_mac(&home).map_err(|error| error.to_string())
@@ -61,6 +59,22 @@ fn main() {
         opened.expect("open Kuvo's window");
         cx.activate(true);
     });
+}
+
+/// Whether it's run against the made-up box (`--stand-in`, with the `stand-in` feature).
+fn stand_in() -> bool {
+    cfg!(feature = "stand-in") && std::env::args().any(|argument| argument == "--stand-in")
+}
+
+#[cfg(feature = "stand-in")]
+fn stand_in_box() -> BoxClient {
+    use kuvo::stand_in::{Replies, StandIn};
+    BoxClient::new(StandIn::new(Replies::Live))
+}
+
+#[cfg(not(feature = "stand-in"))]
+fn stand_in_box() -> BoxClient {
+    unreachable!("built without the stand-in box")
 }
 
 /// What the window says when there's no box to reach.

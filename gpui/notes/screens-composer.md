@@ -30,17 +30,23 @@ Behaviour only.
   compacting, Autopilot, goals, side threads) says so plainly, and what was written stays in the
   field.
 - "/" lists what the box offers there (`GET …/typed`), names starting with what's typed first,
-  then those containing it (as KuvoClient's `SlashCommands.matches`), scrolling past eight: ↑↓
+  then those containing it, each by name (as KuvoClient's `SlashCommands.matches`), scrolling
+  past eight: ↑↓
   move, Tab or Return takes it ("/review "), Esc puts the list away. A keyword the text starts
   with shows as a chip above the field ("/plan"), as the sent message shows it.
 - The model chip names the conversation's model as the box says (`kuvo/sessions/models`), "Choose
-  a Model" when it's gone or there's none; its menu lists what the box offers
-  (`kuvo/models/offered`, without retiring or hidden ones) that the conversation's own side (its
-  engine, or its coding agents' bridge) lists (`api/model` there), since only those can be picked
-  in place (`api/session/<id>/model`). Another side's models carry a conversation to a new session
-  (`kuvo/sessions/<id>/agents`), which this app doesn't do yet: the menu says so. The effort chip
-  lists the model's efforts (its variants), titled as every client titles them. A model that
-  can't run keeps the message in the field, saying why (worded as KuvoClient's
+  a Model" when it's gone or there's none (as KuvoClient's `SessionModelState.namesModel`), and
+  "Model" while the box hasn't said, so one can still be picked. Its menu lists what the box
+  offers (`kuvo/models/offered`, without retiring or hidden ones) on the conversation's own side,
+  as the box says each one's `side`: only those are picked in place (`api/session/<id>/model`).
+  Another side's models carry a conversation to a new session (`kuvo/sessions/<id>/agents`), which
+  this app doesn't do yet: the menu says so. The effort chip lists the model's `efforts`, as the box
+  offers them, titled as every client titles them. A side the box couldn't say keeps what it said
+  before, and is asked again in a while, longer each time; a model whose state couldn't be read
+  keeps what was said of it. The model is read again as the conversation opens, and as its box
+  says its accounts, models, settings or Custom Auto's lists changed (or this conversation's model
+  did), from the conversation's own events. A model that can't run keeps the message in the field,
+  saying why and pointing to Kuvo Code on your Mac or iPhone (worded as KuvoClient's
   `SessionModelState`).
 - Each conversation keeps its own composer while you're in another: its draft, and a send still
   on its way, whose failure puts the text back with why.

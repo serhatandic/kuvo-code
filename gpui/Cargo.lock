@@ -2585,6 +2585,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui_platform",
+ "kuvo",
  "kuvo_box",
  "kuvo_ui",
  "serde_json",

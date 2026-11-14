@@ -16,10 +16,14 @@ serde_json = "1"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+# The tests run against the stand-in box.
+kuvo = { path = ".", features = ["stand-in"] }
 
 [features]
+# The made-up box (`--stand-in`), and reading it at once for shots and tests; not in the app shipped.
+stand-in = []
 # Offscreen rendering for the shots binary; pulls in GPUI's test support.
-shots = ["gpui/test-support", "gpui_platform/test-support"]
+shots = ["stand-in", "gpui/test-support", "gpui_platform/test-support"]
 
 [[bin]]
 name = "kuvo"

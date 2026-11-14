@@ -15,7 +15,7 @@ use kuvo_ui::{ActiveTheme, StyledType, Theme, TypeSize, theme::{radius, space}};
 
 use crate::composer::{Composer, ComposerEvent, Target};
 use crate::conversation::ConversationView;
-use crate::{NewSession, ToggleAppearance, landing, sidebar, stand_in};
+use crate::{NewSession, ToggleAppearance, landing, sidebar, time};
 
 /// How the session lists stand.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,8 +56,13 @@ pub struct Workspace {
     /// Each conversation's composer, kept with its draft (and any send on its way) while you're
     /// in another.
     composers: HashMap<String, (Entity<Composer>, Subscription)>,
-    /// The project the landing view starts in, as picked (none: the newest project's).
+    /// Where the landing view starts a new session: the newest project's, set as the list is first
+    /// read and again as the landing view opens (so it doesn't move while you write), unless one's
+    /// been picked.
     landing_place: Option<StartIn>,
+    landing_picked: bool,
+    /// What the box said of sessions started here, until its list has them: their projects.
+    started: HashMap<String, Option<String>>,
     collapsed: HashSet<String>,
     showing_all: HashSet<String>,
     /// Now, as the sidebar's times count from it (fixed for shots).
@@ -70,7 +75,7 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(client: BoxClient, live: bool, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
-        let landing = cx.new(|cx| Composer::new(client.clone(), Target::New(StartIn::Chat), None, live, cx));
+        let landing = cx.new(|cx| Composer::new(client.clone(), Target::New(StartIn::Chat), live, cx));
         let subscription = cx.subscribe_in(&landing, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
         let mut workspace = Workspace {
             client: client.clone(),
@@ -83,6 +88,8 @@ impl Workspace {
             landing,
             composers: HashMap::new(),
             landing_place: None,
+            landing_picked: false,
+            started: HashMap::new(),
             collapsed: HashSet::new(),
             showing_all: HashSet::new(),
             now: None,
@@ -114,6 +121,7 @@ impl Workspace {
 
     /// Reads the box at once, on this thread, as the follows would hand it: what it is, its lists,
     /// and the landing composer's chips (shots and tests, against a stand-in).
+    #[cfg(feature = "stand-in")]
     pub fn read_at_once(&mut self, cx: &mut Context<Self>) {
         let info = self.client.connect();
         self.connected(info, cx);
@@ -130,6 +138,7 @@ impl Workspace {
     }
 
     /// Opens `session` and reads it at once, on this thread (shots and tests, against a stand-in).
+    #[cfg(feature = "stand-in")]
     pub fn open_read_at_once(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.open_session(session, window, cx);
         let client = self.client.clone();
@@ -168,9 +177,16 @@ impl Workspace {
                 if matches!(self.box_state, BoxState::Connecting | BoxState::Unreachable(_) | BoxState::Updating) {
                     self.box_state = BoxState::Connected;
                 }
+                // Where a new one starts: set once, as the list is first read.
                 if self.landing_place.is_none() {
                     let place = self.default_place();
+                    self.landing_place = Some(place.clone());
                     self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
+                }
+                // Whether the conversation open waits on you.
+                if let Open::Conversation { view, session } = &self.open {
+                    let asking = self.listing.facts(session).is_some_and(|facts| facts.asked.is_some());
+                    view.update(cx, |view, cx| view.set_asking(asking, cx));
                 }
             }
             ListUpdate::Waiting(why) => self.lists = Lists::Waiting(why),
@@ -213,7 +229,7 @@ impl Workspace {
     }
 
     pub fn now(&self) -> f64 {
-        self.now.unwrap_or_else(stand_in::now_ms)
+        self.now.unwrap_or_else(time::now_ms)
     }
 
     /// Counts the sidebar's times from `now` (shots, so they read the same each time).
@@ -274,19 +290,25 @@ impl Workspace {
         let (client, live) = (self.client.clone(), self.live);
         let composer = self.composer_for(session, window, cx);
         let view = cx.new(|cx| ConversationView::new(client, session.to_owned(), composer, live, cx));
+        let asking = self.listing.facts(session).is_some_and(|facts| facts.asked.is_some());
+        view.update(cx, |view, cx| view.set_asking(asking, cx));
         window.focus(&view.focus_handle(cx), cx);
         self.open = Open::Conversation { view, session: session.to_owned() };
         cx.notify();
     }
 
-    /// `session`'s composer: the one it had, with its draft, or a new one.
+    /// `session`'s composer: the one it had, with its draft (its model read again, as it may have
+    /// changed meanwhile), or a new one.
     fn composer_for(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
         if let Some((composer, _)) = self.composers.get(session) {
-            return composer.clone();
+            let composer = composer.clone();
+            if self.live {
+                composer.update(cx, |composer, cx| composer.read_models(cx));
+            }
+            return composer;
         }
-        let directory = self.listing.facts(session).map(|facts| facts.directory.clone());
         let (client, live) = (self.client.clone(), self.live);
-        let composer = cx.new(|cx| Composer::new(client, Target::Session { id: session.to_owned(), place: Where::Engine }, directory, live, cx));
+        let composer = cx.new(|cx| Composer::new(client, Target::Session { id: session.to_owned(), place: Where::Engine }, live, cx));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
         self.composers.insert(session.to_owned(), (composer.clone(), subscription));
         composer
@@ -296,8 +318,12 @@ impl Workspace {
     pub fn new_session(&mut self, project: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(project) = project {
             self.landing_place = Some(StartIn::Project(project));
+            self.landing_picked = true;
+        } else if !self.landing_picked {
+            // The newest project's, as it opens; it stays put while you write.
+            self.landing_place = Some(self.default_place());
         }
-        let place = self.landing_place.clone().unwrap_or_else(|| self.default_place());
+        let place = self.landing_place();
         self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
         self.open = Open::Landing;
         window.focus(&self.landing.focus_handle(cx), cx);
@@ -315,6 +341,7 @@ impl Workspace {
 
     pub fn pick_place(&mut self, place: StartIn, cx: &mut Context<Self>) {
         self.landing_place = Some(place.clone());
+        self.landing_picked = true;
         self.landing.update(cx, |composer, cx| composer.set_start(place, cx));
         cx.notify();
     }
@@ -326,13 +353,16 @@ impl Workspace {
 
     fn composer_event(&mut self, event: &ComposerEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            ComposerEvent::Started { session, unsent } => {
-                // What couldn't be sent goes with the conversation, in its own composer, with why.
-                if let Some((text, error)) = unsent {
-                    let composer = self.composer_for(session, window, cx);
-                    composer.update(cx, |composer, cx| composer.restore(text, error, cx));
+            ComposerEvent::Started { session, project, written, sent, .. } => {
+                // What the box said of what was written (or why it didn't go) goes to the new
+                // conversation's own composer; the landing one is left empty.
+                self.started.insert(session.clone(), project.clone());
+                let composer = self.composer_for(session, window, cx);
+                composer.update(cx, |composer, cx| composer.take_sent(written, sent.clone(), cx));
+                // Opened, unless you've gone to another conversation meanwhile.
+                if self.is_landing() {
+                    self.open_session(session, window, cx);
                 }
-                self.open_session(session, window, cx);
             }
         }
     }
@@ -343,7 +373,8 @@ impl Workspace {
             Some(session) => {
                 let facts = self.listing.facts(session);
                 let title = facts.and_then(|facts| facts.title.clone()).filter(|title| !title.trim().is_empty()).unwrap_or_else(|| "New Session".into());
-                let project = facts.and_then(|facts| facts.project.clone()).map(|project| self.project_name(&project));
+                // (One started here, before the list has it: the project its box said.)
+                let project = facts.and_then(|facts| facts.project.clone()).or_else(|| self.started.get(session).cloned().flatten()).map(|project| self.project_name(&project));
                 (Some(title), project)
             }
             None => (None, None),

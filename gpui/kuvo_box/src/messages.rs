@@ -277,6 +277,14 @@ pub struct Conversation {
     pub earlier: Option<String>,
     /// Whether an earlier page has been read (the way back is then its own, not the newest's).
     paged: bool,
+    /// How many times the box's accounts, models, settings or Custom Auto's lists (or this
+    /// conversation's model) were heard to change: a client reads the conversation's model again
+    /// as it goes up (PROTOCOL.md, "A session's model").
+    pub models_changed: u64,
+    /// Each message's revision, by id: it goes up as the message changes, so a client redraws only
+    /// what did ([`Conversation::revision`]).
+    revisions: HashMap<String, u64>,
+    revision: u64,
 }
 
 /// The parts boxes read of messages from before (`kuvo/messages/parts`), by id, with the text each
@@ -324,6 +332,10 @@ impl ReadParts {
     }
 }
 
+/// The events that say the box's accounts, models, settings or Custom Auto's lists changed
+/// (PROTOCOL.md, "A session's model").
+pub const MODELS_CHANGED: &[&str] = &["integration.updated", "model.updated", "provider.updated", "config.updated", "kuvo.auto.updated"];
+
 /// What an event asks of what's shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Applied {
@@ -337,7 +349,45 @@ pub enum Applied {
 
 impl Conversation {
     pub fn new(session: impl Into<String>, place: Where) -> Conversation {
-        Conversation { session: session.into(), place, messages: Vec::new(), running: false, earlier: None, paged: false }
+        Conversation {
+            session: session.into(),
+            place,
+            messages: Vec::new(),
+            running: false,
+            earlier: None,
+            paged: false,
+            models_changed: 0,
+            revisions: HashMap::new(),
+            revision: 0,
+        }
+    }
+
+    /// Message `id`'s revision: the same while it's unchanged, higher once it's changed.
+    pub fn revision(&self, id: &str) -> u64 {
+        self.revisions.get(id).copied().unwrap_or(0)
+    }
+
+    fn changed(&mut self, id: &str) {
+        self.revision += 1;
+        self.revisions.insert(id.to_owned(), self.revision);
+    }
+
+    /// The parts read of messages from before, put on those they're for (each one changed marked).
+    pub fn take_parts(&mut self, parts: &ReadParts) {
+        let before: Vec<bool> = self.messages.iter().map(|message| matches!(message, Message::User(user) if user.read_parts.is_some())).collect();
+        parts.apply(&mut self.messages);
+        let now: Vec<String> = self
+            .messages
+            .iter()
+            .zip(before)
+            .filter_map(|(message, had)| match message {
+                Message::User(user) if !had && user.read_parts.is_some() => Some(user.id.clone()),
+                _ => None,
+            })
+            .collect();
+        for id in now {
+            self.changed(&id);
+        }
     }
 
     /// An earlier page's messages (newest first, as the engine answers), put ahead of those shown;
@@ -345,6 +395,10 @@ impl Conversation {
     pub fn take_earlier(&mut self, mut newest_first: Vec<Message>, earlier: Option<String>) {
         newest_first.reverse();
         newest_first.retain(|message| !self.messages.iter().any(|shown| shown.id() == message.id()));
+        for message in &newest_first {
+            let id = message.id().to_owned();
+            self.changed(&id);
+        }
         // Nothing new: there's nothing before.
         self.earlier = if newest_first.is_empty() { None } else { earlier };
         self.paged = true;
@@ -356,6 +410,23 @@ impl Conversation {
     /// come; anything else this conversation's is left to a read.
     pub fn apply(&mut self, event: &Value) -> Applied {
         let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+        // The box's accounts, models, settings or Custom Auto's lists changed: the conversation's
+        // model is to be read again.
+        if MODELS_CHANGED.contains(&kind) {
+            self.models_changed += 1;
+            return Applied::Changed;
+        }
+        let applied = self.apply_own(kind, event);
+        if applied != Applied::Nothing
+            && let Some(step) = event.pointer("/data/assistantMessageID").and_then(Value::as_str).filter(|step| !step.is_empty())
+        {
+            let step = step.to_owned();
+            self.changed(&step);
+        }
+        applied
+    }
+
+    fn apply_own(&mut self, kind: &str, event: &Value) -> Applied {
         let data = event.get("data").cloned().unwrap_or(Value::Null);
         if data.get("sessionID").and_then(Value::as_str) != Some(self.session.as_str()) {
             return Applied::Nothing;
@@ -454,8 +525,12 @@ impl Conversation {
             | "session.compaction.ended"
             | "session.revert.committed"
             | "session.instructions.updated"
-            | "session.agent.selected"
-            | "session.model.selected" => Applied::ReadAgain,
+            | "session.agent.selected" => Applied::ReadAgain,
+            // Its model was changed (here or by another client): read it again, and its messages.
+            "session.model.selected" => {
+                self.models_changed += 1;
+                Applied::ReadAgain
+            }
             // The rest (a tool's input or progress as it streams, a step's first output, a look at
             // the conversation, an ask) leave its messages as they are.
             _ => Applied::Nothing,
@@ -526,6 +601,24 @@ impl Conversation {
                     kept.push((step.id.clone(), text, ordinal));
                 }
             }
+        }
+        // What the read changed: compared off the UI's thread, here, with the parts read before kept.
+        let before: HashMap<&str, &Message> = shown.iter().map(|message| (message.id(), message)).collect();
+        let mut changed = Vec::new();
+        for message in &mut self.messages[read_from..] {
+            let was = before.get(message.id()).copied();
+            if let (Message::User(user), Some(Message::User(was))) = (&mut *message, was)
+                && user.read_parts.is_none()
+                && user.text == was.text
+            {
+                user.read_parts = was.read_parts.clone();
+            }
+            if was != Some(&*message) {
+                changed.push(message.id().to_owned());
+            }
+        }
+        for id in changed {
+            self.changed(&id);
         }
         if let Some(running) = running {
             self.running = running;
@@ -625,5 +718,32 @@ mod tests {
         assert!(matches!(&step.content[2], Content::Other { kind, .. } if kind == "image"));
         assert!(matches!(&page.data[2], Message::Idle { outcome, .. } if outcome == "succeeded"));
         assert!(matches!(&page.data[3], Message::Other { kind, id, .. } if kind == "agent-switched" && id == "m4"));
+    }
+
+    #[test]
+    fn a_message_keeps_its_revision_until_it_changes_and_model_changes_are_counted() {
+        let page = |text: &str| -> Vec<Message> {
+            serde_json::from_value(serde_json::json!([
+                { "type": "assistant", "id": "m2", "time": { "created": 2 }, "content": [{ "type": "text", "text": text }] },
+                { "type": "user", "id": "m1", "time": { "created": 1 }, "text": "Hi" }
+            ]))
+            .unwrap()
+        };
+        let mut conversation = Conversation::new("ses_1", Where::Engine);
+        conversation.catch_up(page("Hel"), None, &[], Some(true));
+        let (user, step) = (conversation.revision("m1"), conversation.revision("m2"));
+        // Read again, the same: nothing changed.
+        conversation.catch_up(page("Hel"), None, &[], Some(true));
+        assert_eq!((conversation.revision("m1"), conversation.revision("m2")), (user, step));
+        // Words stream into the step: only it changed.
+        let delta = serde_json::json!({ "type": "session.text.delta", "data": { "sessionID": "ses_1", "assistantMessageID": "m2", "ordinal": 0, "delta": "lo" } });
+        assert_eq!(conversation.apply(&delta), Applied::Changed);
+        assert_eq!(conversation.revision("m1"), user);
+        assert!(conversation.revision("m2") > step);
+        // The box's models changed, or this conversation's model: counted, for the client to read it again.
+        assert_eq!(conversation.apply(&serde_json::json!({ "type": "provider.updated", "data": {} })), Applied::Changed);
+        assert_eq!(conversation.apply(&serde_json::json!({ "type": "session.model.selected", "data": { "sessionID": "ses_1" } })), Applied::ReadAgain);
+        assert_eq!(conversation.apply(&serde_json::json!({ "type": "session.model.selected", "data": { "sessionID": "ses_2" } })), Applied::Nothing);
+        assert_eq!(conversation.models_changed, 2);
     }
 }

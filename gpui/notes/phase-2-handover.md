@@ -28,8 +28,16 @@
   Autopilot, goals and side threads (the composer says so when the box hands one back).
 - An existing conversation can't move to another side's model (the coding agents' from an
   engine session): that's `POST kuvo/sessions/<id>/agents`, which opens a new session; the menu
-  offers only its own side's models, as that side lists them, and says the rest aren't here yet.
-  A `side` field on `kuvo/models/offered` would let clients skip reading `api/model` for it.
+  offers only its own side's models (the box's `side` on `kuvo/models/offered`, added in phase 2's
+  second review, with each model's `efforts`) and says the rest aren't here yet.
+- What a session's model can't do is worded in the client (a port of KuvoClient's
+  `SessionModelState.refusal`), as on the Mac and phone. Better: the box sends the words with
+  `kuvo/sessions/models` (it already decides what's missing), so no client words it.
+- Left from the second review: the earlier page is asked for from the list's render (pages shorter
+  than the window load one after another without scrolling); composers are kept for every
+  conversation opened, never freed; the sidebar's times refresh only as something else redraws, and
+  a list that fails after its first read shows no sign; the dark user bubble barely stands out from
+  the card.
 - Picking another model mid-run takes effect from its next step; the Mac also stops the step and
   adds a note, which is logic for the box to own if wanted.
 

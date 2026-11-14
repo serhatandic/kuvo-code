@@ -160,10 +160,11 @@ fn slash_offers_what_the_box_offers_as_its_typed(cx: &mut TestAppContext) {
 
     cx.simulate_input("/");
     let names = |composer: &Entity<Composer>, cx: &mut VisualTestContext| composer.read_with(cx, |composer, cx| composer.slash_offers(cx).into_iter().map(|offer| offer.name).collect::<Vec<_>>());
-    // Everything it offers (the list scrolls past eight), keywords first, as the box orders them.
-    assert_eq!(names(&composer, cx), ["plan", "goal", "loop", "review", "autopilot", "btw", "handoff", "compact", "init", "test"]);
+    // Everything it offers (the list scrolls past eight), by name, as KuvoClient's
+    // `SlashCommands.matches` orders them.
+    assert_eq!(names(&composer, cx), ["autopilot", "btw", "compact", "goal", "handoff", "init", "loop", "plan", "review", "test"]);
     cx.simulate_input("t");
-    // Names starting with it first, then those with it inside, as KuvoClient matches them.
+    // Names starting with it first, then those with it inside, each by name.
     assert_eq!(names(&composer, cx), ["test", "autopilot", "btw", "compact", "init"]);
     cx.simulate_keystrokes("backspace v i e w");
     assert_eq!(names(&composer, cx), ["review"]);
@@ -180,7 +181,7 @@ fn slash_offers_what_the_box_offers_as_its_typed(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("/");
     cx.simulate_keystrokes("down enter");
-    assert_eq!(typed(&composer, cx).0, "/goal ");
+    assert_eq!(typed(&composer, cx).0, "/btw ");
     cx.simulate_keystrokes("cmd-a backspace");
     cx.simulate_input("/c");
     cx.simulate_keystrokes("escape");
@@ -202,7 +203,7 @@ fn a_model_that_cant_run_keeps_the_message_saying_why(cx: &mut TestAppContext) {
     assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/send").is_empty());
     let (text, error) = typed(&composer, cx);
     assert_eq!(text, "Use Redis");
-    assert_eq!(error.as_deref(), Some("Claude Opus 5.5 needs a sign-in: sign in to Anthropic in Settings › Accounts, or choose another model."));
+    assert_eq!(error.as_deref(), Some("Claude Opus 5.5 needs a sign-in: sign in to Anthropic in Kuvo Code on your Mac or iPhone, or choose another model."));
 }
 
 #[gpui::test]
@@ -285,10 +286,13 @@ fn a_run_streams_into_the_conversation_and_its_end_shows(cx: &mut TestAppContext
     cx.run_until_parked();
     let streamed = view.read_with(cx, |view, _| {
         view.entries().iter().find_map(|entry| match entry {
-            Entry::Message(Message::Assistant(step)) if step.id == "msg_s5" => step.content.iter().find_map(|content| match content {
-                Content::Text(text) => Some(text.clone()),
+            Entry::Message(message) => match message.as_ref() {
+                Message::Assistant(step) if step.id == "msg_s5" => step.content.iter().find_map(|content| match content {
+                    Content::Text(text) => Some(text.clone()),
+                    _ => None,
+                }),
                 _ => None,
-            }),
+            },
             _ => None,
         })
     });
@@ -379,15 +383,100 @@ fn a_conversations_model_menu_offers_its_own_sides_models(cx: &mut TestAppContex
     // An engine conversation: the coding agents' models (another side) aren't offered in place.
     let composer = open_session(&workspace, "ses_limits", cx);
     let (offered, left_out, efforts) = composer.read_with(cx, |composer, _| {
-        let models = composer.models();
-        (models.offered.iter().map(|model| model.id.clone()).collect::<Vec<_>>(), models.left_out, models.efforts.clone())
+        (composer.menu_models().iter().map(|model| model.id.clone()).collect::<Vec<_>>(), composer.left_out(), composer.efforts())
     });
     assert_eq!(offered, ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6", "gemini-3-pro"]);
     assert!(left_out);
+    // Its efforts, as the box offers them with it.
     assert_eq!(efforts, ["low", "medium", "high", "max"]);
     // A new one may start on any, the agents' too.
     let landing = workspace.read_with(cx, |workspace, _| workspace.landing().clone());
-    assert!(landing.read_with(cx, |composer, _| composer.models().offered.iter().any(|model| model.provider_id == "claude-code")));
+    assert!(landing.read_with(cx, |composer, _| composer.menu_models().iter().any(|model| model.provider_id == "claude-code")));
+}
+
+#[gpui::test]
+fn what_a_side_couldnt_say_is_kept_and_the_chip_stays(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let landing = workspace.read_with(cx, |workspace, _| workspace.landing().clone());
+    // The bridge starts again and its models can't be said; the session's model can't be read.
+    stand_in.agents_known(false);
+    stand_in.models_readable(false);
+    composer.update(cx, |composer, cx| composer.read_models(cx));
+    landing.update(cx, |composer, cx| composer.read_models(cx));
+    cx.run_until_parked();
+    // What was said before stays: the agents' models, the conversation's model and its chip.
+    assert!(landing.read_with(cx, |composer, _| composer.menu_models().iter().any(|model| model.provider_id == "claude-code")));
+    assert_eq!(composer.read_with(cx, |composer, _| composer.chip_label()), Some("Claude Opus 5.5".to_owned()));
+    assert_eq!(composer.read_with(cx, |composer, _| composer.efforts()).len(), 4);
+}
+
+#[gpui::test]
+fn a_model_that_changed_elsewhere_is_read_again(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
+    // Its account was signed out on another computer: the box hears its accounts changed.
+    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": false, "missing": "signIn", "account": { "id": "anthropic", "name": "Anthropic" } }));
+    let mut conversation = read_now(&client, "ses_limits").unwrap();
+    conversation.apply(&json!({ "type": "integration.updated", "data": {} }));
+    view.update(cx, |view, cx| view.take(ConversationUpdate::Conversation(conversation), cx));
+    cx.run_until_parked();
+    // Read again: a message on it is kept, saying what to do.
+    cx.simulate_input("Use Redis");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/send").is_empty());
+    assert_eq!(typed(&composer, cx).1.as_deref(), Some("Claude Opus 5.5 needs a sign-in: sign in to Anthropic in Kuvo Code on your Mac or iPhone, or choose another model."));
+}
+
+#[gpui::test]
+fn what_the_box_says_of_a_landing_send_goes_with_the_new_conversation(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let landing = workspace.read_with(cx, |workspace, _| workspace.landing().clone());
+    let field = landing.read_with(cx, |composer, _| composer.field().clone());
+    cx.update(|window, cx| window.focus(&field.focus_handle(cx), cx));
+    cx.simulate_input("/loop now and then");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    // The session started; the box's answer (put back, and why) is in its own composer.
+    let composer = workspace.read_with(cx, |workspace, cx| workspace.conversation().expect("opened").read(cx).composer().clone());
+    let (text, error) = typed(&composer, cx);
+    assert_eq!(text, "/loop now and then");
+    assert!(error.unwrap().starts_with("Can’t tell how often"));
+    // The landing composer is left empty for the next one.
+    assert_eq!(typed(&landing, cx), (String::new(), None));
+}
+
+#[gpui::test]
+fn the_landing_project_doesnt_move_while_you_write(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let website = StartIn::Project("/Users/sam/Projects/website".into());
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.landing_place()), website);
+    // A session in API works on: API is now the newest project.
+    stand_in.set_facts("ses_webhook", |facts| facts["updated"] = json!(NOW + 60_000.0));
+    let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
+    let mut listing = kuvo_box::Listing::new();
+    listing.take(client.session_list(None).unwrap());
+    workspace.update(cx, |workspace, cx| workspace.take_list(kuvo_box::ListUpdate::Listing(listing), cx));
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.landing_place()), website, "it stays while you write");
+    // Opened again, it starts in the newest.
+    workspace.update_in(cx, |workspace, window, cx| workspace.new_session(None, window, cx));
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.landing_place()), StartIn::Project("/Users/sam/Projects/api".into()));
+}
+
+#[gpui::test]
+fn a_session_waiting_on_you_says_so_above_the_composer(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, StandIn::at(Replies::Never, NOW));
+    open_session(&workspace, "ses_limits", cx);
+    assert!(bounds(cx, "asking").is_some());
+    open_session(&workspace, "ses_recipes", cx);
+    assert!(bounds(cx, "asking").is_none());
 }
 
 #[gpui::test]

@@ -34,6 +34,10 @@ Read: `crates/agent_ui/src/conversation_view/thread_view.rs`, `crates/agent_ui/s
   Again.
 - A conversation that can't be read says why and is tried again; one that's gone says so and the
   composer goes.
+- One waiting on you says so above the composer: answering its asks isn't built yet, so it points
+  to Kuvo Code on your Mac or iPhone.
+- Streaming redraws only what changed: each message carries a revision from `kuvo_box` (compared
+  off the UI's thread), and the rows are moved in, not copied.
 - Column 720 px, centred; your messages right-aligned in a soft bubble (the chat list block's look).
 
 ## Where we differ, and why

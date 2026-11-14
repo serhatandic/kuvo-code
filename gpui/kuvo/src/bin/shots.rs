@@ -39,7 +39,7 @@ fn main() -> anyhow::Result<()> {
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../shots");
     std::fs::create_dir_all(&out)?;
     let text_system = gpui_platform::current_platform(true).text_system();
-    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(Assets), || gpui_platform::current_headless_renderer());
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(Assets), gpui_platform::current_headless_renderer);
     cx.update(|cx| {
         Theme::init(Appearance::Light, cx);
         bind_keys(cx);

@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, Read};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+pub use crate::time::now_ms;
 
 use kuvo_box::Result;
 use kuvo_box::transport::{Closer, Request, Response, Stream, Transport};
@@ -65,15 +67,17 @@ struct State {
     sends_fail: bool,
     /// No model runs here: a new session starts on none.
     nothing_runs: bool,
+    /// What it says of a session's model, where a test has said otherwise.
+    model_states: HashMap<String, Value>,
+    /// The coding agents' bridge can't say its models now (it's starting again).
+    agents_unknown: bool,
+    /// Its sessions' models can't be read now (`503`).
+    models_fail: bool,
 }
 
 pub const NAME: &str = "Stand-in Mac";
 const HOME: &str = "/Users/sam";
 
-/// Now, in ms since 1970.
-pub fn now_ms() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |since| since.as_millis() as f64)
-}
 
 const MINUTE: f64 = 60_000.0;
 const HOUR: f64 = 60.0 * MINUTE;
@@ -127,6 +131,21 @@ impl StandIn {
     /// From now on, no model runs here (`kuvo/models/offered` says `starting: null`).
     pub fn nothing_runs(&self) {
         self.state().nothing_runs = true;
+    }
+
+    /// From now on, it says this of `session`'s model (`kuvo/sessions/models`).
+    pub fn set_model_state(&self, session: &str, state: Value) {
+        self.state().model_states.insert(session.to_owned(), state);
+    }
+
+    /// Whether its sessions' models can be read (`kuvo/sessions/models` answers `503` while not).
+    pub fn models_readable(&self, readable: bool) {
+        self.state().models_fail = !readable;
+    }
+
+    /// Whether the coding agents' bridge can say its models (`known.agents`).
+    pub fn agents_known(&self, known: bool) {
+        self.state().agents_unknown = !known;
     }
 
     /// An engine event, to those following the engine's events.
@@ -332,12 +351,13 @@ fn percent_decode(value: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            out.push(byte);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -417,11 +437,14 @@ impl StandIn {
                 answer(200, json!({ "kind": "mac", "name": NAME, "app": "1.0.0", "engine": "2.3.0", "features": features, "agents": true, "started": 1.0, "chats": format!("{HOME}/.kuvo-code/chats") }))
             }
             ("GET", ["kuvo", "sessions", "list"]) => answer(200, state.line(true)),
+            ("GET", ["kuvo", "sessions", "models"]) if state.models_fail => answer(503, json!({ "message": "The engine isn't answering." })),
             ("GET", ["kuvo", "sessions", "models"]) => {
                 let asked = query(path, "sessions").map(decoded).unwrap_or_default();
                 let mut told = serde_json::Map::new();
                 for session in asked.split(',') {
-                    if let Some(model) = state.models.get(session) {
+                    if let Some(said) = state.model_states.get(session) {
+                        told.insert(session.into(), said.clone());
+                    } else if let Some(model) = state.models.get(session) {
                         told.insert(session.into(), json!({ "model": model, "name": model_name(model), "runs": true }));
                     }
                 }
@@ -431,28 +454,17 @@ impl StandIn {
                 if state.nothing_runs {
                     return answer(200, json!({ "models": [], "known": { "engine": true, "agents": true }, "starting": null }));
                 }
-                let listed: Vec<Value> = models().into_iter().chain(agents_models()).map(|(model, _)| model).collect();
-                answer(200, json!({ "models": listed, "known": { "engine": true, "agents": true }, "starting": { "providerID": "anthropic", "id": "claude-opus-5-5", "variant": "high" } }))
-            }
-            ("GET", ["kuvo", "agents", "api", "model"]) => {
-                let listed: Vec<Value> = agents_models()
-                    .into_iter()
-                    .map(|(mut model, efforts)| {
-                        model["variants"] = json!(efforts.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>());
-                        model
-                    })
-                    .collect();
-                answer(200, json!({ "data": listed }))
-            }
-            ("GET", ["api", "model"]) => {
-                let listed: Vec<Value> = models()
-                    .into_iter()
-                    .map(|(mut model, efforts)| {
-                        model["variants"] = json!(efforts.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>());
-                        model
-                    })
-                    .collect();
-                answer(200, json!({ "data": listed }))
+                // Each with its side and its efforts, as the box says them.
+                fn with(side: &'static str, (mut model, efforts): (Value, Vec<&str>)) -> Value {
+                    model["side"] = json!(side);
+                    model["efforts"] = json!(efforts);
+                    model
+                }
+                let mut listed: Vec<Value> = models().into_iter().map(|model| with("engine", model)).collect();
+                if !state.agents_unknown {
+                    listed.extend(agents_models().into_iter().map(|model| with("agents", model)));
+                }
+                answer(200, json!({ "models": listed, "known": { "engine": true, "agents": !state.agents_unknown }, "starting": { "providerID": "anthropic", "id": "claude-opus-5-5", "variant": "high" } }))
             }
             ("POST", ["kuvo", "messages", "parts"]) => {
                 let texts = request.body.as_ref().and_then(|body| body["texts"].as_array().cloned()).unwrap_or_default();
@@ -578,8 +590,10 @@ impl StandIn {
             pause(600);
             {
                 let mut state = stand_in.state();
-                if let Some(found) = state.messages.get_mut(&session).and_then(|messages| messages.iter_mut().rev().find(|message| message["id"] == json!(step))) {
-                    found["content"].as_array_mut().map(|content| content.push(tool("call_live", "read", "completed", json!({ "filePath": "README.md" }))));
+                if let Some(found) = state.messages.get_mut(&session).and_then(|messages| messages.iter_mut().rev().find(|message| message["id"] == json!(step)))
+                    && let Some(content) = found["content"].as_array_mut()
+                {
+                    content.push(tool("call_live", "read", "completed", json!({ "filePath": "README.md" })));
                 }
                 state.emit("session.tool.called", json!({ "sessionID": session, "assistantMessageID": step }));
                 state.emit("session.text.started", json!({ "sessionID": session, "assistantMessageID": step, "ordinal": 0 }));
@@ -594,7 +608,9 @@ impl StandIn {
             let mut state = stand_in.state();
             let now = now_ms();
             if let Some(found) = state.messages.get_mut(&session).and_then(|messages| messages.iter_mut().rev().find(|message| message["id"] == json!(step))) {
-                found["content"].as_array_mut().map(|content| content.push(json!({ "type": "text", "text": reply })));
+                if let Some(content) = found["content"].as_array_mut() {
+                    content.push(json!({ "type": "text", "text": reply }));
+                }
                 found["time"]["completed"] = json!(now);
                 found["finish"] = json!("stop");
             }

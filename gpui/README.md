@@ -36,8 +36,8 @@ starts (`runtime_shaders`), so the separate Metal toolchain isn't needed.
 
 ```sh
 cd gpui
-cargo run -p kuvo -- --stand-in   # against a made-up box: nothing real is reached
-cargo run -p kuvo                 # this Mac's own box (Kuvo Code running here)
+cargo run -p kuvo --features stand-in -- --stand-in   # against a made-up box: nothing real is reached
+cargo run -p kuvo                                       # this Mac's own box (Kuvo Code running here)
 ```
 
 - **The sidebar** lists the box's sessions as its list says them: pinned, each project with its
@@ -53,7 +53,7 @@ cargo run -p kuvo                 # this Mac's own box (Kuvo Code running here)
   session on the box there and opens it.
 - ⌘⇧L switches light and dark.
 
-`kuvo::stand_in` is the made-up box: a Mac's box with sessions in a few projects and chats, one at
+`kuvo::stand_in` (the `stand-in` feature, left out of the app as shipped) is the made-up box: a Mac's box with sessions in a few projects and chats, one at
 work, one waiting on you, one long enough to page through. It answers in this process, as a box
 answers the routes the app uses; with `--stand-in`, a message sent gets a reply streamed back.
 

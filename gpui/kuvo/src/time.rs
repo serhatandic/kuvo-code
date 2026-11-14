@@ -1,5 +1,12 @@
 //! Times as the screens say them.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Now, in ms since 1970.
+pub fn now_ms() -> f64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |since| since.as_millis() as f64)
+}
+
 /// How long ago `then` was, at `now` (both ms since 1970), as a sidebar row says it: "now", "5m",
 /// "3h", "2d", "1w", "1mo", "1y".
 pub fn ago(then: f64, now: f64) -> String {

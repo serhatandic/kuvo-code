@@ -1,7 +1,7 @@
 //! The landing view, for a new conversation: the composer in the middle, on the dotted backdrop,
 //! with where it starts above it: the project (or no project, a chat) and the box it's on.
 
-use gpui::{AnyElement, AppContext as _, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px};
+use gpui::{AnyElement, AppContext as _, Context, IntoElement, ParentElement, Styled, Window, div, px};
 use kuvo_box::models::StartIn;
 use kuvo_ui::{
     ActiveTheme, Button, ButtonSize, IconName, StyledType, TypeSize,
@@ -27,7 +27,11 @@ pub fn render(workspace: &Workspace, _window: &mut Window, cx: &mut Context<Work
     let picked = place.clone();
     let project_chip = PopoverMenu::new(
         "project-menu",
-        Button::new("project-chip", label).ghost().size(ButtonSize::Small).icon(IconName::Folder).icon_after(IconName::ChevronDown),
+        Button::new("project-chip", label)
+            .ghost()
+            .size(ButtonSize::Small)
+            .icon(if place == StartIn::Chat { IconName::Message } else { IconName::Folder })
+            .icon_after(IconName::ChevronDown),
         move |_, cx| {
             let (projects, this, picked) = (projects.clone(), this.clone(), picked.clone());
             cx.new(|cx| {
@@ -61,7 +65,7 @@ pub fn render(workspace: &Workspace, _window: &mut Window, cx: &mut Context<Work
         .text_ui(TypeSize::Caption)
         .text_color(c.text_muted)
         .child(kuvo_ui::Icon::new(IconName::Computer).size(kuvo_ui::IconSize::Nav).color(c.text_muted))
-        .child(SharedString::from(workspace.box_name()))
+        .child(workspace.box_name())
         .child(status_dot(dot));
     div()
         .relative()

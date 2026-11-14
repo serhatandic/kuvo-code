@@ -27,7 +27,8 @@ use crate::time;
 pub enum Entry {
     /// The way back to earlier messages: they load as it comes into view.
     Earlier,
-    Message(Message),
+    /// One of its messages (boxed: a message is large, and most rows are one).
+    Message(Box<Message>),
     /// How long a turn worked, or how it ended, at its end.
     TurnEnd { id: String, outcome: String, worked: Option<f64> },
     /// A run under way, after what it has said so far.
@@ -46,34 +47,44 @@ impl Entry {
     }
 }
 
-/// The rows of `conversation`, oldest first.
-pub fn entries(conversation: &Conversation) -> Vec<Entry> {
+/// The rows of `conversation`, oldest first, each with its revision (it goes up as its message
+/// changes, so only what changed is drawn again). Its messages are moved into them, not copied.
+pub fn entries(mut conversation: Conversation) -> (Vec<Entry>, Vec<u64>) {
     let mut rows = Vec::new();
+    let mut revisions = Vec::new();
     if conversation.earlier.is_some() {
         rows.push(Entry::Earlier);
+        revisions.push(0);
     }
+    // A turn's length counts from its first message, as the Mac's does.
     let mut asked_at: Option<f64> = None;
-    for message in &conversation.messages {
-        match message {
-            Message::User(user) if user.is_box_note() => {}
+    for message in std::mem::take(&mut conversation.messages) {
+        let revision = conversation.revision(message.id());
+        let row = match &message {
+            Message::User(user) if user.is_box_note() => None,
             Message::User(user) => {
-                asked_at = Some(user.time.created);
-                rows.push(Entry::Message(message.clone()));
+                asked_at.get_or_insert(user.time.created);
+                Some(Entry::Message(Box::new(message)))
             }
-            Message::Assistant(step) if shows(step) => rows.push(Entry::Message(message.clone())),
-            Message::System(note) if !note.text.trim().is_empty() => rows.push(Entry::Message(message.clone())),
-            Message::Shell(_) => rows.push(Entry::Message(message.clone())),
+            Message::Assistant(step) if shows(step) => Some(Entry::Message(Box::new(message))),
+            Message::System(note) if !note.text.trim().is_empty() => Some(Entry::Message(Box::new(message))),
+            Message::Shell(_) => Some(Entry::Message(Box::new(message))),
             Message::Idle { id, time, outcome } => {
                 let worked = asked_at.take().map(|asked| time.created - asked).filter(|worked| *worked > 0.0);
-                rows.push(Entry::TurnEnd { id: id.clone(), outcome: outcome.clone(), worked });
+                Some(Entry::TurnEnd { id: id.clone(), outcome: outcome.clone(), worked })
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(row) = row {
+            rows.push(row);
+            revisions.push(revision);
         }
     }
     if conversation.running {
         rows.push(Entry::Working);
+        revisions.push(0);
     }
-    rows
+    (rows, revisions)
 }
 
 /// Whether a step has anything to show: words, thinking, a tool step, or an error.
@@ -89,22 +100,27 @@ fn shows(step: &Step) -> bool {
 /// The widest a conversation's column gets: it stays readable in a wide window.
 pub const COLUMN: f32 = 720.;
 
+/// A thinking block: its step's id, and which of the step's blocks it is.
+pub type Block = (String, usize);
+
 /// Draws row `ix`. `expanded`: the thinking blocks opened; `toggle` opens or closes one.
 pub fn render(
     ix: usize,
     entry: &Entry,
-    expanded: &HashSet<String>,
-    toggle: impl Fn(String, &mut App) + Clone + 'static,
+    expanded: &HashSet<Block>,
+    toggle: impl Fn(Block, &mut App) + Clone + 'static,
     earlier: AnyElement,
     cx: &App,
 ) -> AnyElement {
     let body: AnyElement = match entry {
         Entry::Earlier => earlier,
-        Entry::Message(Message::User(user)) => user_message(ix, &user.parts(), cx),
-        Entry::Message(Message::Assistant(step)) => agent_step(step, expanded, toggle, cx),
-        Entry::Message(Message::System(note)) => quiet_line(note.text.lines().next().unwrap_or("").to_owned(), cx),
-        Entry::Message(Message::Shell(run)) => shell_run(run, cx),
-        Entry::Message(_) => div().into_any_element(),
+        Entry::Message(message) => match message.as_ref() {
+            Message::User(user) => user_message(ix, &user.parts(), cx),
+            Message::Assistant(step) => agent_step(step, expanded, toggle, cx),
+            Message::System(note) => quiet_line(note.text.lines().next().unwrap_or("").to_owned(), cx),
+            Message::Shell(run) => shell_run(run, cx),
+            _ => div().into_any_element(),
+        },
         Entry::TurnEnd { outcome, worked, .. } => turn_end(outcome, *worked, cx),
         Entry::Working => working(cx),
     };
@@ -181,7 +197,7 @@ fn user_message(ix: usize, parts: &Parts, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn agent_step(step: &Step, expanded: &HashSet<String>, toggle: impl Fn(String, &mut App) + Clone + 'static, cx: &App) -> AnyElement {
+fn agent_step(step: &Step, expanded: &HashSet<Block>, toggle: impl Fn(Block, &mut App) + Clone + 'static, cx: &App) -> AnyElement {
     let c = &cx.theme().colors;
     let mut blocks: Vec<AnyElement> = Vec::new();
     for (n, content) in step.content.iter().enumerate() {
@@ -191,9 +207,10 @@ fn agent_step(step: &Step, expanded: &HashSet<String>, toggle: impl Fn(String, &
                 blocks.push(div().child(Markdown::new(SharedString::from(key), text)).into_any_element());
             }
             Content::Reasoning { text, done } => {
-                let open = expanded.contains(&key);
+                let block: Block = (step.id.clone(), n);
+                let open = expanded.contains(&block);
                 let toggle = toggle.clone();
-                let id = key.clone();
+                let id = block.clone();
                 let label = if *done { "Thought" } else { "Thinking" };
                 let row = step_row(SharedString::from(format!("think-{key}")), IconName::Sparkle, label.into(), None, !*done, false, cx)
                     .cursor_pointer()
@@ -378,10 +395,11 @@ mod tests {
 
     #[test]
     fn a_turn_shows_your_message_the_agents_step_and_how_long_it_worked() {
-        let rows = entries(&conversation(
+        let (rows, _) = entries(conversation(
             json!([
                 { "type": "user", "id": "m1", "time": { "created": 1000 }, "text": "Fix it" },
                 { "type": "user", "id": "m0", "time": { "created": 1500 }, "text": "for the agent", "metadata": { "kuvo": { "note": true } } },
+                { "type": "user", "id": "m1b", "time": { "created": 1800 }, "text": "and the tests" },
                 { "type": "assistant", "id": "m2", "time": { "created": 2000 }, "content": [] },
                 { "type": "assistant", "id": "m3", "time": { "created": 3000 }, "content": [{ "type": "text", "text": "Done." }] },
                 { "type": "agent-switched", "id": "m4", "time": { "created": 3500 } },
@@ -392,13 +410,14 @@ mod tests {
         ));
         let keys: Vec<&str> = rows.iter().map(Entry::key).collect();
         // The box's note to the agent, an empty step and a switch of mode show nothing.
-        assert_eq!(keys, ["m1", "m3", "m5"]);
-        assert!(matches!(&rows[2], Entry::TurnEnd { worked: Some(worked), .. } if *worked == 25000.0));
+        assert_eq!(keys, ["m1", "m1b", "m3", "m5"]);
+        // From the turn's first message.
+        assert!(matches!(&rows[3], Entry::TurnEnd { worked: Some(worked), .. } if *worked == 25000.0));
     }
 
     #[test]
     fn a_run_under_way_ends_with_working_and_earlier_ones_start_with_the_way_back() {
-        let rows = entries(&conversation(json!([{ "type": "user", "id": "m1", "time": { "created": 1 }, "text": "Go" }]), true, Some("100")));
+        let (rows, _) = entries(conversation(json!([{ "type": "user", "id": "m1", "time": { "created": 1 }, "text": "Go" }]), true, Some("100")));
         let keys: Vec<&str> = rows.iter().map(Entry::key).collect();
         assert_eq!(keys, ["earlier", "m1", "working"]);
     }

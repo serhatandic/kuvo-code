@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::client::{BoxClient, decode};
 use crate::error::{Error, Refusal, Result};
@@ -45,9 +45,8 @@ pub struct ModelState {
     /// As its provider or coding agent lists it.
     #[serde(default)]
     pub name: Option<String>,
-    /// Whether it can run here now (none: the box can't say yet).
-    #[serde(default)]
-    pub runs: Option<bool>,
+    /// Whether it can run here now.
+    pub runs: bool,
     /// What it needs, when it can't: `model`, `signIn`, `key`, `install`, `gone`.
     #[serde(default)]
     pub missing: Option<String>,
@@ -58,16 +57,27 @@ pub struct ModelState {
 }
 
 impl ModelState {
-    /// Whether the chip says "Choose a Model" and Send waits for one: none to run on, or gone.
+    /// Whether the chip names the model and Send sends with it, as KuvoClient's
+    /// `SessionModelState.namesModel`: one that runs, or one whose account needs something (a
+    /// message on it says what instead of going). For one gone, or none chosen, the chip says
+    /// "Choose a Model" and Send waits for one.
+    pub fn names_model(&self) -> bool {
+        match self.missing.as_deref() {
+            None => self.runs,
+            Some("model" | "gone") => false,
+            Some(_) => true,
+        }
+    }
+
+    /// Whether the chip says "Choose a Model" and Send waits for one.
     pub fn needs_choosing(&self) -> bool {
-        self.runs == Some(false) && matches!(self.missing.as_deref(), None | Some("model" | "gone"))
+        !self.names_model()
     }
 
     /// Why a message can't go on this model, as KuvoClient's `SessionModelState.refusal` says it
-    /// (`accounts`: where its accounts are, "Settings › Accounts"); none while it runs or the box
-    /// can't say.
+    /// (`accounts`: where its accounts are); none for one that runs.
     pub fn refusal(&self, accounts: &str) -> Option<String> {
-        if self.runs != Some(false) {
+        if self.runs && self.missing.is_none() {
             return None;
         }
         let name = self.name.clone().or_else(|| self.model.as_ref().map(|model| model.id.clone())).unwrap_or_else(|| "This model".into());
@@ -103,6 +113,25 @@ fn article(word: &str) -> &'static str {
     }
 }
 
+/// Where a conversation on a model runs: the box's engine, or its coding agents' bridge (Custom
+/// Auto's lists too).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Engine,
+    Agents,
+}
+
+impl Side {
+    /// The side a conversation in `place` is on.
+    pub fn of(place: Where) -> Side {
+        match place {
+            Where::Engine => Side::Engine,
+            Where::Agents => Side::Agents,
+        }
+    }
+}
+
 /// A model a picker offers.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct OfferedModel {
@@ -110,6 +139,13 @@ pub struct OfferedModel {
     pub provider_id: String,
     pub id: String,
     pub name: String,
+    /// Where a conversation on it runs: a conversation is put on one of its own side's in place,
+    /// and goes to another side's as a new session. None from a box before it said.
+    #[serde(default)]
+    pub side: Option<Side>,
+    /// Its efforts (variants), as its side lists them.
+    #[serde(default)]
+    pub efforts: Vec<String>,
     /// Its provider is retiring it: a picker leaves it out.
     #[serde(default)]
     pub retiring: bool,
@@ -126,6 +162,11 @@ impl OfferedModel {
     /// Whether a picker shows it.
     pub fn is_offered(&self) -> bool {
         !self.retiring && !self.hidden
+    }
+
+    /// Whether it's `model` (the same provider and id).
+    pub fn is(&self, model: &ModelRef) -> bool {
+        self.provider_id == model.provider_id && self.id == model.id
     }
 }
 
@@ -144,44 +185,45 @@ pub struct Offered {
     pub models: Vec<OfferedModel>,
     #[serde(default)]
     pub known: Known,
+    /// The coding agents' accounts whose list isn't all they run yet: one of theirs not listed
+    /// may still run.
+    #[serde(default)]
+    pub listing: Vec<String>,
     /// The model a new session starts on (`None` left out: the box couldn't say; `Some(None)`:
     /// nothing runs there).
     #[serde(default, deserialize_with = "present")]
     pub starting: Option<Option<ModelRef>>,
 }
 
+impl Offered {
+    /// Whether both sides could say their models.
+    pub fn is_whole(&self) -> bool {
+        self.known.engine && self.known.agents
+    }
+
+    /// This answer, with what `before` said of a side this one couldn't (PROTOCOL.md, "The models
+    /// offered": a client keeps what the box said of that side before, and asks again in a moment),
+    /// as KuvoClient's `OfferedModels.keeping`: the engine's ahead, the agents' (and their
+    /// `listing`) after.
+    pub fn keeping(mut self, before: Option<&Offered>) -> Offered {
+        let Some(before) = before else { return self };
+        let on = |side: Side| move |model: &&OfferedModel| model.side == Some(side);
+        if !self.known.engine && before.known.engine {
+            let kept: Vec<OfferedModel> = before.models.iter().filter(on(Side::Engine)).cloned().collect();
+            self.models.splice(0..0, kept);
+            self.known.engine = true;
+        }
+        if !self.known.agents && before.known.agents {
+            self.models.extend(before.models.iter().filter(on(Side::Agents)).cloned());
+            self.listing = before.listing.clone();
+            self.known.agents = true;
+        }
+        self
+    }
+}
+
 fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<Option<ModelRef>>, D::Error> {
     Option::<ModelRef>::deserialize(deserializer).map(Some)
-}
-
-/// A model as the engine or the coding agents' bridge lists it (`api/model`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListedModel {
-    pub provider_id: String,
-    pub id: String,
-    /// Other ids it's known by (Claude Code's `default`).
-    pub aliases: Vec<String>,
-    /// Its efforts (variants).
-    pub efforts: Vec<String>,
-}
-
-impl ListedModel {
-    fn read(value: &Value) -> Option<ListedModel> {
-        let strings = |name: &str| -> Vec<String> {
-            value.get(name).and_then(Value::as_array).map(|list| list.iter().filter_map(|each| each.as_str().map(str::to_owned)).collect()).unwrap_or_default()
-        };
-        Some(ListedModel {
-            provider_id: value.get("providerID")?.as_str()?.to_owned(),
-            id: value.get("id")?.as_str()?.to_owned(),
-            aliases: strings("aliases"),
-            efforts: value.get("variants").and_then(Value::as_array).map(|list| list.iter().filter_map(|each| each.get("id")?.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
-        })
-    }
-
-    /// Whether it's `model` (by its id or one it's known by).
-    pub fn is(&self, model: &ModelRef) -> bool {
-        self.provider_id == model.provider_id && (self.id == model.id || self.aliases.iter().any(|alias| *alias == model.id))
-    }
 }
 
 /// Where a new conversation goes.
@@ -236,26 +278,6 @@ impl BoxClient {
         self.get(&path)
     }
 
-    /// The models `place` (the engine, or the coding agents' bridge) lists for `directory`, as it
-    /// lists them (`api/model`): which models a conversation there can be put on in place, and
-    /// their efforts.
-    pub fn listed_models(&self, place: Where, directory: Option<&str>) -> Result<Vec<ListedModel>> {
-        let mut request = Request::get(format!("{}api/model", place.prefix()));
-        if let Some(directory) = directory {
-            request = request.header("x-opencode-directory", directory);
-        }
-        let listed: Value = self.value(&request)?;
-        let models = listed.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
-        Ok(models.iter().filter_map(ListedModel::read).collect())
-    }
-
-    /// The efforts `model` offers (its variants, "low", "high"…), as the engine (or the coding
-    /// agents' bridge) lists it for `directory`; none for a model that has none or isn't listed.
-    pub fn efforts(&self, place: Where, directory: Option<&str>, model: &ModelRef) -> Result<Vec<String>> {
-        let listed = self.listed_models(place, directory)?;
-        Ok(listed.into_iter().find(|listed| listed.is(model)).map(|listed| listed.efforts).unwrap_or_default())
-    }
-
     /// Puts `session` on `model` (with its effort as `variant`), from its next step.
     pub fn select_model(&self, session: &str, place: Where, model: &ModelRef) -> Result<()> {
         let body = json!({ "model": model });
@@ -300,6 +322,7 @@ pub fn effort_title(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn state(value: Value) -> ModelState {
         serde_json::from_value(value).unwrap()
@@ -321,8 +344,32 @@ mod tests {
         let unsaid = state(json!({ "model": null, "runs": false }));
         assert!(unsaid.needs_choosing());
         assert_eq!(unsaid.refusal("x").as_deref(), Some("Choose a model to send it."));
-        // Not said yet: nothing refused.
-        assert_eq!(state(json!({ "model": null })).refusal("x"), None);
+        // What's missing counts whatever `runs` says, as in KuvoClient's `SessionModelState`.
+        let gone_but_runs = state(json!({ "model": { "providerID": "openai", "id": "gpt-4" }, "runs": true, "missing": "gone" }));
+        assert!(gone_but_runs.needs_choosing());
+        assert_eq!(gone_but_runs.refusal("x").as_deref(), Some("gpt-4 is no longer available: choose another model."));
+    }
+
+    fn offered(value: Value) -> Offered {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_side_that_cant_say_keeps_what_it_said_before() {
+        let engine = json!({ "providerID": "anthropic", "id": "opus", "name": "Opus", "side": "engine", "efforts": ["low", "high"] });
+        let agents = json!({ "providerID": "claude-code", "id": "opus", "name": "Claude Code · Opus", "side": "agents", "efforts": [] });
+        let before = offered(json!({ "models": [engine, agents], "known": { "engine": true, "agents": true }, "listing": ["codex"] }));
+        // The bridge started again: its side isn't said now; what it said before stays.
+        let now = offered(json!({ "models": [engine], "known": { "engine": true, "agents": false } })).keeping(Some(&before));
+        assert_eq!(now.models.iter().map(|model| model.provider_id.as_str()).collect::<Vec<_>>(), ["anthropic", "claude-code"]);
+        assert_eq!((now.known.agents, now.listing.clone()), (true, vec!["codex".to_owned()]));
+        assert!(now.is_whole());
+        assert_eq!(now.models[0].efforts, ["low", "high"]);
+        // The engine's, the same, ahead.
+        let now = offered(json!({ "models": [agents], "known": { "engine": false, "agents": true } })).keeping(Some(&before));
+        assert_eq!(now.models.iter().map(|model| model.side).collect::<Vec<_>>(), [Some(Side::Engine), Some(Side::Agents)]);
+        // Nothing before: as said, not whole.
+        assert!(!offered(json!({ "models": [], "known": { "engine": false, "agents": true } })).keeping(None).is_whole());
     }
 
     #[test]

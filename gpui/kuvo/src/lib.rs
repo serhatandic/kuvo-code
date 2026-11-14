@@ -2,14 +2,15 @@
 //! sidebar, a conversation followed live, and the composer. It decides nothing the box decides: it
 //! reads the box's facts through `kuvo_box`, changes them through its routes, and draws.
 //!
-//! `main.rs` opens it; `bin/shots.rs` renders its screens offscreen; [`stand_in`] is a made-up
-//! box it runs against without touching a real one.
+//! `main.rs` opens it; `bin/shots.rs` renders its screens offscreen; `stand_in` (the `stand-in`
+//! feature) is a made-up box it runs against without touching a real one.
 
 pub mod composer;
 pub mod conversation;
 pub mod entries;
 mod landing;
 pub mod sidebar;
+#[cfg(feature = "stand-in")]
 pub mod stand_in;
 pub mod time;
 pub mod workspace;
