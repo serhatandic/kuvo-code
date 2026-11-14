@@ -575,7 +575,9 @@ impl Workspace {
         let lines = sidebar::lines(self, cx);
         let line = match &self.walked {
             Some(key) => lines.iter().find(|line| &line.key() == key),
-            None => lines.iter().find(|line| line.walkable()),
+            // From the search: the first found, once something's searched for.
+            None if !self.search_text(cx).trim().is_empty() => lines.iter().find(|line| line.walkable()),
+            None => None,
         };
         match line.cloned() {
             Some(Line::Project(directory)) => {

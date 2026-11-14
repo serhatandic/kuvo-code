@@ -65,6 +65,8 @@ pub struct ConversationView {
     queue_failed: Option<String>,
     /// Why what it asks couldn't be read (what was shown stays meanwhile).
     asks_failed: Option<String>,
+    /// Whether the card had the composer's place (and the keyboard with it) last it was drawn.
+    card_took_keys: bool,
     client: BoxClient,
     live: bool,
     _queue_follow: Option<Follow<Followed<Queue>>>,
@@ -74,7 +76,7 @@ pub struct ConversationView {
 impl Focusable for ConversationView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         let asks = self.asks.read(cx);
-        if asks.is_asking() { asks.focus_handle(cx) } else { self.composer.focus_handle(cx) }
+        if asks.is_asking() && !asks.leaves_composer() { asks.focus_handle(cx) } else { self.composer.focus_handle(cx) }
     }
 }
 
@@ -104,6 +106,7 @@ impl ConversationView {
             queue: Queue::default(),
             queue_failed: None,
             asks_failed: None,
+            card_took_keys: false,
             client: client.clone(),
             live,
             _queue_follow: None,
@@ -228,6 +231,22 @@ impl ConversationView {
             })
             .ok();
         }));
+    }
+
+    /// The keyboard follows the card: an ask that takes the composer's place takes the keyboard from
+    /// it as it comes (from the composer, or anywhere in the conversation), and gives it back to the
+    /// composer as it goes; the card's keys still wait a moment before they answer.
+    fn keep_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let card = self.asks.read(cx);
+        let taking = card.is_asking() && !card.leaves_composer();
+        if taking == self.card_took_keys {
+            return;
+        }
+        self.card_took_keys = taking;
+        let (from, to) = if taking { (self.composer.focus_handle(cx), self.asks.focus_handle(cx)) } else { (self.asks.read(cx).focus_handle_any(cx), self.composer.focus_handle(cx)) };
+        if from.contains_focused(window, cx) || from.is_focused(window) {
+            window.focus(&to, cx);
+        }
     }
 
     pub fn asks(&self) -> &Entity<AskCard> {
@@ -511,7 +530,8 @@ pub fn read_now(client: &BoxClient, session: &str) -> kuvo_box::Result<kuvo_box:
 }
 
 impl Render for ConversationView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.keep_focus(window, cx);
         let theme = cx.theme().clone();
         let c = &theme.colors;
         let view = cx.entity();
@@ -521,7 +541,7 @@ impl Render for ConversationView {
                 None => centred("Loading the conversation…".into(), true, cx),
             }
         } else if self.entries.is_empty() {
-            let asking = self.asks.read(cx).is_asking();
+            let asking = self.asks.read(cx).is_asking() && !self.asks.read(cx).leaves_composer();
             centred(if asking { "Nothing here yet.".into() } else { "Nothing here yet. Write below to start.".into() }, false, cx)
         } else {
             chat_list(&self.list, move |ix, _window, cx| {
@@ -562,9 +582,12 @@ impl Render for ConversationView {
                     }))
                     .when(!gone, |d| d.children(self.queue_view(cx)))
                     // What it waits on you for takes the composer's place, as on the Mac and the phone.
+                    // One this app can't answer sits over the composer, which stays usable.
                     .when(!gone, |d| {
-                        let asking = self.asks.read(cx).is_asking();
-                        d.child(div().w_full().max_w(px(COLUMN)).child(if asking { self.asks.clone().into_any_element() } else { self.composer.clone().into_any_element() }))
+                        let card = self.asks.read(cx);
+                        let (asking, beside) = (card.is_asking(), card.leaves_composer());
+                        d.when(asking && beside, |d| d.child(div().w_full().max_w(px(COLUMN)).pb(space::S2).child(self.asks.clone())))
+                            .child(div().w_full().max_w(px(COLUMN)).child(if asking && !beside { self.asks.clone().into_any_element() } else { self.composer.clone().into_any_element() }))
                     }),
             )
     }

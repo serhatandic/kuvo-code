@@ -470,23 +470,42 @@ fn the_landing_project_doesnt_move_while_you_write(cx: &mut TestAppContext) {
     assert_eq!(workspace.read_with(cx, |workspace, _| workspace.landing_place()), StartIn::Project("/Users/sam/Projects/api".into()));
 }
 
+/// Opens `session`, which waits on you, as you'd come to it: the keyboard goes where it's drawn.
+fn open_asking(workspace: &Entity<Workspace>, session: &str, cx: &mut VisualTestContext) -> (Entity<kuvo::conversation::ConversationView>, Entity<kuvo::ask_card::AskCard>) {
+    workspace.update_in(cx, |workspace, window, cx| workspace.open_read_at_once(session, window, cx));
+    cx.run_until_parked();
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let card = view.read_with(cx, |view, _| view.asks().clone());
+    (view, card)
+}
+
+/// Whether the keyboard is on the card (or its line).
+fn card_has_keys(card: &Entity<kuvo::ask_card::AskCard>, cx: &mut VisualTestContext) -> bool {
+    let focus = card.read_with(cx, |card, cx| card.focus_handle_any(cx));
+    cx.update(|window, cx| focus.contains_focused(window, cx))
+}
+
+/// The moment a card waits, still, before its keys answer.
+fn quiet(cx: &mut VisualTestContext) {
+    cx.executor().advance_clock(kuvo::ask_card::QUIET);
+    cx.run_until_parked();
+}
+
 #[gpui::test]
 fn a_permission_shows_in_the_composers_place_and_is_answered_through_the_box(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
     stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission()]);
     let (workspace, cx) = open(cx, stand_in.clone());
-    open_session(&workspace, "ses_limits", cx);
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
 
     // The card, as the box words it, in the composer's place; the keyboard's on it.
     assert!(bounds(cx, "ask-card").is_some());
     assert!(bounds(cx, "composer-card").is_none());
     assert!(bounds(cx, "ask-choice-always").is_some());
-    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
-    let card = view.read_with(cx, |view, _| view.asks().clone());
-    let card_focus = card.read_with(cx, |card, cx| card.focus_handle(cx));
-    cx.update(|window, cx| window.focus(&card_focus, cx));
+    assert!(card_has_keys(&card, cx));
 
     // Escape opens the line for your words; what's written goes as Don't Allow, with them.
+    quiet(cx);
     cx.simulate_keystrokes("escape");
     assert!(bounds(cx, "ask-instead").is_some());
     // A number typed there is words, never an answer (pressed as keys, as the keyboard sends them).
@@ -499,32 +518,49 @@ fn a_permission_shows_in_the_composers_place_and_is_answered_through_the_box(cx:
     let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis");
     assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "instead", "message": "12 Use the redis package we already have" })));
 
-    // Answered: the composer is back.
+    // Answered: the composer is back, with the keyboard.
     assert!(bounds(cx, "ask-card").is_none());
     assert!(bounds(cx, "composer-card").is_some());
+    let field = workspace.read_with(cx, |workspace, cx| workspace.conversation().unwrap().read(cx).composer().read(cx).field().clone());
+    assert!(cx.update(|window, cx| field.focus_handle(cx).is_focused(window)));
 }
 
 #[gpui::test]
-fn a_number_key_picks_a_permissions_answer_and_more_than_one_ask_pages(cx: &mut TestAppContext) {
+fn a_cards_keys_wait_until_its_been_still_a_moment_and_a_held_key_answers_nothing(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
     let mut second = kuvo::stand_in::redis_permission();
     second["id"] = json!("per_push");
     second["command"] = json!("git push origin rate-limits");
     stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
     let (workspace, cx) = open(cx, stand_in.clone());
-    open_session(&workspace, "ses_limits", cx);
-    let card = workspace.read_with(cx, |workspace, cx| workspace.conversation().unwrap().read(cx).asks().clone());
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
     assert_eq!(card.read_with(cx, |card, _| card.place().words()), Some("1 of 2".into()));
-    let card_focus = card.read_with(cx, |card, cx| card.focus_handle(cx));
-    cx.update(|window, cx| window.focus(&card_focus, cx));
 
-    // 2: Always Allow, for the first; the second shows next.
+    // As it comes, a key (a Return meant for the composer) answers nothing.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").is_empty());
+
+    // Still a moment: 2, Always Allow, for the first; the second shows next.
+    quiet(cx);
     cx.simulate_keystrokes("2");
     cx.run_until_parked();
     let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis");
     assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "always" })));
     assert_eq!(card.read_with(cx, |card, _| card.place().shown().map(str::to_owned)), Some("per_push".into()));
-    assert_eq!(card.read_with(cx, |card, _| card.place().words()), None);
+
+    // The 2 held down, repeating, doesn't answer the one that took its place: neither at once, nor
+    // after a moment.
+    let held = gpui::KeyDownEvent { keystroke: gpui::Keystroke::parse("2").unwrap(), is_held: true, prefer_character_input: false };
+    cx.simulate_event(held.clone());
+    quiet(cx);
+    cx.simulate_event(held);
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "once" })));
 }
 
 #[gpui::test]
@@ -534,21 +570,19 @@ fn a_key_meant_for_an_ask_answered_elsewhere_doesnt_answer_the_one_that_takes_it
     second["id"] = json!("per_push");
     stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second.clone()]);
     let (workspace, cx) = open(cx, stand_in.clone());
-    open_session(&workspace, "ses_limits", cx);
-    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
-    let card = view.read_with(cx, |view, _| view.asks().clone());
-    let card_focus = card.read_with(cx, |card, cx| card.focus_handle(cx));
-    cx.update(|window, cx| window.focus(&card_focus, cx));
+    let (view, card) = open_asking(&workspace, "ses_limits", cx);
+    quiet(cx);
 
-    // The first is answered on the phone: the second takes its place, and the Return meant for
-    // the first only says so.
+    // The first is answered on the phone: the second takes its place, and a Return meant for the
+    // first, pressed as it does, answers nothing.
     let asks: kuvo_box::asks::Asks = serde_json::from_value(json!({ "asks": [second] })).unwrap();
     view.update(cx, |view, cx| view.take_asks(asks, cx));
-    assert!(card.read_with(cx, |card, _| card.is_fresh()));
+    assert!(!card.read_with(cx, |card, cx| card.takes_keys(cx)));
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
-    // Again: it answers this one.
+    // Once it's been there a moment, Return answers it.
+    quiet(cx);
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
@@ -559,9 +593,23 @@ fn a_key_meant_for_an_ask_answered_elsewhere_doesnt_answer_the_one_that_takes_it
 fn the_agents_question_takes_a_choice_or_your_own_words(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
     let (workspace, cx) = open(cx, stand_in.clone());
-    open_session(&workspace, "ses_cms", cx);
+    let (_, card) = open_asking(&workspace, "ses_cms", cx);
     assert!(bounds(cx, "ask-option-0").is_some());
     assert!(bounds(cx, "ask-words").is_some(), "it takes words of your own too");
+    assert!(card_has_keys(&card, cx));
+
+    // Return with nothing picked or written sends nothing (nor puts it away); it needs an answer,
+    // so it can't be skipped.
+    quiet(cx);
+    let words = card.read_with(cx, |card, cx| card.focus_handle_any(cx));
+    cx.update(|window, cx| window.focus(&words, cx));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty());
+    let skip = bounds(cx, "ask-skip").expect("Skip");
+    cx.simulate_click(skip.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms").is_empty(), "Skip is off for one that needs an answer");
 
     // A click on a choice answers a question that takes one.
     let redirect = bounds(cx, "ask-option-0").unwrap();
@@ -570,6 +618,18 @@ fn the_agents_question_takes_a_choice_or_your_own_words(cx: &mut TestAppContext)
     let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_cms/asks/frm_cms");
     assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answers": { "q0": "redirect" } })));
     assert!(bounds(cx, "ask-card").is_none());
+}
+
+#[gpui::test]
+fn an_ask_this_app_cant_answer_leaves_the_composer_usable_under_it(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    stand_in.set_asks("ses_limits", vec![json!({ "id": "sq_1", "kind": "other", "session": "ses_limits", "title": "Allow running this outside the sandbox?", "message": "brew install redis", "dismiss": false })]);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let (_, card) = open_asking(&workspace, "ses_limits", cx);
+    assert!(bounds(cx, "ask-card").is_some());
+    assert!(bounds(cx, "composer-card").is_some(), "the composer stays, under it");
+    assert!(bounds(cx, "ask-dismiss").is_none(), "the box's own ask isn't put away from here");
+    assert!(!card_has_keys(&card, cx));
 }
 
 #[gpui::test]
@@ -816,6 +876,11 @@ fn the_keyboard_walks_the_sidebar_and_opens_what_its_on(cx: &mut TestAppContext)
     let search = workspace.read_with(cx, |workspace, _| workspace.search().clone());
     assert!(cx.update(|window, cx| search.focus_handle(cx).is_focused(window)));
 
+    // Return in an empty search opens nothing (nor folds anything).
+    cx.simulate_keystrokes("enter");
+    assert_eq!(workspace.read_with(cx, |workspace, _| workspace.opened().map(str::to_owned)), Some("ses_dark".into()));
+    assert!(workspace.read_with(cx, |workspace, _| workspace.is_collapsed("/Users/sam/Projects/website")));
+
     // From the search, Return opens the first that's found.
     cx.simulate_input("lifetimes");
     cx.simulate_keystrokes("enter");
@@ -907,4 +972,67 @@ fn the_queue_shows_what_waits_and_a_message_taken_back_comes_to_the_composer(cx:
     cx.run_until_parked();
     assert_eq!(stand_in.seen_at("DELETE", "kuvo/sessions/ses_signup/queue/msg_q2").len(), 1);
     assert!(bounds(cx, "queue").is_none());
+}
+
+/// Runs the window until `done`, waiting (on no clock) for what the follows' own threads hand on:
+/// each time it's still not done, until the conversation is told something again.
+fn until(cx: &mut VisualTestContext, view: &Entity<kuvo::conversation::ConversationView>, mut done: impl FnMut(&mut VisualTestContext) -> bool) {
+    use futures::StreamExt as _;
+    cx.executor().allow_parking();
+    let mut told = cx.notifications(view);
+    loop {
+        cx.run_until_parked();
+        if done(cx) {
+            return;
+        }
+        cx.foreground_executor().block_test(told.next());
+    }
+}
+
+#[gpui::test]
+fn followed_live_an_ask_takes_the_keyboard_as_it_comes_and_the_queue_shows_as_it_changes(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        Theme::init(Appearance::Light, cx);
+        kuvo::bind_keys(cx);
+    });
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let mut second = kuvo::stand_in::redis_permission();
+    second["id"] = json!("per_push");
+    let client = BoxClient::new(stand_in.clone());
+    // Live: the box is followed on threads of their own, as the app follows it.
+    let window = cx.add_window(move |window, cx| Workspace::new(client, true, window, cx));
+    let workspace = window.root(cx).unwrap();
+    let cx = VisualTestContext::from_window(window.into(), cx).into_mut();
+    cx.simulate_resize(size(px(1200.), px(800.)));
+    workspace.update_in(cx, |workspace, window, cx| workspace.open_session("ses_limits", window, cx));
+    let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
+    let card = view.read_with(cx, |view, _| view.asks().clone());
+    let field = view.read_with(cx, |view, cx| view.composer().read(cx).field().clone());
+    until(cx, &view, |cx| view.read_with(cx, |view, _| !view.entries().is_empty()));
+    assert!(cx.update(|window, cx| field.focus_handle(cx).is_focused(window)), "nothing asked: the composer has the keyboard");
+
+    // Asks come while you're in the composer: the card takes its place, and the keyboard.
+    stand_in.set_asks("ses_limits", vec![kuvo::stand_in::redis_permission(), second]);
+    until(cx, &view, |cx| card.read_with(cx, |card, _| card.is_asking()));
+    assert!(card_has_keys(&card, cx));
+
+    // Answered: whether the box's word that it's gone comes before the answer's own reply or
+    // after it, the next one shows, and takes no key until it's been there a moment.
+    quiet(cx);
+    cx.simulate_keystrokes("1");
+    until(cx, &view, |cx| card.read_with(cx, |card, _| card.place().shown() == Some("per_push")) && stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_redis").len() == 1);
+    cx.simulate_keystrokes("1");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push").is_empty());
+    quiet(cx);
+    cx.simulate_keystrokes("3");
+    until(cx, &view, |cx| !card.read_with(cx, |card, _| card.is_asking()));
+    let answered = stand_in.seen_at("POST", "kuvo/sessions/ses_limits/asks/per_push");
+    assert_eq!(answered.last().and_then(|seen| seen.body.clone()), Some(json!({ "answer": "reject" })));
+    assert!(cx.update(|window, cx| field.focus_handle(cx).is_focused(window)), "the keyboard is back in the composer");
+
+    // The queue, as the box changes it.
+    stand_in.set_queue("ses_limits", vec![json!({ "id": "msg_q9", "words": "Then add a test for the header", "files": [], "keyword": null, "from": null, "on": "engine", "delivery": "queue", "held": false })]);
+    until(cx, &view, |cx| view.read_with(cx, |view, _| view.queued().len() == 1));
+    assert!(bounds(cx, "queued-msg_q9").is_some());
 }

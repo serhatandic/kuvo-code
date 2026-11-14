@@ -18,6 +18,17 @@ use crate::theme::{ActiveTheme, StyledType, TypeSize, radius, space};
 pub const FOLDED: usize = 12;
 /// The most lines shown whole: past this, the rest is counted, not drawn.
 pub const MOST: usize = 400;
+/// The most characters of one line shown: past this, it ends in "…" (a minified file's one line
+/// would otherwise be laid out whole).
+pub const LINE_MOST: usize = 400;
+
+/// `line`, cut to [`LINE_MOST`] characters.
+pub fn capped(line: &str) -> std::borrow::Cow<'_, str> {
+    match line.char_indices().nth(LINE_MOST) {
+        Some((at, _)) => format!("{}…", &line[..at]).into(),
+        None => line.into(),
+    }
+}
 
 type Toggle = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -76,7 +87,7 @@ impl RenderOnce for OutputWell {
         let (shown, button) = fold(lines.len(), self.whole);
         let unshown = lines.len().saturating_sub(MOST);
         let command = self.command.map(|command| div().text_color(c.text_muted).child(format!("$ {command}")));
-        let body = (!lines.is_empty()).then(|| div().text_color(c.text).child(lines[..shown].join("\n")));
+        let body = (!lines.is_empty()).then(|| div().text_color(c.text).child(lines[..shown].iter().map(|line| capped(line)).collect::<Vec<_>>().join("\n")));
         let empty = lines.is_empty().then(|| div().text_color(c.text_faint).child("No output"));
         let more = (self.whole && unshown > 0).then(|| div().text_color(c.text_faint).child(format!("… and {unshown} more lines")));
         let selector = self.id.to_string();
@@ -262,7 +273,7 @@ impl RenderOnce for DiffView {
                 .child(number(line.old))
                 .child(number(line.new))
                 .child(div().w(px(16.)).flex_none().text_center().text_color(sign_color).child(sign))
-                .child(div().flex_none().pr(space::S3).text_color(c.syntax.plain).child(if line.text.is_empty() { " ".to_owned() } else { line.text.clone() }))
+                .child(div().flex_none().pr(space::S3).text_color(c.syntax.plain).child(if line.text.is_empty() { " ".to_owned() } else { capped(&line.text).into_owned() }))
                 .into_any_element()
         });
         let header = self.title.clone().map(|title| {
@@ -326,5 +337,13 @@ mod tests {
         assert_eq!(fold(240, true), (240, Some("Show less".into())));
         assert_eq!(fold(5000, true), (MOST, Some("Show less".into())));
         assert_eq!(fold(5000, false).1.as_deref(), Some("Show the first 400 of 5000 lines"));
+    }
+
+    #[test]
+    fn a_long_line_is_cut_where_it_would_never_be_read() {
+        let long = "é".repeat(LINE_MOST + 50);
+        assert_eq!(capped(&long).chars().count(), LINE_MOST + 1);
+        assert!(capped(&long).ends_with('…'));
+        assert_eq!(capped("short"), "short");
     }
 }

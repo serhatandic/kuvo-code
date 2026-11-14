@@ -21,6 +21,9 @@ use kuvo_ui::{
     theme::{radius, space},
 };
 
+/// How long the card shown stays still before its keys answer.
+pub const QUIET: std::time::Duration = std::time::Duration::from_millis(600);
+
 /// Which ask shows, one at a time, and where it is among them: it stays while it waits, whatever
 /// comes meanwhile; once it's answered, the next after it shows (or, after the last, the one
 /// before). As KuvoClient's `AskPlace`.
@@ -100,9 +103,10 @@ pub struct AskCard {
     answering: Option<String>,
     /// Why the last answer didn't go.
     failed: Option<String>,
-    /// The ask shown just took another's place (that one was answered elsewhere): the first key
-    /// that would answer it only says so, so a key meant for the one before doesn't answer this.
-    fresh: bool,
+    /// Since when the card shown has been still: its keys answer only once it's been a moment
+    /// ([`QUIET`]), so a key meant for the one before it (or for the composer it took the place of)
+    /// never answers it, as the Mac's `KeysTyped` holds them.
+    quiet_since: Option<std::time::Instant>,
     focus: FocusHandle,
     tasks: Vec<Task<()>>,
     _words: Subscription,
@@ -142,7 +146,7 @@ impl AskCard {
             instead: false,
             answering: None,
             failed: None,
-            fresh: false,
+            quiet_since: None,
             focus: cx.focus_handle(),
             tasks: Vec::new(),
             _words: subscription,
@@ -156,15 +160,13 @@ impl AskCard {
         self.place.update(self.asks.iter().map(|ask| ask.id().to_owned()).collect());
         if self.place.shown() != before.as_deref() {
             self.reset(cx);
-            // (Another took the place of one you may have been about to answer.)
-            self.fresh = before.is_some() && self.place.shown().is_some();
         }
         cx.notify();
     }
 
-    /// Whether the ask shown just took another's place, and its keys wait for one more press.
-    pub fn is_fresh(&self) -> bool {
-        self.fresh
+    /// Whether its keys answer now: it's been still a moment since the card shown changed.
+    pub fn takes_keys(&self, cx: &App) -> bool {
+        self.quiet_since.is_none_or(|since| cx.background_executor().now().saturating_duration_since(since) >= QUIET)
     }
 
     /// Whether anything waits (the card shows in the composer's place).
@@ -194,7 +196,7 @@ impl AskCard {
 
     /// A new ask shows: nothing picked, nothing written.
     fn reset(&mut self, cx: &mut Context<Self>) {
-        self.fresh = false;
+        self.quiet_since = Some(cx.background_executor().now());
         self.question = 0;
         self.picked.clear();
         self.instead = false;
@@ -331,6 +333,23 @@ impl AskCard {
         self.answer(answer, cx);
     }
 
+    /// Whether the question shown has an answer to send: something picked or written.
+    fn can_go(&self, cx: &App) -> bool {
+        let Some(asked) = self.shown_question() else { return false };
+        self.picked.get(&asked.key).is_some_and(|picked| !picked.is_empty()) || !self.words.read(cx).text().trim().is_empty()
+    }
+
+    /// The card's own focus, its line's included: where the keyboard is while it's on the card.
+    pub fn focus_handle_any(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+
+    /// Whether the card leaves the composer usable below it: an ask this app can't answer (the
+    /// box's own, a form it can't take) doesn't hold the conversation up.
+    pub fn leaves_composer(&self) -> bool {
+        matches!(self.shown(), Some(Ask::Other { .. }))
+    }
+
     /// Puts the ask away unanswered (×).
     pub fn dismiss(&mut self, cx: &mut Context<Self>) {
         self.answer(Answer::dismiss(), cx);
@@ -356,9 +375,8 @@ impl AskCard {
             return;
         }
         let answers = key == "enter" || key == "escape" || (key.len() == 1 && key.as_bytes()[0].is_ascii_digit());
-        if answers && self.fresh {
-            self.fresh = false;
-            cx.notify();
+        // A key held down, or pressed before the card has been still a moment, answers nothing.
+        if answers && (event.is_held || !self.takes_keys(cx)) {
             cx.stop_propagation();
             return;
         }
@@ -375,7 +393,8 @@ impl AskCard {
             (Some(Ask::Question(_)), digit) if digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit() && digit != "0" => {
                 self.pick(digit.parse::<usize>().unwrap_or(1) - 1, cx);
             }
-            (Some(Ask::Question(_)), "enter") => self.next_question(cx),
+            // (Only as the button would: something picked or written.)
+            (Some(Ask::Question(_)), "enter") if self.can_go(cx) => self.next_question(cx),
             _ => return,
         }
         cx.stop_propagation();
@@ -405,7 +424,7 @@ impl AskCard {
             .child(div().pt(px(2.)).child(Icon::new(icon).size(IconSize::Nav).color(c.warning)))
             .child(div().flex_1().min_w_0().text_ui(TypeSize::Body).medium().text_color(c.text).child(title))
             .children(pager)
-            .when(dismiss, |d| d.child(Button::icon_only("ask-dismiss", IconName::Close, "Don’t Answer").size(ButtonSize::Small).on_click(cx.listener(|this, _, _, cx| this.dismiss(cx)))))
+            .when(dismiss, |d| d.child(div().debug_selector(|| "ask-dismiss".into()).child(Button::icon_only("ask-dismiss", IconName::Close, "Don’t Answer").size(ButtonSize::Small).on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))))))
             .into_any_element()
     }
 
@@ -523,13 +542,14 @@ impl AskCard {
             parts.push(div().debug_selector(|| "ask-words".into()).px(space::S2).py(space::S1_5).rounded(radius::NAV).border_1().border_color(c.border_strong).child(self.words.clone()).into_any_element());
         }
         let last = self.question + 1 >= question.questions.len();
-        let can_go = !picked.is_empty() || !self.words.read(cx).text().trim().is_empty();
+        let can_go = self.can_go(cx);
         parts.push(
             div()
                 .flex()
                 .justify_end()
                 .gap(space::S2)
-                .child(Button::new("ask-skip", "Skip").size(ButtonSize::Small).on_click(cx.listener(|this, _, _, cx| this.skip(cx))))
+                // (A question that needs an answer can't be skipped: × puts it away.)
+                .child(div().debug_selector(|| "ask-skip".into()).child(Button::new("ask-skip", "Skip").size(ButtonSize::Small).disabled(asked.required || self.answering.is_some()).on_click(cx.listener(|this, _, _, cx| this.skip(cx)))))
                 .child(Button::new("ask-next", if last { "Answer" } else { "Next" }).size(ButtonSize::Small).accent().disabled(!can_go || self.answering.is_some()).on_click(cx.listener(|this, _, _, cx| this.next_question(cx))))
                 .into_any_element(),
         );
@@ -551,7 +571,6 @@ impl Render for AskCard {
             ],
             Some(Ask::Unknown) | None => Vec::new(),
         };
-        let fresh = self.fresh.then(|| div().text_ui(TypeSize::Caption).text_color(c.text_muted).child("The one before was answered elsewhere: this one took its place. Press again to answer it."));
         let failed = self.failed.clone().map(|why| div().text_ui(TypeSize::Caption).text_color(c.warning).child(why));
         div()
             .id("ask-card")
@@ -568,7 +587,6 @@ impl Render for AskCard {
             .border_1()
             .border_color(c.border_strong)
             .shadow(theme.card_shadow())
-            .children(fresh)
             .children(parts)
             .children(failed)
     }

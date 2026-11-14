@@ -56,13 +56,15 @@ pub fn route(session: &str) -> String {
 }
 
 impl BoxClient {
+    /// The queue with every message waiting (`?items=1`: a client that doesn't draw them isn't
+    /// slowed by the engine's being asked).
     pub fn queue(&self, session: &str) -> Result<Queue> {
-        self.get(&route(session))
+        self.get(&format!("{}?items=1", route(session)))
     }
 
     /// Follows `session`'s queue: now, and again as it changes.
     pub fn follow_queue(&self, session: &str, timing: Timing) -> Follow<Followed<Queue>> {
-        follow_lines(self, "kuvo-box queue", route(session), timing)
+        follow_lines(self, "kuvo-box queue", format!("{}/events", route(session)), format!("{}?items=1", route(session)), timing)
     }
 
     /// Takes `item` out of the queue (wherever it waits), with what it was.

@@ -16,7 +16,7 @@ use kuvo_box::{Conversation, Parts};
 use kuvo_ui::{
     ActiveTheme, Icon, IconName, IconSize, StyledType, TypeSize,
     markdown::Markdown,
-    output::{DiffLine, DiffView, OutputWell, parse_patch},
+    output::{DiffView, OutputWell, parse_patch},
     small::{Chip, ChipTone, spinner},
     theme::{radius, space},
 };
@@ -323,7 +323,8 @@ pub struct Changed {
     pub status: Option<String>,
     pub added: usize,
     pub removed: usize,
-    pub lines: Rc<Vec<DiffLine>>,
+    /// Its unified patch, read into lines only once it's shown.
+    pub patch: Rc<str>,
 }
 
 impl Details {
@@ -367,10 +368,10 @@ pub fn details(name: &str, state: &Value) -> Option<Details> {
                 status: file.get("status").and_then(Value::as_str).filter(|status| *status != "modified").map(str::to_owned),
                 added: file.get("additions").and_then(Value::as_u64).unwrap_or(0) as usize,
                 removed: file.get("deletions").and_then(Value::as_u64).unwrap_or(0) as usize,
-                lines: Rc::new(parse_patch(patch)),
+                patch: patch.into(),
             })
         })
-        .filter(|file| !file.lines.is_empty())
+        .filter(|file| file.patch.lines().any(|line| line.starts_with("@@")))
         .collect();
     if !changed.is_empty() {
         return Some(Details::Changes(changed));
@@ -404,7 +405,7 @@ fn details_view(key: &str, step: &Step, n: usize, shown: Details, open: &HashSet
             let views = files.into_iter().enumerate().map(|(part, file)| {
                 let fold = whole(part);
                 let toggle = toggle.clone();
-                let mut view = DiffView::new(SharedString::from(format!("diff-{key}-{part}")), file.lines).whole(open.contains(&fold)).on_toggle(move |_, cx| toggle(fold.clone(), cx));
+                let mut view = DiffView::new(SharedString::from(format!("diff-{key}-{part}")), Rc::new(parse_patch(&file.patch))).whole(open.contains(&fold)).on_toggle(move |_, cx| toggle(fold.clone(), cx));
                 if titled {
                     let title = match file.status.as_deref() {
                         Some("added") => format!("{} (new)", short_path(&file.file)),

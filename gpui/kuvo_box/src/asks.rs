@@ -11,10 +11,22 @@ use crate::follow::{Follow, Followed, Timing, follow_lines};
 use crate::paths;
 use crate::transport::Request;
 
-/// The asks waiting, oldest first.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+/// The asks waiting, oldest first. Each is read on its own: one this client can't read (a newer
+/// kind, or one missing a field) is [`Ask::Unknown`], and the rest still show.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Asks {
     pub asks: Vec<Ask>,
+}
+
+impl<'de> Deserialize<'de> for Asks {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            asks: Vec<Value>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Asks { asks: raw.asks.into_iter().map(|ask| serde_json::from_value(ask).unwrap_or(Ask::Unknown)).collect() })
+    }
 }
 
 /// One ask, as the box words it.
@@ -150,7 +162,7 @@ impl BoxClient {
 
     /// Follows `session`'s asks: those now, and again as they change.
     pub fn follow_asks(&self, session: &str, timing: Timing) -> Follow<Followed<Asks>> {
-        follow_lines(self, "kuvo-box asks", route(session), timing)
+        follow_lines(self, "kuvo-box asks", format!("{}/events", route(session)), route(session), timing)
     }
 
     /// Answers `ask` in `session`. A refusal says why (an answer that didn't fit, or one already

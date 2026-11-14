@@ -748,6 +748,8 @@ impl Composer {
         }
         self.mentions_for = typed.clone();
         self.mention_reads += 1;
+        // What was suggested for what was typed before goes: the list waits for the box's answer.
+        self.mentions.clear();
         let read = self.mention_reads;
         let Some((wanted, query)) = typed else {
             self.mentions.clear();

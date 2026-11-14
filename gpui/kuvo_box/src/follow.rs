@@ -648,15 +648,15 @@ pub enum Followed<T> {
     Failed(Error),
 }
 
-/// Follows `route`'s `…/events` (ndjson: the state now, then a line as it changes); over SSH,
-/// `route` itself is read again every few seconds.
-pub(crate) fn follow_lines<T: serde::de::DeserializeOwned + Send + 'static>(client: &BoxClient, name: &str, route: String, timing: Timing) -> Follow<Followed<T>> {
+/// Follows `events` (ndjson: the state now, then a line as it changes); over SSH, `once` (the same
+/// answered once) is read again every few seconds.
+pub(crate) fn follow_lines<T: serde::de::DeserializeOwned + Send + 'static>(client: &BoxClient, name: &str, events: String, once: String, timing: Timing) -> Follow<Followed<T>> {
     let client = client.clone();
     spawn(name, move |latest, stop| {
         let mut backoff = Backoff::new(timing);
         while !stop.is_stopped() {
             let streams = client.streams();
-            let path = if streams { format!("{route}/events") } else { route.clone() };
+            let path = if streams { events.clone() } else { once.clone() };
             let mut stream = match client.open(&Request::get(path), &|closer| stop.hold(closer)) {
                 Ok(stream) => stream,
                 Err(error) => {

@@ -38,6 +38,13 @@ pub struct Seen {
     pub body: Option<Value>,
 }
 
+/// What a conversation's follower follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Followed {
+    Asks,
+    Queue,
+}
+
 /// The stand-in box. Cheap to clone: clones share it.
 #[derive(Clone)]
 pub struct StandIn {
@@ -60,6 +67,9 @@ struct State {
     models: HashMap<String, Value>,
     /// Open followed routes: the session list's and the engine's events, by an id of their own.
     lists: HashMap<u64, Sender<String>>,
+    /// Those following a conversation's asks or queue (`…/asks/events`, `…/queue/events`): its
+    /// session, which, and where its lines go.
+    followers: HashMap<u64, (String, Followed, Sender<String>)>,
     events: HashMap<u64, Sender<String>>,
     next: u64,
     seen: Vec<Seen>,
@@ -154,7 +164,16 @@ impl StandIn {
 
     /// What `session` waits on you for, from now on (as the box words each ask).
     pub fn set_asks(&self, session: &str, asks: Vec<Value>) {
-        self.state().asks.insert(session.to_owned(), asks);
+        let mut state = self.state();
+        state.asks.insert(session.to_owned(), asks);
+        state.told(session, Followed::Asks);
+    }
+
+    /// `session`'s queue from now on, in the box's order (each as `items` lists it).
+    pub fn set_queue(&self, session: &str, items: Vec<Value>) {
+        let mut state = self.state();
+        state.queues.insert(session.to_owned(), items);
+        state.told(session, Followed::Queue);
     }
 
     /// An engine event, to those following the engine's events.
@@ -357,6 +376,21 @@ fn test_output() -> String {
 impl State {
     fn line(&self, full: bool) -> Value {
         json!({ "at": self.at.to_string(), "full": full, "sessions": self.sessions, "projects": self.projects })
+    }
+
+    /// A conversation's asks, or its queue, as its follower reads them.
+    fn followed(&self, session: &str, what: Followed) -> String {
+        match what {
+            Followed::Asks => json!({ "asks": self.asks.get(session).cloned().unwrap_or_default() }),
+            Followed::Queue => json!({ "paused": false, "held": [], "items": self.queues.get(session).cloned().unwrap_or_default() }),
+        }
+        .to_string()
+    }
+
+    /// Those following `session`'s asks or queue hear it as it is now.
+    fn told(&mut self, session: &str, what: Followed) {
+        let line = self.followed(session, what);
+        self.followers.retain(|_, (followed, which, sender)| followed != session || *which != what || sender.send(line.clone()).is_ok());
     }
 
     fn list_changed(&mut self) {
@@ -632,8 +666,10 @@ impl StandIn {
                 let Some(queue) = state.queues.get_mut(*session) else { return answer(404, json!({})) };
                 let Some(at) = queue.iter().position(|each| each["id"] == json!(item)) else { return answer(404, json!({})) };
                 let removed = queue.remove(at);
+                let session = (*session).to_owned();
                 let files: Vec<Value> = removed["files"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|name| json!({ "uri": format!("file://{HOME}/Downloads/{name}"), "name": name })).collect();
                 let words = removed["words"].clone();
+                state.told(&session, Followed::Queue);
                 answer(200, json!({ "paused": false, "held": [], "removed": { "id": item, "text": words, "words": words, "files": files, "delivery": removed["delivery"] } }))
             }
             ("GET", ["kuvo", "sessions", session, "asks"]) if state.sessions.contains_key(*session) => answer(200, json!({ "asks": state.asks.get(*session).cloned().unwrap_or_default() })),
@@ -641,12 +677,14 @@ impl StandIn {
                 let Some(asks) = state.asks.get_mut(*session) else { return answer(404, json!({})) };
                 let Some(at) = asks.iter().position(|each| each["id"] == json!(ask)) else { return answer(404, json!({})) };
                 asks.remove(at);
+                let asking = (*session).to_owned();
                 if asks.is_empty()
                     && let Some(facts) = state.sessions.get_mut(*session)
                 {
                     facts.as_object_mut().map(|facts| facts.remove("asked"));
                 }
                 state.list_changed();
+                state.told(&asking, Followed::Asks);
                 answer(200, json!({}))
             }
             ("POST", ["kuvo", "sessions", session, "typed"]) if state.sessions.contains_key(*session) => {
@@ -823,6 +861,29 @@ impl Transport for StandIn {
 
     fn open(&self, request: &Request, hold: &dyn Fn(Closer) -> bool) -> Result<Stream> {
         let route = request.route();
+        // A conversation's asks or queue, followed: as it is now, then a line as it changes.
+        let parts: Vec<&str> = route.split('/').collect();
+        if let ["kuvo", "sessions", session, which @ ("asks" | "queue"), "events"] = parts.as_slice() {
+            let what = if *which == "asks" { Followed::Asks } else { Followed::Queue };
+            let (sender, receiver) = channel();
+            let id = {
+                let mut state = self.state();
+                state.seen.push(Seen { method: request.method.clone(), path: request.path.clone(), body: None });
+                let id = state.next;
+                state.next += 1;
+                let _ = sender.send(state.followed(session, what));
+                state.followers.insert(id, ((*session).to_owned(), what, sender));
+                id
+            };
+            let inner = self.inner.clone();
+            let closer = Closer::new(move || {
+                inner.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).followers.remove(&id);
+            });
+            if !hold(closer.clone()) {
+                closer.close();
+            }
+            return Ok(Stream { status: 200, content_type: Some("application/x-ndjson".into()), reader: Box::new(Pieces { receiver, piece: Vec::new(), at: 0, sse: false }), closer });
+        }
         let lists = route == "kuvo/sessions/list/events";
         if !lists && route != "api/event" {
             let response = self.route(request)?;
