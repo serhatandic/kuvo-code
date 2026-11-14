@@ -4743,13 +4743,39 @@ notices. Peers preserve the original ID and decision; they do not decide it agai
 account holder with the smallest link key among online same-setup direct peers forwards decided
 facts to phones, including facts received from another holder. Once the link has named this box,
 each fact pins that selection in `forwarder`; before then, push waits. A later ownership change
-never replays old pushes. An unavailable selected holder catches up only while the fact is current:
+never replays old pushes. If the same occurrence arrives with conflicting pins from readers
+that had not exchanged yet, the lexicographically smallest forwarder wins, persisted into local
+and peer copies so a peer disappearing cannot undo the agreement. An unavailable selected holder
+catches up only while the fact is current:
 at most ten minutes from the decision and never past its reset. Disconnected computers without
 a shared current peer view cannot guarantee exactly-once background push delivery under an
 arbitrary network partition. Decisions and dedup survive box restarts. Answers and peer mail
 expose at most 100 current facts per account. With no layout part yet, the default visible meters
 apply, including optional meters remaining off. Ordinary turn samples retain the thirty-second
-disk-save limit; new notice decisions are persisted before delivery.
+disk-save limit; new notice decisions are persisted before delivery. Account-specific Claude cards
+(`claude@<hash8>`) use their exact enabled/placed meters when the box can derive that card from
+its sign-in and find it in settings. Sticky first-card IDs, salted record IDs, and Codex's
+email-based card IDs cannot always be mapped from plan-limit identities. Without a reliable
+mapping, an enabled matching meter on any card of the service family enables that warning;
+this fallback can include an account whose individual card is hidden. No extra identity is
+sent to recover the mapping. Ordinary directory heartbeats keep the one-minute heard-mail
+throttle; a setup or notice-sharing eligibility change sends pending scoped facts at once.
+
+Limits and usage-settings answers include `notificationAvailability: [{provider, available,
+message}]` for providers whose alerts are unavailable (currently Devin, `available:false`).
+The box owns both the capability and its explanation; clients filter the returned entries to
+their displayed/enabled cards and draw the returned words.
+
+The host owns the OS notification delegate and opens the usage panel for a usage tap. A usage
+notification actually shown on the Mac is acknowledged through attention using its stable
+`data.notice` ID (in `shown.request`), so only that occurrence is suppressed in pending phone
+pushes, even when another own box is the forwarder. Silently consumed or banner-disabled
+notifications do not acknowledge presentation. Native shown-ID receipts and phone receipts
+are timestamped and expire after about a day.
+
+The native notice list remains ten minutes, while agent-authored `notify_user` records are kept
+for twenty-four hours for rate limits and unread-session bookkeeping. Keeping a usage fact
+with its original `at` prunes other records by the current wall time, never that fact's age.
 
 The bridge emits `kuvo.usage.notices` `{notices, push}`: `push:true` when this box is the
 selected forwarder, false otherwise. The link delivers them on the existing

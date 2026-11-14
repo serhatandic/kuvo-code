@@ -1,11 +1,12 @@
 import "../safety"
 import { afterAll, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Limits, LimitsProblem, limitsRoutes, type LimitedAccount } from "../../src/agents/limits"
 import { LimitsPeers, type LimitsMail } from "../../src/agents/limits-peers"
-import { UsageSettings } from "../../src/agents/usage/settings"
+import { UsageSettings, settingsRoutes } from "../../src/agents/usage/settings"
 import { initialState, meter, transitions, type Meter, type NoticeState, takeNotices, currentNotice, noticeWindowName, noticeAccountName } from "../../src/agents/usage/notices"
 
 const all = { underTenPercent: true, healthyToClose: true, closeToRunningOut: true }
@@ -262,16 +263,6 @@ test("learning the setup immediately shares pending facts despite a recent unsco
   expect(sent[1].accounts[0].notices).toHaveLength(2)
 })
 
-test("a direct peer excluded by the private peer boundary receives no notices", async () => {
-  const f = fixture(); await f.limits.tick(); f.advance(0.95); await f.limits.tick()
-  const sent: LimitsMail[] = []
-  const peers = new LimitsPeers(f.limits, {followed:true,send:(_,mail)=>sent.push(mail)}, {told:true,setup:"set_test",own:()=>({key:"a",name:"a"}),peerBoxes:()=>[{key:"shared",name:"shared"}],listen:()=>{},isPeer:()=>true,isYours:()=>false}, undefined, () => reset-599000)
-  peers.tell(true)
-  expect(sent[0].accounts[0].notices).toBeUndefined()
-  peers.take("shared", {kind:"limits",at:reset-599000,noticeSetup:"set_test",accounts:f.limits.list(false)})
-  expect(peers.notices()).toEqual([])
-})
-
 const layoutWith = (placed: string[]) => ({placed,providerOrder:[],metricOrder:{},pinned:[],expanded:[],expandOnEnable:[],seeded:[]})
 test("an exact secondary Claude card's meter visibility and enablement override the family card", async () => {
   const raw="anthropic:user-secondary|organization"
@@ -295,7 +286,6 @@ test("unmappable Codex card identities fall back to enabled matching meters on a
   expect(f.limits.notices()).toHaveLength(2)
 })
 
-
 test("conflicting pins for the same occurrence converge to the smallest forwarder and persist", async () => {
   const a=fixture(),z=fixture(); a.limits.ownKey=()=>"a"; z.limits.ownKey=()=>"z"
   await a.limits.tick(); await z.limits.tick(); a.advance(0.95); z.advance(0.95); await a.limits.tick(); await z.limits.tick()
@@ -316,7 +306,6 @@ test("conflicting pins for the same occurrence converge to the smallest forwarde
   expect(z.limits.pushableNotices()).toEqual([])
 })
 
-
 test("unrelated directory heartbeats do not bypass the heard-mail throttle", async () => {
   const f=fixture(); f.account.limits.read=undefined; await f.limits.tick()
   const heard=(used:number)=>f.account.limits.heard!({id:"seven_day",used,minutes:100,resetsAt:reset})
@@ -332,7 +321,6 @@ test("unrelated directory heartbeats do not bypass the heard-mail throttle", asy
   expect(sent).toHaveLength(1)
 })
 
-
 test("unsupported notification providers and their wording come from box answers", async () => {
   const f=fixture()
   const limits=await (await limitsRoutes(f.limits,"GET",[])).json()
@@ -341,3 +329,12 @@ test("unsupported notification providers and their wording come from box answers
   expect(settings.data.notificationAvailability).toEqual(limits.data.notificationAvailability)
 })
 
+test("a direct peer excluded by the private peer boundary receives no notices", async () => {
+  const f = fixture(); await f.limits.tick(); f.advance(0.95); await f.limits.tick()
+  const sent: LimitsMail[] = []
+  const peers = new LimitsPeers(f.limits, {followed:true,send:(_,mail)=>sent.push(mail)}, {told:true,setup:"set_test",own:()=>({key:"a",name:"a"}),peerBoxes:()=>[{key:"shared",name:"shared"}],listen:()=>{},isPeer:()=>true,isYours:()=>false}, undefined, () => reset-599000)
+  peers.tell(true)
+  expect(sent[0].accounts[0].notices).toBeUndefined()
+  peers.take("shared", {kind:"limits",at:reset-599000,noticeSetup:"set_test",accounts:f.limits.list(false)})
+  expect(peers.notices()).toEqual([])
+})
