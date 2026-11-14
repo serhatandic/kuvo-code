@@ -26,6 +26,10 @@ export interface SeatBox {
   key: string;
   name: string;
   seats: boolean;
+  /** One of this box's peers that isn't one of your own computers for plan limits' resets, Always
+   * Allow and usage totals: this box or it is a machine two people's Macs share, or it follows
+   * another setup (PROTOCOL.md, "Plan limits", "Across your computers"). */
+  apart?: true;
 }
 
 /** A bot on another of your computers, as the link tells the bridge: its computer (`box`, by key),

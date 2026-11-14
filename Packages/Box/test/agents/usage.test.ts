@@ -384,8 +384,9 @@ class PeerBox {
     }
   }
 
-  async meet(others: PeerBox[], also: PeerBox[] = []) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
+  /** Its link says who your computers are; `apart`, those of `others` that aren't your own (this box or it a machine two people's Macs share, or in another setup). */
+  async meet(others: PeerBox[], also: PeerBox[] = [], apart: PeerBox[] = []) {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true, ...(apart.includes(box) ? { apart: true } : {}) })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
   }
 
   stop() {
@@ -762,5 +763,28 @@ describe("across your computers", () => {
     expect(events).toHaveLength(1)
     again.stop()
     dev.stop()
+  })
+
+  test("a machine two people's Macs set up (#701) never counts one Mac's spend in its totals, nor either Mac the machine's: each row shows, in no total", async () => {
+    const adaHome = mkdtempSync(join(base, "ada-"))
+    const boHome = mkdtempSync(join(base, "bo-"))
+    const sharedHome = mkdtempSync(join(base, "shared-"))
+    const ada = new PeerBox("ada-key", "Ada's MacBook", relay, adaHome, [account(adaHome, "default", reply("2026-11-12T09:00:00Z", "a1", "claude-opus-4-5", 20, 0))], () => "aaaaaaaaaaaaaaaa", now)
+    const bo = new PeerBox("bo-key", "Bo's MacBook", relay, boHome, [account(boHome, "default", reply("2026-11-12T09:00:00Z", "b1", "claude-opus-4-5", 50, 0))], () => "bbbbbbbbbbbbbbbb", now)
+    const machine = new PeerBox("shared-key", "shared", relay, sharedHome, [account(sharedHome, "default", reply("2026-11-12T10:00:00Z", "s1", "claude-opus-4-5", 7, 0))], () => "cccccccccccccccc", now)
+    // Each link as it says: the machine's peers aren't anyone's own computers there; each Mac's machine isn't one of its own.
+    await ada.meet([machine], [bo], [machine])
+    await bo.meet([machine], [ada], [machine])
+    await machine.meet([ada, bo], [], [ada, bo])
+    for (const box of [ada, bo, machine]) await box.usage.refresh()
+    await relay.settled()
+    const view = machine.usage.view("UTC")
+    expect(view.rows.map((row) => [row.id, row.vouched ?? false]).sort()).toEqual([["claude#aaaaaaaaaaaaaaaa", true], ["claude#bbbbbbbbbbbbbbbb", true], ["claude#cccccccccccccccc", false]])
+    // Only its own.
+    expect(view.totals.claude!.map((day) => day.tokens)).toEqual([7])
+    // Ada's Mac: its own only, not Bo's, nor what's spent on the machine both share.
+    expect(ada.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([20])
+    expect(bo.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([50])
+    for (const box of [ada, bo, machine]) box.stop()
   })
 })

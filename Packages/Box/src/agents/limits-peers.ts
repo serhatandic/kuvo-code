@@ -47,6 +47,12 @@ export interface LimitsDirectory {
   listen(listener: () => void): void
   /** Whether a box is one of your computers (a peer), not one a peer vouches for. */
   isPeer?(key: string): boolean
+  /**
+   * Whether a box is one of your own computers for what's yours alone (spending resets, Always
+   * Allow, what you spend beyond your limits, usage totals): a peer, neither of the two a machine
+   * two people's Macs share, nor in another setup.
+   */
+  isYours?(key: string): boolean
 }
 
 interface Kept {
@@ -123,7 +129,7 @@ export class LimitsPeers {
     const self = this.directory.own()
     const boxes: LimitsBox[] = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }]
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))
-    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(this.directory.isPeer?.(key) === false ? { vouched: true } : {}), accounts: kept.accounts })
+    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(!this.ours(key) ? { vouched: true } : {}), accounts: kept.accounts })
     return limitRows(boxes)
   }
 
@@ -158,10 +164,14 @@ export class LimitsPeers {
     const now = this.now()
     // Its clock, onto this box's: a mail takes a moment, so only one that's well off is moved.
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW ? now - given.at : 0
-    const accounts = given.accounts.slice(0, 100).flatMap((account) => {
+    const read = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount(account, off, now)
       return taken ? [taken] : []
     })
+    // (From a box that isn't one of your own computers, only what such a box is told, whatever it
+    // said: a machine two people's Macs share never shows one owner's spending or Always Allow to
+    // the other.)
+    const accounts = this.directory.told && !this.ours(from) ? forVouched(read) : read
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     this.peers.set(from, { name, heard: now, accounts })
@@ -213,9 +223,9 @@ export class LimitsPeers {
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
   }
 
-  /** Whether a box is one of your own computers (not one a peer of yours only vouches for). */
+  /** Whether a box is one of your own computers (not one a peer of yours only vouches for, a machine two people's Macs share, or a box of another setup). */
   private ours(key: string) {
-    return this.directory.isPeer?.(key) === true
+    return this.directory.isYours?.(key) === true
   }
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
@@ -225,14 +235,23 @@ export class LimitsPeers {
     return accounts
   }
 
-  /** The link said who your computers are: those no longer among them go, and one new to this box is told now. */
+  /**
+   * The link said who your computers are: those no longer among them go, one that's no longer one
+   * of your own keeps only what such a box is told, and one new to this box is told now.
+   */
   private directorySaid() {
     const here = new Set(this.directory.peerBoxes().map((box) => box.key))
     let gone = false
-    for (const key of [...this.peers.keys()]) {
-      if (here.has(key)) continue
-      this.peers.delete(key)
-      gone = true
+    for (const [key, kept] of [...this.peers]) {
+      if (!here.has(key)) {
+        this.peers.delete(key)
+        gone = true
+      } else if (!this.ours(key)) {
+        const told = forVouched(kept.accounts)
+        if (JSON.stringify(told) === JSON.stringify(kept.accounts)) continue
+        kept.accounts = told
+        gone = true
+      }
     }
     for (const key of [...this.told.keys()]) if (!here.has(key)) this.told.delete(key)
     for (const key of [...this.answered.keys()]) if (!here.has(key)) this.answered.delete(key)
@@ -240,7 +259,8 @@ export class LimitsPeers {
       this.save()
       this.limits.peersChanged()
     }
-    this.tell()
+    // (One that's no longer one of your own is told only what such a box is, now.)
+    this.tell(true)
   }
 
   private load() {

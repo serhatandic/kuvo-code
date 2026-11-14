@@ -404,9 +404,13 @@ class Box {
       }
     }
   }
-  /** Its link says who your computers are, and `also`, boxes a peer of yours only vouches for. */
-  async meet(others: Box[], also: Box[] = []) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
+  /**
+   * Its link says who your computers are, and `also`, boxes a peer of yours only vouches for;
+   * `apart`, those of `others` that aren't your own computers (this box or it a machine two people's
+   * Macs share, or in another setup).
+   */
+  async meet(others: Box[], also: Box[] = [], apart: Box[] = []) {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true, ...(apart.includes(box) ? { apart: true } : {}) })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
   }
   stop() {
     this.following.abort()
@@ -1174,5 +1178,91 @@ describe("the sixth review's cases", () => {
     expect(sameClaudeAccount(`anthropic:${a}|`, `anthropic:${b}|org-1`)).toBe(false)
     expect(sameClaudeAccount(`anthropic:${a}|org-1`, `anthropic:${b}|`)).toBe(false)
     expect(sameClaudeAccount(`anthropic:|`, `anthropic:|`)).toBe(false)
+  })
+})
+
+describe("a machine two people's Macs set up (#701)", () => {
+  /**
+   * Ada's Mac, signed in to an account with resets (and extra usage); Bo's Mac; and a machine both
+   * set up. Each link says what it does: the machine's peers aren't anyone's own computers there,
+   * and each Mac's machine isn't one of its own; each Mac is the other's box a peer vouches for.
+   */
+  async function shared() {
+    const relay = new Map<string, Box>()
+    const adaFolder = mkdtempSync(join(base, "ada-"))
+    const ada = new Box("key-ada", "Ada's MacBook", () => agentAccounts([linuxClaude(adaFolder)]), adaFolder, relay)
+    const bo = new Box("key-bo", "Bo's MacBook", () => [], mkdtempSync(join(base, "bo-")), relay)
+    const machine = new Box("key-shared", "shared", () => [], mkdtempSync(join(base, "shared-")), relay)
+    await ada.meet([machine], [bo], [machine])
+    await bo.meet([machine], [ada], [machine])
+    await machine.meet([ada, bo], [], [ada, bo])
+    await ada.limits.tick()
+    const id = ada.limits.rows()[0]!.id
+    // (The machine has heard Ada's account.)
+    await until(() => !!machine.limits.rows().find((row) => row.id === id))
+    return { ada, bo, machine, id, stop: () => [ada, bo, machine].forEach((box) => box.stop()) }
+  }
+
+  test("an agent on the machine (Bo's, or anyone's there) can't spend Ada's reset: the machine offers none, and an ask that reaches Ada's box anyway is never taken", async () => {
+    const { ada, machine, id, stop } = await shared()
+    try {
+      const there = machine.limits.rows().find((row) => row.id === id)!
+      // Counted there, but no computer there can use them.
+      expect(there.extras?.find((extra) => extra.kind === "resets")).toMatchObject({ count: 2, usable: false })
+      expect(there.extras?.find((extra) => extra.kind === "resets")?.on).toBeUndefined()
+      const asked = await post(machine.limits, { row: id })
+      expect(asked.status).toBe(409)
+      expect(asked.body.message).toBe("None of your computers can use this account's resets now.")
+      // Mail from the machine asking Ada's box to spend one (as a box from before this would send it): never taken.
+      await peerRoutes(ada.parts, "POST", ["mail"], async () => ({ from: "key-shared", mail: { kind: "reset", at: time, ask: { id: "s1", row: id, by: "Bo's agent", unasked: true } } }))
+      await peerRoutes(ada.parts, "POST", ["mail"], async () => ({ from: "key-shared", mail: { kind: "reset", at: time, ask: { id: "s2", row: id } } }))
+      expect(makers.claims).toEqual([])
+      expect(makers.spends).toBe(0)
+      // Ada's own box still spends its own.
+      const own = await post(ada.limits, { row: id })
+      expect((await post(ada.limits, { row: id, confirm: own.body.data.confirm })).body.data.outcome).toBe("reset")
+      expect(makers.spends).toBe(1)
+    } finally {
+      stop()
+    }
+  })
+
+  test("Always Allow never crosses: Ada's on stays off the machine, one set on the machine never reaches Ada's box, and the machine never hears Ada's extra usage", async () => {
+    const { ada, machine, id, stop } = await shared()
+    try {
+      expect((await limitsRoutes(ada.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: true }))).status).toBe(200)
+      expect(ada.resets.agentsMay("claude-code")).toBe(true)
+      // Ada's box tells the machine its limits again, with what may be told such a box only.
+      ada.peers.tell(true)
+      await until(() => machine.limits.rows().find((row) => row.id === id)?.extras?.some((extra) => extra.kind === "resets") === true)
+      const there = machine.limits.rows().find((row) => row.id === id)!
+      expect(there.extras?.map((extra) => extra.kind)).toEqual(["resets"])
+      expect(there.extras?.[0]!.agents).toBeUndefined()
+      expect(there.agentsReset).toBeUndefined()
+      expect((machine.resets as any).allowed.get(id)).toBeUndefined()
+      // Set on the machine (by Bo there): it has no computer of yours with the sign-in, and nothing goes to Ada's.
+      const set = await limitsRoutes(machine.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: false }))
+      expect(set.status).toBe(404)
+      // An Always Allow off (or on) mailed from the machine anyway: Ada's box keeps its own.
+      await peerRoutes(ada.parts, "POST", ["mail"], async () => ({ from: "key-shared", mail: { kind: "reset", at: time + 60_000, always: { row: id, on: false, at: time + 60_000 } } }))
+      expect(ada.resets.agentsMay("claude-code")).toBe(true)
+    } finally {
+      stop()
+    }
+  })
+
+  test("the machine's own box, told by a box from before this the whole of Ada's account, keeps only what such a box is told", async () => {
+    const { machine, id, stop } = await shared()
+    try {
+      // As Ada's box sent it before it knew the machine is shared: its extra usage, and Always Allow on.
+      const full = { provider: "claude-code", service: "claude", identity: id.split("#")[1], windows: [{ id: "five_hour", used: 0.5, minutes: 300, read: time }], balance: { left: 3, unit: "usd" }, extras: [{ id: "extra_usage", name: "Extra Usage", kind: "capped", amount: 12.4, limit: 50, unit: "usd" }, { id: "resets", name: "Rate Limit Resets", kind: "resets", count: 2, usable: true, agents: true }], agentsReset: true, checked: time }
+      await peerRoutes(machine.parts, "POST", ["mail"], async () => ({ from: "key-ada", mail: { kind: "limits", at: time, accounts: [full] } }))
+      const there = machine.limits.rows().find((row) => row.id === id)!
+      expect(there.balance).toBeUndefined()
+      expect(there.agentsReset).toBeUndefined()
+      expect(there.extras).toEqual([{ id: "resets", name: "Rate Limit Resets", kind: "resets", count: 2, usable: false }])
+    } finally {
+      stop()
+    }
   })
 })

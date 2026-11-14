@@ -202,11 +202,16 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   const key = link ? ownKey(link) : null;
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os.hostname();
   const setup = followedSetup(link);
+  // A peer that isn't one of your own computers for plan limits' resets and usage totals: every
+  // peer of a machine two people's Macs share, a machine that says it's one, and one that says it
+  // follows another setup than this box's (PROTOCOL.md, "Plan limits", "Across your computers").
+  const shared = sharedMachine(link);
+  const apart = (key: string) => shared || told[key]?.shared === true || (!!setup && !!told[key]?.setup && told[key]!.setup !== setup.id);
   return {
     ...(key ? { self: { key, name } } : {}),
     // Boxes only a peer knows, for plan limits alone.
     also: vouchedOf(link, told).map(box => ({ key: box.key, name: plainName(box.name) || "another computer" })),
-    boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
+    boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...(apart(peer.key) ? { apart: true as const } : {}) })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
     // (The usage panel's settings go only between its boxes: never a shared machine's. `null` only

@@ -2536,7 +2536,9 @@ function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
       list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
       ...Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {},
       ...Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {},
-      ...Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {}
+      ...Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {},
+      ...typeof given.setup === "string" && SETUP_ID.test(given.setup) ? { setup: given.setup } : {},
+      ...given.shared === true ? { shared: true } : {}
     };
     writePrivate(file, JSON.stringify(all));
     return true;
@@ -25402,10 +25404,12 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
   const key = link ? ownKey(link) : null;
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os11.hostname();
   const setup = followedSetup(link);
+  const shared = sharedMachine(link);
+  const apart = (key) => shared || told[key]?.shared === true || !!setup && !!told[key]?.setup && told[key].setup !== setup.id;
   return {
     ...key ? { self: { key, name } } : {},
     also: vouchedOf(link, told).map((box) => ({ key: box.key, name: plainName(box.name) || "another computer" })),
-    boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
+    boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats"), ...apart(peer.key) ? { apart: true } : {} })),
     bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} }))),
     ...setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}
   };
@@ -32115,7 +32119,9 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
     return;
   const moved = movedAway(now).map(({ session, key, at }) => ({ session, key, at }));
   const boxes = peersOf(link).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
-  const json = JSON.stringify([ownList, moved, boxes]);
+  const setup = followedSetup(link)?.id;
+  const where = { ...setup ? { setup } : {}, ...sharedMachine(link) ? { shared: true } : {} };
+  const json = JSON.stringify([ownList, moved, boxes, where]);
   let have = null;
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
@@ -32127,7 +32133,7 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved, boxes: boxes.filter((box) => box.key !== peer.key) }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved, boxes: boxes.filter((box) => box.key !== peer.key), ...where }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
       if (bytes)
         break;
     }
@@ -40276,7 +40282,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "421972cabda7";
+var BRIDGE_VERSION = "955b2d50e030";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

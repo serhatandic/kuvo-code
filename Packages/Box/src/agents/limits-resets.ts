@@ -7,9 +7,11 @@
 // crash, a lost answer or a failure, it goes as the same request, and its maker answers that it's
 // done rather than spending another. It runs on the computer that holds the account's sign-in: a box
 // without one (a Mac's Claude token can only run Claude) passes it to the peer of yours that has
-// one (`{"seat": {"kind": "reset"}}`, only between your own computers), and answers when that one
-// does. Whether agents may use an account's resets without asking (Always Allow) is kept here too,
-// with the account, on the box whose sign-in spends them.
+// one (`{"seat": {"kind": "reset"}}`, only between your own computers: never a box a peer vouches
+// for, nor through a machine two people's Macs share, nor a box of another setup), and answers when
+// that one does. Whether agents may use an account's resets without asking (Always Allow) is kept
+// here too, with the account, on the box whose sign-in spends them, and told only to your own
+// computers.
 
 import { randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
@@ -195,10 +197,15 @@ export class LimitResets {
     for (const box of this.yours()) this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true)
   }
 
-  /** Your other computers (never a box a peer only vouches for). */
+  /** Your other computers (never a box a peer only vouches for, a machine two people's Macs share, or a box of another setup). */
   private yours() {
     const own = this.directory?.own()?.key
-    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true)
+    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.isYours(box.key))
+  }
+
+  /** Whether a box is one of your own computers (`LimitsDirectory.isYours`). */
+  private isYours(key: string) {
+    return this.directory?.isYours?.(key) === true
   }
 
   /**
@@ -371,10 +378,10 @@ export class LimitResets {
     return this.spends.findLast((each) => each.row === rowID && each.state === "sending" && (via ? each.via === via : !each.via) && this.now() - each.at < UNSETTLED_FOR)
   }
 
-  /** A peer's reset mail: only from one of your own computers. */
+  /** A peer's reset mail: only from one of your own computers (another owner's, through a machine you share, never spends yours). */
   take(from: string, mail: unknown) {
     if (!isResetMail(mail)) return
-    if (this.directory && this.directory.isPeer?.(from) !== true) return
+    if (this.directory && !this.isYours(from)) return
     if (mail.answer && typeof mail.answer.id === "string") {
       this.waiting.get(mail.answer.id)?.(mail.answer)
       return
@@ -404,9 +411,9 @@ export class LimitResets {
     })
   }
 
-  /** Whether a peer of yours can be asked now (one a peer vouches for never spends your resets). */
+  /** Whether one of your own computers can be asked now (any other box never spends your resets). */
   private reaches(key: string) {
-    return !!this.transport?.followed && this.directory?.isPeer?.(key) === true
+    return !!this.transport?.followed && this.isYours(key)
   }
 
   /** Asks passed to a peer and waiting for its answer, by id: asked again meanwhile, the same wait. */

@@ -493,6 +493,30 @@ test("a box only a peer knew is forgotten once no peer names it: nothing goes to
   assert.equal(link.openMail(link.readFrame(mail.subarray(17)).body, link.readLink(), () => link.vouchedOf(link.readLink()))?.vouched, true);
 });
 
+test("the bridge is told which peers aren't your own computers for plan limits' resets, Always Allow and usage totals (#701): every peer of a machine two people's Macs share, a machine that says it's one, and one of another setup", () => {
+  fresh();
+  const air = box("mac", "air");
+  const apart = given => Object.fromEntries(link.seatPeers(given).boxes.filter(each => each.key === mac.pub || each.key === second.pub).map(each => [each.key === mac.pub ? "mac" : "second", each.apart === true]));
+  let at = Date.now();
+  const tells = agents => link.takeAgents(second.peer, { at: ++at, list: [], ...agents });
+  // A machine one Mac set up, its peers saying nothing of a setup: all yours.
+  tells({});
+  assert.deepEqual(apart(link.readLink()), { mac: false, second: false });
+  // The other machine says two people's Macs share it: it isn't.
+  tells({ shared: true });
+  assert.deepEqual(apart(link.readLink()), { mac: false, second: true });
+  // In a setup: a peer of another isn't; one of the same, or one that doesn't say, is.
+  const inSetup = { ...link.readLink(), setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub, sign: mac.pub, role: "member" } };
+  tells({ setup: "set_BBBBBBBBBBBBBBBBBBBBBB" });
+  assert.deepEqual(apart(inSetup), { mac: false, second: true });
+  tells({ setup: "set_AAAAAAAAAAAAAAAAAAAAAA" });
+  assert.deepEqual(apart(inSetup), { mac: false, second: false });
+  tells({});
+  assert.deepEqual(apart(inSetup), { mac: false, second: false });
+  // This box is a machine two people's Macs set up: none of its peers is anyone's own computer here.
+  assert.deepEqual(apart({ ...link.readLink(), macs: [mac.pub, air.pub] }), { mac: true, second: true });
+});
+
 test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between your own computers only: to a peer as a seat's mail, never to a box only a peer knows, and from it never to the bridge", async () => {
   fresh();
   const air = box("mac", "air");

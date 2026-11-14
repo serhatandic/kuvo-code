@@ -14,7 +14,11 @@ export interface LimitsBox {
   here: boolean
   /** A peer not heard from for a while: what it said is as of then. */
   away: boolean
-  /** A box a peer of yours vouches for, not one of yours: it never uses your resets. */
+  /**
+   * Not one of your own computers (`LimitsDirectory.isYours`): a box a peer of yours vouches for,
+   * any peer of a machine two people's Macs share (on that machine), a machine that is one, or a box
+   * of another setup. It never uses your resets.
+   */
   vouched?: boolean
   accounts: AccountLimits[]
 }
@@ -86,7 +90,8 @@ export function limitRows(boxes: LimitsBox[]): LimitRow[] {
 /**
  * The computer that would use one of a row's resets: the first of its boxes (this box's first)
  * whose own sign-in can (its `resets` extra says `usable`), one that's heard from before one that's
- * away. None where none can: the row's resets are only counted.
+ * away, and only this box or one of your own computers (never a `vouched` one). None where none
+ * can: the row's resets are only counted.
  */
 function withResetsOn(row: LimitRow, members: { box: LimitsBox; account: AccountLimits }[]) {
   const index = row.extras?.findIndex((extra) => extra.kind === "resets") ?? -1

@@ -9586,7 +9586,10 @@ class LimitResets {
   }
   yours() {
     const own = this.directory?.own()?.key;
-    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true);
+    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.isYours(box.key));
+  }
+  isYours(key) {
+    return this.directory?.isYours?.(key) === true;
   }
   decide(rowID, on, at) {
     const kept = this.allowed.get(rowID);
@@ -9730,7 +9733,7 @@ class LimitResets {
   take(from, mail) {
     if (!isResetMail(mail))
       return;
-    if (this.directory && this.directory.isPeer?.(from) !== true)
+    if (this.directory && !this.isYours(from))
       return;
     if (mail.answer && typeof mail.answer.id === "string") {
       this.waiting.get(mail.answer.id)?.(mail.answer);
@@ -9758,7 +9761,7 @@ class LimitResets {
     });
   }
   reaches(key) {
-    return !!this.transport?.followed && this.directory?.isPeer?.(key) === true;
+    return !!this.transport?.followed && this.isYours(key);
   }
   passing = new Map;
   passed(spend) {
@@ -30781,9 +30784,9 @@ class UsagePeers {
     return usageRows(boxes);
   }
   vouched(key) {
-    if (!this.directory.isPeer)
+    if (!this.directory.isYours)
       return false;
-    return this.directory.told ? !this.directory.isPeer(key) : this.peers.get(key)?.vouched === true;
+    return this.directory.told ? !this.directory.isYours(key) : this.peers.get(key)?.vouched === true;
   }
   tell(changed = false) {
     if (!this.transport.followed || !this.directory.told)
@@ -34130,7 +34133,7 @@ class LinkDirectory {
     const boxes = new Map;
     for (const box of given.boxes) {
       if (box && typeof box.key === "string" && box.key)
-        boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true });
+        boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true, ...box.apart === true ? { apart: true } : {} });
     }
     this.boxes = boxes;
     const self = given.self;
@@ -34175,6 +34178,9 @@ class LinkDirectory {
   }
   isPeer(box) {
     return this.boxes.has(box);
+  }
+  isYours(box) {
+    return this.told && this.isPeer(box) && this.boxes.get(box)?.apart !== true;
   }
   home(box) {
     let home = this.homes.get(box);
@@ -35379,7 +35385,7 @@ class LimitsPeers {
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
     for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...this.directory.isPeer?.(key) === false ? { vouched: true } : {}, accounts: kept.accounts });
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...!this.ours(key) ? { vouched: true } : {}, accounts: kept.accounts });
     return limitRows(boxes);
   }
   tell(urgent = false) {
@@ -35409,10 +35415,11 @@ class LimitsPeers {
       return;
     const now = this.now();
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW2 ? now - given.at : 0;
-    const accounts = given.accounts.slice(0, 100).flatMap((account) => {
+    const read = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount2(account, off, now);
       return taken ? [taken] : [];
     });
+    const accounts = this.directory.told && !this.ours(from) ? forVouched(read) : read;
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
     this.peers.set(from, { name, heard: now, accounts });
@@ -35460,7 +35467,7 @@ class LimitsPeers {
     this.told.set(key, { json: JSON.stringify(accounts), at: now });
   }
   ours(key) {
-    return this.directory.isPeer?.(key) === true;
+    return this.directory.isYours?.(key) === true;
   }
   shared() {
     const accounts = this.limits.list(false);
@@ -35471,11 +35478,17 @@ class LimitsPeers {
   directorySaid() {
     const here = new Set(this.directory.peerBoxes().map((box) => box.key));
     let gone = false;
-    for (const key of [...this.peers.keys()]) {
-      if (here.has(key))
-        continue;
-      this.peers.delete(key);
-      gone = true;
+    for (const [key, kept] of [...this.peers]) {
+      if (!here.has(key)) {
+        this.peers.delete(key);
+        gone = true;
+      } else if (!this.ours(key)) {
+        const told = forVouched(kept.accounts);
+        if (JSON.stringify(told) === JSON.stringify(kept.accounts))
+          continue;
+        kept.accounts = told;
+        gone = true;
+      }
     }
     for (const key of [...this.told.keys()])
       if (!here.has(key))
@@ -35487,7 +35500,7 @@ class LimitsPeers {
       this.save();
       this.limits.peersChanged();
     }
-    this.tell();
+    this.tell(true);
   }
   load() {
     if (!this.file)
@@ -35980,4 +35993,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 513395d41d49c8303c82caaa5149d4b8315772cf0a33276ab948d76bb5b53609
+// Built from Packages/Box/src/agents 00256d829d701d08732e08ea981b951fe49d27286dc28c5ed6b90a79b474bee4
