@@ -2555,6 +2555,72 @@ without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's ow
   older one. The box leaves a build of the same Chromium or a newer one in place, and that Mac
   leaves the box's (marked by a newer Kuvo Code) as it is.
 
+### The browser's data
+
+Every box keeps its browser's data itself, in its `browser` folder (`~/.kuvo-code/browser`; this
+Mac's box in its app's folder, `<its folder>/box/browser`), and it never leaves the box but in these
+answers (feature `browser.data`). This Mac's agents still browse in its app's panel until this
+Mac's box runs a browser of its own (#693): until then its routes answer what its box keeps, which
+no client shows yet.
+
+- **History**: the sites its browser opened (agents' pages too), a site per host without `www.`
+  and with a port where the address names one (two dev servers on localhost are two), 300 at most
+  (the oldest go), each with how often and when it was last opened, the address that names it
+  best (its front page's once seen) and that page's title. The keeper (`kuvo-browser.js host`)
+  only notes each page as it loads, and its site's icon the first time since Chrome started, as
+  Chrome fetched it as the page's own (from its `<link rel=icon>`, else `/favicon.ico`; never an
+  SVG, nothing over 128 KB): a line each in `browser/visits.jsonl`. The box takes them in as the
+  history is asked for, or as the keeper asks once they've piled up (`kuvo-link.js browser fold`),
+  into `browser/history.json` and `browser/icons/<host>`.
+  - `GET kuvo/browser/history` → `{"sites": [{host, url, title, visits, lastVisit, icon}]}`, most
+    suggested first (visits count, and fade over two weeks), `lastVisit` in ms; `icon`, whether
+    there's one.
+  - `GET kuvo/browser/icons/<host>` → the icon's bytes, with its type (PNG, ICO, JPEG, GIF or
+    WebP), or `404`.
+  - `DELETE kuvo/browser/history/<host>` takes a site out (until it's visited again), with its icon;
+    `DELETE kuvo/browser/history` clears it all, the keeper's notes not yet taken in too. Each
+    answers the history then.
+- **Website data**: the sites that keep data in the browser, by registrable domain (as near as
+  can be told without the public suffix list: `example.co.uk`).
+  - `GET kuvo/browser/sites` → `{"sites": [{site, kinds}]}`, by name; `kinds` of `cookies` and
+    `storage` (what its pages stored).
+  - `DELETE kuvo/browser/sites/<site>` removes a site's data, which signs the browser out of it;
+    `DELETE kuvo/browser/sites`, every site's. Each answers the sites then (without the one
+    removed, whose stored data Chrome may still be clearing a moment later). `<site>` is a name as
+    the list has it (`400` for a part of one, as `com`); `503 {"message"}` when nothing could be
+    removed now (Chrome starting, or its files busy). While Chrome runs, through it, in a page:
+    each of the site's cookies deleted as Chrome has it (`Network.deleteCookies`), then what each
+    of its hosts stored (`Storage.clearDataForOrigin`); every site's, all cookies and the cache.
+    With Chrome stopped, from its profile's files, cookies first (the `Cookies` database; the
+    site's IndexedDB; every site's, the profile's storage folders whole), holding
+    `browser/.profile-editing` meanwhile (the keeper starts Chrome once it's gone, or once it's
+    half a minute old); the rest of what a site stored is cleared in the first page Chrome has as
+    it next starts (`browser/clear-sites.json`, kept until Chrome takes each).
+  - The box's own calls to the keeper (these, and `siteSignedIn`, "Integrations") join with
+    `Kuvo.key {key, quiet: true}`: they neither start the browser nor keep it running.
+- **Settings**: `browser/settings.json`, and whether agents' tabs are left open, the file the
+  keeper has always read (`browser/keeps-agent-tabs`).
+  - `GET kuvo/browser/settings` → `{searchEngine, searchEngines: [{id, title}], tidiesAgentTabs,
+    offersToSave, never}`: the search engine (`google`, `duckDuckGo`, `bing`, `brave`, `kagi` or
+    `ecosia`) and those offered in order with their names; whether agents' tabs no one looked at
+    close an hour after their last use; whether the browser offers to save a password you sign in
+    with, and the sites you said Never to (hosts).
+  - `PATCH kuvo/browser/settings` with any of `searchEngine`, `tidiesAgentTabs`, `offersToSave` and
+    `never` (the whole list) → the settings, or `400 {"message"}` for one that isn't right. The
+    agents' tools search with the box's engine once it has one (before, the one its Mac names,
+    `KUVO_SEARCH`); `kuvo-browser.js` is built with the engines' addresses.
+- **Taken in once, on this Mac's box**: as its own browser's keeper first starts (`kuvo-link.js
+  browser take-in`; on a machine it only notes there's nothing to take), what its app's panel kept
+  before (Kuvo Code 0.5–0.7), so nothing the app keeps meanwhile is left behind: its history (`Browser/history.json` in the app's folder,
+  or the folder this box moved from), merged with the box's; its icons (`Browser/Icons`) for the
+  sites taken; and, where the box has no browser settings of its own yet, the app's (its
+  preferences: `browser.searchEngine`, `panel.tidiesAgentTabs`, `passwords.offersToSave`,
+  `passwords.never`). Only read: the app's copy stays. `browser/app-data-read` says when, and
+  what it took; nothing is taken again.
+- **Pages kept across a stop**: the keeper keeps the pages open as it stops (`run/pages.json`, at
+  most 8) with the conversation that worked in each last (`[{url, session}]`; a keeper before
+  this kept addresses alone, which it still reads), and each opens again as that conversation's.
+
 ## Notifications
 
 What the Mac shows as a notification goes to each paired phone too, as the relay's `push`
@@ -3272,9 +3338,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     then sign in), `package` (an open-source server, `by`, with the keys you bring; `macOnly` for
     one that uses the Mac's own apps, which a machine's catalog leaves out) or `browser`
     (the agent uses its site in the computer's browser: not added here; `siteSignedIn` says
-    whether it's signed in there, on this Mac's box, as its app reads the panel browser's cookies;
-    a machine's box can't tell yet, as its browser's cookies are read only by a Mac connected to
-    it, so it leaves it out). `keys`: `[{name, label, prompt}]`,
+    whether it's signed in there: on this Mac's box as its app reads the panel browser's cookies;
+    on a machine's, from its own browser's cookies, by the cookie the catalog names for the site
+    (`signInCookie {domain, name}`, which isn't listed): Chrome's own while it runs, else its
+    profile's `Cookies` file, where only an unexpired cookie that outlives the browser counts, and a
+    sign-in from the last 30 seconds may not show yet. Left out where it can't be told: a catalog
+    from an older Mac without `signInCookie`, no browser there yet, or its cookies there but
+    unreadable now). `keys`: `[{name, label, prompt}]`,
     `keysSaved` whether the computer has them (left out while its keys can't be reached). `how` is the tag the page shows. Added: `health` is
     `connected`, `starting` (also just turned on, while the engine still says it's off),
     `waitsForCode` (Outlook, until its first use's code), `needsSignIn`, `failed` or `disabled`
@@ -5635,6 +5705,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `box.update` | `POST kuvo/box/update {from}`: a release from a folder on the box's computer, the one Kuvo Code carries, taken at the next quiet moment ("Updates"); a release's Mac bundles, swapped whole; `kuvo/update`'s `offered` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
+| `browser.data` | `kuvo/browser/history`, `…/icons/<host>`, `…/sites` and `…/settings`: the browser's data, every box's own ("The browser's data") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `btw.threads` | a side question's `thread`, follow-ups and a thread's removal (bridge 0.9.98) |
 | `claude-code` | `kuvo/claude-code` (a Mac only, before #341) |
@@ -8374,6 +8445,10 @@ before connects (the box notes one: `run/attached`).
   it compares, and replaces one whose `keeper` is lower. The box's says `keeper: 51` in its
   `Kuvo.hello` (beside its `build`), above every such number, so those never replace it.
   <!-- compat: 0.7 keeper-number -->
+- **Its browser's pages kept across a stop**: a keeper from before kept the pages open as it
+  stopped as addresses alone (`run/pages.json`, `["<url>"]`); the box's reads those too, opening
+  each as nobody's ("The browser's data").
+  <!-- compat: 0.7 pages-addresses -->
 - **Its engine**: such a Mac has Stop, which leaves `run/stopped` and the engine down until
   `POST kuvo/engine/start` (`kuvo/info` says `stopped`; Settings › Machines offers Start). It
   doesn't know a stopped engine, so it starts one over `run/stopped`; running, it isn't stopped

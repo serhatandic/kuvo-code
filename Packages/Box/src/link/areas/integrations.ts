@@ -13,6 +13,7 @@ import { listOf, locked, writePrivate } from "../files";
 import { BOTS, CONFIG_LOCK, INTEGRATION_DATA, IS_MAC, K, OWN_HOME_MAC, OWN_RUNTIME, SCRIPT } from "../home";
 import { answeringOnce } from "../once";
 import { KeysUnavailable, siteSignIns } from "../host-interface";
+import { siteSignInsHere, type SignInCookie } from "../browser/sites";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { updateOnTrial } from "../updates/update";
@@ -30,11 +31,14 @@ export const INTEGRATIONS_FILE = OWN_HOME_MAC && fs.existsSync(MAC_INTEGRATIONS)
 /** An integration as its Mac's catalog has it (`bin/integrations.json`): what `kuvo/integrations`
  * lists of it, then what adding it takes: the server's `settings` it adds, its keys' `variables`
  * (each key's name, as a client sends it, to the variable its server reads), and `signInFile`, the
- * file a server that signs in by itself with a code keeps once it has. */
+ * file a server that signs in by itself with a code keeps once it has; and for one used on its site,
+ * the cookie the site keeps while you're signed in (`signInCookie`), which tells whether this box's
+ * browser is. */
 export type CatalogIntegration = Omit<Integration, "added" | "keysSaved" | "siteSignedIn" | "health" | "signIn"> & {
   settings?: unknown;
   variables?: Record<string, string>;
   signInFile?: string;
+  signInCookie?: SignInCookie;
 };
 
 /** An MCP server as the engine lists it (`api/mcp`): what this reads of it. */
@@ -248,8 +252,11 @@ async function integrationEntries(catalog: CatalogIntegration[], engine: EngineR
   } catch (error) {
     if (!(error instanceof KeysUnavailable)) throw error;
   }
-  const sites = catalog.some(entry => entry.way === "browser") ? await siteSignIns() : null;
-  const entries = catalog.map(({ settings: _, variables, signInFile, ...entry }) => {
+  // Whether the browser is signed in to the sites used there: this Mac's app's panel says for a
+  // Mac's box (its agents browse there); every other box's own browser, from its cookies.
+  const onSite = catalog.filter(entry => entry.way === "browser");
+  const sites = !onSite.length ? null : IS_MAC ? await siteSignIns() : await siteSignInsHere(onSite).catch(() => null);
+  const entries = catalog.map(({ settings: _, variables, signInFile, signInCookie: __, ...entry }) => {
     const added = valueAt(settings ?? {}, [...SERVERS, entry.id]) !== undefined;
     const shown: Integration = { ...entry, added };
     if (variables && names) shown.keysSaved = Object.values(variables).every(name => names.includes(name));
