@@ -120,22 +120,16 @@ extension SessionModel {
 
     /// As the Mode menu offers it: nil until its box is known.
     var autopilotChoice: AutopilotChoice? {
-        if autopilotUnavailable { return AutopilotChoice(on: false, unavailable: "Needs a newer Kuvo Code on its computer") }
-        return autopilotShown.map { AutopilotChoice(on: $0.autopilot) }
+        autopilotShown.map { AutopilotChoice(on: $0.autopilot) }
     }
 
     /// Reads its Autopilot and the calls it made, as its box has them. Not while a switch is on its
     /// way: what it brings may be from before the box took it.
     func readAutopilot() async {
         guard autopilotPending == 0, let box = box() else { return }
-        guard await boxHas("autopilot") else {
-            autopilotUnavailable = true
-            return
-        }
         let asked = autopilotChanges
         guard let shown = try? await box.value(AutopilotShown.self, "GET", autopilotRoute) else { return }
         guard asked == autopilotChanges, autopilotPending == 0 else { return }
-        autopilotUnavailable = false
         if autopilotShown != shown { autopilotShown = shown }
     }
 
@@ -156,7 +150,7 @@ extension SessionModel {
     /// Shows `on` at once and sends it to its box: whether its box took it. Nil where it can't be
     /// sent.
     private func sendAutopilot(_ on: Bool) -> Task<Bool, Never>? {
-        guard canReach, !autopilotUnavailable, let box = box() else { return nil }
+        guard canReach, let box = box() else { return nil }
         autopilotChanges += 1
         autopilotPending += 1
         let pick = autopilotChanges

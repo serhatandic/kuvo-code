@@ -43,14 +43,6 @@ struct BoxSkills {
         _ = try await box.value(Empty.self, "DELETE", "kuvo/skills/" + Self.part(name))
     }
 
-    /// Whether the box has Recently Deleted, as its `kuvo/info` says (`skills.trash`). This Mac's
-    /// always has: it's the one the app brings.
-    func offersRecentlyDeleted() async throws -> Bool {
-        if BoxClient.hasEveryFeature(box.box) { return true }
-        struct Info: Decodable { var features: [String]? }
-        return try await box.value(Info.self, "GET", "kuvo/info").features?.contains("skills.trash") == true
-    }
-
     /// The box's Recently Deleted, newest first.
     func deleted() async throws -> [DeletedSkill] {
         struct Listed: Decodable { var entries: [DeletedSkill] }
@@ -145,15 +137,9 @@ final class RecentlyDeletedSkills {
     private(set) var refusals: [String: String] = [:]
     /// The entry being restored.
     private(set) var restoring: String?
-    /// Whether the box has Recently Deleted (`skills.trash`); nil until it's said.
-    private(set) var isOffered: Bool?
 
-    /// What deleting a skill says becomes of it, on a box with Recently Deleted or one without.
-    static func deletionNote(recentlyDeleted: Bool) -> String {
-        recentlyDeleted
-            ? "Its folder, with anything else in it, is kept for 30 days in Recently Deleted, where you can restore it."
-            : "Its folder, with anything else in it, is put away in Kuvo Code’s trash for 30 days."
-    }
+    /// What deleting a skill says becomes of it.
+    static let deletionNote = "Its folder, with anything else in it, is kept for 30 days in Recently Deleted, where you can restore it."
 
     init(routes: BoxSkills) {
         self.routes = routes
@@ -162,14 +148,6 @@ final class RecentlyDeletedSkills {
     /// Lists them again, as the box has them now.
     func load() async {
         do {
-            // A box from before Recently Deleted (bridge 0.9.43 to 0.9.47) keeps a deleted skill in
-            // its trash without offering it back: it has none to show.
-            if isOffered == nil { isOffered = try await routes.offersRecentlyDeleted() }
-            guard isOffered == true else {
-                entries = []
-                failure = nil
-                return
-            }
             let listed = try await routes.deleted()
             entries = listed
             failure = nil

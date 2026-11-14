@@ -49,10 +49,8 @@ enum GoalSandbox {
     /// What was read of a box's sandbox.
     enum Reading: Equatable {
         case status(Status)
-        /// A box from before the sandbox could be checked (no `sandbox.check`, or 404).
+        /// A box from before the sandbox could be checked (it answers 404).
         case old
-        /// A box with goals whose sandbox can't be checked yet: it can't say why.
-        case unchecked
         /// It couldn't be read now.
         case unreadable
     }
@@ -131,8 +129,6 @@ enum GoalSandbox {
             return Row(title: cant, text: "Kuvo Code on \(computer) is too old for the sandbox. \(withYou)", buttons: [Button(label: "Update \(computer)…", action: .updateMachine)])
         case .unreadable:
             return Row(title: cant, text: "Its sandbox can’t be read now. \(withYou)", buttons: [Button(label: "Try Again", action: .readAgain)])
-        case .unchecked:
-            return Row(title: cant, text: "\(bot) works while you’re here.", buttons: [])
         case .status(let read):
             status = read
         }
@@ -214,18 +210,12 @@ enum GoalSandbox {
 }
 
 extension GoalPlans {
-    /// What `box` says of its sandbox: a box without `sandbox.check` (or that answers 404) is from
-    /// before it.
+    /// What `box` says of its sandbox: one that answers 404 is from before it.
     func sandbox(on box: String) async -> GoalSandbox.Reading {
         #if DEBUG
         if let demoSandbox { return demoSandbox }
         #endif
         guard let client = client(box) else { return .unreadable }
-        struct Info: Decodable { var features: [String]? }
-        guard let info = try? await client.value(Info.self, "GET", "kuvo/info") else { return .unreadable }
-        let features = info.features ?? []
-        // One with goals but no check yet can't say why; one with neither is from before both.
-        guard features.contains("sandbox.check") else { return features.contains("work.goals") ? .unchecked : .old }
         do {
             return .status(try await client.value(GoalSandbox.Status.self, "GET", "kuvo/sandbox"))
         } catch let refusal as BoxRefusal where refusal.status == 404 {

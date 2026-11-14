@@ -72,7 +72,6 @@ extension AppModel {
         // One machine at two addresses: the one added later is one of the other's addresses, and
         // what's kept under its name is the other's.
         machines.onFolded = { [weak self] address, machine in self?.machineFolded(address, into: machine) }
-        engineConfig.onRulesChanged = { [weak self] in self?.workspace.syncPermissions() }
         // Each machine's settings are its own: its sessions, bots and group chats go by them.
         EngineConfig.machine = { [weak self] machine in self?.machines.engine(machine)?.config }
         EngineConfig.machines = { [weak self] in self?.machines.engines.values.map(\.config) ?? [] }
@@ -421,10 +420,11 @@ extension AppModel {
             // It signed in again, or a sign-in ran out and was renewed there: here too.
             if event.type == "credential.updated" { self?.nudgeSignIns(engine) }
         }
-        engine.onReconnect = { [weak self] in _ = await self?.workspace.refresh(engine) }
-        // Its Settings › Permissions changed: its open sessions follow. (Its group chats and new
-        // bots go by them as its box has them.)
-        engine.config.onRulesChanged = { [weak self] in self?.workspace.syncPermissions() }
+        engine.onReconnect = { [weak self] in
+            // (Its box may have been updated meanwhile: what it has is read again.)
+            self?.boxFeatures.forget(machine)
+            _ = await self?.workspace.refresh(engine)
+        }
         // Its coding agents, beside its engine: their sessions as its engine's, their accounts,
         // models and Custom Auto lists (its own) in its catalog.
         engine.agents.onEvent = { [weak self, weak engine] event in
@@ -698,6 +698,8 @@ extension AppModel {
     /// chats show as last seen, nothing talking, until it's back.
     private func connectionClosed(_ machine: String) {
         workspace.forget(machine)
+        // (Connected again, it may have been updated meanwhile: what it has is read again.)
+        boxFeatures.forget(machine)
         boxGroups.disconnected(machine)
         planLimits.stopped(machine)
         if machine == SSHConnection.thisMac { usageHistory.stopped() }

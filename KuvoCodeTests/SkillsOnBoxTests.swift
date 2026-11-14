@@ -240,31 +240,6 @@ import Testing
         #expect(when("2026-11-19T08:00:00Z") == "Deleted 30 days ago · goes today")
     }
 
-    /// A machine's box from before Recently Deleted (bridge 0.9.43 to 0.9.47) keeps a deleted skill
-    /// in its trash but offers none back: the page shows no Recently Deleted for it, and deleting
-    /// says what that box does.
-    @Test func aBoxWithoutRecentlyDeletedShowsNone() async throws {
-        defer { done() }
-        let older = BoxClient(box: "older", transport: LocalBox { request in
-            AsyncThrowingStream { continuation in
-                // As 0.9.47 answers: its features, without skills.trash; anything else it hasn't got.
-                let info = request.path == "kuvo/info"
-                continuation.yield(.head(status: info ? 200 : 404, headers: ["content-type": "application/json"]))
-                continuation.yield(.body(Data((info ? #"{"kind":"machine","features":["skills","config"]}"# : "{}").utf8)))
-                continuation.finish()
-            }
-        })
-        let page = RecentlyDeletedSkills(routes: BoxSkills(box: older, library: older))
-        await page.load()
-        #expect(page.isOffered == false && page.entries == [] && page.failure == nil)
-        #expect(RecentlyDeletedSkills.deletionNote(recentlyDeleted: page.isOffered == true) == "Its folder, with anything else in it, is put away in Kuvo Code’s trash for 30 days.")
-        // This Mac's box has it.
-        let here = RecentlyDeletedSkills(routes: routes)
-        await here.load()
-        #expect(here.isOffered == true)
-        #expect(RecentlyDeletedSkills.deletionNote(recentlyDeleted: here.isOffered == true) == "Its folder, with anything else in it, is kept for 30 days in Recently Deleted, where you can restore it.")
-    }
-
     private static let utc: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
