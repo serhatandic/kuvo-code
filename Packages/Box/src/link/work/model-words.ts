@@ -9,10 +9,12 @@ import type { ModelState } from "./model-rule";
 
 export type Readiness = Pick<SessionModel, "refusal" | "choose" | "action">;
 
-/** "an" before a name said starting with a vowel ("an OpenAI key", "an xAI key", said "ex-A-I"),
- * else "a" ("a Xiaomi key"). */
+/** "an" before a name said starting with a vowel ("an OpenAI key", "an xAI key", said "ex-A-I",
+ * "an NVIDIA key" and "an LM Studio key", said letter by letter), else "a" ("a Xiaomi key"). */
 export function article(word: string): "a" | "an" {
   const first = word.toLowerCase()[0];
+  // (A name in capitals is said letter by letter: F, H, L, M, N, R, S and X start with a vowel too.)
+  if (/^[A-Z][A-Z]/.test(word)) return "AEFHILMNORSX".includes(word[0]!) ? "an" : "a";
   return (first && "aeiou".includes(first)) || word.startsWith("xA") ? "an" : "a";
 }
 

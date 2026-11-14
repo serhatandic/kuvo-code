@@ -457,6 +457,9 @@ test("the models offered in a project's folder: the engine's lists there, where 
   });
   const on = handlerOn(own);
   link.forgetModelLists();
+  // (A project of this box's: only those, their worktrees and its sessions' folders are read.)
+  fs.mkdirSync(path.join(home, "box"), { recursive: true });
+  fs.writeFileSync(path.join(home, "box", "projects.json"), JSON.stringify({ projects: [{ directory: project, folders: [] }] }));
   const there = await offeredOn(on, `?folder=${encodeURIComponent(project)}`);
   const local = there.models.find(each => each.providerID === "my-own");
   assert.deepEqual(local, { providerID: "my-own", id: "local-7b", name: "Local 7B", side: "engine", efforts: ["high"], aliases: [] });
@@ -467,10 +470,11 @@ test("the models offered in a project's folder: the engine's lists there, where 
   assert.deepEqual(plain.starting, { providerID: "anthropic", id: "claude-opus-5-5" });
 });
 
-test("a folder that isn't a full path, or isn't one here (a worktree removed since), is offered the box's own", async () => {
+test("a folder that isn't a full path, isn't one here (a worktree removed since), or is no project's or session's, is offered the box's own, the engine not asked there", async () => {
   link.forgetModelLists();
   const own = await offeredOn(handle);
-  for (const folder of ["src/app", path.join(home, "nowhere")]) {
+  const stranger = fs.mkdtempSync(path.join(home, "stranger-"));
+  for (const folder of ["src/app", path.join(home, "nowhere"), stranger, "/"]) {
     folders.length = 0;
     const offered = await offeredOn(handle, `?folder=${encodeURIComponent(folder)}`);
     assert.deepEqual(refs(offered.models), refs(own.models), folder);
@@ -478,18 +482,49 @@ test("a folder that isn't a full path, or isn't one here (a worktree removed sin
   }
 });
 
-test("a model whose account was signed out since is named as it was listed, by an id it's known by too (Claude Code's default), and a Custom Auto list by its name", async () => {
-  link.forgetModelLists();
-  // Listed while signed in: Claude Code's `default` stands for Opus 5.5.
-  await statesOn(handle, "ses_agentFine");
-  // Then signed out, and its Custom Auto lists deleted: it lists none of either.
+// The coding agents' bridge again, its Claude Code signed out and its Custom Auto lists deleted:
+// it lists none of either.
+const signedOutBridge = async () => {
   const out = await standIn(url => {
     const one = url.match(/^\/api\/session\/([^/?]+)$/);
     if (one) return bridgeSessions[decodeURIComponent(one[1])];
     return { "/api/integration": [agent("claude-code", "Claude Code", { signedIn: false })], "/api/model?hidden=1": [], "/api/kuvo/auto": { entries: [], lists: [], limits: [] } }[url];
   });
-  const signedOut = link.engineHandler(() => ({ pid: process.pid, ...engine, version: "2.0.32" }), { name: "Studio" }, () => ({ pid: agents, ...out }));
+  return link.engineHandler(() => ({ pid: process.pid, ...engine, version: "2.0.32" }), { name: "Studio" }, () => ({ pid: agents, ...out }));
+};
+
+test("a model whose account was signed out since is named as it was listed, by an id it's known by too (Claude Code's default), and a Custom Auto list by its name, the box having heard its engine and bridge again meanwhile", async () => {
+  link.forgetModelNames();
+  link.forgetModelLists();
+  // Listed while signed in: Claude Code's `default` stands for Opus 5.5.
+  await statesOn(handle, "ses_agentFine");
+  // The bridge restarts signed out (an update, a sleep): the box hears it again, and reads its
+  // lists again, as engine/watch.ts does on every reconnect.
+  link.forgetModelLists();
+  const signedOut = await signedOutBridge();
   const shown = await wordedOn(signedOut, "ses_agentFine", "ses_autoEmpty");
   assert.equal(shown.ses_agentFine.refusal, "Opus 5.5 needs a sign-in to Claude Code: sign in, or choose another model.");
   assert.equal(shown.ses_autoEmpty.refusal, "Bugfixes is no longer available: choose another model.");
+});
+
+test("the name a session's model ran under lasts past a restart of the box", async () => {
+  link.forgetModelNames();
+  link.forgetModelLists();
+  // A client asked while it ran (the box keeps its name, in its own folder)…
+  assert.equal((await statesOn(handle, "ses_agentFine")).ses_agentFine.name, "Opus 5.5");
+  // …then the box started again, and the account was signed out meanwhile.
+  link.forgetModelNames(true);
+  link.forgetModelLists();
+  const shown = await wordedOn(await signedOutBridge(), "ses_agentFine");
+  assert.equal(shown.ses_agentFine.refusal, "Opus 5.5 needs a sign-in to Claude Code: sign in, or choose another model.");
+  assert.ok(fs.existsSync(path.join(home, "box", "model-names.json")), "kept in the box's own folder");
+});
+
+test("a model turned off since is named as it was listed", async () => {
+  link.forgetModelNames();
+  link.forgetModelLists();
+  // The engine lists it turned off (`enabled: false`), with its name: it's gone, by that name.
+  const off = handlerOn(await engineWith({ "/api/model": [...engineLists["/api/model"], model("anthropic", "claude-3-opus", "Claude 3 Opus", { enabled: false })] }));
+  const gone = (await wordedOn(off, "ses_gone")).ses_gone;
+  assert.deepEqual([gone.missing, gone.refusal], ["gone", "Claude 3 Opus is no longer among Anthropic’s models: choose another model."]);
 });

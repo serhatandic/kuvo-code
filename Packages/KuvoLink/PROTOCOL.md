@@ -1500,8 +1500,10 @@ box decides it from what its engine and coding agents list, so every client show
     Copilot", "Add an xAI key (with a SuperGrok plan, choose a model under Grok instead)").
   - The words are product words: no computer's name (the conversation shows where it is) and no
     settings page. A model that isn't listed now (gone from its list, or its account signed out
-    of) is named as the box last listed it since it started, by its own id or one it's known by,
-    and a Custom Auto list by its name (else by its id).
+    of) is named as the box last listed it (one turned off too), by its own id or one it's known
+    by, and a Custom Auto list by its name; else as it was when a session here last ran on it (the
+    box keeps those, the 2000 most recent, in `box/model-names.json`, so they last past a restart);
+    else by its id.
 - The engine's lists (its providers, models, accounts and default) are read in the session's
   folder, where a project's own settings may add to them.
 - An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
@@ -1516,7 +1518,8 @@ box decides it from what its engine and coding agents list, so every client show
   `api/integration`: not while Claude Code lists its usual ones, nor for a Codex that listed none
   it hides, nor from a bridge before it). Custom Auto runs while its list has models: it
   picks among them each turn, so whether one entry's account is signed in isn't said.
-- Left out, as not known yet: a session the box doesn't have; one whose place didn't answer just
+- Left out, as not known yet: a session the box doesn't have; a coding agent's own subagent (it
+  runs on what its agent gives it, with no model to choose); one whose place didn't answer just
   now; an engine's session while the engine lists no provider ready or no models for its folder
   (one it hasn't loaded yet answers so at first), or, for one with no model of its own, while it
   didn't answer for its default; a coding agent's model while that account, signed in, lists no
@@ -1565,9 +1568,10 @@ start on a model by the same rule.
 - `folder` (`models.offered.folder`): a project's folder, or a conversation's, as a full path: the
   engine's lists are read there, where a project's own settings may add providers and models or
   set its default, so a picker there offers them (with their efforts) and `starting` is that
-  project's. Without it, or for one that isn't a full path to a folder on the box (a worktree
-  removed since), the box's own lists. A client asks with the folder of the conversation, or of
-  the project a new one starts in.
+  project's: one the box knows (a project's folder, one of its worktrees, or a session's), as a
+  full path, that's still a folder there. Without it, or for any other (a worktree removed since, a
+  folder of no project), the box's own lists, and the engine isn't started there. A client asks
+  with the folder of the conversation, or of the project a new one starts in.
 - `models`: every model that runs there now (`runs` in "A session's model"): the engine's, its
   featured providers first (OpenAI, GitHub Copilot, Anthropic, Google, xAI, OpenRouter, OpenCode
   Zen, DeepSeek, Mistral, Groq) and the rest by id, each provider's newest first; then the coding
@@ -5488,8 +5492,7 @@ client does with the rest; a client keeps the draft, puts back what it's told to
     alone, which the keyword would otherwise take in; nothing for a goal's pause), else `text`;
     `error` says why, over the composer.
   - The conversation's model is checked first, by the box, as `kuvo/sessions/models` says it (a text
-    that needs it: all but a "!" command and showing, pausing, resuming or taking away a goal; not
-    in a coding agent's own subagent, which runs on its parent's): with a `refusal`, that's the
+    that needs it: all but a "!" command and showing, pausing, resuming or taking away a goal): with a `refusal`, that's the
     `error`, all of it goes back, and `action` says what to offer doing about it, as there. One the
     box can't say about now goes on. (A `refusal` a client still sends is ignored.)
 - **Meanwhile** a client shows the text at once where it was sent (as a message waiting to go; a

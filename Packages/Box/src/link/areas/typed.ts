@@ -295,10 +295,10 @@ async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): Asy
   // review can be read by, whether a goal is there to show.
   const slash = splitCommand(text) !== null;
   const onAgents = agents !== null && place.target.port === agents.port;
-  // Whether its model can run, as this box says it (`kuvo/sessions/models`), read meanwhile: only
-  // where the text needs it, and not for a coding agent's own subagent (its agent runs it on the
-  // parent's). One that can't be said now is let go, as a client lets it go.
-  const modelRead = needsModel(text) && !(onAgents && data.parentID) ? modelOf(place, engine, agents).catch(() => undefined) : Promise.resolve(undefined);
+  // Whether its model can run, as this box says it (`kuvo/sessions/models`), read meanwhile, where
+  // the text needs it. One that can't be said now (a coding agent's own subagent's) is let go, as
+  // a client lets it go.
+  const modelRead = needsModel(text) ? modelOf(place, engine, agents).catch(() => undefined) : Promise.resolve(undefined);
   const commands = slash ? await engineCommands(engine, folder, signal) : [];
   const typed = parseKeyword(text);
   const readers = typed?.keyword === "review" && !onAgents ? await reviewReaders(engine, folder) : [];

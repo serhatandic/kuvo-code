@@ -82,6 +82,7 @@ let held: { reached: () => void; release: Promise<void> } | null = null
 let bridgeSays: (asked: Asked) => { status: number; body: unknown } = () => ({ status: 200, body: {} })
 let typedRoute: typeof import("../src/link/areas/typed").typedRoute
 let forgetModelLists: () => void
+let forgetModelNames: () => void
 let TYPED_SENT: string
 let TYPED_ROUTE: RegExp
 
@@ -112,7 +113,7 @@ function startBridge() {
 
 beforeAll(async () => {
   ;({ typedRoute, TYPED_ROUTE, TYPED_SENT } = await import("../src/link/areas/typed"))
-  ;({ forgetModelLists } = await import("../src/link/work/model-rule"))
+  ;({ forgetModelLists, forgetModelNames } = await import("../src/link/work/model-rule"))
   engine = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -151,8 +152,9 @@ beforeEach(() => {
   bridgeRuns = true
   commandsAnswer = COMMANDS
   engineLists = {}
-  // (What the engine listed in one test isn't another's.)
+  // (What the engine listed in one test isn't another's, nor the names it kept.)
   forgetModelLists()
+  forgetModelNames()
   rmSync(TYPED_SENT, { force: true })
   held = null
   bridgeSays = () => ({ status: 200, body: {} })

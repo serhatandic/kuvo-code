@@ -6,6 +6,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Target } from "../../shared/records";
+import { keptList } from "../lists/sessions";
+import { readProjects } from "./projects";
+import { readWorktrees } from "./worktree-records";
 import { targetsOf } from "../letters/tools";
 import { listsHere, offeredHere, startingModel, stillListing, type Lists, type Ref } from "../work/model-rule";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -21,13 +24,25 @@ function wantedIn(requestPath: string): Ref | null {
 }
 
 /** The folder asked about (`folder`: a project's, or a conversation's), where the engine's lists
- * are read, a project's own settings adding providers, models or its default; none named, or one
- * that isn't a folder here (a worktree removed since, a project named otherwise), the box's own. */
+ * are read, a project's own settings adding providers, models or its default: only one this box
+ * knows (a project's, one of its worktrees, or a session's) that's still a folder here. None named,
+ * or any other (a worktree removed since, a folder of no project), the box's own: the engine isn't
+ * started anywhere it wouldn't be otherwise. */
 async function folderIn(requestPath: string): Promise<string | undefined> {
   const folder = new URLSearchParams(requestPath.split("?")[1] ?? "").get("folder")?.trim();
   if (!folder || !path.isAbsolute(folder)) return undefined;
   const resolved = path.resolve(folder);
+  if (!isKnown(resolved)) return undefined;
   return (await fs.promises.stat(resolved).then(found => found.isDirectory(), () => false)) ? resolved : undefined;
+}
+
+/** Whether `folder` is one of this box's: a project's (or one of its folders), a worktree it keeps,
+ * or one of its sessions' as its list has them. */
+function isKnown(folder: string): boolean {
+  if (readProjects().some(project => project.directory === folder || project.folders.includes(folder))) return true;
+  if (readWorktrees().some(worktree => worktree.root === folder || worktree.folder === folder)) return true;
+  const list = keptList();
+  return list ? Object.values(list.sessions).some(each => each.facts.directory === folder) : false;
 }
 
 export async function* modelsOfferedRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {

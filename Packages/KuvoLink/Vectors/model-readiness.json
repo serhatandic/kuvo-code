@@ -37,6 +37,11 @@
       "readiness": { "refusal": "GPT-5.5 needs an OpenAI key: add one, or choose another model (with a ChatGPT plan, one under Codex).", "action": { "do": "addKey", "label": "Add Key", "help": "Add an OpenAI key (with a ChatGPT plan, choose a model under Codex instead)" } }
     },
     {
+      "about": "a key, for a name said letter by letter (\"an NVIDIA key\")",
+      "state": { "model": { "providerID": "nvidia", "id": "nemotron-4" }, "name": "Nemotron 4", "runs": false, "missing": "key", "account": { "id": "nvidia", "name": "NVIDIA" } },
+      "readiness": { "refusal": "Nemotron 4 needs an NVIDIA key: add one, or choose another model.", "action": { "do": "addKey", "label": "Add Key", "help": "Add an NVIDIA key" } }
+    },
+    {
       "about": "a coding agent to install",
       "state": { "model": { "providerID": "cursor", "id": "composer-2" }, "runs": false, "missing": "install", "account": { "id": "cursor", "name": "Cursor" } },
       "readiness": { "refusal": "composer-2 needs Cursor installed: install it, or choose another model.", "action": { "do": "install", "label": "Install", "help": "Install Cursor" } }

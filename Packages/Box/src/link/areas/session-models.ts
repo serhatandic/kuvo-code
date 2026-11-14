@@ -12,7 +12,7 @@ import type { Target } from "../../shared/records";
 import type { SessionModel } from "../../shared/routes/sessions";
 import { targetsOf } from "../letters/tools";
 import type { EngineSession } from "../engine/sessions";
-import { bridgeListsOf, engineListsIn, lastName, onAgents, stateOf, type Ref } from "../work/model-rule";
+import { bridgeListsOf, engineListsIn, lastName, onAgents, rememberName, stateOf, type Ref } from "../work/model-rule";
 import { readiness } from "../work/model-words";
 import { sessionHere, sessionsAsked, Unreached, GLANCE_MOST } from "./glance";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -54,6 +54,8 @@ export async function modelOf(place: { target: Target; data: Partial<EngineSessi
   const folder = data.location?.directory ?? data.directory;
   const own = isObject(data.model) && typeof data.model.providerID === "string" && typeof data.model.id === "string" ? data.model : null;
   const onBridge = bridge !== null && target.port === bridge.port;
+  // A coding agent's own subagent runs on what its agent gives it, with no model to choose: none said.
+  if (onBridge && data.parentID) return undefined;
   // None of its own: the engine's default (a coding agents' session always has one).
   const fallback = own || onBridge ? null : (await reads.engine(folder))?.fallback;
   // (An engine that can't say, or didn't say its default, has none to tell yet.)
@@ -65,7 +67,10 @@ export async function modelOf(place: { target: Target; data: Partial<EngineSessi
   }
   // (Only the place it runs in is read.)
   const state = stateOf(ref, onAgents(ref) ? { engine: null, bridge: await reads.bridge() } : { engine: await reads.engine(folder), bridge: null });
-  return state ? { model: ref, ...state, ...readiness(ref, state, lastName(ref)) } : undefined;
+  if (!state) return undefined;
+  // (Its name kept while it runs, so it's named as it was once it doesn't, the box restarted since too.)
+  if (state.runs && state.name) rememberName(ref, state.name);
+  return { model: ref, ...state, ...readiness(ref, state, lastName(ref)) };
 }
 
 export async function* sessionModelsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
