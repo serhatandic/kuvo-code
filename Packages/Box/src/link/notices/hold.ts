@@ -88,7 +88,7 @@ export const holdFor = (category: NoticeCategory): number => ASKED.has(category)
 
 // What a notice is about (its conversation, or group chat), and what answering takes it back.
 const shownIn = (notice: Notice): string | undefined => notice?.data?.session ?? notice?.data?.group ?? notice?.thread;
-const answeredBy = (notice: Notice): string | undefined => notice?.data?.request ?? notice?.data?.ask;
+const answeredBy = (notice: Notice): string | undefined => notice.category === "usage" ? notice.data?.notice : notice?.data?.request ?? notice?.data?.ask;
 // Whether a client's notification (`{session, ask, request?}`) is of this notice: the request or
 // ask it's about, when it names one; else its conversation, and asked of you or news alike.
 const showsNotice = (shown: ShownNotice, notice: Notice): boolean => shown.request !== undefined

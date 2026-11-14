@@ -28,7 +28,7 @@ export type MacLetterAnswer = LetterReply | { text: null };
 // This Mac in use, or not any more, as its app says (`kuvo/attention`): each of your machines hears
 // it by mail, with what of its own this Mac's notifications showed (`elsewhere`, by its id here), so
 // notices for your phones wait a little there too, and one you saw here doesn't go.
-export function macAttendPeers(body: Body<"elsewhere">, given: Pick<Attention, "seconds" | "sessions">): void {
+export function macAttendPeers(body: Body<"elsewhere">, given: Pick<Attention, "seconds" | "sessions"> & Partial<Pick<Attention, "shown">>): void {
   const host = macLink.host;
   const link = readLink();
   if (!host?.welcomed || !link?.key) return;
@@ -36,7 +36,10 @@ export function macAttendPeers(body: Body<"elsewhere">, given: Pick<Attention, "
   for (const peer of peersOf(link)) {
     // (A peer with no id has none.)
     const shown = isObject(body?.elsewhere) && Array.isArray(body.elsewhere[peer.id as string]) ? body.elsewhere[peer.id as string] : [];
-    const theirs = attentionGiven({ for: 0, shown })?.shown ?? [];
+    // A usage fact travels between direct own computers. Its stable occurrence id, unlike a
+    // conversation's news, can be held on a different computer from the one the Mac read.
+    const usage = given.shown?.filter(each => each.request?.startsWith("usage_")) ?? [];
+    const theirs = [...(attentionGiven({ for: 0, shown })?.shown ?? []), ...usage];
     const bytes = mailFor(peer, { attention: { for: given.seconds, sessions: given.sessions, ...(theirs.length ? { shown: theirs } : {}) }, at }, link);
     if (bytes) try { host.send(bytes); } catch {}
   }

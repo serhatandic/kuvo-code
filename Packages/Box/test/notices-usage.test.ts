@@ -139,6 +139,19 @@ test("journal write failure retains in-memory marks and retries persistence with
   } finally { rmSync(folder, { recursive: true, force: true }) }
 })
 
+test("a usage notification shown by Mac suppresses only its stable id, not another on the same row", () => {
+  let now = 0; const sent: string[] = []
+  const hold = new NoticeHold({ send: notice => { sent.push(notice.data!.notice!); return true }, now: () => now, setTimer: (() => 0) as any, clearTimer: () => {} })
+  const first = fact(), second = { ...fact(), row: "same-row" }
+  first.row = second.row
+  hold.attend("mac", { seconds: 45 })
+  usageNotices({ notices: [first, second], push: true }, notice => hold.tell(notice))
+  hold.attend("mac", { seconds: 45, shown: [{ session: `usage:${first.row}`, ask: false, request: first.id }] })
+  now = 61_000
+  hold.settle()
+  expect(sent).toEqual([second.id])
+})
+
 test("a queued losing forwarder copy is cancelled when a snapshot agrees on another holder", () => {
   let now = 0; const sent: string[] = []
   const hold = new NoticeHold({ send: notice => { sent.push(notice.data!.notice!); return true }, now: () => now, setTimer: (() => 0) as any, clearTimer: () => {} })
