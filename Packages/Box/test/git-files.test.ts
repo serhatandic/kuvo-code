@@ -1,7 +1,7 @@
 import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ask, follow } from "./route-answer"
@@ -343,4 +343,63 @@ test("a staged deletion of a file just as it was committed leaves nothing in the
   } finally {
     delete process.env.KUVO_CHANGES_TRASH
   }
+})
+
+test("a file only noted with git add -N can be discarded with the stamp it was listed with", async () => {
+  const top = repository("noted")
+  process.env.KUVO_CHANGES_TRASH = join(box, "trash-noted")
+  try {
+    writeFileSync(join(top, "later.ts"), "later\n")
+    git(top, "add", "-N", "later.ts")
+    const row = { ...(await files(top)).files.find((file: any) => file.path === "later.ts"), root: top }
+    expect((await discard(row)).status).toBe(200)
+  } finally {
+    delete process.env.KUVO_CHANGES_TRASH
+  }
+})
+
+test("a copy left after git rm --cached is a new file to discard, not one committed since", async () => {
+  const top = repository("uncached")
+  process.env.KUVO_CHANGES_TRASH = join(box, "trash-uncached")
+  try {
+    git(top, "rm", "-q", "--cached", "README.md")
+    const listed = (await files(top)).files
+    const copy = { ...listed.find((file: any) => file.group === "untracked"), root: top }
+    expect([copy.path, copy.discard]).toEqual(["README.md", "trash"])
+    // As the Mac asks, with no stamp.
+    expect((await discard(copy, undefined)).status).toBe(200)
+  } finally {
+    delete process.env.KUVO_CHANGES_TRASH
+  }
+})
+
+test("a file changed while the list was being read has a stamp no discard matches", async () => {
+  const top = repository("racing")
+  writeFileSync(join(top, "README.md"), "# App\nEdited.\n")
+  // Its time after the list began to be read, as an edit landing meanwhile would have.
+  const later = new Date(Date.now() + 60_000)
+  utimesSync(join(top, "README.md"), later, later)
+  const row = { ...(await files(top)).files.find((file: any) => file.path === "README.md"), root: top }
+  expect((await discard(row)).status).toBe(409)
+  expect(readFileSync(join(top, "README.md"), "utf8")).toBe("# App\nEdited.\n")
+})
+
+test("a follower hears of a change as it's seen, and of a reset that moves only the branch", async () => {
+  const { changeClock, gitLook } = await import("../src/link/areas/changes")
+  let seen = "a"
+  const clock = changeClock(() => seen)
+  seen = "b"
+  const at = Date.now()
+  clock.look()
+  expect(clock.changed()).toBeGreaterThanOrEqual(at)
+
+  const top = repository("reset")
+  writeFileSync(join(top, "README.md"), "# App\nTwo.\n")
+  git(top, "commit", "-q", "-am", "Two")
+  const gitDir = join(top, ".git")
+  const past = new Date(Date.now() - 60_000)
+  for (const file of ["index", "HEAD", "logs/HEAD"]) utimesSync(join(gitDir, file), past, past)
+  const before = gitLook(gitDir)
+  git(top, "reset", "-q", "--soft", "HEAD~1")
+  expect(gitLook(gitDir)).not.toBe(before)
 })

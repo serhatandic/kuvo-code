@@ -136,6 +136,31 @@ async function uncommittedIn(root: string, scope: Scope) {
   return status === null || status.length > 0;
 }
 
+/** What a followed folder's repository looks like from its git folder, looked at each second: its
+ * index (staged), HEAD (switched) and HEAD's log (a commit, a reset, a checkout, which may move only
+ * the branch). */
+export function gitLook(gitDir: string): string {
+  const stamp = (file: string) => { try { return String(fs.statSync(file).mtimeMs); } catch { return ""; } };
+  return ["index", "HEAD", path.join("logs", "HEAD")].map(file => stamp(path.join(gitDir, file))).join("/");
+}
+
+/** When a follower last heard of a change, at the latest: as it's told, or as what it looks at
+ * (`look`) is seen to differ. A read shared with another follower must have started after it. */
+export function changeClock(look: () => string) {
+  let changed = Date.now();
+  let looked = look();
+  return {
+    look: () => {
+      const now = look();
+      if (now !== looked) changed = Date.now();
+      looked = now;
+      return now;
+    },
+    told: () => { changed = Date.now(); },
+    changed: () => changed,
+  };
+}
+
 /** `filesIn` for every follower of `directory` at once: a read that started once the change a
  * follower heard of had happened (`since`) is shared, under way or ended under a second ago; one
  * that started earlier may have missed it, so a new one starts. */
@@ -243,24 +268,26 @@ async function oneFileIn(root: string, against: string, scope: Scope, compared: 
 
 /** A file as it is now, for a discard to tell it hasn't changed since it was listed: what the index
  * has at its path, and its size and when it last changed on disk ("gone" without one). */
-export function stampOf(root: string, name: string, indexed: string | undefined): string {
+export function stampOf(root: string, name: string, indexed: string | undefined, since?: bigint): string {
   const stat = fs.lstatSync(path.join(root, name), { bigint: true, throwIfNoEntry: false });
-  return `${indexed ?? "-"}:${stat ? `${stat.size}-${stat.mtimeNs}` : "gone"}`;
+  // Changed once the list was being read (`since`): what the row shows may be from before it, so
+  // its stamp matches nothing, and a discard waits for the list read again.
+  const fresh = since !== undefined && stat && stat.mtimeNs >= since ? ":since" : "";
+  return `${indexed ?? "-"}:${stat ? `${stat.size}-${stat.mtimeNs}` : "gone"}${fresh}`;
 }
 
-/** What the index has at each path in `limit` (`ls-files -s`): its object, by path. */
-async function indexedIn(root: string, limit: string[]): Promise<Map<string, string>> {
-  const listed = (await text(root, ["--literal-pathspecs", "-c", "core.quotepath=off", "ls-files", "-s", "-z", "--", ...limit])) ?? "";
-  const indexed = new Map<string, string>();
-  for (const entry of listed.split("\0")) {
-    const tab = entry.indexOf("\t");
-    if (tab < 0) continue;
-    // `mode object stage<TAB>path`; a conflict has one for each of its sides.
-    const name = entry.slice(tab + 1);
-    const object = entry.slice(0, tab).split(" ")[1] ?? "";
-    indexed.set(name, indexed.has(name) ? `${indexed.get(name)},${object}` : object);
+/** What the index has at `name`, as `git status` says it (as `kuvo/git/files` lists it): its
+ * object, none for a file the index doesn't have or notes only (`git add -N`, all zeros). */
+async function indexEntryOf(root: string, name: string): Promise<string | undefined> {
+  const said = (await text(root, ["--literal-pathspecs", "-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames", "--", name])) ?? "";
+  for (const record of said.split("\0")) {
+    if (record[0] !== "1" && record[0] !== "2") continue;
+    const fields = record.split(" ");
+    if (fields.slice(8).join(" ") !== name) continue;
+    const object = fields[7] ?? "";
+    return object && !/^0+$/.test(object) ? object : undefined;
   }
-  return indexed;
+  return undefined;
 }
 
 /** Why a discard of `file` mustn't go now, or null: a "new file" the last commit has (an agent
@@ -268,10 +295,14 @@ async function indexedIn(root: string, limit: string[]): Promise<Map<string, str
  * gave it), whose later changes the discard would throw away. */
 export async function staleDiscard(root: string, file: { path: string; oldPath?: string; status: Status }, stamp: string | undefined): Promise<string | null> {
   const name = file.path.replace(/\/$/, "");
-  if (file.status === "added" && (await text(root, ["--literal-pathspecs", "ls-tree", "--name-only", "HEAD", "--", name]))?.trim()) {
+  // Committed since: the last commit and the index both have it. (Only the commit: taken out of git
+  // with `git rm --cached`, a new file again, which goes to the Trash as one.)
+  if (file.status === "added" && (await text(root, ["--literal-pathspecs", "ls-tree", "--name-only", "HEAD", "--", name]))?.trim()
+      && (await git(root, ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", name])).ok) {
     return `${name} is in the last commit now, so it isn’t a new file any more. Look at it again before you discard it.`;
   }
-  const now = stampOf(root, name, (await indexedIn(root, [name])).get(name)) + (file.oldPath ? `|${stampOf(root, file.oldPath, undefined)}` : "");
+  // Its index entry read as the list reads it, so the two stamps can match.
+  const now = stampOf(root, name, await indexEntryOf(root, name)) + (file.oldPath ? `|${stampOf(root, file.oldPath, undefined)}` : "");
   if (stamp !== undefined && now !== stamp) {
     return `${name} changed since it was listed. Look at it again before you discard it.`;
   }
@@ -315,6 +346,8 @@ export async function filesIn(directory: string): Promise<GitFiles | null> {
   const found = await scoped(directory, "uncommitted");
   if (!found) return { repository: false };
   const { root, against, limit } = found;
+  // When the list began to be read: a file changed after it has a stamp that matches nothing.
+  const since = BigInt(Date.now()) * 1_000_000n;
   const status = await git(root, ["-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--find-renames", "--", limit]);
   if (!status.ok) return null;
   const [staged, unstaged] = await Promise.all([linesBy(root, ["--cached", against], limit), linesBy(root, [], limit)]);
@@ -331,7 +364,7 @@ export async function filesIn(directory: string): Promise<GitFiles | null> {
     const discard = group === "conflicted" ? undefined : status === "added" ? "trash" : scope === "unstaged" ? "unstaged" : "head";
     // What a discard sends back, so it's refused once the file changed since.
     // A move's old path too, which its discard brings back.
-    const stamp = discard ? stampOf(root, path.replace(/\/$/, ""), indexed.get(path)) + (oldPath ? `|${stampOf(root, oldPath, undefined)}` : "") : undefined;
+    const stamp = discard ? stampOf(root, path.replace(/\/$/, ""), indexed.get(path), since) + (oldPath ? `|${stampOf(root, oldPath, undefined, since)}` : "") : undefined;
     files.push({ path, ...(oldPath ? { oldPath } : {}), group, status, scope, ...(lines ?? {}), ...(discard ? { discard, stamp } : {}), ...(path.endsWith("/") ? { repository: true as const } : {}) });
   };
   const records = status.out.toString("utf8").split("\0");
@@ -946,18 +979,10 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     // Linux every 10 seconds (a watch there takes one of the system's watches for each folder, which
     // an install's thousands would use up). When git can't say, what it said last stands.
     const gitDir = (await text(directory, ["rev-parse", "--absolute-git-dir"]))?.trim();
-    const stamp = (file: string) => { try { return String(fs.statSync(file).mtimeMs); } catch { return ""; } };
     // When the last change this follower heard of happened, at the latest: a read shared with
     // another follower must have started after it.
-    let changed = Date.now();
-    let looked = "";
-    const look = () => {
-      const now = gitDir ? stamp(path.join(gitDir, "index")) + "/" + stamp(path.join(gitDir, "HEAD")) : "";
-      // Looked at each second: it changed within the last one.
-      if (now !== looked) changed = Date.now() - 1_000;
-      looked = now;
-      return now;
-    };
+    const clock = changeClock(() => (gitDir ? gitLook(gitDir) : ""));
+    const look = clock.look;
     // Never outside a repository (a session in the home folder would watch all of it).
     const watched = process.platform === "darwin" && !!gitDir;
     // Reads spaced by how long the last took (an install's or a build's changes come by the
@@ -967,7 +992,7 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     const listen = (told: () => void) => {
       if (!watched) return () => {};
       const soon = () => {
-        changed = Date.now();
+        clock.told();
         if (waiting) return;
         waiting = setTimeout(() => { waiting = undefined; told(); }, Math.max(0, next - Date.now()));
       };
@@ -981,7 +1006,7 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     };
     const read = async () => {
       const started = Date.now();
-      const read = (await sharedFiles(directory, changed)) ?? undefined;
+      const read = (await sharedFiles(directory, clock.changed())) ?? undefined;
       next = Date.now() + Math.max(1_000, 2 * (Date.now() - started));
       return read;
     };

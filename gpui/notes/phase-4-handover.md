@@ -63,8 +63,12 @@ All additive, each with its route shape, PROTOCOL.md ("Changes"), feature name a
   and the phone branch).
 - The phone: `kuvo/folders?files=1` no longer lists `.git`, which the phone's Files showed; its
   CHANGELOG says so (same phone branch).
-- Docs: nothing users see changed (the desktop client isn't shipped; the Mac and phone don't use
-  the new routes), so no kuvo-web page or CHANGELOG line.
+- Docs: the desktop client isn't shipped, and the Mac and phone don't use the new routes, but the
+  box's Discard changed for the Mac too (a new file committed since is refused; a staged deletion's
+  file, and a file at a staged move's old name, go to the Trash before the committed one comes
+  back). CHANGELOG has a line; kuvo-web's `changes.md` and `privacy.md` say it, on kuvo-web branch
+  `kuvo/gpui-p4-discard-safety` (worktree `~/.kuvo-code/tmp/opencode/kuvo-web-gpui-p4`), to merge
+  with this one. The phone's CHANGELOG says Files no longer lists `.git`.
 
 ## Review
 
@@ -138,6 +142,25 @@ Its reviewer pass (one) found, fixed with tests that fail on the code before (bo
   repository and its ignoring of `.git` have no deterministic test (they wait on the system's
   watch and a clock).
 
+## The re-review (the lead's)
+
+Fixed, each with a test that fails on the code before (box tests now 20):
+- A file only noted with `git add -N` could never be discarded: the check read its index entry
+  with `ls-files -s` (the empty file's), the list with `git status` (none); both read it as the list
+  does now.
+- A copy left after `git rm --cached` was refused as "committed since", on the Mac too: refused
+  only when the last commit and the index both have the path.
+- A follower's clock marked a change seen by its look a second early, so a read started just before
+  it could be shared: it's marked when seen (`changeClock`).
+- A file changed while the list was read is stamped so no discard matches it until it's listed
+  again; the look takes in HEAD's log too, so a reset that moves only the branch is seen.
+- The two "to move to the box" items above (8, 9), and the Docs line.
+- Recorded, not changed: a `web/` repository's stamp is its top folder's, so work deep inside it
+  goes to the Trash with it, recoverable, as its confirm says (N3); stamps lean on a file's size and
+  time, so on a disk that keeps times to the second (FAT32, some network shares) a same-size edit
+  within that second isn't seen (N4; APFS and ext4 keep nanoseconds).
+- Merged kuvo-ai main again; the built bundles rebuilt from the merged sources, not merged by hand.
+
 ## Open
 
 - **Not built:** the Mac's scope menu (Branch since its base, This Session), review comments on
@@ -189,6 +212,13 @@ request can be made are the box's), but it still works these out from the box's 
 7. **The Mac's own `.git` filter.** The Mac's Files panel leaves out `.git`, `.hg` and `.svn` itself
    (`KuvoCode/Views/Utilities/FilesView.swift`, `unlisted`); the box does it for `files=1`, so the
    Mac could list folders through it.
+8. **"Undo Move" for a staged move.** `GET kuvo/git/files`, each file's `discard`: a value for a
+   staged move (its old path comes back, the new one goes to the Trash), in place of the client
+   reading `status == "renamed"` with `discard == "head"`. View: Changes' discard confirm
+   (`confirm`).
+9. **Whether a discard can be undone.** `GET kuvo/git/files`, each file: `"undoable": bool` (what
+   goes, goes to the Trash, or a file comes back), in place of the client deciding from `discard`
+   and `status`, which picks the plain or the red button. View: Changes' discard confirm.
 
 Wanted from the box, not built (new features, not fixes): Stage All and Unstage All in one request;
 a branch's last commit and its time, and deleting a branch, in `kuvo/git/branches`; a Files filter

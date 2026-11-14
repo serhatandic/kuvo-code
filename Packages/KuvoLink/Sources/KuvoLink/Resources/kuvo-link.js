@@ -37151,6 +37151,33 @@ async function uncommittedIn(root, scope) {
   const status = scope === "branch" ? await text4(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
   return status === null || status.length > 0;
 }
+function gitLook(gitDir) {
+  const stamp = (file) => {
+    try {
+      return String(fs123.statSync(file).mtimeMs);
+    } catch {
+      return "";
+    }
+  };
+  return ["index", "HEAD", path127.join("logs", "HEAD")].map((file) => stamp(path127.join(gitDir, file))).join("/");
+}
+function changeClock(look) {
+  let changed = Date.now();
+  let looked = look();
+  return {
+    look: () => {
+      const now = look();
+      if (now !== looked)
+        changed = Date.now();
+      looked = now;
+      return now;
+    },
+    told: () => {
+      changed = Date.now();
+    },
+    changed: () => changed
+  };
+}
 var filesReads = new Map;
 function sharedFiles(directory, since) {
   const known = filesReads.get(directory);
@@ -37233,29 +37260,30 @@ async function oneFileIn(root, against, scope, compared, args, only) {
   const ran = await git2(root, ["--literal-pathspecs", ...args, ...compared, "--", ...paths]);
   return ran.ok ? done(ran.out.toString("utf8")) : null;
 }
-function stampOf(root, name, indexed) {
+function stampOf(root, name, indexed, since) {
   const stat = fs123.lstatSync(path127.join(root, name), { bigint: true, throwIfNoEntry: false });
-  return `${indexed ?? "-"}:${stat ? `${stat.size}-${stat.mtimeNs}` : "gone"}`;
+  const fresh = since !== undefined && stat && stat.mtimeNs >= since ? ":since" : "";
+  return `${indexed ?? "-"}:${stat ? `${stat.size}-${stat.mtimeNs}` : "gone"}${fresh}`;
 }
-async function indexedIn(root, limit) {
-  const listed = await text4(root, ["--literal-pathspecs", "-c", "core.quotepath=off", "ls-files", "-s", "-z", "--", ...limit]) ?? "";
-  const indexed = new Map;
-  for (const entry of listed.split("\x00")) {
-    const tab = entry.indexOf("\t");
-    if (tab < 0)
+async function indexEntryOf(root, name) {
+  const said = await text4(root, ["--literal-pathspecs", "-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames", "--", name]) ?? "";
+  for (const record of said.split("\x00")) {
+    if (record[0] !== "1" && record[0] !== "2")
       continue;
-    const name = entry.slice(tab + 1);
-    const object = entry.slice(0, tab).split(" ")[1] ?? "";
-    indexed.set(name, indexed.has(name) ? `${indexed.get(name)},${object}` : object);
+    const fields = record.split(" ");
+    if (fields.slice(8).join(" ") !== name)
+      continue;
+    const object = fields[7] ?? "";
+    return object && !/^0+$/.test(object) ? object : undefined;
   }
-  return indexed;
+  return;
 }
 async function staleDiscard(root, file, stamp) {
   const name = file.path.replace(/\/$/, "");
-  if (file.status === "added" && (await text4(root, ["--literal-pathspecs", "ls-tree", "--name-only", "HEAD", "--", name]))?.trim()) {
+  if (file.status === "added" && (await text4(root, ["--literal-pathspecs", "ls-tree", "--name-only", "HEAD", "--", name]))?.trim() && (await git2(root, ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", name])).ok) {
     return `${name} is in the last commit now, so it isn’t a new file any more. Look at it again before you discard it.`;
   }
-  const now = stampOf(root, name, (await indexedIn(root, [name])).get(name)) + (file.oldPath ? `|${stampOf(root, file.oldPath, undefined)}` : "");
+  const now = stampOf(root, name, await indexEntryOf(root, name)) + (file.oldPath ? `|${stampOf(root, file.oldPath, undefined)}` : "");
   if (stamp !== undefined && now !== stamp) {
     return `${name} changed since it was listed. Look at it again before you discard it.`;
   }
@@ -37289,6 +37317,7 @@ async function filesIn2(directory) {
   if (!found)
     return { repository: false };
   const { root, against, limit } = found;
+  const since = BigInt(Date.now()) * 1000000n;
   const status = await git2(root, ["-c", "core.quotepath=off", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--find-renames", "--", limit]);
   if (!status.ok)
     return null;
@@ -37301,7 +37330,7 @@ async function filesIn2(directory) {
     const scope = group === "staged" ? "staged" : group === "conflicted" ? "uncommitted" : "unstaged";
     const lines = group === "staged" ? staged.get(path) : group === "unstaged" ? unstaged.get(path) : undefined;
     const discard = group === "conflicted" ? undefined : status === "added" ? "trash" : scope === "unstaged" ? "unstaged" : "head";
-    const stamp = discard ? stampOf(root, path.replace(/\/$/, ""), indexed.get(path)) + (oldPath ? `|${stampOf(root, oldPath, undefined)}` : "") : undefined;
+    const stamp = discard ? stampOf(root, path.replace(/\/$/, ""), indexed.get(path), since) + (oldPath ? `|${stampOf(root, oldPath, undefined, since)}` : "") : undefined;
     files.push({ path, ...oldPath ? { oldPath } : {}, group, status, scope, ...lines ?? {}, ...discard ? { discard, stamp } : {}, ...path.endsWith("/") ? { repository: true } : {} });
   };
   const records = status.out.toString("utf8").split("\x00");
@@ -37849,22 +37878,8 @@ async function* changesRoute(context) {
       return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
     }
     const gitDir = (await text4(directory, ["rev-parse", "--absolute-git-dir"]))?.trim();
-    const stamp = (file) => {
-      try {
-        return String(fs123.statSync(file).mtimeMs);
-      } catch {
-        return "";
-      }
-    };
-    let changed = Date.now();
-    let looked = "";
-    const look = () => {
-      const now = gitDir ? stamp(path127.join(gitDir, "index")) + "/" + stamp(path127.join(gitDir, "HEAD")) : "";
-      if (now !== looked)
-        changed = Date.now() - 1000;
-      looked = now;
-      return now;
-    };
+    const clock = changeClock(() => gitDir ? gitLook(gitDir) : "");
+    const look = clock.look;
     const watched = process.platform === "darwin" && !!gitDir;
     let next = 0;
     let waiting;
@@ -37872,7 +37887,7 @@ async function* changesRoute(context) {
       if (!watched)
         return () => {};
       const soon = () => {
-        changed = Date.now();
+        clock.told();
         if (waiting)
           return;
         waiting = setTimeout(() => {
@@ -37894,7 +37909,7 @@ async function* changesRoute(context) {
     };
     const read = async () => {
       const started = Date.now();
-      const read = await sharedFiles(directory, changed) ?? undefined;
+      const read = await sharedFiles(directory, clock.changed()) ?? undefined;
       next = Date.now() + Math.max(1000, 2 * (Date.now() - started));
       return read;
     };
@@ -41439,7 +41454,7 @@ import fs135 from "node:fs";
 import path140 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f5bd0d1cd86e";
+var BRIDGE_VERSION = "a10372afb6d8";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
