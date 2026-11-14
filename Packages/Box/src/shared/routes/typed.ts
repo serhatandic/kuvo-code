@@ -3,6 +3,7 @@
 
 import { any, bool, type Infer, list, nullable, number, object, type RouteShape, string } from "../shape";
 import { SESSION_AUTOPILOT } from "./autopilot";
+import { MODEL_ACTION } from "./sessions";
 
 /** A keyword a conversation offers: its name ("loop", typed "/loop"), its name in a list, what it
  * does in a line, and what follows it, in grey until something's written (null: it takes nothing). */
@@ -19,7 +20,8 @@ export const TYPED_RESTORE = object({ text: string, "beside?": string });
 /** What a typed text meant: what the box did (`goal`, `goalCleared`, `askedBot`, `autopilot`,
  * `wakeUp`, `sideQuestion`, `handoff`, `review`), then what the client does, in this order
  * (`showGoal`, `agent` (the mode to switch to: Plan, or back from it), `toggleAutopilot`, `compact`, `shell`, `command`, `send`, `sideThread`), and
- * what goes back to the composer, saying why (`restore`, `error`). The composer's files go with
+ * what goes back to the composer, saying why (`restore`, `error`; `action`, what to offer doing
+ * about it where the conversation's model can't run, as `kuvo/sessions/models` says it). The composer's files go with
  * `send` or `command` (else they stay); its quotes with `send` when `quoted` (else they stay). */
 export const TYPED = object({
   "keyword?": string,
@@ -30,7 +32,7 @@ export const TYPED = object({
   "shell?": string, "command?": object({ name: string, arguments: string }),
   "send?": object({ text: string, "typed?": string, "quoted?": bool, "steer?": bool }),
   "sideThread?": bool,
-  "restore?": TYPED_RESTORE, "error?": string,
+  "restore?": TYPED_RESTORE, "error?": string, "action?": MODEL_ACTION,
 });
 
 export type TypedAnswer = Infer<typeof TYPED>;

@@ -368,7 +368,7 @@ struct ModelChip<Label: View>: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .help(catalog.chipHelp(selection, in: scope, on: catalog.machine.map { app.name(of: .machine($0)) }, said: said))
+        .help(catalog.chipHelp(selection, in: scope, said: said))
         .background(ScreenRoomReader(room: anchor))
         .closesWhenKept($isOpen)
         .popover(isPresented: $isOpen, arrowEdge: placement.below ? .bottom : .top) {

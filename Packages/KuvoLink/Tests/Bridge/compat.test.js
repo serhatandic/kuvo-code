@@ -22,7 +22,7 @@ const listed = [...section.matchAll(/<!-- compat: (0\.7|beta\.1) ([a-z0-9-]+) --
 // The code of every side, as written: not what's built from it (a bundle leaves comments out),
 // nor the tests.
 const ROOTS = ["Packages/Box/src", "KuvoCode", "Packages/OpenCodeKit/Sources", "Packages/KuvoClient/Sources", "Packages/KuvoLink/Sources", "scripts"];
-const BUILT = new Set(["KuvoCode/Resources/kuvo-agents.js", "scripts/compat.sh"]);
+const BUILT = new Set(["KuvoCode/Resources/kuvo-agents.js", "KuvoCode/Resources/kuvo-browser.js", "scripts/compat.sh"]);
 const CODE = /\.(swift|ts|js|mjs|sh|py)$/;
 function* files(folder) {
   let entries = [];

@@ -21,6 +21,7 @@
   },
   "include": [
     "src/link",
-    "src/shared"
+    "src/shared",
+    "src/browser"
   ]
 }

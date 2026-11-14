@@ -30,8 +30,6 @@ actions!(composer, [SlashNext, SlashPrevious, SlashPick, SlashDismiss]);
 
 const CONTEXT: &str = "Composer";
 const SLASH: &str = "SlashMenu";
-/// Where a model's accounts are, as a refusal names it: this app has no Accounts of its own yet.
-const ACCOUNTS: &str = "Kuvo Code on your Mac or iPhone";
 /// How long before what the box couldn't say of its models is asked again, at first and at most.
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MOST: Duration = Duration::from_secs(30);
@@ -109,6 +107,8 @@ pub struct Composer {
     models: Models,
     /// The model a new conversation starts on, as picked here (the box's `starting` until then).
     picked: Option<ModelRef>,
+    /// The conversation's folder, where its project's own settings may add models (`set_folder`).
+    folder: Option<String>,
     /// Which read of the models is the latest: an older one coming back late is left.
     reads: u64,
     /// How long before what the box couldn't say is asked again (longer each time).
@@ -160,6 +160,12 @@ impl Composer {
     /// A composer for `target`. `read`: whether to read what it shows (the model, the efforts,
     /// "/"'s offers) from the box now.
     pub fn new(client: BoxClient, target: Target, read: bool, cx: &mut Context<Self>) -> Composer {
+        Composer::in_folder(client, target, None, read, cx)
+    }
+
+    /// The same, for a conversation in `folder` (as its box lists it): what's offered is read
+    /// there from the first read (`set_folder`).
+    pub fn in_folder(client: BoxClient, target: Target, folder: Option<String>, read: bool, cx: &mut Context<Self>) -> Composer {
         let placeholder = match &target {
             Target::Session { .. } => "Ask anything, / for commands",
             Target::New(_) => "What should we work on?",
@@ -190,6 +196,7 @@ impl Composer {
             live: read,
             models: Models::default(),
             picked: None,
+            folder,
             reads: 0,
             retry: RETRY_FIRST,
             retrying: None,
@@ -248,6 +255,35 @@ impl Composer {
         {
             self.target = Target::New(place);
             cx.notify();
+        }
+    }
+
+    /// The conversation's folder, where what's offered is read (none known yet).
+    pub fn folder(&self) -> Option<&str> {
+        self.folder.as_deref()
+    }
+
+    /// The conversation's folder, as its box lists it: what's offered is read there, its project's
+    /// own models too (`models.offered.folder`). Whether it was read again for it (a folder it
+    /// didn't have, in the app).
+    pub fn set_folder(&mut self, folder: Option<String>, cx: &mut Context<Self>) -> bool {
+        if self.folder == folder {
+            return false;
+        }
+        self.folder = folder;
+        if self.live {
+            self.read_models(cx);
+        }
+        self.live
+    }
+
+    /// The folder what's offered is read in: a conversation's, or the project a new one starts in.
+    fn offered_in(&self) -> Option<String> {
+        match &self.target {
+            Target::Session { .. } => self.folder.clone(),
+            // (The box reads its own lists for one that isn't a folder there.)
+            Target::New(StartIn::Project(project)) => Some(project.clone()),
+            Target::New(_) => None,
         }
     }
 
@@ -335,7 +371,7 @@ impl Composer {
     /// (a new one) the box says nothing runs and none's picked.
     pub fn needs_model(&self) -> bool {
         match &self.target {
-            Target::Session { .. } => self.models.state.as_ref().is_some_and(ModelState::needs_choosing),
+            Target::Session { .. } => self.models.state.as_ref().is_some_and(|state| state.choose),
             Target::New(_) => self.picked.is_none() && self.models.offered.as_ref().is_some_and(|offered| offered.starting == Some(None)),
         }
     }
@@ -370,8 +406,8 @@ impl Composer {
     pub fn read_models(&mut self, cx: &mut Context<Self>) {
         self.reads += 1;
         let read = self.reads;
-        let (client, target, picked, before) = (self.client.clone(), self.target.clone(), self.picked.clone(), self.models.offered.clone());
-        self.spawn(cx, move || models_of(&client, &target, picked.as_ref(), before.as_ref()), move |this, (offered, said_all, state), cx| {
+        let (client, target, picked, before, folder) = (self.client.clone(), self.target.clone(), self.picked.clone(), self.models.offered.clone(), self.offered_in());
+        self.spawn(cx, move || models_of(&client, &target, picked.as_ref(), folder.as_deref(), before.as_ref()), move |this, (offered, said_all, state), cx| {
             if this.reads == read {
                 this.took_models(offered, said_all, state, cx);
             }
@@ -396,10 +432,7 @@ impl Composer {
             // refusal of its own (PROTOCOL.md, "A session's model"), and it's asked again.
             Some(Said::Unsaid) => {
                 if let Some(state) = self.models.state.as_mut() {
-                    state.runs = true;
-                    state.missing = None;
-                    state.account = None;
-                    state.plan = None;
+                    state.unsaid();
                 }
                 said_all = false;
             }
@@ -431,7 +464,7 @@ impl Composer {
     /// Reads what the chips and "/" show at once, on this thread (shots and tests, against a stand-in).
     #[cfg(feature = "stand-in")]
     pub fn read_at_once(&mut self, cx: &mut Context<Self>) {
-        let (offered, said_all, state) = models_of(&self.client, &self.target, self.picked.as_ref(), self.models.offered.as_ref());
+        let (offered, said_all, state) = models_of(&self.client, &self.target, self.picked.as_ref(), self.offered_in().as_deref(), self.models.offered.as_ref());
         self.took_models(offered, said_all, state, cx);
         if let Target::Session { id, .. } = &self.target
             && let Ok(offers) = self.client.typed_offers(id)
@@ -488,9 +521,7 @@ impl Composer {
                 if let Some(state) = self.models.state.as_mut() {
                     state.model = Some(model.clone());
                     state.name = name.or(state.name.take());
-                    state.runs = true;
-                    state.missing = None;
-                    state.account = None;
+                    state.unsaid();
                 }
                 cx.notify();
                 let client = self.client.clone();
@@ -522,10 +553,14 @@ impl Composer {
         // The agents picked from "&"'s list that are still named in it.
         draft.named = self.named.iter().filter(|(text, _)| mentioned(&draft.text, text)).map(|(_, session)| session.clone()).collect();
         draft.named.dedup();
-        draft.refusal = self.models.state.as_ref().and_then(|state| state.refusal(ACCOUNTS));
-        if self.needs_model() {
+        draft.refusal = self.models.state.as_ref().and_then(|state| state.refusal.clone());
+        // ("/" and "!" texts go to the box, which says whether they need the model: "!" commands and
+        // a goal's pause don't.)
+        if self.needs_model() && !(matches!(self.target, Target::Session { .. }) && typed::asks_box(&text)) {
             self.attached = files;
-            self.set_note(Note { text: "Choose a model to send it.".into(), warning: true }, cx);
+            // As its box words it, for a conversation; a new one's box says only that none runs.
+            let words = self.models.state.as_ref().and_then(|state| state.refusal.clone()).unwrap_or_else(|| "Choose a model to send it.".to_owned());
+            self.set_note(Note { text: words.into(), warning: true }, cx);
             cx.notify();
             return;
         }
@@ -966,11 +1001,11 @@ enum Said {
     Unsaid,
 }
 
-/// What the box offers (kept, for a side it couldn't say now, as it said before; none for a read
-/// that failed), whether it could say all of it itself, and what it says of the conversation's
+/// What the box offers in `folder` (kept, for a side it couldn't say now, as it said before; none
+/// for a read that failed), whether it could say all of it itself, and what it says of the conversation's
 /// model (none for a new one).
-fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, before: Option<&Offered>) -> (Option<Offered>, bool, Option<Said>) {
-    let offered = client.offered_models(picked).ok();
+fn models_of(client: &BoxClient, target: &Target, picked: Option<&ModelRef>, folder: Option<&str>, before: Option<&Offered>) -> (Option<Offered>, bool, Option<Said>) {
+    let offered = client.offered_models(picked, folder).ok();
     let said_all = offered.as_ref().is_some_and(Offered::is_whole);
     let offered = offered.map(|offered| offered.keeping(before));
     let state = match target {

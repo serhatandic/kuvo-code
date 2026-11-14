@@ -194,7 +194,7 @@ fn a_model_that_cant_run_keeps_the_message_saying_why(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
     let (workspace, cx) = open(cx, stand_in.clone());
     let composer = open_session(&workspace, "ses_limits", cx);
-    let state: ModelState = serde_json::from_value(json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": false, "missing": "signIn", "account": { "id": "anthropic", "name": "Anthropic" } })).unwrap();
+    let state: ModelState = serde_json::from_value(json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": false, "missing": "signIn", "account": { "id": "anthropic", "name": "Anthropic" }, "refusal": "Claude Opus 5.5 needs a sign-in to Anthropic: sign in, or choose another model.", "action": { "do": "signIn", "label": "Sign In", "help": "Sign in to Anthropic" } })).unwrap();
     composer.update(cx, |composer, cx| composer.take_models(Models { state: Some(state), ..Models::default() }, cx));
 
     cx.simulate_input("Use Redis");
@@ -203,7 +203,8 @@ fn a_model_that_cant_run_keeps_the_message_saying_why(cx: &mut TestAppContext) {
     assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/send").is_empty());
     let (text, error) = typed(&composer, cx);
     assert_eq!(text, "Use Redis");
-    assert_eq!(error.as_deref(), Some("Claude Opus 5.5 needs a sign-in: sign in to Anthropic in Kuvo Code on your Mac or iPhone, or choose another model."));
+    // In its box's words, as they are.
+    assert_eq!(error.as_deref(), Some("Claude Opus 5.5 needs a sign-in to Anthropic: sign in, or choose another model."));
 }
 
 #[gpui::test]
@@ -420,7 +421,7 @@ fn a_model_that_changed_elsewhere_is_read_again(cx: &mut TestAppContext) {
     let view = workspace.read_with(cx, |workspace, _| workspace.conversation().unwrap().clone());
     let client = workspace.read_with(cx, |workspace, _| workspace.client().clone());
     // Its account was signed out on another computer: the box hears its accounts changed.
-    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": false, "missing": "signIn", "account": { "id": "anthropic", "name": "Anthropic" } }));
+    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "anthropic", "id": "claude-opus-5-5" }, "name": "Claude Opus 5.5", "runs": false, "missing": "signIn", "account": { "id": "anthropic", "name": "Anthropic" }, "refusal": "Claude Opus 5.5 needs a sign-in to Anthropic: sign in, or choose another model.", "action": { "do": "signIn", "label": "Sign In", "help": "Sign in to Anthropic" } }));
     let mut conversation = read_now(&client, "ses_limits").unwrap();
     conversation.apply(&json!({ "type": "integration.updated", "data": {} }));
     view.update(cx, |view, cx| view.take(ConversationUpdate::Conversation(conversation), cx));
@@ -430,7 +431,7 @@ fn a_model_that_changed_elsewhere_is_read_again(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/send").is_empty());
-    assert_eq!(typed(&composer, cx).1.as_deref(), Some("Claude Opus 5.5 needs a sign-in: sign in to Anthropic in Kuvo Code on your Mac or iPhone, or choose another model."));
+    assert_eq!(typed(&composer, cx).1.as_deref(), Some("Claude Opus 5.5 needs a sign-in to Anthropic: sign in, or choose another model."));
 }
 
 #[gpui::test]
@@ -834,7 +835,7 @@ fn a_model_named_by_another_id_is_the_one_offered(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_session_its_box_leaves_out_is_refused_nothing(cx: &mut TestAppContext) {
     let stand_in = StandIn::at(Replies::Never, NOW);
-    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "claude-code", "id": "opus" }, "name": "Opus", "runs": false, "missing": "signIn", "account": { "id": "claude-code", "name": "Claude Code" } }));
+    stand_in.set_model_state("ses_limits", json!({ "model": { "providerID": "claude-code", "id": "opus" }, "name": "Opus", "runs": false, "missing": "signIn", "account": { "id": "claude-code", "name": "Claude Code" }, "refusal": "Opus needs a sign-in to Claude Code: sign in, or choose another model.", "action": { "do": "signIn", "label": "Sign In", "help": "Sign in to Claude Code" } }));
     let (workspace, cx) = open(cx, stand_in.clone());
     let composer = open_session(&workspace, "ses_limits", cx);
     // Signed in elsewhere; its list still being read, so the box leaves the session out for now.
@@ -1183,4 +1184,85 @@ fn followed_live_an_ask_takes_the_keyboard_as_it_comes_and_the_queue_shows_as_it
     stand_in.set_queue("ses_limits", vec![json!({ "id": "msg_q9", "words": "Then add a test for the header", "files": [], "keyword": null, "from": null, "on": "engine", "delivery": "queue", "held": false })]);
     until(cx, &view, |cx| view.read_with(cx, |view, _| view.queued().len() == 1));
     assert!(bounds(cx, "queued-msg_q9").is_some());
+}
+
+/// What's offered is read in the conversation's folder, and in the project a new one starts in, so a
+/// model only that project's own settings add is offered there, with its efforts
+/// (`models.offered.folder`); a chat's, with no project, is the box's own.
+#[gpui::test]
+fn whats_offered_is_read_in_the_conversations_folder(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        Theme::init(Appearance::Light, cx);
+        kuvo::bind_keys(cx);
+    });
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let folders = |stand_in: &StandIn| -> Vec<Option<String>> {
+        stand_in
+            .seen_at("GET", "kuvo/models/offered")
+            .into_iter()
+            .map(|seen| seen.path.split_once('?').and_then(|(_, query)| query.split('&').find_map(|pair| pair.strip_prefix("folder=")).map(|folder| folder.replace("%2F", "/"))))
+            .collect()
+    };
+    let client = BoxClient::new(stand_in.clone());
+    let api = Some("/Users/sam/Projects/api".to_owned());
+    let conversation = cx.new(|cx| Composer::in_folder(client.clone(), kuvo::composer::Target::Session { id: "ses_limits".into(), place: Where::Engine }, api.clone(), true, cx));
+    cx.run_until_parked();
+    assert_eq!(folders(&stand_in), vec![api.clone()], "read there from the first read");
+    // The same folder again reads nothing more; another (a conversation moved) reads there.
+    assert!(!conversation.update(cx, |composer, cx| composer.set_folder(api.clone(), cx)));
+    assert!(conversation.update(cx, |composer, cx| composer.set_folder(Some("/Users/sam/Projects/web".into()), cx)));
+    cx.run_until_parked();
+    assert_eq!(folders(&stand_in), vec![api, Some("/Users/sam/Projects/web".to_owned())]);
+
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let client = BoxClient::new(stand_in.clone());
+    let landing = cx.new(|cx| Composer::new(client, kuvo::composer::Target::New(StartIn::Project("/Users/sam/Projects/website".into())), true, cx));
+    cx.run_until_parked();
+    assert_eq!(folders(&stand_in), vec![Some("/Users/sam/Projects/website".to_owned())]);
+    landing.update(cx, |composer, cx| {
+        composer.set_start(StartIn::Chat, cx);
+        composer.read_models(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(folders(&stand_in), vec![Some("/Users/sam/Projects/website".to_owned()), None], "a chat: the box's own lists");
+}
+
+/// A model gone: Send waits for one for a message, but a "!" command or a goal's pause goes to
+/// the box, which says whether it needs the model (they don't).
+#[gpui::test]
+fn with_a_model_to_choose_a_command_still_goes_to_the_box(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let gone: ModelState = serde_json::from_value(json!({ "model": { "providerID": "openai", "id": "gpt-4" }, "runs": false, "missing": "gone", "refusal": "gpt-4 is no longer available: choose another model.", "choose": true, "action": { "do": "choose", "label": "Choose a Model", "help": "Choose another model" } })).unwrap();
+    composer.update(cx, |composer, cx| composer.take_models(Models { state: Some(gone), ..Models::default() }, cx));
+
+    cx.simulate_input("Use Redis");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/send").is_empty());
+    assert_eq!(composer.read_with(cx, |composer, _| composer.note().map(|note| note.text.to_string())).as_deref(), Some("gpt-4 is no longer available: choose another model."), "in its box's words");
+
+    cx.simulate_keystrokes("cmd-a backspace");
+    cx.simulate_input("!ls");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(stand_in.seen_at("POST", "kuvo/sessions/ses_limits/typed").len(), 1, "asked of the box");
+}
+
+/// A conversation's composer follows its folder as the box's list has it: what's offered is read
+/// there (a conversation moved, or one opened before the list knew it).
+#[gpui::test]
+fn a_composer_follows_its_conversations_folder_from_the_list(cx: &mut TestAppContext) {
+    let stand_in = StandIn::at(Replies::Never, NOW);
+    let (workspace, cx) = open(cx, stand_in.clone());
+    let composer = open_session(&workspace, "ses_limits", cx);
+    let folder = || composer.read_with(cx, |composer, _| composer.folder().map(str::to_owned));
+    let was = folder();
+    assert!(was.is_some(), "its folder, as the list had it when it opened");
+    // Moved to another folder: the list says so, and the composer reads there.
+    stand_in.set_facts("ses_limits", |facts| facts["directory"] = json!("/Users/sam/Projects/api-moved"));
+    workspace.update(cx, |workspace, cx| workspace.read_at_once(cx));
+    cx.run_until_parked();
+    assert_eq!(composer.read_with(cx, |composer, _| composer.folder().map(str::to_owned)), Some("/Users/sam/Projects/api-moved".to_owned()));
 }

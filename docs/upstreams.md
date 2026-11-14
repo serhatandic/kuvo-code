@@ -27,7 +27,7 @@ Kuvo Code runs one pinned build of `@opencode/cli`. A new opencode release bring
 
 ## Code copied from other projects
 
-- **browser-use**'s page reader, `KuvoCode/Resources/buildDomTree.js` (version in `scripts/third-party-licenses.sh`): ours is 0.4.2's, unchanged, and 0.4.2 is the last browser-use release that has the file; later ones read pages through Chrome's DevTools protocol, which WebKit doesn't offer. Check new releases in case it comes back, and port fixes to it by hand if the agent's browsing needs them.
+- **browser-use**'s page reader, `Packages/Box/src/browser/buildDomTree.js` (version in `scripts/third-party-licenses.sh`): ours is 0.4.2's, unchanged, and 0.4.2 is the last browser-use release that has the file; later ones read pages through Chrome's DevTools protocol, which WebKit doesn't offer. Check new releases in case it comes back, and port fixes to it by hand if the agent's browsing needs them.
 - **Textual**, `Packages/Textual`: a copy of [gonzalezreal/textual](https://github.com/gonzalezreal/textual) at the commit its README names, changed so replies lay out in one pass (the README lists what's different). Check upstream's releases, port fixes and features by hand while keeping those changes, and move the commit in the README.
 - **Prism**, `KuvoCode/Resources/prism-bundle.js`: rebundle when Textual's bundle script moves to a newer Prism.
 - **Mermaid**, `KuvoCode/Resources/mermaid.min.js` (version in `scripts/third-party-licenses.sh`, license in `Licenses/mermaid.txt`): npm's `mermaid` build, unchanged. Check for new releases (`https://registry.npmjs.org/mermaid/latest`), read their notes for changes to how diagrams look or what the page must allow, and move it in its own commit.

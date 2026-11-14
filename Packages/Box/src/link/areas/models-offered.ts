@@ -1,8 +1,14 @@
 // The models a session can use here, and the one a new session starts on (PROTOCOL.md, "The models
-// offered"): `GET kuvo/models/offered`, decided by the box's one rule (work/model-rule.ts), so every
-// client's picker offers the same, and a new session starts by the same rule whoever starts it.
+// offered"): `GET kuvo/models/offered[?folder=<path>]`, decided by the box's one rule
+// (work/model-rule.ts), so every client's picker offers the same, and a new session starts by the
+// same rule whoever starts it, in a project's folder by what its own settings add too.
 
+import fs from "node:fs";
+import path from "node:path";
 import type { Target } from "../../shared/records";
+import { keptList } from "../lists/sessions";
+import { readProjects } from "./projects";
+import { readWorktrees } from "./worktree-records";
 import { targetsOf } from "../letters/tools";
 import { listsHere, offeredHere, startingModel, stillListing, type Lists, type Ref } from "../work/model-rule";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -17,14 +23,39 @@ function wantedIn(requestPath: string): Ref | null {
   return providerID && id ? { providerID, id, ...(variant ? { variant } : {}) } : null;
 }
 
+/** The folder asked about (`folder`: a project's, or a conversation's), where the engine's lists
+ * are read, a project's own settings adding providers, models or its default: only one this box
+ * knows (a project's, one of its worktrees, or a session's) that's still a folder here. None named,
+ * or any other (a worktree removed since, a folder of no project), the box's own: the engine isn't
+ * started anywhere it wouldn't be otherwise. */
+async function folderIn(requestPath: string): Promise<string | undefined> {
+  const folder = new URLSearchParams(requestPath.split("?")[1] ?? "").get("folder")?.trim();
+  if (!folder || !path.isAbsolute(folder)) return undefined;
+  const resolved = path.resolve(folder);
+  if (!isKnown(resolved)) return undefined;
+  return (await fs.promises.stat(resolved).then(found => found.isDirectory(), () => false)) ? resolved : undefined;
+}
+
+/** Whether `folder` (resolved) is one of this box's: a project's not removed (or one of its
+ * folders), a worktree it keeps, or one of its sessions' as its list has them; each as resolved
+ * too (one kept with a trailing "/" is the same folder). */
+function isKnown(folder: string): boolean {
+  const same = (other: unknown) => typeof other === "string" && path.isAbsolute(other) && path.resolve(other) === folder;
+  if (readProjects().some(project => !project.removed && (same(project.directory) || project.folders.some(same)))) return true;
+  if (readWorktrees().some(worktree => same(worktree.root) || same(worktree.folder))) return true;
+  const list = keptList();
+  return list ? Object.values(list.sessions).some(each => same(each.facts.directory)) : false;
+}
+
 export async function* modelsOfferedRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  const folder = await folderIn(request.path);
   if (!targetsOf({ readEngine, bridge }).length) return yield* json(503, { message: "The engine isn't running." });
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
   const agents = bridge();
-  const lists = await listsHere(engine, agents);
+  const lists = await listsHere(engine, agents, folder);
   return yield* json(200, offeredAnswer(lists, wantedIn(request.path)));
 }
 

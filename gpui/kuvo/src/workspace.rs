@@ -7,19 +7,21 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, ScrollHandle, SharedString, Styled, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollHandle, SharedString, Styled,
+    Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use kuvo_box::follow::{Follow, ListUpdate, Timing};
 use kuvo_box::models::StartIn;
 use kuvo_box::search::{Found, SEARCHED_FROM};
 use kuvo_box::sessions::project_name;
 use kuvo_box::{BoxClient, BoxInfo, Listing, Where};
-use kuvo_ui::{ActiveTheme, StyledType, TextField, TextFieldEvent, Theme, TypeSize, theme::{radius, space}};
+use kuvo_ui::{ActiveTheme, Button, ButtonSize, IconName, StyledType, TextField, TextFieldEvent, Theme, TypeSize, theme::{radius, space}};
 
 use crate::composer::{Composer, ComposerEvent, Target};
 use crate::conversation::ConversationView;
 use crate::sidebar::{FocusSearch, Line};
-use crate::{NewSession, ToggleAppearance, landing, sidebar, time};
+use crate::panel::{self, Place, SidePanel, Tab};
+use crate::{NewSession, ShowChanges, ShowFiles, ToggleAppearance, TogglePanel, landing, sidebar, time};
 
 /// How long typing pauses before the box is asked to search conversations.
 const SEARCH_PAUSE: Duration = Duration::from_millis(300);
@@ -92,6 +94,12 @@ pub struct Workspace {
     walked: Option<String>,
     list_focus: FocusHandle,
     list_scroll: ScrollHandle,
+    /// The side panel beside the conversation, whether it's open, its width (kept while it's
+    /// closed), and where a drag of its edge started (the pointer's x and the width then).
+    panel: Entity<SidePanel>,
+    panel_open: bool,
+    panel_width: Pixels,
+    resizing: Option<(Pixels, Pixels)>,
     _sessions: Option<Follow<ListUpdate>>,
     tasks: Vec<Task<()>>,
     _landing: Subscription,
@@ -135,6 +143,10 @@ impl Workspace {
             walked: None,
             list_focus: cx.focus_handle(),
             list_scroll: ScrollHandle::new(),
+            panel: cx.new(|cx| SidePanel::new(client.clone(), live, cx)),
+            panel_open: false,
+            panel_width: panel::WIDTH,
+            resizing: None,
             _sessions: None,
             tasks: Vec::new(),
             _landing: subscription,
@@ -232,6 +244,22 @@ impl Workspace {
                 // Sessions started here are in the list now: what their box said of them goes.
                 let listing = &self.listing;
                 self.started.retain(|session, _| listing.facts(session).is_none());
+                // A composer opened before the list knew its conversation's folder (or since it
+                // moved): what's offered is read there now.
+                let moved: Vec<_> = self
+                    .composers
+                    .iter()
+                    .filter_map(|(session, (composer, _))| {
+                        let folder = self.listing.facts(session)?.directory.clone();
+                        (composer.read(cx).folder() != Some(folder.as_str())).then(|| (composer.clone(), folder))
+                    })
+                    .collect();
+                for (composer, folder) in moved {
+                    composer.update(cx, |composer, cx| composer.set_folder(Some(folder), cx));
+                }
+                // The panel's folder, as the list says it now (a session opened before the list had
+                // it, a worktree's folder said later).
+                self.place_panel(cx);
             }
             ListUpdate::Waiting(why) => self.lists = Lists::Waiting(why),
             ListUpdate::Held { .. } => {
@@ -344,21 +372,28 @@ impl Workspace {
         let view = cx.new(|cx| ConversationView::new(client, session.to_owned(), composer, live, cx));
         window.focus(&view.focus_handle(cx), cx);
         self.open = Open::Conversation { view, session: session.to_owned() };
+        self.place_panel(cx);
         cx.notify();
     }
 
     /// `session`'s composer: the one it had, with its draft (its model read again, as it may have
     /// changed meanwhile), or a new one.
     fn composer_for(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
+        // Its folder, where its project's own settings may add models to what's offered.
+        let folder = self.listing.facts(session).map(|facts| facts.directory.clone());
         if let Some((composer, _)) = self.composers.get(session) {
             let composer = composer.clone();
             if self.live {
-                composer.update(cx, |composer, cx| composer.read_models(cx));
+                composer.update(cx, |composer, cx| {
+                    if !composer.set_folder(folder, cx) {
+                        composer.read_models(cx);
+                    }
+                });
             }
             return composer;
         }
         let (client, live) = (self.client.clone(), self.live);
-        let composer = cx.new(|cx| Composer::new(client, Target::Session { id: session.to_owned(), place: Where::Engine }, live, cx));
+        let composer = cx.new(|cx| Composer::in_folder(client, Target::Session { id: session.to_owned(), place: Where::Engine }, folder, live, cx));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| this.composer_event(event, window, cx));
         // Not on screen until its conversation opens.
         composer.update(cx, |composer, cx| composer.set_shown(false, cx));
@@ -383,6 +418,7 @@ impl Workspace {
         // or (another project) a new one there starts on another: read again, once.
         landing.update(cx, |composer, cx| composer.read_models(cx));
         self.open = Open::Landing;
+        self.place_panel(cx);
         window.focus(&self.landing.focus_handle(cx), cx);
         cx.notify();
     }
@@ -408,6 +444,7 @@ impl Workspace {
     pub fn pick_place(&mut self, place: StartIn, cx: &mut Context<Self>) {
         self.landing_place = Some(place.clone());
         self.landing_picked = true;
+        self.place_panel(cx);
         self.landing.update(cx, |composer, cx| {
             composer.set_start(place, cx);
             composer.read_models(cx);
@@ -441,6 +478,124 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    // MARK: The side panel
+
+    pub fn panel(&self) -> &Entity<SidePanel> {
+        &self.panel
+    }
+
+    pub fn is_panel_open(&self) -> bool {
+        self.panel_open
+    }
+
+    pub fn panel_width(&self) -> Pixels {
+        self.panel_width
+    }
+
+    /// Opens or closes the side panel; its width stays as it was.
+    pub fn toggle_panel(&mut self, cx: &mut Context<Self>) {
+        self.panel_open = !self.panel_open;
+        let open = self.panel_open;
+        self.place_panel(cx);
+        self.panel.update(cx, |panel, cx| panel.set_shown(open, cx));
+        cx.notify();
+    }
+
+    /// Opens the side panel on `tab`.
+    pub fn show_panel(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        self.panel.update(cx, |panel, cx| panel.show(tab, cx));
+        if !self.panel_open {
+            self.toggle_panel(cx);
+        }
+    }
+
+    /// The folder the panel shows: the open session's (its worktree's, for one in a worktree), or on
+    /// the landing view the project a new one starts in.
+    fn place_panel(&mut self, cx: &mut Context<Self>) {
+        let place = match self.opened() {
+            Some(session) => self.listing.facts(session).filter(|facts| !facts.kind.is_chat()).map(|facts| Place { directory: facts.directory.clone(), session: Some(session.to_owned()) }),
+            None => match self.landing_place() {
+                StartIn::Project(directory) => Some(Place { directory, session: None }),
+                _ => None,
+            },
+        };
+        self.panel.update(cx, |panel, cx| panel.set_place(place, cx));
+    }
+
+    /// A drag of the panel's edge started at `x`.
+    pub fn start_resize(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        self.resizing = Some((x, self.panel_width));
+        cx.notify();
+    }
+
+    /// The panel's edge dragged to `x` in a window `wide`: wider as it goes left, within its
+    /// bounds, never leaving the conversation narrower than its narrowest.
+    pub fn resize_to(&mut self, x: Pixels, wide: Pixels, cx: &mut Context<Self>) {
+        let Some((from, width)) = self.resizing else { return };
+        self.panel_width = (width + (from - x)).clamp(panel::NARROWEST, widest_panel(wide));
+        cx.notify();
+    }
+
+    pub fn end_resize(&mut self, cx: &mut Context<Self>) {
+        if self.resizing.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Its width as it first opened.
+    pub fn reset_panel_width(&mut self, cx: &mut Context<Self>) {
+        self.panel_width = panel::WIDTH;
+        cx.notify();
+    }
+
+    fn panel_card(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let c = cx.theme().colors.clone();
+        // In a window narrower than it was made for, the panel gives way before the conversation
+        // does; its width is kept for a wider one.
+        let width = self.panel_width.min(widest_panel(window.viewport_size().width));
+        let resizing = self.resizing.is_some();
+        div()
+            .flex()
+            .flex_none()
+            .h_full()
+            .py(space::S2)
+            .pr(space::S2)
+            .child(
+                // The edge to drag: wider than it looks, between the two cards.
+                div()
+                    .id("panel-edge")
+                    .debug_selector(|| "panel-edge".into())
+                    .w(px(8.))
+                    .h_full()
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .cursor_col_resize()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                        if event.click_count >= 2 {
+                            this.reset_panel_width(cx);
+                        } else {
+                            this.start_resize(event.position.x, cx);
+                        }
+                    }))
+                    .child(div().w(px(2.)).h_full().rounded_full().when(resizing, |d| d.bg(c.accent)).hover(|s| s.bg(c.border_strong))),
+            )
+            .child(
+                div()
+                    .w(width)
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .rounded(radius::CARD - px(4.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(c.border)
+                    .bg(c.surface)
+                    .child(self.panel.clone()),
+            )
+            .into_any_element()
     }
 
     // MARK: Search and walking the sidebar
@@ -614,7 +769,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn header(&self, cx: &App) -> AnyElement {
+    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
         let c = &cx.theme().colors;
         let (title, project) = match self.opened() {
             Some(session) => {
@@ -642,8 +797,27 @@ impl Workspace {
             })
             .children(title.map(|title| div().min_w_0().truncate().text_ui(TypeSize::Small).medium().text_color(c.text).child(title)))
             .children(project.map(|project| div().flex_none().text_ui(TypeSize::Small).text_color(c.text_faint).child(project)))
+            .child(div().flex_1())
+            .child(
+                // A press here is the button's, never the header's window move.
+                div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(
+                    Button::icon_only("toggle-panel", IconName::PanelRight, if self.panel_open { "Hide Panel" } else { "Show Panel" })
+                        .ghost()
+                        .size(ButtonSize::Small)
+                        .selected(self.panel_open)
+                        .tooltip("⌥⌘0")
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(cx))),
+                ),
+            )
             .into_any_element()
     }
+}
+
+/// The widest the side panel goes in a window `wide`: never leaving the conversation narrower than
+/// its narrowest (the sidebar, the cards' margins and the panel's edge apart).
+fn widest_panel(wide: Pixels) -> Pixels {
+    let room = wide - px(sidebar::WIDTH) - panel::CONVERSATION_NARROWEST - px(24.);
+    panel::WIDEST.min(room).max(panel::NARROWEST)
 }
 
 impl Focusable for Workspace {
@@ -661,11 +835,28 @@ impl Render for Workspace {
             Open::Conversation { view, .. } => view.clone().into_any_element(),
         };
         let header = self.header(cx);
+        let panel = self.panel_open.then(|| self.panel_card(window, cx));
         div()
             .key_context("Workspace")
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &NewSession, window, cx| this.new_session(None, window, cx)))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &TogglePanel, _, cx| this.toggle_panel(cx)))
+            .on_action(cx.listener(|this, _: &ShowChanges, _, cx| this.show_panel(Tab::Changes, cx)))
+            .on_action(cx.listener(|this, _: &ShowFiles, _, cx| this.show_panel(Tab::Files, cx)))
+            // A drag of the panel's edge, wherever the pointer goes meanwhile.
+            .when(self.resizing.is_some(), |d| {
+                d.cursor_col_resize()
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        // Let go outside the window: the drag ends as the pointer comes back.
+                        if event.pressed_button != Some(MouseButton::Left) {
+                            this.end_resize(cx);
+                        } else {
+                            this.resize_to(event.position.x, window.viewport_size().width, cx);
+                        }
+                    }))
+                    .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_resize(cx)))
+            })
             .on_action(cx.listener(|_, _: &ToggleAppearance, _, cx| {
                 let next = cx.theme().appearance.toggled();
                 Theme::set_appearance(next, cx);
@@ -677,7 +868,7 @@ impl Render for Workspace {
             .text_color(c.text)
             .child(sidebar::render(self, window, cx))
             .child(
-                div().flex_1().min_w_0().h_full().py(space::S2).pr(space::S2).child(
+                div().flex_1().min_w_0().h_full().py(space::S2).when(panel.is_none(), |d| d.pr(space::S2)).child(
                     div()
                         .size_full()
                         .flex()
@@ -691,5 +882,6 @@ impl Render for Workspace {
                         .child(div().relative().flex_1().min_h_0().child(content)),
                 ),
             )
+            .children(panel)
     }
 }

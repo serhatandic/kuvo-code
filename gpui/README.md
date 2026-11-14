@@ -51,6 +51,12 @@ cargo run -p kuvo                                       # this Mac's own box (Ku
   box offers. Stop (or Esc) with nothing written while it works.
 - **The landing view**: the composer in the middle with a project chip above it; Send starts the
   session on the box there and opens it.
+- **The side panel** (⌥⌘0, or the button at the conversation's top right) beside the
+  conversation, resized by its edge: the session's folder's **Changes** as the box groups them
+  (conflicts, staged, unstaged, new), followed live, each opening to its diff, with stage, unstage,
+  discard (asked first) and commit; its **Files**, a folder at a time, one the box can't read saying
+  why, each opening read-only; its **Branches**, switching and a new one, and a worktree's Merge
+  into… and Create Pull Request. ⌥⌘I and ⌥⌘F open it on Changes and Files.
 - ⌘⇧L switches light and dark.
 
 `kuvo::stand_in` (the `stand-in` feature, left out of the app as shipped) is the made-up box: a Mac's box with sessions in a few projects and chats, one at
@@ -93,7 +99,8 @@ cargo test
 The app's scenarios (`kuvo/tests/screens.rs`) run its screens in a window against the stand-in
 box, with real clicks and keystrokes: the sidebar opening a session and folding a project, sending
 a message and a typed keyword, "/"'s list, a model that can't run, a new session from the landing
-view, a run streaming in and paging back. The follows' threads are left off: what they'd hand the
+view, a run streaming in and paging back. The side panel's are `kuvo/tests/panel.rs`, against the
+stand-in's made-up repositories (no git runs). The follows' threads are left off: what they'd hand the
 screens is read from the stand-in at once and handed over the same way.
 
 The blocks' scenario tests drive them through a window with real keystrokes, clicks and scrolling:
@@ -162,7 +169,9 @@ seconds, over one shared connection (`/tmp/kuvo-ssh-<uid>`, as the Mac app share
 hands on only the latest of what it sees, so a view that reads late gets the state now.
 
 Also: a conversation's model and the models offered, a model's efforts, picking one, starting a
-session and stopping one (`kuvo_box::models`).
+session and stopping one (`kuvo_box::models`); a folder's git as the box runs it, its changed files
+grouped and followed, a file's diff, staging, committing, branches, Merge into… and pull requests
+(`kuvo_box::git`); a folder as a Files panel lists it, and a file's bytes (`kuvo_box::folders`).
 
 Not done yet:
 - Following a machine as it streams. The plan is in `notes/kuvo-box-machines.md`; the app shows

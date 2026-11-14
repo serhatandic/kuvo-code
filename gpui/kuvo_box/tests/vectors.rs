@@ -207,6 +207,18 @@ fn the_gate_needs_what_the_swift_clients_need() {
     assert_eq!(names, gate::REQUIRED);
 }
 
+/// The gate PROTOCOL.md names ("The update gate") is the one every client holds: the same names, in
+/// order.
+#[test]
+fn the_gate_protocol_names_is_the_clients() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoLink/PROTOCOL.md");
+    let protocol = std::fs::read_to_string(path).unwrap();
+    let section = protocol.split("### The update gate").nth(1).expect("The update gate");
+    let list = section.split("today").nth(1).and_then(|rest| rest.split("(KuvoClient").next()).expect("its list");
+    let names: Vec<&str> = list.split('`').skip(1).step_by(2).collect();
+    assert_eq!(names, gate::REQUIRED);
+}
+
 /// A message's parts as every client reads them, kept with a message or read by its box from one
 /// from before; and the fields a client sends, as the box takes them (Vectors/message-parts.json).
 #[test]
@@ -255,6 +267,34 @@ fn a_client_sends_the_fields_the_box_takes() {
             ..Sending::default()
         };
         assert_eq!(numbers_as_floats(serde_json::to_value(&sending).unwrap()), numbers_as_floats(fields.clone()), "{}", case["about"]);
+    }
+}
+
+/// What a session's model being ready means for a composer, as its box words it
+/// (`Vectors/model-readiness.json`, which the box's words and KuvoClient's `SessionModelState` are
+/// held to too): read as `kuvo/sessions/models` answers it, and drawn as it says, nothing worded here.
+#[test]
+fn a_models_readiness_is_drawn_as_its_box_words_it() {
+    let vectors = vectors("model-readiness.json");
+    let cases = vectors["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 10);
+    for case in cases {
+        let about = case["about"].as_str().unwrap_or_default();
+        let mut answer = case["state"].clone();
+        let readiness = case["readiness"].as_object().expect("readiness");
+        for (key, value) in readiness {
+            answer[key] = value.clone();
+        }
+        let state: kuvo_box::models::ModelState = serde_json::from_value(answer).expect("the box's answer is read");
+        assert_eq!(state.refusal.as_deref(), readiness.get("refusal").and_then(Value::as_str), "{about}");
+        assert_eq!(state.choose, readiness.get("choose").and_then(Value::as_bool).unwrap_or(false), "{about}");
+        let action = readiness.get("action");
+        assert_eq!(state.action.as_ref().map(|action| action.kind.as_str()), action.and_then(|action| action["do"].as_str()), "{about}");
+        assert_eq!(state.action.as_ref().map(|action| action.label.as_str()), action.and_then(|action| action["label"].as_str()), "{about}");
+        assert_eq!(state.action.as_ref().map(|action| action.help.as_str()), action.and_then(|action| action["help"].as_str()), "{about}");
+        // A plain message on it is kept, saying why in the box's words, as the box would (typed/decide.ts).
+        let kept = kuvo_box::typed::plain_answer("fix it", false, state.refusal.as_deref());
+        assert_eq!(kept.and_then(|answer| answer.error), state.refusal.clone(), "{about}");
     }
 }
 

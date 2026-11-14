@@ -135,6 +135,12 @@ export const GLANCE = object({
 /** The sessions asked for, by id: one this box doesn't have is left out. */
 export const GLANCES = object({ sessions: map(GLANCE) });
 
+/** What a client offers doing about a model that can't run (`kuvo/sessions/models`' `action`, and
+ * the typed send's when it's refused for the model): signing in to its `account`, adding its key,
+ * installing its coding agent, or choosing a model; `label`, a button's words ("Sign In"), and
+ * `help`, what it does ("Sign in to Anthropic"). */
+export const MODEL_ACTION = object({ do: words("signIn", "addKey", "install", "choose"), label: string, help: string });
+
 /** What a session's model button shows and whether its model can run (`kuvo/sessions/models`):
  * the model it runs on (its own, else the engine's default; null for none), its name as its
  * provider or agent lists it, whether it can run here now, and what's missing if not: a model to
@@ -142,7 +148,10 @@ export const GLANCES = object({ sessions: map(GLANCE) });
  * from its provider's list. `account`: the account to sign in to, add a key for or install, or the
  * provider it's gone from. `plan`: for a key the engine needs where a plan goes through a coding
  * agent of its own (the engine's xAI, whose SuperGrok plan is Grok's), that plan, its agent and
- * the agent's provider. */
+ * the agent's provider. What that means for a composer, decided and worded by the box
+ * (`models.readiness`): `refusal`, why a message on it can't go and what to do (left out where one
+ * can); `choose`, the model button asks for a model and Send waits for one (a model gone, or none
+ * to run on); `action`, what to offer doing about it. */
 export const SESSION_MODEL = object({
   model: nullable(object({ providerID: string, id: string, "variant?": string })),
   "name?": string,
@@ -150,12 +159,16 @@ export const SESSION_MODEL = object({
   "missing?": words("model", "signIn", "key", "install", "gone"),
   "account?": object({ id: string, name: string, "label?": string }),
   "plan?": object({ name: string, agent: string, provider: string }),
+  "refusal?": string,
+  "choose?": bool,
+  "action?": MODEL_ACTION,
 });
 
 /** The sessions asked for, by id: one the box doesn't have, or can't say about yet, is left out. */
 export const SESSION_MODELS = object({ sessions: map(SESSION_MODEL) });
 
 export type SessionModel = Infer<typeof SESSION_MODEL>;
+export type ModelAction = Infer<typeof MODEL_ACTION>;
 
 /** The models a session can use here (`kuvo/models/offered`), as a picker offers them: every one
  * that runs now (`retiring`: its provider is retiring it; `hidden`: its agent keeps it out of its
