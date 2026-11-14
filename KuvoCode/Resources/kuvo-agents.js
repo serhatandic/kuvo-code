@@ -9970,7 +9970,7 @@ function limitRows(boxes) {
   }
   return groups.map(({ id, members }) => {
     const row = {
-      ...merged(members.map((member) => member.account)),
+      ...merged(members),
       id,
       boxes: members.map(({ box, account }) => ({
         key: box.key,
@@ -10004,10 +10004,13 @@ function withResetsOn(row, members) {
   row.extras = extras;
 }
 var newestOf = (account) => account.checked ?? Math.max(0, ...account.windows.map((window) => window.read));
-function merged(members) {
+function merged(boxes) {
+  const members = boxes.map((member) => member.account);
   const base = members.find((member) => member.agent) ?? members[0];
   if (members.length === 1)
     return base;
+  const yours = boxes.filter((member) => !member.box.vouched).map((member) => member.account);
+  const pool = yours.some((member) => member.checked && !member.problem) ? yours : members;
   const account = { ...base };
   const label = members.map((member) => member.label?.trim()).find(Boolean);
   if (label)
@@ -10025,7 +10028,7 @@ function merged(members) {
     }
   }
   account.windows = windows;
-  const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
+  const newest = [...pool].sort((a, b) => newestOf(b) - newestOf(a));
   const plan = newest.find((member) => member.plan)?.plan;
   const balance = newest.find((member) => member.balance)?.balance;
   const read = newest.find((member) => member.checked && !member.problem);
@@ -35369,7 +35372,9 @@ class LimitsPeers {
   }
   freshest(service, identity) {
     let newest;
-    for (const kept of this.peers.values()) {
+    for (const [key, kept] of this.peers) {
+      if (!this.ours(key))
+        continue;
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked)
           continue;
@@ -35419,7 +35424,7 @@ class LimitsPeers {
       const taken = takenAccount2(account, off, now);
       return taken ? [taken] : [];
     });
-    const accounts = this.directory.told && !this.ours(from) ? forVouched(read) : read;
+    const accounts = !this.ours(from) ? forVouched(read) : read;
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
     this.peers.set(from, { name, heard: now, accounts });
@@ -35510,7 +35515,7 @@ class LimitsPeers {
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount2(account, 0, Infinity) ?? []) });
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: forVouched(kept.accounts.flatMap((account) => takenAccount2(account, 0, Infinity) ?? [])) });
       }
     } catch {}
   }
@@ -35993,4 +35998,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 00256d829d701d08732e08ea981b951fe49d27286dc28c5ed6b90a79b474bee4
+// Built from Packages/Box/src/agents 4012f2353de8750a015cd9675930887979865fa04d1124a6b532802b963ccc58

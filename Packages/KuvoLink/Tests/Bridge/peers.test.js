@@ -571,6 +571,8 @@ test("a box tells its peers the setup it follows, or that it's a machine two peo
   };
   // One Mac's machine, in no setup yet: neither.
   assert.deepEqual(await said({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } }), { setup: undefined, shared: undefined });
+  // In a setup: it says which.
+  assert.deepEqual(await said({ peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } }, setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub, sign: mac.pub, role: "member" } }), { setup: "set_AAAAAAAAAAAAAAAAAAAAAA", shared: undefined });
   // Two people's Macs set it up: it says it's shared.
   assert.deepEqual(await said({ macs: [mac.pub, air.pub], peersFrom: { [mac.pub]: { at: 1, peers: [mac.peer] }, [air.pub]: { at: 1, peers: [air.peer] } } }), { setup: undefined, shared: true });
 });

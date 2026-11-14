@@ -473,7 +473,7 @@ describe("plan limits across your computers", () => {
     expect(await post("gaveup", { to: "key-other", mail: { kind: "work", work: { task: "gt_1" } } })).toBe(404)
   })
 
-  test("two Macs that share a machine aren't each other's peers, yet each lists the other's accounts, and an account both are signed in to is read once", async () => {
+  test("two Macs that share a machine aren't each other's peers, yet each lists the other's accounts; an account both are signed in to is read by each (#701: a reading from a box that isn't yours, told without its spend, never stands in for your own)", async () => {
     const studio = new Box("key-studio", "Studio", relay, [claude(maker, "studio", "anthropic:work|org"), claude(maker, "studio", "anthropic:studio|org", "claude-code@studio01")])
     const air = new Box("key-air", "Air", relay, [claude(maker, "air", "anthropic:work|org")])
     const shared = new Box("key-shared", "shared", relay, [])
@@ -485,7 +485,7 @@ describe("plan limits across your computers", () => {
     await relay.settled()
     await air.limits.tick()
     await relay.settled()
-    expect(maker.reads.map((read) => `${read.box} ${read.who}`)).toEqual(["studio anthropic:work|org", "studio anthropic:studio|org"])
+    expect(maker.reads.map((read) => `${read.box} ${read.who}`)).toEqual(["studio anthropic:work|org", "studio anthropic:studio|org", "air anthropic:work|org"])
     // Each has the whole list: the Studio-only account on the Air, both Macs on the work account's row.
     for (const box of [studio, air, shared]) {
       expect(box.rows().map((row) => row.boxes.map((each) => each.name).sort().join(",")).sort()).toEqual(["Air,Studio", "Studio"])

@@ -1251,6 +1251,30 @@ describe("a machine two people's Macs set up (#701)", () => {
     }
   })
 
+  test("Ada's own machine signed in to the same account as the shared machine reads it itself: the shared machine's reading, told without its extra usage, never stands in for it", async () => {
+    const relay = new Map<string, Box>()
+    const sharedFolder = mkdtempSync(join(base, "shared-same-"))
+    const machine = new Box("key-shared", "shared", () => agentAccounts([linuxClaude(sharedFolder)]), sharedFolder, relay)
+    const ownFolder = mkdtempSync(join(base, "own-same-"))
+    const own = new Box("key-own", "hetzner", () => agentAccounts([linuxClaude(ownFolder)]), ownFolder, relay)
+    try {
+      await machine.meet([own], [], [own])
+      await own.meet([machine], [], [machine])
+      // The shared machine reads it first, and tells Ada's machine (only what such a box is told).
+      await machine.limits.tick()
+      const id = machine.limits.rows()[0]!.id
+      await until(() => own.limits.rows().some((row) => row.id === id))
+      await own.limits.tick()
+      const row = own.limits.rows().find((each) => each.id === id)!
+      expect(row.boxes.map((box) => box.name).sort()).toEqual(["hetzner", "shared"])
+      expect(row.extras?.map((extra) => extra.kind)).toEqual(["capped", "resets"])
+      expect(row.extras?.find((extra) => extra.kind === "resets")?.on).toEqual({ key: "key-own", name: "hetzner", here: true })
+    } finally {
+      machine.stop()
+      own.stop()
+    }
+  })
+
   test("the machine's own box, told by a box from before this the whole of Ada's account, keeps only what such a box is told", async () => {
     const { machine, id, stop } = await shared()
     try {

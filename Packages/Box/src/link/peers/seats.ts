@@ -27,6 +27,7 @@ import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shar
 import type { DocPart, PendingParts } from "../documents/parts";
 import { followedSetup } from "../setup/record";
 import { sharedMachine } from "../setup/settle";
+import { toldShared } from "../work-queue/told";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { MailSender, Peer } from "./known";
@@ -203,10 +204,12 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os.hostname();
   const setup = followedSetup(link);
   // A peer that isn't one of your own computers for plan limits' resets and usage totals: every
-  // peer of a machine two people's Macs share, a machine that says it's one, and one that says it
-  // follows another setup than this box's (PROTOCOL.md, "Plan limits", "Across your computers").
+  // peer of a machine two people's Macs share, a machine that says it's one (in its agents' mail,
+  // or in its numbering mail, which an older box or one whose engine isn't answering still sends:
+  // `toldShared`), and one that says it follows another setup than this box's (PROTOCOL.md, "Plan
+  // limits", "Across your computers", Whose).
   const shared = sharedMachine(link);
-  const apart = (key: string) => shared || told[key]?.shared === true || (!!setup && !!told[key]?.setup && told[key]!.setup !== setup.id);
+  const apart = (key: string) => shared || told[key]?.shared === true || toldShared(key) === true || (!!setup && !!told[key]?.setup && told[key]!.setup !== setup.id);
   return {
     ...(key ? { self: { key, name } } : {}),
     // Boxes only a peer knows, for plan limits alone.

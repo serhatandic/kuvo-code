@@ -67,7 +67,7 @@ export function limitRows(boxes: LimitsBox[]): LimitRow[] {
   }
   return groups.map(({ id, members }) => {
     const row: LimitRow = {
-      ...merged(members.map((member) => member.account)),
+      ...merged(members),
       id,
       boxes: members.map(({ box, account }) => ({
         key: box.key,
@@ -116,9 +116,15 @@ const newestOf = (account: AccountLimits) => account.checked ?? Math.max(0, ...a
  * plan, credits, what it has beyond its windows (`extras`) and when it was checked as the newest says; a problem only when none of them could
  * read it.
  */
-function merged(members: AccountLimits[]): AccountLimits {
+function merged(boxes: { box: LimitsBox; account: AccountLimits }[]): AccountLimits {
+  const members = boxes.map((member) => member.account)
   const base = members.find((member) => member.agent) ?? members[0]!
   if (members.length === 1) return base
+  // (What it spends and has beyond its limits from your own computers where one of them read it
+  // without a problem: a box that isn't yours is told none of it, so its reading never takes
+  // theirs' place.)
+  const yours = boxes.filter((member) => !member.box.vouched).map((member) => member.account)
+  const pool = yours.some((member) => member.checked && !member.problem) ? yours : members
   const account: AccountLimits = { ...base }
   const label = members.map((member) => member.label?.trim()).find(Boolean)
   if (label) account.label = label
@@ -132,7 +138,7 @@ function merged(members: AccountLimits[]): AccountLimits {
     }
   }
   account.windows = windows
-  const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a))
+  const newest = [...pool].sort((a, b) => newestOf(b) - newestOf(a))
   const plan = newest.find((member) => member.plan)?.plan
   const balance = newest.find((member) => member.balance)?.balance
   // (A reading without them says there are none now: the newest that read without a problem;

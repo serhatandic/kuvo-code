@@ -4173,8 +4173,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     (`resetsAt`, its maker's, as it is), and a `service` it doesn't know (a newer box's) as its name
     (lowercase letters, digits and dashes, 40 at most). A computer you removed goes, with what it
     said.
-  - **One read per account**: before asking a maker, a box looks for a peer's reading of the same
-    account (`service` and `identity`) that its maker answered without a problem within the
+  - **One read per account**: before asking a maker, a box looks for a reading of the same
+    account (`service` and `identity`) by one of your own computers (never one that isn't yours,
+    Whose: what such a box is told has no spend or extras, so it never stands in for a read; two
+    people's Macs signed in to one account each read it) that its maker answered without a problem within the
     account's time between reads (15 minutes for Claude's, 10 for the rest). Then it doesn't ask,
     lists the account as its own still (with no numbers of its own, if it never read it), and looks
     again past that peer's next read and two minutes more: a peer that's off, or turned away, is
@@ -4194,7 +4196,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     (ignoring case), `name` and `minutes` (by `id` where a window has none of the three): a coding
     agent and the engine name a model's own limit differently. Each is the one read last (`read`)
     among them. The newest reading is the one checked last (`checked`, else its newest window's
-    `read`): the plan and the credits are its, where it has them, else the next newest's; `checked`
+    `read`): the plan and the credits are its, where it has them, else the next newest's (and, where one of your own computers read it without a problem, the newest of theirs: a box that isn't yours is told no spend or extras); `checked`
     is the latest and `next` the earliest; a `problem` shows only when every box has one, the
     newest's. A row is as an account, named as the coding agent's where one is among them (else
     the engine's sign-in's), with the first `label` among them, and adds `id` (`<service>#<identity>`,
@@ -4216,11 +4218,11 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   they're from ("Claude · hetzner, lokum"), as does one beside a bar the Mac panel shows of its
   own of that name (a provider's card that reads your own login's limits, when this Mac's box has
   no row of it: Codex's, say; Claude's card has none, so the accounts take its place, `covers`);
-  rows still alike add their other boxes' names. Otherwise (a computer the client reaches answers
-  without `rows`, a box from before them, or one whose own rows the first box doesn't have from it
-  as it hears it now, not `away`: just added, or the relay down), the client merges each box's
-  `accounts` itself, by the rules for `rows` above, and refreshes each ("For released Macs",
-  `limits-merge`).
+  rows still alike add their other boxes' names. Otherwise (a computer the client reaches whose own
+  rows the first box doesn't have from it as it hears it now, not `away`: just added, or the relay
+  down), the client merges each box's `accounts` itself, by the rules for `rows` above, and
+  refreshes each (every box the update gate lets through has `rows`; this merge, a client's own,
+  is yet to move to the box).
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run
@@ -4567,7 +4569,8 @@ box keeps them, and your own computers' boxes share them. They're what the panel
 not how it looks: density, theme, transparency, animation, the menu bar's style and how each card
 is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/usage/settings…`
 (the Mac app at `api/kuvo/usage/settings…` on its box's bridge), where `features` has
-`usage.settings`. A box from before them answers 404, and a client keeps its own settings there.
+`usage.settings`. A bridge without them (an older app's keeper's, while the update gate holds this
+Mac's box) answers 404: the Mac keeps a change and sends it once its bridge has the route.
 
 - They're in parts, each changed and shared whole:
   - `layout`: `{placed, providerOrder, metricOrder, pinned, expanded, expandOnEnable, seeded}`.

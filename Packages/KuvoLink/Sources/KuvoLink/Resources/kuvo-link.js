@@ -25405,7 +25405,7 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os11.hostname();
   const setup = followedSetup(link);
   const shared = sharedMachine(link);
-  const apart = (key) => shared || told[key]?.shared === true || !!setup && !!told[key]?.setup && told[key].setup !== setup.id;
+  const apart = (key) => shared || told[key]?.shared === true || toldShared(key) === true || !!setup && !!told[key]?.setup && told[key].setup !== setup.id;
   return {
     ...key ? { self: { key, name } } : {},
     also: vouchedOf(link, told).map((box) => ({ key: box.key, name: plainName(box.name) || "another computer" })),
@@ -40282,7 +40282,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "955b2d50e030";
+var BRIDGE_VERSION = "ac09fd7b18fb";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
