@@ -68,6 +68,20 @@ for a server's step (`runsServer`) with notices and Autopilot, and an MCP form s
 is the one conversation's its notification names; a Return while a mention's suggestions are on
 their way waits instead of sending; a failed answer is said only on the ask it was for.
 
+The re-review's last round: the keyboard goes back to the card whenever what it shows moves on
+(the next ask, the next question) while its line has it; an ask takes the keyboard from anywhere in
+the conversation; the box lists the asks a client answers ahead of those answered elsewhere; the
+race tests fail on the old behaviour; PROTOCOL.md says only gpui tests against `tool-steps.json`.
+
+**Why the live scenario keeps its one-minute guard.** It waits for the follows' own threads, which
+nothing in the test controls, so it blocks on the conversation's notifications, never on a clock:
+a passing run takes well under a second, and the guard never decides one. Without a bound, a
+follow that never hands anything on would leave `cargo test` waiting for good, unseen; the guard
+ends that run, saying so. Nothing is retried or slept on. A guard that needs no time would need the
+stand-in's lines delivered on the test's executor, which the follows' threads (kuvo_box's, as the
+app runs them) don't allow; the deterministic tests (both orders of the race, focus, keys) need no
+threads at all.
+
 **Decided (point 4):** which tool steps open is drawing, and stays in the client (`details()`).
 PROTOCOL.md has a "Tool steps" table (names and aliases, the target, what opens), and every
 client's samples are `Packages/KuvoLink/Vectors/tool-steps.json`, which gpui's tests read. **The
