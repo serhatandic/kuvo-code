@@ -250,7 +250,7 @@ impl RenderOnce for Button {
                 border: None,
             },
             ButtonStyle::Destructive => Look {
-                fill: Some(c.danger),
+                fill: Some(c.danger_fill),
                 hover: c.danger_hover,
                 pressed: c.danger_pressed,
                 text: c.text_on_accent,

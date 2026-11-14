@@ -605,12 +605,20 @@ impl ChangesView {
         let c = cx.theme().colors.clone();
         let name = file.name().to_owned();
         // Worded by what the box says the discard does.
-        let (title, detail, button) = match (file.discard.as_deref(), file.repository, file.status.as_str()) {
-            (Some("trash"), true, _) => (format!("Move the repository {name} to the Trash?"), "It’s a repository of its own: its commits go with it, pushed or not.".to_owned(), "Move to Trash"),
-            (Some("trash"), false, _) => (format!("Move {name} to the Trash?"), "It’s a new file, so git keeps nothing of it.".to_owned(), "Move to Trash"),
-            (_, _, "deleted") => (format!("Restore {name}?"), "It comes back as it was last staged or committed.".to_owned(), "Restore"),
-            (Some("head"), _, _) => (format!("Discard every change to {name}?"), "It goes back to the last commit, what’s staged too. This can’t be undone.".to_owned(), "Discard"),
-            _ => (format!("Discard the changes to {name}?"), "What isn’t staged is thrown away. This can’t be undone.".to_owned(), "Discard"),
+        // What can be taken back (from the Trash, or a file coming back) isn't drawn as destructive.
+        let (title, detail, button, undoable) = match (file.discard.as_deref(), file.repository, file.status.as_str()) {
+            (Some("trash"), true, _) => (format!("Move the repository {name} to the Trash?"), "It’s a repository of its own: its commits go with it, pushed or not.".to_owned(), "Move to Trash", true),
+            (Some("trash"), false, _) => (format!("Move {name} to the Trash?"), "It’s a new file, so git keeps nothing of it.".to_owned(), "Move to Trash", true),
+            (Some("head"), _, "deleted") => (format!("Restore {name}?"), "The last commit’s copy comes back; a copy on disk that differs goes to the Trash first.".to_owned(), "Restore", true),
+            (_, _, "deleted") => (format!("Restore {name}?"), "It comes back as it was last staged.".to_owned(), "Restore", true),
+            (Some("head"), _, "renamed") => (
+                format!("Undo the move to {name}?"),
+                format!("{} comes back as last committed, and {name} goes to the Trash. A file written at {} since goes to the Trash first.", file.old_path.clone().unwrap_or_default(), file.old_path.clone().unwrap_or_default()),
+                "Undo Move",
+                true,
+            ),
+            (Some("head"), _, _) => (format!("Discard every change to {name}?"), "It goes back to the last commit, what’s staged too. This can’t be undone.".to_owned(), "Discard", false),
+            _ => (format!("Discard the changes to {name}?"), "What isn’t staged is thrown away. This can’t be undone.".to_owned(), "Discard", false),
         };
         let file = file.clone();
         div()
@@ -632,7 +640,7 @@ impl ChangesView {
                     .justify_end()
                     .gap(space::S2)
                     .child(Button::new("discard-cancel", "Cancel").size(ButtonSize::Small).on_click(cx.listener(|this, _, _, cx| this.cancel_discard(cx))))
-                    .child(Button::new("discard-confirmed", button).destructive().size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard, file.clone(), cx)))),
+                    .child(Button::new("discard-confirmed", button).map(|button| if undoable { button.primary() } else { button.destructive() }).size(ButtonSize::Small).on_click(cx.listener(move |this, _, _, cx| this.act(Action::Discard, file.clone(), cx)))),
             )
             .into_any_element()
     }

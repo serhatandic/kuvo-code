@@ -281,3 +281,66 @@ test("a linked worktree's .git file isn't listed in its Files", async () => {
   const { json } = await ask(handler, "GET", `kuvo/folders?path=${encodeURIComponent(tree)}&files=1&hidden=1`)
   expect(json.files).toEqual(["README.md"])
 })
+
+test("followers share a read only when it started after the change they heard of", async () => {
+  const { sharedFiles } = await import("../src/link/areas/changes")
+  const top = repository("shared")
+  const before = Date.now()
+  const first = await sharedFiles(top, before)
+  expect(first!.repository && first!.files).toEqual([])
+  // A second follower, told of nothing new, gets the same read.
+  expect(await sharedFiles(top, before)).toBe(first)
+  // A change, then a follower told of it: a new read, never the one from before it.
+  writeFileSync(join(top, "README.md"), "# App\nChanged.\n")
+  const after = await sharedFiles(top, Date.now())
+  expect(after!.repository && after!.files.map((file: any) => file.path)).toEqual(["README.md"])
+})
+
+test("discarding a staged move never overwrites a file written at its old path since", async () => {
+  const top = repository("moved")
+  const trash = join(box, "trash-moved")
+  process.env.KUVO_CHANGES_TRASH = trash
+  try {
+    git(top, "mv", "app/old.ts", "app/new.ts")
+    const listed = { ...(await files(top)).files.find((file: any) => file.status === "renamed"), root: top }
+    expect([listed.path, listed.oldPath]).toEqual(["app/new.ts", "app/old.ts"])
+    // An agent writes a new file where the old one was.
+    writeFileSync(join(top, "app", "old.ts"), "agent work\n")
+    // With what it was shown: refused, nothing touched.
+    const refused = await ask(handler, "POST", "kuvo/git/discard", { root: top, path: listed.path, oldPath: listed.oldPath, status: "renamed", scope: "staged", stamp: listed.stamp })
+    expect(refused.status).toBe(409)
+    expect(readFileSync(join(top, "app", "old.ts"), "utf8")).toBe("agent work\n")
+    // Without a stamp (as the Mac asks): the move goes back, and the new file goes to the Trash first.
+    expect((await ask(handler, "POST", "kuvo/git/discard", { root: top, path: listed.path, oldPath: listed.oldPath, status: "renamed", scope: "staged" })).status).toBe(200)
+    expect(readFileSync(join(top, "app", "old.ts"), "utf8")).toBe("export const old = 1\n")
+    expect(spawnSync("grep", ["-rl", "agent work", trash], { encoding: "utf8" }).stdout.trim()).not.toBe("")
+  } finally {
+    delete process.env.KUVO_CHANGES_TRASH
+  }
+})
+
+test("a move into the folder from outside it counts the side outside", async () => {
+  const top = repository("into")
+  mkdirSync(join(top, "other"))
+  writeFileSync(join(top, "other", "x.ts"), "x\n")
+  git(top, "add", "-A")
+  git(top, "commit", "-q", "-m", "Other")
+  git(top, "mv", "other/x.ts", "app/x.ts")
+  const app = await files(join(top, "app"))
+  expect([app.commits, app.stagedElsewhere]).toEqual(["staged", 1])
+})
+
+test("a staged deletion of a file just as it was committed leaves nothing in the Trash", async () => {
+  const top = repository("unchanged")
+  const trash = join(box, "trash-unchanged")
+  process.env.KUVO_CHANGES_TRASH = trash
+  try {
+    git(top, "rm", "-q", "--cached", "README.md")
+    const row = { ...(await files(top)).files.find((file: any) => file.group === "staged"), root: top }
+    expect((await discard(row)).status).toBe(200)
+    expect(readFileSync(join(top, "README.md"), "utf8")).toBe("# App\n")
+    expect(spawnSync("ls", ["-A", trash], { encoding: "utf8" }).stdout.trim()).toBe("")
+  } finally {
+    delete process.env.KUVO_CHANGES_TRASH
+  }
+})
