@@ -8,12 +8,15 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 - Your computers now decide usage alerts where they read the account, even with Kuvo Code closed. Your devices avoid repeat alerts using the same notification settings across your own computers, and your iPhone stays quiet when your Mac already showed an alert while its phone delivery was waiting. Devin alerts are unavailable because Devin has no sign-in in Kuvo Code’s background service; Usage settings now says so.
 
+- When a conversation's model can't run (its account needs a sign-in or a key, its coding agent isn't installed, or the model is gone), what Send says comes from the computer the conversation is on, in the same words on your Mac and your iPhone. It names the account and the model, but no longer the computer or a Settings page.
+- Discard Changes in the Changes tab leaves a new file alone if it was committed in the meantime, and says so; discarding a deletion you staged while keeping the file, or a move whose old name has a new file since, now puts what's there in the Trash before the committed file comes back.
 - What goes with your message for the agent (your comments on the changes, where your files are, who the agents you name with & are) is written by the computer the conversation is on, the same way from your Mac and your iPhone; conversations from before show as they did.
 - New sessions in every project open as conversations. The project’s terminal-command setting and terminal tabs in the main window have been removed; existing projects keep their names, folders and Run commands. Terminals remain available in the side panel.
 - Antigravity's limits and conversation spend are read by your computers with the sign-ins you made in Kuvo Code, including on Linux, with the app closed. The Antigravity app's own login and history are no longer read.
 - The usage panel shows what a plan has beyond its limits under each account: Claude's extra usage, Codex's credits, an OpenRouter key's spend today, this week and this month, and a Copilot organization's credits, read by your computers with the app closed.
 - Your iPhone now reads usage from each of your computers directly, a Linux machine's too, so it shows your accounts' limits and spend with Kuvo Code closed on your Mac.
 - Use a rate-limit reset (Claude's reset grants, Codex's reset credits) from an account's row in the usage panel: Use asks you to confirm in place, and it's used once, on the computer of yours that has the account's sign-in. A Mac's own Claude sign-in can't read resets; they show when one of your machines is signed in to the same account.
+- On your machines, an agent goes on in its own browser tab after the machine's browser was idle and stopped, rather than opening a new one.
 - Agents can use a reset when work can't wait (`use_limit_reset`): each use asks you on a card in the conversation (Allow, Always Allow for that account, Don't). Always Allow can be turned off in Settings › Accounts, in the account's menu.
 
 ### Highlights

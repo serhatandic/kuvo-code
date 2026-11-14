@@ -406,20 +406,20 @@ final class Catalog {
         return said?.model ?? startingModel(lastModel)
     }
 
-    /// Why a message on `ref` can't be sent (on the machine named `on`), from what its box says
-    /// (`said`); nil when it can go, or where the box hasn't said it of `ref` (yet).
-    func refusal(_ ref: ModelRef, on machine: String? = nil, said: SessionModelState?) -> String? {
+    /// Why a message on `ref` can't be sent, in its box's words (`said`); nil when it can go, or
+    /// where the box hasn't said it of `ref` (yet).
+    func refusal(_ ref: ModelRef, said: SessionModelState?) -> String? {
         guard let said, said.isAbout(ref) else { return nil }
-        return said.refusal(there: machine.map { " on \($0)" } ?? "", accounts: "Settings › Accounts", shownName: shownName(ref))
+        return said.refusal
     }
 
     /// The chip's help for `ref`: why it can't run and what to do, else what it is. Where the box
     /// hasn't said it of `ref`, by what it offers.
-    func chipHelp(_ ref: ModelRef?, in scope: ModelScope, on machine: String? = nil, said: SessionModelState?) -> String {
+    func chipHelp(_ ref: ModelRef?, in scope: ModelScope, said: SessionModelState?) -> String {
         if let said, said.isAbout(ref), let shown = ref ?? said.model, scope.allows(shown.providerID) {
-            return said.refusal(there: machine.map { " on \($0)" } ?? "", accounts: "Settings › Accounts", shownName: shownName(shown)) ?? "Model and effort"
+            return said.refusal ?? "Model and effort"
         }
-        if let said, ref == nil, said.model == nil, !said.namesModel { return said.refusal(accounts: "Settings › Accounts") ?? "Model and effort" }
+        if let said, ref == nil, said.model == nil, !said.namesModel { return said.refusal ?? "Model and effort" }
         let unavailable = isUnavailable(ref) || ref.map { !scope.allows($0.providerID) } == true
         return unavailable && chipModel(ref, in: scope) == nil ? "\(model(ref)?.name ?? ref?.id ?? "") isn't available now: choose another model" : "Model and effort"
     }
@@ -428,7 +428,7 @@ final class Catalog {
     /// box says of the conversation's model where that's this account's; else as its account's
     /// ways in have it (a card for another account than the model's).
     func signInHelp(_ id: String, on machine: String? = nil, said: SessionModelState?) -> String {
-        said?.signInHelp(id, there: machine.map { " on \($0)" } ?? "") ?? signInHelp(id, on: machine)
+        said?.signInHelp(id) ?? signInHelp(id, on: machine)
     }
 
     /// Whether `ref`'s account needs a sign-in, a key or its agent installed now, from what the
@@ -436,11 +436,6 @@ final class Catalog {
     func needsAccount(_ ref: ModelRef, said: SessionModelState?) -> Bool {
         guard let said, said.isAbout(ref) else { return false }
         return said.needsAccount
-    }
-
-    /// `ref`'s name as last listed here, for one its box no longer names.
-    private func shownName(_ ref: ModelRef) -> String? {
-        model(ref)?.name ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)]?.name
     }
 
     /// Changes each time the accounts or models are read anew (and Custom Auto's lists change):

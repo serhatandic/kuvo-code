@@ -5,7 +5,9 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use gpui::{AppContext as _, Focusable as _, HeadlessAppContext, px, size};
+use gpui::{AppContext as _, Context, Focusable as _, HeadlessAppContext, Window, px, size};
+use kuvo::panel::Tab;
+use kuvo_box::git::Group;
 use kuvo::stand_in::{Replies, StandIn};
 use kuvo::{Workspace, bind_keys};
 use kuvo_box::BoxClient;
@@ -30,23 +32,96 @@ struct Screen {
     walks: usize,
     /// Files attached in the composer (from `gpui/`).
     attach: &'static [&'static str],
+    /// What the side panel shows (none: it's closed).
+    panel: Option<Panel>,
 }
 
+type Panel = fn(&mut Workspace, &mut Window, &mut Context<Workspace>);
+
 const SCREENS: &[Screen] = &[
-    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "question", width: 1280., height: 820., session: Some("ses_cms"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)], search: None, walks: 0, attach: &[] },
-    Screen { slug: "search", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: Some("redis"), walks: 1, attach: &[] },
-    Screen { slug: "walking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 3, attach: &[] },
-    Screen { slug: "attached", width: 1280., height: 820., session: Some("ses_dark"), typed: Some("This is how the settings look in dark mode now: the cards blend into the page."), empty: false, opens: &[], search: None, walks: 0, attach: &["shots/theme-dark.png", "kuvo_ui/src/theme.rs"] },
-    Screen { slug: "files", width: 1280., height: 820., session: Some("ses_lighthouse"), typed: Some("Look at @Form"), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "agents", width: 1280., height: 820., session: Some("ses_lighthouse"), typed: Some("Ask &"), empty: false, opens: &[], search: None, walks: 0, attach: &[] },
-    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[], search: None, walks: 0, attach: &[] },
+    Screen { slug: "conversation", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "landing", width: 1280., height: 820., session: None, typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "asking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "question", width: 1280., height: 820., session: Some("ses_cms"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "slash", width: 1280., height: 820., session: Some("ses_recipes"), typed: Some("/"), empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "narrow", width: 860., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "steps", width: 1280., height: 900., session: Some("ses_signup"), typed: None, empty: false, opens: &[("msg_s2", 2), ("msg_s5", 0), ("msg_s5", 1)], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "search", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: Some("redis"), walks: 1, attach: &[], panel: None },
+    Screen { slug: "walking", width: 1280., height: 820., session: Some("ses_limits"), typed: None, empty: false, opens: &[], search: None, walks: 3, attach: &[], panel: None },
+    Screen { slug: "attached", width: 1280., height: 820., session: Some("ses_dark"), typed: Some("This is how the settings look in dark mode now: the cards blend into the page."), empty: false, opens: &[], search: None, walks: 0, attach: &["shots/theme-dark.png", "kuvo_ui/src/theme.rs"], panel: None },
+    Screen { slug: "files", width: 1280., height: 820., session: Some("ses_lighthouse"), typed: Some("Look at @Form"), empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "agents", width: 1280., height: 820., session: Some("ses_lighthouse"), typed: Some("Ask &"), empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "empty", width: 1280., height: 820., session: None, typed: None, empty: true, opens: &[], search: None, walks: 0, attach: &[], panel: None },
+    Screen { slug: "changes", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(changes) },
+    Screen { slug: "diff", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(diff) },
+    Screen { slug: "discard", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(discard) },
+    Screen { slug: "tree", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(tree) },
+    Screen { slug: "file", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(file) },
+    Screen { slug: "branches", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(branches) },
+    Screen { slug: "worktree", width: 1280., height: 820., session: Some("ses_dark"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(branches) },
+    Screen { slug: "pull-request", width: 1280., height: 820., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(pull_request) },
+    Screen { slug: "panel-narrow", width: 980., height: 760., session: Some("ses_signup"), typed: None, empty: false, opens: &[], search: None, walks: 0, attach: &[], panel: Some(changes) },
 ];
+
+fn changes(workspace: &mut Workspace, _: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.show_panel(Tab::Changes, cx);
+}
+
+/// The sign-up form's staged changes, opened.
+fn diff(workspace: &mut Workspace, _: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.show_panel(Tab::Changes, cx);
+    let view = workspace.panel().read(cx).changes().clone();
+    view.update(cx, |view, cx| {
+        let file = view.files().ready().and_then(|files| files.files.iter().find(|file| file.group == Group::Staged).cloned());
+        if let Some(file) = file {
+            view.open(file, cx);
+        }
+    });
+}
+
+/// Discarding the validation's changes, asked first.
+fn discard(workspace: &mut Workspace, _: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.show_panel(Tab::Changes, cx);
+    let view = workspace.panel().read(cx).changes().clone();
+    view.update(cx, |view, cx| {
+        let file = view.files().ready().and_then(|files| files.files.iter().find(|file| file.path.ends_with("validate.ts")).cloned());
+        if let Some(file) = file {
+            view.confirm_discard(file, cx);
+        }
+    });
+}
+
+/// The website's folders, a few open, one that can't be read.
+fn tree(workspace: &mut Workspace, _: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.show_panel(Tab::Files, cx);
+    let view = workspace.panel().read(cx).files().clone();
+    let root = kuvo::stand_in::git::website();
+    view.update(cx, |view, cx| {
+        for folder in ["src", "src/components", "secrets"] {
+            view.toggle(&format!("{root}/{folder}"), cx);
+        }
+    });
+}
+
+/// The sign-up form, opened to read.
+fn file(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    tree(workspace, window, cx);
+    let view = workspace.panel().read(cx).files().clone();
+    let path = format!("{}/src/components/SignupForm.tsx", kuvo::stand_in::git::website());
+    view.update(cx, |view, cx| view.open_file(&path, window, cx));
+}
+
+fn branches(workspace: &mut Workspace, _: &mut Window, cx: &mut Context<Workspace>) {
+    workspace.panel().update(cx, |panel, cx| panel.show(Tab::Branches, cx));
+    workspace.toggle_panel(cx);
+}
+
+/// Create Pull Request, the box's draft in it.
+fn pull_request(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    branches(workspace, window, cx);
+    let view = workspace.panel().read(cx).branches().clone();
+    view.update(cx, |view, cx| view.write_pull_request(window, cx));
+}
 
 fn main() -> anyhow::Result<()> {
     let only: Vec<String> = std::env::args().skip(1).collect();
@@ -96,6 +171,9 @@ fn main() -> anyhow::Result<()> {
                         field.update(cx, |field, cx| field.set_text(typed, cx));
                     }
                     window.focus(&field.focus_handle(cx), cx);
+                    if let Some(panel) = screen.panel {
+                        panel(workspace, window, cx);
+                    }
                     if let Some(search) = screen.search {
                         workspace.search().clone().update(cx, |field, cx| field.set_text(search, cx));
                         workspace.focus_search(window, cx);

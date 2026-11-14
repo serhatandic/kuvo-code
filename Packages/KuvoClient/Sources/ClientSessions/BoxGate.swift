@@ -14,17 +14,24 @@ public enum BoxGate {
     /// agent reads) came before the last: a box that has it has what came before it too
     /// (`sessions.list`, `typed`, plan limits' `rows`, `kuvo/updates`, Cursor's limits,
     /// `kuvo/sessions/read`). `sessions.asks`, `queue.items` and `sessions.mentions` came last, for
-    /// the desktop client (gpui), which draws asks, the queue and "@" and "&" as the box says them.
+    /// the desktop client (gpui), which draws asks, the queue and "@" and "&" as the box says them;
+    /// then `git.files`, `git.changes.path` and `git.branches.worktree`, for its side panel's
+    /// Changes and Branches.
     public static let required: [String] = [
         "agent-tools.own",
         "folders.tree",
         "git.branches",
+        "git.branches.worktree",
+        "git.changes.path",
+        "git.files",
         "git.merge",
         "git.pull-request",
         "git.status",
         "messages.send",
         "models.offered",
+        "models.offered.folder",
         "models.offered.sides",
+        "models.readiness",
         "queue.items",
         "sessions.asks",
         "sessions.list",

@@ -29,7 +29,8 @@ pub fn asks_box(text: &str) -> bool {
 
 /// What the box would answer for a plain text (one [`asks_box`] doesn't ask about) where it isn't
 /// sent as a message: in the box's order (`typed/decide.ts`), a model that can't run first (every
-/// plain text needs the model), all of it kept, saying why; then, with the side thread's tag on, a
+/// plain text needs the model), all of it kept, saying why in the box's words (`refusal`, from
+/// `kuvo/sessions/models`); then, with the side thread's tag on, a
 /// follow-up there. None: it's sent. Held to `Vectors/typed.json`'s `decide` cases.
 pub fn plain_answer(text: &str, side: bool, refusal: Option<&str>) -> Option<Answer> {
     if let Some(refusal) = refusal {
@@ -49,8 +50,8 @@ pub fn keyword(text: &str) -> Option<(&'static str, String)> {
 }
 
 /// What's sent: the text as typed, whether pictures or files are attached, whether the side
-/// thread's tag is on the composer, why the conversation's model can't run (as the client says
-/// it), and the model picked last in "Who reads it".
+/// thread's tag is on the composer, and the model picked last in "Who reads it". (Whether the
+/// conversation's model can run is the box's to say.)
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Ask {
     /// This send's own id: the same send again (after a dropped connection) is answered as it
@@ -60,14 +61,12 @@ pub struct Ask {
     pub files: bool,
     pub side: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub refusal: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<ModelRef>,
 }
 
 impl Ask {
     pub fn new(id: impl Into<String>, text: impl Into<String>) -> Ask {
-        Ask { id: id.into(), text: text.into(), files: false, side: false, refusal: None, reviewer: None }
+        Ask { id: id.into(), text: text.into(), files: false, side: false, reviewer: None }
     }
 }
 
@@ -156,6 +155,10 @@ pub struct Answer {
     // What goes back.
     pub restore: Option<Restore>,
     pub error: Option<String>,
+    /// Where it's refused for the conversation's model: what to offer doing about it (none for
+    /// one this client can't read: the rest of the answer stands).
+    #[serde(default, deserialize_with = "crate::models::lenient")]
+    pub action: Option<crate::models::Action>,
 }
 
 impl Answer {
@@ -206,4 +209,16 @@ pub struct OfferedCommand {
 pub struct Offers {
     pub keywords: Vec<OfferedKeyword>,
     pub commands: Vec<OfferedCommand>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An action a newer box words otherwise is none: the rest of its answer stands.
+    #[test]
+    fn an_action_this_client_cant_read_leaves_the_answer() {
+        let answer: Answer = serde_json::from_value(serde_json::json!({ "restore": { "text": "fix it" }, "error": "Choose a model to send it.", "action": { "do": "choose" } })).unwrap();
+        assert_eq!((answer.error.as_deref(), answer.action), (Some("Choose a model to send it."), None));
+    }
 }

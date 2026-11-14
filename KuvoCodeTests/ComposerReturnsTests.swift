@@ -140,7 +140,7 @@ import Testing
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json([:]) }
         let catalog = Catalog()
         let luna = ModelRef(id: "luna", providerID: "openai")
-        let state = try JSONDecoder().decode(SessionModelState.self, from: Data(#"{"model":{"providerID":"openai","id":"luna"},"name":"Luna","runs":false,"missing":"key","account":{"id":"openai","name":"OpenAI"},"plan":{"name":"ChatGPT","agent":"Codex","provider":"codex-cli"}}"#.utf8))
+        let state = try JSONDecoder().decode(SessionModelState.self, from: Data(#"{"model":{"providerID":"openai","id":"luna"},"name":"Luna","runs":false,"missing":"key","account":{"id":"openai","name":"OpenAI"},"plan":{"name":"ChatGPT","agent":"Codex","provider":"codex-cli"},"refusal":"Luna needs an OpenAI key: add one, or choose another model (with a ChatGPT plan, one under Codex).","action":{"do":"addKey","label":"Add Key","help":"Add an OpenAI key (with a ChatGPT plan, choose a model under Codex instead)"}}"#.utf8))
         // (What the conversation's view hands the composer: its box's word on its model.)
         let refusal = catalog.refusal(luna, said: state)
 
@@ -149,7 +149,7 @@ import Testing
         conversation.submitDraft(for: catalog.model(luna), queue: false, unavailable: refusal)
         #expect(conversation.draftText == "Summarize the release", "kept, to send once you can")
         let said = try #require(conversation.failure)
-        #expect(said.contains("Luna") && said.contains("ChatGPT plan") && said.contains("Settings › Accounts"), "\(said)")
+        #expect(said == "Luna needs an OpenAI key: add one, or choose another model (with a ChatGPT plan, one under Codex).", "in its box's words")
         #expect(!StubWeb.asked.contains { $0.hasSuffix("/prompt") }, "nothing sent into the void")
         // A "!" command needs no model, and runs (its box says so, as the app's does).
         StubWeb.handle(Self.engine + "/api/session/\(id)/shell") { _, _ in StubWeb.json([:]) }

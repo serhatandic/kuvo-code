@@ -2,7 +2,7 @@
 // show and parse, and staging, unstaging, discarding, committing and pushing them there, bringing a
 // branch's work back (Merge into…, Create Pull Request), and the repository's branches and status.
 
-import { bool, BYTES, type Infer, list, literal, map, NOTHING, nullable, number, object, oneOf, type RouteShape, string } from "../shape";
+import { bool, BYTES, type Infer, list, literal, map, NOTHING, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
 
 /** What changed in a folder's repository in a scope: outside one, `repository: false`; in one, its
  * top folder (`root`), what it was compared with (`against`: HEAD, a commit, or the empty tree
@@ -11,7 +11,7 @@ import { bool, BYTES, type Infer, list, literal, map, NOTHING, nullable, number,
  * and whether anything isn't committed yet. */
 export const GIT_CHANGES = oneOf(
   object({ repository: literal(false) }),
-  object({ repository: literal(true), root: string, against: string, patch: string, untracked: list(string), hashes: map(string), uncommitted: bool }),
+  object({ repository: literal(true), root: string, against: string, patch: string, untracked: list(string), hashes: map(string), uncommitted: bool, "big?": literal(true) }),
 );
 export type GitChanges = Infer<typeof GIT_CHANGES>;
 
@@ -25,12 +25,46 @@ export const GIT_CHANGES_COUNT = oneOf(
 );
 export type GitChangesCount = Infer<typeof GIT_CHANGES_COUNT>;
 
+/** One changed file as a Changes panel lists it (`kuvo/git/files`): its path in the repository (and
+ * where it was, moved), which group it shows in (`conflicted`, `staged`, `unstaged`, `untracked`),
+ * what changed (the status the stage, unstage and discard routes take), the scope its diff, its
+ * stage or unstage and its discard take, and git's count of lines added and removed (none for a
+ * binary file, a new one git doesn't know, or a conflicted one). A file partly staged is listed
+ * twice: staged and unstaged. With a discard, its `stamp`: what it is now, which a discard sends back
+ * and is refused (409) once the file changed since. What its discard does (`discard`, none for a conflict, which is
+ * resolved, not discarded): `trash`, a new file to the Trash; `unstaged`, what isn't staged thrown
+ * away; `head`, back to the last commit, what's staged too. `repository`: a repository of its own
+ * inside this one ("web/"), whose commits go with it to the Trash. */
+export const LISTED_FILE = object({
+  path: string, "oldPath?": string, group: words("conflicted", "staged", "unstaged", "untracked"),
+  status: words("added", "deleted", "modified", "renamed"), scope: words("uncommitted", "unstaged", "staged"),
+  "additions?": number, "deletions?": number, "discard?": words("trash", "unstaged", "head"), "stamp?": string, "repository?": literal(true),
+});
+
+/** A folder's repository's changed files, grouped as a Changes panel shows them (`kuvo/git/files`):
+ * outside one `repository: false`; in one, its top folder, the branch checked out (null on none),
+ * the files in the order they show (conflicts, staged, unstaged, new; by name in each), whether
+ * anything isn't committed, what a commit takes now (`commits`: what's staged anywhere in the
+ * repository, or all of the folder's changes when nothing is), how many staged files outside the
+ * folder it takes (`stagedElsewhere`), how many new files past the most it lists are left out
+ * (`more`), and what git is in the middle of (`underway`). */
+export const GIT_FILES = oneOf(
+  object({ repository: literal(false) }),
+  object({
+    repository: literal(true), root: string, branch: nullable(string), files: list(LISTED_FILE), uncommitted: bool, commits: words("staged", "all"),
+    stagedElsewhere: number, "more?": number, "underway?": words("merging", "rebasing", "cherry-picking", "reverting"),
+  }),
+);
+export type GitFiles = Infer<typeof GIT_FILES>;
+
 /** The repository a folder is in, for a branch menu: outside one `repository: false`; in one, its
  * top folder (null with no checkout there: a bare repository its `.git` names), the branch checked
- * out (null on none) and its branches, the latest commit first. */
+ * out (null on none) and its branches, the latest commit first; in a worktree whose branch Merge
+ * into… takes back (`git.branches.worktree`), `worktree`, with the branch it goes into without one
+ * named (`into`: its base, else the branch the project's folder has checked out; null on none). */
 export const GIT_BRANCHES = oneOf(
   object({ repository: literal(false) }),
-  object({ repository: literal(true), root: nullable(string), current: nullable(string), branches: list(string) }),
+  object({ repository: literal(true), root: nullable(string), current: nullable(string), branches: list(string), "worktree?": object({ into: nullable(string) }) }),
 );
 export type GitBranches = Infer<typeof GIT_BRANCHES>;
 
@@ -92,12 +126,14 @@ const REFUSED = object({ message: string });
 export const CHANGES_ROUTES: RouteShape[] = [
   { route: "POST kuvo/git/changes", answers: { 200: GIT_CHANGES } },
   { route: "POST kuvo/git/changes/count", answers: { 200: GIT_CHANGES_COUNT } },
+  { route: "GET kuvo/git/files", answers: { 200: GIT_FILES, 404: REFUSED, 500: REFUSED } },
+  { route: "GET kuvo/git/files/events", answers: { 200: GIT_FILES, 404: REFUSED } },
   { route: "POST kuvo/git/branches", answers: { 200: GIT_BRANCHES, 404: REFUSED, 500: REFUSED } },
   { route: "POST kuvo/git/switch", answers: { 200: NOTHING, 400: REFUSED, 404: REFUSED, 422: REFUSED } },
   { route: "POST kuvo/git/status", answers: { 200: GIT_STATUS, 404: REFUSED, 500: REFUSED } },
   { route: "POST kuvo/git/stage", answers: { 200: NOTHING } },
   { route: "POST kuvo/git/unstage", answers: { 200: NOTHING } },
-  { route: "POST kuvo/git/discard", answers: { 200: NOTHING } },
+  { route: "POST kuvo/git/discard", answers: { 200: NOTHING, 409: REFUSED } },
   { route: "GET kuvo/git/show", answers: { 200: BYTES } },
   { route: "POST kuvo/git/commit", answers: { 200: NOTHING, 422: NOT_PUSHED } },
   { route: "POST kuvo/git/push", answers: { 200: NOTHING } },

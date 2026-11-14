@@ -83,6 +83,7 @@ icons! {
     Minus => "minus",
     Moon => "moon",
     More => "more",
+    PanelRight => "panel-right",
     Paperclip => "paperclip",
     Pencil => "pencil",
     Pin => "pin",
@@ -99,6 +100,7 @@ icons! {
     Sun => "sun",
     Terminal => "terminal",
     Trash => "trash",
+    Undo => "undo",
     User => "user",
     Warning => "warning",
 }

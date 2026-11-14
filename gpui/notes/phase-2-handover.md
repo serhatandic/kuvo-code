@@ -30,14 +30,11 @@
   engine session): that's `POST kuvo/sessions/<id>/agents`, which opens a new session; the menu
   offers only its own side's models (the box's `side` on `kuvo/models/offered`, added in phase 2's
   second review, with each model's `efforts`) and says the rest aren't here yet.
-- **Left to move to the box:** whether a message may go on a session's model, and the words
-  saying why not, are worked out in the client (a port of KuvoClient's `SessionModelState`
-  `namesModel` and `refusal`), as on the Mac and phone. The box already knows `missing`, `account`
-  and `plan`: its typed send (and `kuvo/sessions/models`) could decide and word it, so no client
-  needs either. Until then the Rust port mirrors Swift's conditions, except Swift's fallback to the
-  picker's name for a model gone from its list.
-- `kuvo/models/offered` takes no folder, so a model only a project's own settings add has no
-  efforts on the landing view (the box's gap).
+- **Moved to the box (#668):** whether a message may go on a session's model, and the words
+  saying why not, come from the box (`refusal`, `choose`, `action` on `kuvo/sessions/models`, held
+  to `Vectors/model-readiness.json`); the composer draws them. And `kuvo/models/offered` takes the
+  folder (`models.offered.folder`): the composer asks in its conversation's folder, or the project a
+  new one starts in, so a model only a project's own settings add is offered there with its efforts.
 - Left from the second review: the earlier page is asked for from the list's render (pages shorter
   than the window load one after another without scrolling); composers are kept for every
   conversation opened, never freed; the sidebar's times refresh only as something else redraws, and
@@ -53,11 +50,10 @@
   composer, with why). Recommended: keep the dot and add words beside it once the sidebar has room
   for a second line; it has no VoiceOver label yet (GPUI has no accessibility here yet).
 
-- New words and a new line, built without drafts (the user was away): the line above the composer
-  of a session waiting on you ("It’s waiting on you for an answer this app can’t give yet: answer
-  it in Kuvo Code on your Mac or iPhone."), and a model refusal's "in Kuvo Code on your Mac or
-  iPhone" in place of "Settings › Accounts", which this app hasn't. Recommended: keep both until
-  this app answers asks and has Accounts; the refusal's words should come from the box.
+- A new line, built without drafts (the user was away): the line above the composer of a session
+  waiting on you ("It’s waiting on you for an answer this app can’t give yet: answer it in Kuvo
+  Code on your Mac or iPhone."). Recommended: keep it until this app answers asks. (A model
+  refusal's words now come from the box, #668, and name no settings page.)
 - The look follows the Capy references the user gave (nested threads, landing with the project chip
   above the composer). The block shots aren't approved yet; the screens use the theme's tokens, so
   changes there flow through.

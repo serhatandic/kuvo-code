@@ -9,6 +9,7 @@ import { AUTOPILOT_ROUTES } from "./autopilot";
 import { ASK_ROUTES } from "./asks";
 import { BOT_ROUTES } from "./bots";
 import { BOX_ROUTES } from "./box";
+import { BROWSER_ROUTES } from "./browser";
 import { CHANGES_ROUTES } from "./changes";
 import { GROUP_ROUTES } from "./groups";
 import { INTEGRATION_ROUTES } from "./integrations";
@@ -45,6 +46,7 @@ export const ROUTES: RouteShape[] = [
   ...ASK_ROUTES,
   ...BOT_ROUTES,
   ...BOX_ROUTES,
+  ...BROWSER_ROUTES,
   ...CHANGES_ROUTES,
   ...MAC_ROUTES,
   ...MOVE_ROUTES,

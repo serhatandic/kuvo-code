@@ -35,12 +35,13 @@ fn states(cx: &App) -> impl IntoElement {
         ("Keyboard focus", Some(ShownState::Focused), false),
         ("Disabled", None, true),
     ];
-    let styles: [(&str, ButtonStyle, bool, &str); 5] = [
+    let styles: [(&str, ButtonStyle, bool, &str); 6] = [
         ("Primary pill", ButtonStyle::Primary, true, "Connect device"),
         ("Primary", ButtonStyle::Primary, false, "Create bot"),
         ("Secondary", ButtonStyle::Secondary, false, "Connect"),
         ("Ghost", ButtonStyle::Ghost, false, "Skip"),
         ("Accent", ButtonStyle::Accent, false, "Send"),
+        ("Destructive", ButtonStyle::Destructive, false, "Discard"),
     ];
     let label_w = px(112.);
     let col_w = px(150.);

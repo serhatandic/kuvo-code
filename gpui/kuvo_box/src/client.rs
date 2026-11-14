@@ -43,7 +43,8 @@ pub struct Draft {
     pub widget: Option<String>,
     /// Whether the side thread's tag is on the composer.
     pub side: bool,
-    /// Why the conversation's model can't run, as the client says it (it's kept, not sent).
+    /// Why the conversation's model can't run, as its box says it (`kuvo/sessions/models`'
+    /// `refusal`): a plain message is kept, saying so; a typed one the box checks itself.
     pub refusal: Option<String>,
     /// The model picked last in "Who reads it", for a review.
     pub reviewer: Option<ModelRef>,
@@ -288,7 +289,6 @@ impl BoxClient {
             text: draft.text.clone(),
             files: !draft.files.is_empty() || !draft.notes.is_empty(),
             side: draft.side,
-            refusal: draft.refusal.clone(),
             reviewer: draft.reviewer.clone(),
         };
         let answer = self.typed(session, &ask)?;
