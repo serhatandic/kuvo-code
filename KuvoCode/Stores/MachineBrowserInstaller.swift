@@ -59,6 +59,8 @@ extension MachineBrowserInstaller {
 
     /// Puts the helper on the machine, unless it has this one already.
     static func installHelper(_ helper: (text: String, hash: String), on connection: SSHConnection) async throws {
+        // (None in the app: never an empty file over the machine's.)
+        guard !helper.hash.isEmpty else { throw MachineBrowserError.browser("This copy of Kuvo Code is missing its browser helper (kuvo-browser.js).") }
         let first = try await connection.run("head -n 1 \"\(helperPath)\" 2>/dev/null || true")
         guard first.trimmingCharacters(in: .whitespacesAndNewlines) != "// kuvo-browser \(helper.hash)" else { return }
         let file = FileManager.default.temporaryDirectory.appending(path: "kuvo-browser-\(UUID().uuidString).js")

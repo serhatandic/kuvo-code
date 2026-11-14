@@ -2513,8 +2513,10 @@ without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's ow
   and why (an older Mac then puts the browser there itself, as it did). A tool that waited says
   why, or to try again in a minute.
 - **The keeper's version**: `kuvo-browser.js` is built from `Packages/Box/src/browser`
-  (`scripts/build-browser.sh`), which writes its keeper's version in: a hash of its source. Its
-  `Kuvo.hello` says it as `build`. A process replaces a running keeper only while its own file is
+  (`scripts/build-browser.sh`), which writes its keeper's version in: a hash of its source, so any
+  change to the file's source (its tools' code too) restarts the keeper once a new process starts,
+  closing its pages (sign-ins stay). Its `Kuvo.hello` says it as `build`, and its `version` is the
+  box's `bin/box-version` (`dev` before a Mac or an update has written one). A process replaces a running keeper only while its own file is
   the one in place, and then only one of another `build`, or one from before (`keeper` a number
   below 51, and no `build`).
 - Only in a test's folder: `KUVO_BROWSER_SOURCE` (an address serving `<host>/<path>`),

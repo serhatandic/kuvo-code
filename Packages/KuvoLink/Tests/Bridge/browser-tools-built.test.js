@@ -71,21 +71,27 @@ async function given(open) {
   return { serverInfo: started.serverInfo, instructions: started.instructions, tools: listed.tools };
 }
 
+const sha256 = (text) => crypto.createHash("sha256").update(text).digest("hex");
+
+/** What's kept of `given(false)`: its tools only as the SHA-256 of them as sent, as they're
+ * `given(true)`'s but for the vault's (kept whole). */
+const keptClosed = (closed) => ({ ...closed, tools: sha256(JSON.stringify(closed.tools)) });
+
 /** The scripts the built file runs in pages, by name, as the SHA-256 of each. */
 function pageScripts() {
   const line = fs.readFileSync(script, "utf8").split("\n").find((each) => each.startsWith("const CONFIG = "));
   const { scripts } = JSON.parse(line.slice("const CONFIG = ".length, -1));
-  return Object.fromEntries(Object.keys(scripts).sort().map((name) => [name, crypto.createHash("sha256").update(scripts[name]).digest("hex")]));
+  return Object.fromEntries(Object.keys(scripts).sort().map((name) => [name, sha256(scripts[name])]));
 }
 
 if (process.env.KUVO_TEST_BROWSER_TOOLS === "write") {
-  kept = { about: kept.about, closed: await given(false), open: await given(true), scripts: pageScripts() };
+  kept = { about: kept.about, closed: keptClosed(await given(false)), open: await given(true), scripts: pageScripts() };
   fs.writeFileSync(keptFile, JSON.stringify(kept, null, 1) + "\n");
 }
 
 test("an agent on a machine is given the same tools, schemas and instructions, byte for byte, with the vault closed", async () => {
   const now = await given(false);
-  assert.equal(JSON.stringify(now.tools), JSON.stringify(kept.closed.tools));
+  assert.equal(sha256(JSON.stringify(now.tools)), kept.closed.tools);
   assert.equal(now.instructions, kept.closed.instructions);
   assert.deepEqual(now.serverInfo, kept.closed.serverInfo);
   // (Never the vault's: browser_fill, and browser_sign_in's item, only where it's open.)
