@@ -1111,8 +1111,8 @@ browser's tools (`browser_…`), which work in a client's own browser, aren't th
     takes that away again, branch and all, should the session not be made (also where the client
     goes away meanwhile). Asked for `autopilot` but its agent couldn't be told how to work on it,
     the session goes again: 502, so it never starts asking you instead. With `wait`, or from a conversation, a
-    task is still needed (400). A box from before needs a task: a client makes the session with its
-    engine then, and gives it its project's folders, approval and Autopilot itself.
+    task is still needed (400). A box from before is held by the update gate, which requires
+    `sessions.start.empty` ("The update gate"): no client starts a session there itself.
   - Either way its project's other folders (those of the project whose folder it's in, or a
     worktree of; none in one of those other folders) are allowed to it and named in its instructions, one in
     a worktree is told so, one filed under another folder than its own (a worktree, a project's
@@ -3001,8 +3001,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     status and words for another refusal, `502` for an answer that isn't one.
   - Held to `Vectors/sign-in.json` in the box and KuvoClient (`SignInMethods`, `SignInAccounts`,
     `SignInStatus`); the phone's sample Mac and tests' computers serve its recorded answers as they
-    are. A box without `sign-in.methods` needs updating: a client says so
-    rather than offering ways of its own.
+    are. Every box the update gate lets through has `sign-in.methods`; a client offers no ways of
+    its own.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
   computer (`http://127.0.0.1:<port>/…?code=…`: a plan's that finishes there, an MCP server's at
   `127.0.0.1:19876`, a coding agent's), which a phone can't load. The computer loads it, as the
@@ -6468,15 +6468,14 @@ while a box is away goes there when it's back.
   last. Only for a project the box lists with folders a client set: a session of one it doesn't
   list (its Mac keeps them, or hasn't handed them over yet), or of one it added itself
   (`addedByBox`), keeps the rules and instruction it has; one moved into one it added gets none. Not a subagent's, nor a hidden run's (a group chat's seat, an engine run, a review's part).
-  A box from before doesn't: a client gives each session it opens its folders then.
+  A box from before is held by the update gate: no client gives a session its folders itself.
 - `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
   project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at
   its next step), and it gets that project's other folders as above. `200 {session, directory,
   info?}` (`info`, the session as its engine lists it now); 400 for a folder that isn't here; 404
   for no such conversation; 409 for a coding agent's session (their sessions keep the folder they
   started in), one moving to another computer, and a subagent's or hidden run's; 502 where the engine didn't take it; 503 with no
-  engine. A box from before: a client moves it with the engine's `POST api/session/<id>/move` and
-  gives it the project's folders itself.
+  engine. A box from before is held by the update gate: no client moves one itself.
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
   other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on
